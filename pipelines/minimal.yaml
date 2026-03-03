@@ -1,0 +1,39 @@
+version: "1"
+
+pipeline:
+  name: minimal-pipeline
+  description: "Minimal pipeline — JSON pass-through, manual trigger only"
+  enabled: true
+
+  # Manual schedule — only runs when triggered via CLI or REST
+  schedule:
+    type: manual
+
+  source:
+    type: sftp
+    host: ${SFTP_HOST:-localhost}
+    port: ${SFTP_PORT:-22}
+    username: ${SFTP_USER:-user}
+    password: ${SFTP_PASS:-pass}
+    remote_path: ${SFTP_SOURCE_PATH:-/data/in}
+    file_pattern: "*.json"
+
+  serializer_in:
+    type: json
+
+  # No transforms — pass-through
+
+  serializer_out:
+    type: json
+    indent: 2
+
+  sink:
+    type: sftp
+    host: ${SFTP_HOST:-localhost}
+    port: ${SFTP_PORT:-22}
+    username: ${SFTP_USER:-user}
+    password: ${SFTP_PASS:-pass}
+    remote_path: ${SFTP_SINK_PATH:-/data/out}
+    filename_template: "out_{pipeline}_{timestamp}.json"
+
+  on_error: continue
