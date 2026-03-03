@@ -18,7 +18,7 @@ WORKDIR /app
 
 # Install wheel
 COPY --from=builder /build/dist/*.whl .
-RUN pip install --no-cache-dir *.whl && rm *.whl
+RUN whl=$(ls *.whl) && pip install --no-cache-dir "${whl}[metrics]" && rm *.whl
 
 # Create default pipeline and data directories; give tram user a home .tram dir
 RUN mkdir -p /pipelines /data && \
