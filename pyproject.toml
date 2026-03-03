@@ -32,12 +32,18 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
+kafka = ["kafka-python>=2.0"]
+opensearch = ["opensearch-py>=2.4"]
 dev = [
     "pytest>=8.0",
     "pytest-asyncio>=0.23",
     "pytest-cov>=5.0",
     "pytest-mock>=3.14",
     "ruff>=0.4",
+]
+all = [
+    "tram[kafka]",
+    "tram[opensearch]",
 ]
 
 [project.scripts]
