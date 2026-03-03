@@ -80,7 +80,7 @@ class TestPipelineExecutorBatchRun:
 
         with (
             patch.object(executor, "_build_source", return_value=mock_source),
-            patch.object(executor, "_build_sink", return_value=mock_sink),
+            patch.object(executor, "_build_sinks", return_value=[(mock_sink, None)]),
             patch.object(executor, "_build_serializer_in", return_value=mock_ser_in),
             patch.object(executor, "_build_serializer_out", return_value=mock_ser_out),
             patch.object(executor, "_build_transforms", return_value=[]),
@@ -104,7 +104,7 @@ class TestPipelineExecutorBatchRun:
 
         with (
             patch.object(executor, "_build_source", return_value=mock_source),
-            patch.object(executor, "_build_sink", return_value=mock_sink),
+            patch.object(executor, "_build_sinks", return_value=[(mock_sink, None)]),
             patch.object(executor, "_build_serializer_in", return_value=MagicMock()),
             patch.object(executor, "_build_serializer_out", return_value=MagicMock()),
             patch.object(executor, "_build_transforms", return_value=[]),
@@ -136,7 +136,7 @@ class TestPipelineExecutorBatchRun:
 
         with (
             patch.object(executor, "_build_source", return_value=mock_source),
-            patch.object(executor, "_build_sink", return_value=mock_sink),
+            patch.object(executor, "_build_sinks", return_value=[(mock_sink, None)]),
             patch.object(executor, "_build_serializer_in", return_value=mock_ser_in),
             patch.object(executor, "_build_serializer_out", return_value=mock_ser_out),
             patch.object(executor, "_build_transforms", return_value=[]),
@@ -177,7 +177,7 @@ class TestTransformChain:
 
         with (
             patch.object(executor, "_build_source", return_value=mock_source),
-            patch.object(executor, "_build_sink", return_value=mock_sink),
+            patch.object(executor, "_build_sinks", return_value=[(mock_sink, None)]),
             patch.object(executor, "_build_serializer_in", return_value=mock_ser_in),
             patch.object(executor, "_build_serializer_out", return_value=mock_ser_out),
             patch.object(executor, "_build_transforms", return_value=[t1, t2, t3]),

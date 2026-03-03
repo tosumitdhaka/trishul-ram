@@ -8,6 +8,7 @@ from contextlib import asynccontextmanager
 from fastapi import FastAPI
 
 from tram.api.routers import health, pipelines, runs
+from tram.api.routers import metrics_router, webhooks
 from tram.core.config import AppConfig
 from tram.pipeline.loader import scan_pipeline_dir
 from tram.pipeline.manager import PipelineManager
@@ -53,6 +54,12 @@ async def lifespan(app: FastAPI):
     # ── Shutdown ───────────────────────────────────────────────────────────
     logger.info("TRAM daemon shutting down")
     scheduler.stop()
+
+    # Close DB if present
+    db = getattr(app.state, "db", None)
+    if db is not None:
+        db.close()
+
     logger.info("TRAM daemon stopped")
 
 
@@ -61,13 +68,21 @@ def create_app(config: AppConfig | None = None) -> FastAPI:
     if config is None:
         config = AppConfig.from_env()
 
-    manager = PipelineManager()
+    # Initialise persistence
+    try:
+        from tram.persistence.db import TramDB
+        db = TramDB()
+    except Exception as exc:
+        logger.warning("Could not initialise TramDB: %s — run history will be in-memory only", exc)
+        db = None
+
+    manager = PipelineManager(db=db)
     scheduler = TramScheduler(manager)
 
     app = FastAPI(
         title="TRAM",
         description="Trishul Real-time Adapter & Mapper",
-        version="0.1.0",
+        version="0.5.0",
         lifespan=lifespan,
     )
 
@@ -75,10 +90,13 @@ def create_app(config: AppConfig | None = None) -> FastAPI:
     app.state.config = config
     app.state.manager = manager
     app.state.scheduler = scheduler
+    app.state.db = db
 
     # Register routers
     app.include_router(health.router)
     app.include_router(pipelines.router)
     app.include_router(runs.router)
+    app.include_router(webhooks.router)
+    app.include_router(metrics_router.router)
 
     return app

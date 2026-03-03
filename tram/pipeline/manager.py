@@ -5,11 +5,14 @@ from __future__ import annotations
 import logging
 from collections import deque
 from datetime import datetime, timezone
-from typing import Optional
+from typing import TYPE_CHECKING, Optional
 
 from tram.core.context import RunResult
 from tram.core.exceptions import PipelineAlreadyExistsError, PipelineNotFoundError
 from tram.models.pipeline import PipelineConfig
+
+if TYPE_CHECKING:
+    from tram.persistence.db import TramDB
 
 logger = logging.getLogger(__name__)
 
@@ -48,12 +51,18 @@ class PipelineState:
 class PipelineManager:
     """Thread-safe registry of pipeline configurations and their live state."""
 
-    def __init__(self) -> None:
+    def __init__(self, db: Optional["TramDB"] = None) -> None:
         self._pipelines: dict[str, PipelineState] = {}
+        self._db = db
 
     # ── CRUD ───────────────────────────────────────────────────────────────
 
-    def register(self, config: PipelineConfig, replace: bool = False) -> PipelineState:
+    def register(
+        self,
+        config: PipelineConfig,
+        replace: bool = False,
+        yaml_text: Optional[str] = None,
+    ) -> PipelineState:
         """Register a pipeline configuration."""
         if config.name in self._pipelines and not replace:
             raise PipelineAlreadyExistsError(
@@ -63,6 +72,11 @@ class PipelineManager:
         state = PipelineState(config)
         self._pipelines[config.name] = state
         logger.info("Registered pipeline", extra={"pipeline": config.name})
+
+        # Persist version if yaml_text provided
+        if yaml_text and self._db:
+            self._db.save_pipeline_version(config.name, yaml_text)
+
         return state
 
     def deregister(self, name: str) -> None:
@@ -90,6 +104,8 @@ class PipelineManager:
 
     def record_run(self, name: str, result: RunResult) -> None:
         self.get(name).record_run(result)
+        if self._db:
+            self._db.save_run(result)
 
     # ── Run history ────────────────────────────────────────────────────────
 
@@ -99,14 +115,16 @@ class PipelineManager:
         status: Optional[str] = None,
         limit: int = 100,
     ) -> list[RunResult]:
-        """Return run history, optionally filtered."""
+        """Return run history. Uses SQLite if available (survives restarts)."""
+        if self._db:
+            return self._db.get_runs(pipeline_name=pipeline_name, status=status, limit=limit)
+
         all_runs: list[RunResult] = []
         for state in self._pipelines.values():
             if pipeline_name and state.config.name != pipeline_name:
                 continue
             all_runs.extend(state.run_history)
 
-        # Sort by most recent first
         all_runs.sort(key=lambda r: r.finished_at, reverse=True)
 
         if status:
@@ -120,3 +138,34 @@ class PipelineManager:
                 if result.run_id == run_id:
                     return result
         return None
+
+    # ── Version management ─────────────────────────────────────────────────
+
+    def save_version(self, name: str, yaml_text: str) -> int:
+        """Save a pipeline version. Returns version number."""
+        if self._db is None:
+            raise RuntimeError("Persistence not configured (no TramDB)")
+        return self._db.save_pipeline_version(name, yaml_text)
+
+    def get_versions(self, name: str) -> list[dict]:
+        """List all saved versions for a pipeline."""
+        if self._db is None:
+            return []
+        return self._db.get_pipeline_versions(name)
+
+    def get_version_yaml(self, name: str, version: int) -> str:
+        """Return YAML content for a specific version."""
+        if self._db is None:
+            raise RuntimeError("Persistence not configured (no TramDB)")
+        return self._db.get_pipeline_version(name, version)
+
+    def rollback(self, name: str, version: int) -> PipelineConfig:
+        """Restore a previous version, re-register and return new config."""
+        from tram.pipeline.loader import load_pipeline_from_yaml
+
+        yaml_text = self.get_version_yaml(name, version)
+        config = load_pipeline_from_yaml(yaml_text)
+
+        # Re-register (replace)
+        self.register(config, replace=True, yaml_text=yaml_text)
+        return config

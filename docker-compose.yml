@@ -5,10 +5,10 @@ services:
       - "8765:8765"
     volumes:
       - ./pipelines:/pipelines:ro        # Pipeline YAMLs — mounted read-only
-      - tram_state:/data/state           # Persistent run history
+      - tram_data:/data                  # Persistent SQLite DB + state
     environment:
       TRAM_PIPELINE_DIR: /pipelines
-      TRAM_STATE_DIR: /data/state
+      TRAM_DB_PATH: /data/tram.db
       TRAM_PORT: 8765
       TRAM_HOST: 0.0.0.0
       TRAM_LOG_LEVEL: ${TRAM_LOG_LEVEL:-INFO}
@@ -32,4 +32,4 @@ services:
     restart: unless-stopped
 
 volumes:
-  tram_state:
+  tram_data:

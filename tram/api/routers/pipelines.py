@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import logging
 
-from fastapi import APIRouter, HTTPException, Request, Response, status
+from fastapi import APIRouter, HTTPException, Query, Request, Response, status
 from pydantic import BaseModel
 
 from tram.core.exceptions import (
@@ -55,7 +55,7 @@ async def register_pipeline(request: Request) -> dict:
         raise HTTPException(status_code=400, detail=str(exc))
 
     try:
-        state = manager.register(config)
+        state = manager.register(config, yaml_text=yaml_text)
     except PipelineAlreadyExistsError as exc:
         raise HTTPException(status_code=409, detail=str(exc))
 
@@ -193,3 +193,60 @@ async def reload_pipelines(request: Request) -> dict:
             logger.error("Failed to register pipeline %s: %s", config.name, exc)
 
     return {"reloaded": loaded, "total": len(configs)}
+
+
+# ── Version history + rollback ─────────────────────────────────────────────
+
+
+@router.get("/{name}/versions")
+async def list_versions(name: str, request: Request) -> list[dict]:
+    """List saved versions for a pipeline."""
+    manager = request.app.state.manager
+    try:
+        manager.get(name)
+    except PipelineNotFoundError as exc:
+        raise HTTPException(status_code=404, detail=str(exc))
+
+    versions = manager.get_versions(name)
+    return versions
+
+
+@router.post("/{name}/rollback")
+async def rollback_pipeline(
+    name: str,
+    request: Request,
+    version: int = Query(..., description="Version number to restore"),
+) -> dict:
+    """Restore a pipeline to a previously saved version."""
+    manager = request.app.state.manager
+    scheduler = request.app.state.scheduler
+
+    try:
+        state = manager.get(name)
+    except PipelineNotFoundError as exc:
+        raise HTTPException(status_code=404, detail=str(exc))
+
+    # Stop if running
+    if state.status == "running":
+        try:
+            scheduler.stop_pipeline(name)
+        except Exception as exc:
+            logger.warning("Error stopping pipeline before rollback: %s", exc)
+
+    try:
+        new_config = manager.rollback(name, version)
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail=str(exc))
+    except RuntimeError as exc:
+        raise HTTPException(status_code=503, detail=str(exc))
+
+    new_state = manager.get(name)
+
+    # Restart if was running
+    if new_config.enabled and new_config.schedule.type != "manual":
+        try:
+            scheduler.start_pipeline(name)
+        except Exception as exc:
+            logger.warning("Could not restart pipeline after rollback: %s", exc)
+
+    return {**new_state.to_dict(), "rolled_back_to_version": version}

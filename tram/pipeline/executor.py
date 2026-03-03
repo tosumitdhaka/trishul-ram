@@ -17,8 +17,59 @@ if TYPE_CHECKING:
 logger = logging.getLogger(__name__)
 
 
+def _make_evaluator():
+    try:
+        from simpleeval import EvalWithCompoundTypes, DEFAULT_FUNCTIONS
+        funcs = dict(DEFAULT_FUNCTIONS)
+        funcs.update({
+            "round": round, "abs": abs, "int": int, "float": float,
+            "str": str, "len": len, "min": min, "max": max,
+        })
+        return EvalWithCompoundTypes, funcs
+    except ImportError:
+        return None, None
+
+
+_EvalCls, _EVAL_FUNCS = _make_evaluator()
+
+
+def _filter_by_condition(records: list[dict], condition: str) -> list[dict]:
+    """Return subset of records where condition evaluates to truthy."""
+    if _EvalCls is None:
+        raise TramError("simpleeval is required for conditional routing")
+    result = []
+    for record in records:
+        try:
+            evaluator = _EvalCls(names=record, functions=_EVAL_FUNCS)
+            if evaluator.eval(condition):
+                result.append(record)
+        except Exception as exc:
+            raise TramError(f"Condition eval error: {condition!r} — {exc}") from exc
+    return result
+
+
 class PipelineExecutor:
     """Executes pipeline configurations in batch or stream mode."""
+
+    def __init__(self) -> None:
+        self._last_refill: float = 0.0
+        self._tokens: float = 0.0
+
+    # ── Rate limiting ──────────────────────────────────────────────────────
+
+    def _rate_limit(self, rps: float) -> None:
+        """Token-bucket rate limiter. Blocks until a token is available."""
+        now = time.monotonic()
+        elapsed = now - self._last_refill
+        self._tokens = min(rps, self._tokens + elapsed * rps)
+        self._last_refill = now
+        if self._tokens >= 1.0:
+            self._tokens -= 1.0
+        else:
+            sleep_time = (1.0 - self._tokens) / rps
+            time.sleep(sleep_time)
+            self._tokens = 0.0
+            self._last_refill = time.monotonic()
 
     # ── Internal helpers ───────────────────────────────────────────────────
 
@@ -26,9 +77,14 @@ class PipelineExecutor:
         src_cls = get_source(config.source.type)
         return src_cls(config.source.model_dump())
 
-    def _build_sink(self, config: "PipelineConfig"):
-        sink_cls = get_sink(config.sink.type)
-        return sink_cls(config.sink.model_dump())
+    def _build_sinks(self, config: "PipelineConfig") -> list[tuple]:
+        """Returns list of (sink_instance, condition_str | None)."""
+        result = []
+        for sink_cfg in config.sinks:
+            sink_cls = get_sink(sink_cfg.type)
+            condition = getattr(sink_cfg, "condition", None)
+            result.append((sink_cls(sink_cfg.model_dump()), condition))
+        return result
 
     def _build_serializer_in(self, config: "PipelineConfig"):
         ser_cls = get_serializer(config.serializer_in.type)
@@ -52,30 +108,60 @@ class PipelineExecutor:
         serializer_in,
         transforms: list,
         serializer_out,
-        sink,
+        sinks: list[tuple],
         ctx: PipelineRunContext,
         on_error: str,
+        rate_limit_rps: float | None = None,
     ) -> bool:
         """Process one (raw, meta) chunk. Returns True on success."""
+        from tram.metrics.registry import RECORDS_IN, RECORDS_OUT, RECORDS_SKIP, ERRORS, DURATION
+
         meta = dict(meta)
         meta["pipeline_name"] = ctx.pipeline_name
+        t_start = time.monotonic()
 
         try:
             records = serializer_in.parse(raw)
             ctx.records_in += len(records)
+            RECORDS_IN.labels(pipeline=ctx.pipeline_name).inc(len(records))
 
             for transform in transforms:
                 records = transform.apply(records)
 
-            ctx.records_out += len(records)
+            # Multi-sink routing
+            wrote_any = False
+            for sink_instance, condition in sinks:
+                if condition:
+                    filtered = _filter_by_condition(records, condition)
+                else:
+                    filtered = records
 
-            serialized = serializer_out.serialize(records)
-            sink.write(serialized, meta)
+                if not filtered:
+                    continue
+
+                serialized = serializer_out.serialize(filtered)
+
+                if rate_limit_rps is not None:
+                    self._rate_limit(rate_limit_rps)
+
+                sink_instance.write(serialized, meta)
+                wrote_any = True
+
+            if wrote_any:
+                ctx.records_out += len(records)
+                RECORDS_OUT.labels(pipeline=ctx.pipeline_name).inc(len(records))
+            else:
+                ctx.records_skipped += len(records)
+                RECORDS_SKIP.labels(pipeline=ctx.pipeline_name).inc(len(records))
+
+            duration = time.monotonic() - t_start
+            DURATION.labels(pipeline=ctx.pipeline_name).observe(duration)
             return True
 
         except TramError as exc:
             msg = f"Processing error: {exc}"
             logger.error(msg, extra={"pipeline": ctx.pipeline_name, "run_id": ctx.run_id})
+            ERRORS.labels(pipeline=ctx.pipeline_name).inc()
             if on_error == "abort":
                 raise
             ctx.record_error(msg)
@@ -84,10 +170,7 @@ class PipelineExecutor:
     # ── Batch run ──────────────────────────────────────────────────────────
 
     def batch_run(self, config: "PipelineConfig") -> RunResult:
-        """Execute one discrete batch run.
-
-        Reads all matching source items, transforms, writes to sink, returns RunResult.
-        """
+        """Execute one discrete batch run."""
         ctx = PipelineRunContext(pipeline_name=config.name)
         logger.info(
             "Batch run started",
@@ -95,7 +178,7 @@ class PipelineExecutor:
         )
 
         source = self._build_source(config)
-        sink = self._build_sink(config)
+        sinks = self._build_sinks(config)
         serializer_in = self._build_serializer_in(config)
         serializer_out = self._build_serializer_out(config)
         transforms = self._build_transforms(config)
@@ -108,7 +191,8 @@ class PipelineExecutor:
                 for raw, meta in source.read():
                     self._process_chunk(
                         raw, meta, serializer_in, transforms,
-                        serializer_out, sink, ctx, config.on_error,
+                        serializer_out, sinks, ctx, config.on_error,
+                        config.rate_limit_rps,
                     )
 
                 result = RunResult.from_context(ctx, RunStatus.SUCCESS)
@@ -154,15 +238,11 @@ class PipelineExecutor:
     # ── Stream run ─────────────────────────────────────────────────────────
 
     def stream_run(self, config: "PipelineConfig", stop_event: threading.Event) -> None:
-        """Run indefinitely until stop_event is set.
-
-        Processes records one by one as they arrive from the source.
-        Suitable for Kafka, NATS, SNMP, or any infinite generator source.
-        """
+        """Run indefinitely until stop_event is set."""
         logger.info("Stream run started", extra={"pipeline": config.name})
 
         source = self._build_source(config)
-        sink = self._build_sink(config)
+        sinks = self._build_sinks(config)
         serializer_in = self._build_serializer_in(config)
         serializer_out = self._build_serializer_out(config)
         transforms = self._build_transforms(config)
@@ -176,7 +256,8 @@ class PipelineExecutor:
                     break
                 self._process_chunk(
                     raw, meta, serializer_in, transforms,
-                    serializer_out, sink, ctx, config.on_error,
+                    serializer_out, sinks, ctx, config.on_error,
+                    config.rate_limit_rps,
                 )
         except Exception as exc:
             logger.error(
@@ -208,9 +289,9 @@ class PipelineExecutor:
             issues.append(f"source: {exc}")
 
         try:
-            self._build_sink(config)
+            self._build_sinks(config)
         except Exception as exc:
-            issues.append(f"sink: {exc}")
+            issues.append(f"sinks: {exc}")
 
         try:
             self._build_serializer_in(config)
