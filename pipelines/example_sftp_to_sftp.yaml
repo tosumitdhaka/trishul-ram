@@ -1,0 +1,76 @@
+version: "1"
+
+pipeline:
+  name: pm-counters-ingest
+  description: "Read PM CSV from NE SFTP → transform → write JSON to mediation SFTP"
+  enabled: true
+
+  # ── Schedule ──────────────────────────────────────────────────────────
+  schedule:
+    type: interval
+    interval_seconds: 300     # Poll every 5 minutes
+
+  source:
+    type: sftp
+    host: ${NE_SFTP_HOST}
+    port: ${NE_SFTP_PORT:-22}
+    username: ${NE_SFTP_USER}
+    password: ${NE_SFTP_PASS}
+    remote_path: /export/pm/
+    file_pattern: "*.csv"
+    move_after_read: /export/pm/processed/
+
+  serializer_in:
+    type: csv
+    delimiter: ","
+    has_header: true
+
+  transforms:
+    - type: rename
+      fields:
+        ne_id: network_element_id
+        ts: timestamp
+
+    - type: cast
+      fields:
+        rx_bytes: int
+        timestamp: datetime
+        active: bool
+
+    - type: add_field
+      fields:
+        rx_mbps: "rx_bytes / 1000000"
+        load_pct: "round(rx_mbps / 1000 * 100, 2)"
+
+    - type: drop
+      fields: [debug_flag, raw_bytes]
+
+    - type: value_map
+      field: severity
+      mapping:
+        "1": CRITICAL
+        "2": MAJOR
+        "3": MINOR
+        "4": WARNING
+        "5": INDETERMINATE
+      default: UNKNOWN
+
+    - type: filter
+      condition: "rx_mbps > 0"
+
+  serializer_out:
+    type: json
+    indent: 2
+
+  sink:
+    type: sftp
+    host: ${MED_SFTP_HOST}
+    port: ${MED_SFTP_PORT:-22}
+    username: ${MED_SFTP_USER}
+    password: ${MED_SFTP_PASS}
+    remote_path: /ingest/pm/
+    filename_template: "pm_{pipeline}_{timestamp}.json"
+
+  on_error: continue
+  retry_count: 3
+  retry_delay_seconds: 10
