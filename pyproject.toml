@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "tram"
-version = "0.1.0"
+version = "0.5.0"
 description = "Trishul Real-time Adapter & Mapper — telecom data pipeline daemon"
 readme = "README.md"
 requires-python = ">=3.11"
@@ -34,6 +34,26 @@ dependencies = [
 [project.optional-dependencies]
 kafka = ["kafka-python>=2.0"]
 opensearch = ["opensearch-py>=2.4"]
+s3 = ["boto3>=1.35"]
+snmp = ["pysnmp-lextudio>=6.2"]
+avro = ["fastavro>=1.9"]
+protobuf_ser = ["protobuf>=4.25", "grpcio-tools>=1.64"]
+parquet = ["pyarrow>=16"]
+msgpack_ser = ["msgpack>=1.0"]
+mqtt = ["paho-mqtt>=2.0"]
+amqp = ["pika>=1.0"]
+nats = ["nats-py>=2.3"]
+gnmi = ["pygnmi>=0.8"]
+jmespath = ["jmespath>=1.0"]
+sql = ["sqlalchemy>=2.0"]
+influxdb = ["influxdb-client>=3.0"]
+redis = ["redis>=5.0"]
+gcs = ["google-cloud-storage>=2.0"]
+azure = ["azure-storage-blob>=12.0"]
+websocket = ["websockets>=12.0"]
+elasticsearch = ["elasticsearch>=8.0"]
+metrics = ["prometheus-client>=0.20"]
+prometheus_rw = ["protobuf>=4.25", "python-snappy>=0.7"]
 dev = [
     "pytest>=8.0",
     "pytest-asyncio>=0.23",
@@ -44,6 +64,26 @@ dev = [
 all = [
     "tram[kafka]",
     "tram[opensearch]",
+    "tram[s3]",
+    "tram[snmp]",
+    "tram[avro]",
+    "tram[protobuf_ser]",
+    "tram[parquet]",
+    "tram[msgpack_ser]",
+    "tram[mqtt]",
+    "tram[amqp]",
+    "tram[nats]",
+    "tram[gnmi]",
+    "tram[jmespath]",
+    "tram[sql]",
+    "tram[influxdb]",
+    "tram[redis]",
+    "tram[gcs]",
+    "tram[azure]",
+    "tram[websocket]",
+    "tram[elasticsearch]",
+    "tram[metrics]",
+    "tram[prometheus_rw]",
 ]
 
 [project.scripts]

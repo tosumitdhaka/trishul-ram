@@ -290,6 +290,46 @@ def pipeline_reload():
     console.print(f"[green]✓[/green] Reloaded {result.get('reloaded', 0)} / {result.get('total', 0)} pipelines")
 
 
+@pipeline_app.command("history")
+def pipeline_history(
+    name: str = typer.Argument(..., help="Pipeline name"),
+    limit: int = typer.Option(20, "--limit", "-n"),
+):
+    """Show version history for a pipeline."""
+    data = _api_get(f"/api/pipelines/{name}/versions")
+    if not data:
+        console.print(f"No saved versions found for pipeline '{name}'.")
+        return
+
+    table = Table(title=f"Versions: {name}")
+    table.add_column("Version", justify="right")
+    table.add_column("Created At")
+    table.add_column("Active")
+
+    for v in data[:limit]:
+        active_mark = "[green]✓[/green]" if v.get("is_active") else ""
+        table.add_row(
+            str(v["version"]),
+            v.get("created_at", "—"),
+            active_mark,
+        )
+
+    console.print(table)
+
+
+@pipeline_app.command("rollback")
+def pipeline_rollback(
+    name: str = typer.Argument(..., help="Pipeline name"),
+    version: int = typer.Option(..., "--version", "-v", help="Version number to restore"),
+):
+    """Rollback a pipeline to a previously saved version."""
+    result = _api_post(f"/api/pipelines/{name}/rollback?version={version}")
+    console.print(
+        f"[green]✓[/green] Rolled back pipeline '{name}' to version {version}. "
+        f"Status: {result.get('status', '—')}"
+    )
+
+
 # ── Runs proxy commands ────────────────────────────────────────────────────
 
 

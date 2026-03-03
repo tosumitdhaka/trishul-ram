@@ -100,8 +100,14 @@ class TimestampNormalizeTransform(BaseTransform):
     Config keys:
         fields        (list[str], required)   Fields to normalize.
         input_format  (str, optional)         strptime format string. Auto-detected if omitted.
-        output_format (str, default "iso")    "iso" → ISO-8601 string, "datetime" → Python datetime,
-                                              or a strftime format string.
+        output_format (str, default "iso")    "iso" | "datetime" | "epoch_s" | "epoch_ms" |
+                                              "epoch_us" | "epoch_ns" | strftime format string.
+                                              "iso"       → UTC ISO-8601 string (millisecond precision)
+                                              "datetime"  → Python datetime object
+                                              "epoch_s"   → float seconds since Unix epoch
+                                              "epoch_ms"  → int milliseconds since Unix epoch
+                                              "epoch_us"  → int microseconds since Unix epoch
+                                              "epoch_ns"  → int nanoseconds since Unix epoch
         on_error      (str, default "raise")  "raise" | "null" | "keep"
     """
 
@@ -115,6 +121,14 @@ class TimestampNormalizeTransform(BaseTransform):
         self.on_error: str = config.get("on_error", "raise")
 
     def _format(self, dt: datetime) -> Any:
+        if self.output_format == "epoch_s":
+            return dt.timestamp()
+        if self.output_format == "epoch_ms":
+            return int(dt.timestamp() * 1_000)
+        if self.output_format == "epoch_us":
+            return int(dt.timestamp() * 1_000_000)
+        if self.output_format == "epoch_ns":
+            return int(dt.timestamp() * 1_000_000_000)
         if self.output_format == "iso":
             return dt.strftime("%Y-%m-%dT%H:%M:%S.%f")[:-3] + "Z"  # millisecond precision + Z
         if self.output_format == "datetime":

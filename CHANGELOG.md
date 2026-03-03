@@ -9,30 +9,146 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ---
 
+## [0.5.0] — 2026-03-03
+
+### Added
+
+**Conditional Multi-Sink Routing**
+- `sinks: list[SinkConfig]` replaces `sink: SinkConfig` (backward compat: singular `sink:` auto-wrapped by model_validator)
+- Per-sink `condition: Optional[str]` — simpleeval expression evaluated per record; sink is skipped if no records match
+- Catch-all sink (no condition) receives all records
+- `rate_limit_rps: Optional[float]` on `PipelineConfig` — token-bucket rate limiter across all sink writes
+
+**SQLite Persistence** (`tram/persistence/db.py`)
+- `TramDB` wraps `sqlite3`; DB at `~/.tram/tram.db` (or `$TRAM_DB_PATH`)
+- Tables: `run_history` (persists `RunResult`), `pipeline_versions` (auto-saved on register)
+- `PipelineManager` accepts `db: TramDB | None`; `record_run()` persists to SQLite; `get_runs()` queries SQLite
+- API: `GET /api/pipelines/{name}/versions`, `POST /api/pipelines/{name}/rollback?version=N`
+- CLI: `tram pipeline history <name>`, `tram pipeline rollback <name> --version N`
+
+**Prometheus Metrics** (`tram/metrics/registry.py`)
+- Counters: `tram_records_in_total`, `tram_records_out_total`, `tram_records_skipped_total`, `tram_errors_total` (labeled by `pipeline`)
+- Histogram: `tram_chunk_duration_seconds`
+- All metrics are no-ops when `prometheus_client` is not installed
+- `GET /metrics` endpoint (503 if not installed)
+- New optional extra: `pip install tram[metrics]`
+
+**Webhook Source** (`tram/connectors/webhook/source.py`)
+- `@register_source("webhook")` — receives HTTP POSTs forwarded from `/webhooks/{path}` on the daemon port
+- Module-level `_WEBHOOK_REGISTRY` bridges FastAPI router → source generator
+- Optional `secret` for `Authorization: Bearer` validation
+- New API router: `POST /webhooks/{path}` → 202 Accepted / 404 / 401
+
+**WebSocket Connector** (`tram/connectors/websocket/`)
+- `@register_source("websocket")` — background thread + asyncio loop + SimpleQueue bridge; auto-reconnect
+- `@register_sink("websocket")` — `asyncio.run()` connect/send/close per write
+- Optional dep: `websockets>=12.0`; new extra `pip install tram[websocket]`
+
+**Elasticsearch Connector** (`tram/connectors/elasticsearch/`)
+- `@register_source("elasticsearch")` — search + scroll API
+- `@register_sink("elasticsearch")` — `helpers.bulk()` with `index_template` token substitution
+- Optional dep: `elasticsearch>=8.0`; new extra `pip install tram[elasticsearch]`
+
+**Prometheus Remote-Write Source** (`tram/connectors/prometheus_rw/source.py`)
+- `@register_source("prometheus_rw")` — Snappy-decompress + protobuf `WriteRequest` → `list[dict]`
+- Reuses WebhookSource global registry (path-routed via daemon)
+- Optional dep: `protobuf>=4.25`, `python-snappy>=0.7`; new extra `pip install tram[prometheus_rw]`
+
+**Schema Registry** (`tram/schema_registry/client.py`)
+- `SchemaRegistryClient` — Confluent-compatible REST API (also Apicurio); in-memory cache by schema_id
+- `encode_with_magic(schema_id, payload)` / `decode_magic(data)` — Confluent magic-byte `\x00` + 4-byte BE ID framing
+- Avro serializer gains `schema_registry_url/subject/id` + `use_magic_bytes` config
+- Protobuf serializer gains same registry config
+
+**New Pydantic Models**
+- Sources: `WebhookSourceConfig`, `WebSocketSourceConfig`, `ElasticsearchSourceConfig`, `PrometheusRWSourceConfig`
+- Sinks: `WebSocketSinkConfig`, `ElasticsearchSinkConfig`
+- Serializers: `AvroSerializerConfig` and `ProtobufSerializerConfig` extended with registry fields
+
+**Tests** — 49 new tests; **371 total, all passing**
+
+---
+
+## [0.4.0] — 2026-03-03
+
+### Added
+
+**New Serializers**
+- `avro` — fastavro read/write; requires `pip install tram[avro]`
+- `parquet` — pyarrow read/write; requires `pip install tram[parquet]`
+- `msgpack` — msgpack pack/unpack; requires `pip install tram[msgpack_ser]`
+- `protobuf` — runtime .proto compilation via grpcio-tools; length-delimited framing; requires `pip install tram[protobuf_ser]`
+
+**New Source Connectors**
+- `mqtt` — paho-mqtt subscriber; TLS support; reconnect on drop
+- `amqp` — pika consumer; prefetch, auto-ack configurable
+- `nats` — nats-py subscriber; queue groups; credentials file
+- `gnmi` — pygnmi subscription (telemetry streaming)
+- `sql` — SQLAlchemy; chunked reads
+- `influxdb` — influxdb-client Flux query
+- `redis` — list LPOP or stream XREAD modes
+- `gcs` — google-cloud-storage; blob listing + streaming
+- `azure_blob` — azure-storage-blob; container listing + streaming
+
+**New Sink Connectors**
+- `amqp` — pika publisher to exchange/routing-key
+- `nats` — nats-py publisher
+- `sql` — SQLAlchemy insert/upsert
+- `influxdb` — line-protocol write
+- `redis` — list RPUSH, pubsub PUBLISH, or stream XADD
+- `gcs` — google-cloud-storage blob upload
+- `azure_blob` — azure-storage-blob upload
+
+**New Transforms**
+- `explode` — expand a list field into multiple rows
+- `deduplicate` — remove duplicate rows by key fields
+- `regex_extract` — extract named capture groups from a string field
+- `template` — render Jinja-style `{field}` string templates
+- `mask` — redact, hash, or partial-mask sensitive fields
+- `validate` — schema validation with `on_invalid: drop|raise`
+- `sort` — sort records by field list
+- `limit` — keep only first N records
+- `jmespath` — JMESPath field extraction
+- `unnest` — lift a nested dict field to top level
+
+**Tests** — 322 total, all passing
+
+---
+
+## [0.3.0] — 2026-03-03
+
+### Added
+
+**New Connectors**
+- `ftp` source + sink — ftplib; move/delete after read; passive mode
+- `s3` source + sink — boto3; endpoint_url override for S3-compatible stores
+- `syslog` source — UDP/TCP listener; RFC 3164/5424 parsing
+- `snmp_trap` source + sink — pysnmp trap receiver / sender
+- `snmp_poll` source — GET/WALK OID polling
+- `ves` sink — ONAP VES event batch sender; auth types: none/basic/bearer
+- `opensearch` source (scroll) added alongside existing sink
+
+**Tests** — 198 total, all passing
+
+---
+
 ## [0.2.0] — 2026-03-03
 
 ### Added
 
 **New Transforms**
-- `flatten` — recursive dict flattening with configurable `separator`, `max_depth`, and `prefix`. Essential for 3GPP XML/JSON data arriving multi-level nested.
-- `timestamp_normalize` — normalizes heterogeneous timestamps (unix sec/ms/us/ns auto-detect, ISO-8601 variants, custom strptime) to UTC ISO-8601 strings or Python `datetime` objects. Configurable `on_error`: raise / null / keep.
-- `aggregate` — groupby + sum / avg / min / max / count / first / last. Collapses an entire batch into one output record per group. Supports both shorthand (`"sum:field"`) and dict (`{op: sum, field: ...}`) operation specs.
-- `enrich` — left-join records with a static CSV or JSON lookup file loaded once at init. Supports `add_fields` filtering, key `prefix`, custom `lookup_key`, and `on_miss: null_fields`.
+- `flatten` — recursive dict flattening with configurable `separator`, `max_depth`, and `prefix`
+- `timestamp_normalize` — normalizes heterogeneous timestamps to UTC ISO-8601
+- `aggregate` — groupby + sum/avg/min/max/count/first/last
+- `enrich` — left-join records with a static CSV or JSON lookup file
 
 **New Connectors**
-- `local` source — reads files from a local directory; supports glob pattern, recursive scan, move/delete after read. Zero extra dependencies.
-- `local` sink — writes files to a local directory; creates parent dirs automatically; supports filename template tokens and overwrite control.
-- `rest` source — polls HTTP endpoints (GET/POST/PUT); bearer and basic auth; dot-path `response_path` extraction; offset-based pagination. Uses existing `httpx` dependency.
-- `rest` sink — HTTP POST/PUT with configurable content-type, auth, expected status codes. Uses existing `httpx` dependency.
-- `kafka` source — `KafkaConsumer` infinite generator for stream mode; SASL/SSL support; yields `(message.value, {topic, partition, offset, key})`. Optional dep: `kafka-python`.
-- `kafka` sink — `KafkaProducer` with configurable `key_field`, acks, compression. Optional dep: `kafka-python`.
-- `opensearch` sink — bulk-indexes records into OpenSearch/Elasticsearch; supports date-pattern index names (`pm-%Y.%m.%d`), `id_field`, ingest pipeline, chunked bulk requests. Optional dep: `opensearch-py`.
+- `local` source + sink — reads/writes local filesystem files
+- `rest` source + sink — HTTP polling source and POST/PUT sink (httpx)
+- `kafka` source + sink — KafkaConsumer/Producer; SASL/SSL support
+- `opensearch` sink — bulk-indexes records via opensearch-py
 
-**Pydantic Models** — added config models for all new connectors and transforms; updated `SourceConfig`, `SinkConfig`, and `TransformConfig` discriminated unions.
-
-**pyproject.toml** — added optional extras: `kafka`, `opensearch`, `all`.
-
-**Tests** — 55 new tests (33 transform + 22 connector); 124 total, all passing.
+**Tests** — 124 total, all passing
 
 ---
 
@@ -41,95 +157,29 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 ### Added
 
 **Core**
-- `tram.core.exceptions` — `TramError` hierarchy: `SourceError`, `SinkError`, `TransformError`, `SerializerError`, `ConfigError`, `PluginNotFoundError`, `PipelineAlreadyExistsError`, `PipelineNotFoundError`
-- `tram.core.context` — `PipelineRunContext` (mutable, per-run state) and `RunResult` (immutable result) dataclasses with `RunStatus` enum
-- `tram.core.config` — `AppConfig` loaded entirely from environment variables (12-factor)
-- `tram.core.log_config` — `setup_logging()` with JSON-structured output (`JsonFormatter`) for container log aggregators; text format for local dev
+- `tram.core.exceptions` — `TramError` hierarchy
+- `tram.core.context` — `PipelineRunContext` + `RunResult` + `RunStatus`
+- `tram.core.config` — `AppConfig` from environment variables
+- `tram.core.log_config` — JSON-structured logging
 
-**Plugin Interfaces**
-- `BaseSource` — ABC: `read() → Iterator[(bytes, meta)]`
-- `BaseSink` — ABC: `write(bytes, meta)`
-- `BaseTransform` — ABC: `apply(list[dict]) → list[dict]`
-- `BaseSerializer` — ABC: `parse(bytes) → list[dict]`, `serialize(list[dict]) → bytes`
+**Plugin Interfaces** — `BaseSource`, `BaseSink`, `BaseTransform`, `BaseSerializer`
 
-**Plugin Registry**
-- `@register_source/sink/transform/serializer` class decorators
-- `get_source/sink/transform/serializer(key)` lookup with `PluginNotFoundError` on miss
-- `list_plugins()` — returns all registered keys by category
+**Plugin Registry** — `@register_*` decorators + `get_*()` lookups + `list_plugins()`
 
-**Pydantic Models**
-- `PipelineConfig` — full pipeline schema with discriminated unions for `SourceConfig`, `SinkConfig`, `SerializerConfig`, `TransformConfig`
-- `ScheduleConfig` — `interval` / `cron` / `stream` / `manual` with validation
-- Pipeline name validation (slug: alphanumeric + hyphens/underscores)
+**Pydantic Models** — `PipelineConfig` with discriminated unions; `ScheduleConfig`
 
-**Serializers**
-- `json` — parse JSON array or object; serialize with optional indent
-- `csv` — parse with header/delimiter/quotechar options; handles UTF-8 BOM
-- `xml` — parse with `defusedxml` (XXE-safe); serialize with `lxml`
+**Serializers** — `json`, `csv`, `xml`
 
-**Transforms**
-- `rename` — rename fields by mapping
-- `cast` — convert to `str / int / float / bool / datetime`; bool accepts `true/1/yes/on`
-- `add_field` — computed fields via `simpleeval` safe sandbox; supports `round`, `abs`, ternary, etc.
-- `drop` — remove fields by name list
-- `value_map` — lookup-table value replacement with optional default
-- `filter` — row filter using `simpleeval` condition expressions
+**Transforms** — `rename`, `cast`, `add_field`, `drop`, `value_map`, `filter`
 
-**Connectors**
-- `sftp` source — paramiko; `listdir` + `read` + optional `move_after_read` or `delete_after_read`
-- `sftp` sink — paramiko; writes with `filename_template` tokens: `{pipeline}`, `{timestamp}`, `{source_filename}`
+**Connectors** — `sftp` source + sink
 
-**Pipeline Engine**
-- `loader.py` — YAML loader with `${VAR:-default}` env substitution; `scan_pipeline_dir()` for bulk loading
-- `executor.py` — `batch_run()` (finite, returns `RunResult`), `stream_run()` (infinite, stop event), `dry_run()` (no I/O validation)
-- `manager.py` — in-memory registry of `PipelineState`; run history (last 500 per pipeline); thread-safe CRUD
+**Pipeline Engine** — `loader.py`, `executor.py` (batch/stream/dry-run), `manager.py`
 
-**Scheduler**
-- `TramScheduler` — APScheduler `BackgroundScheduler` for interval/cron pipelines; dedicated threads for stream pipelines
-- `start/stop_pipeline()` and `trigger_run()` for runtime management
-- `get_status()` — returns scheduler state, active streams, next scheduled runs
+**Scheduler** — `TramScheduler` (APScheduler batch + threads stream)
 
-**REST API** (FastAPI, port 8765)
-- `GET /api/health` — liveness probe
-- `GET /api/ready` — readiness probe with pipeline count
-- `GET /api/meta` — version + build info
-- `GET /api/plugins` — registered plugin keys by category
-- `GET /api/pipelines` — list all pipelines + status
-- `POST /api/pipelines` — register from YAML body
-- `GET/DELETE /api/pipelines/{name}` — get or deregister
-- `POST /api/pipelines/{name}/start|stop|run` — lifecycle control
-- `POST /api/pipelines/reload` — rescan `TRAM_PIPELINE_DIR`
-- `GET /api/runs` — run history (filterable by pipeline, status, limit)
-- `GET /api/runs/{run_id}` — single run result
-- `GET /api/daemon/status` — scheduler state
-- `POST /api/daemon/stop` — graceful shutdown
+**REST API** — FastAPI on port 8765; health, pipelines, runs, daemon endpoints
 
-**Daemon**
-- `TramServer` — starts `TramScheduler` + uvicorn in one process; lifespan loads pipelines and starts scheduler on startup, drains on shutdown
+**CLI** — Typer; direct + daemon-proxy commands
 
-**CLI** (Typer)
-- Direct: `tram version`, `tram plugins`, `tram validate <file>`, `tram run <file> [--dry-run]`, `tram daemon`
-- Proxy: `tram pipeline list/add/remove/start/stop/run/status/reload`
-- Proxy: `tram runs [--pipeline] [--limit]`, `tram runs get <run_id>`
-- All proxy commands read `TRAM_API_URL` env var (default `http://localhost:8765`)
-
-**Container**
-- Multi-stage `Dockerfile` — builder stage produces wheel; runtime stage installs as non-root user `tram` (uid 1000)
-- `docker-compose.yml` — volume-mounted pipeline dir, persistent state volume, full env var passthrough
-- `.env.example` — all supported env vars with defaults and comments
-
-**Examples**
-- `pipelines/example_sftp_to_sftp.yaml` — full PM pipeline (CSV→transforms→JSON, interval schedule)
-- `pipelines/minimal.yaml` — minimal JSON pass-through, manual trigger
-
-**Documentation**
-- `docs/architecture.md` — design, data flow, component map, execution modes, error handling
-- `docs/connectors.md` — 3-step guide to adding new connectors; full interface examples
-- `docs/transforms.md` — all transform options, expression syntax, ordering tips
-- `docs/api.md` — full REST API reference with request/response examples
-- `docs/deployment.md` — Docker, Kubernetes, env vars, logging, security, scaling
-
-**Tests**
-- 66 unit tests (`tests/unit/`) — registry, loader, all transforms, all serializers, executor (batch, empty, error handling, transform chain)
-- 3 integration tests (`tests/integration/`) — full SFTP pipeline with mocked paramiko; transform chain correctness; empty source handling
-- Total: **69 tests, all passing**
+**Tests** — 69 total, all passing
