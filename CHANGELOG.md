@@ -9,6 +9,33 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ---
 
+## [0.2.0] — 2026-03-03
+
+### Added
+
+**New Transforms**
+- `flatten` — recursive dict flattening with configurable `separator`, `max_depth`, and `prefix`. Essential for 3GPP XML/JSON data arriving multi-level nested.
+- `timestamp_normalize` — normalizes heterogeneous timestamps (unix sec/ms/us/ns auto-detect, ISO-8601 variants, custom strptime) to UTC ISO-8601 strings or Python `datetime` objects. Configurable `on_error`: raise / null / keep.
+- `aggregate` — groupby + sum / avg / min / max / count / first / last. Collapses an entire batch into one output record per group. Supports both shorthand (`"sum:field"`) and dict (`{op: sum, field: ...}`) operation specs.
+- `enrich` — left-join records with a static CSV or JSON lookup file loaded once at init. Supports `add_fields` filtering, key `prefix`, custom `lookup_key`, and `on_miss: null_fields`.
+
+**New Connectors**
+- `local` source — reads files from a local directory; supports glob pattern, recursive scan, move/delete after read. Zero extra dependencies.
+- `local` sink — writes files to a local directory; creates parent dirs automatically; supports filename template tokens and overwrite control.
+- `rest` source — polls HTTP endpoints (GET/POST/PUT); bearer and basic auth; dot-path `response_path` extraction; offset-based pagination. Uses existing `httpx` dependency.
+- `rest` sink — HTTP POST/PUT with configurable content-type, auth, expected status codes. Uses existing `httpx` dependency.
+- `kafka` source — `KafkaConsumer` infinite generator for stream mode; SASL/SSL support; yields `(message.value, {topic, partition, offset, key})`. Optional dep: `kafka-python`.
+- `kafka` sink — `KafkaProducer` with configurable `key_field`, acks, compression. Optional dep: `kafka-python`.
+- `opensearch` sink — bulk-indexes records into OpenSearch/Elasticsearch; supports date-pattern index names (`pm-%Y.%m.%d`), `id_field`, ingest pipeline, chunked bulk requests. Optional dep: `opensearch-py`.
+
+**Pydantic Models** — added config models for all new connectors and transforms; updated `SourceConfig`, `SinkConfig`, and `TransformConfig` discriminated unions.
+
+**pyproject.toml** — added optional extras: `kafka`, `opensearch`, `all`.
+
+**Tests** — 55 new tests (33 transform + 22 connector); 124 total, all passing.
+
+---
+
 ## [0.1.0] — 2026-03-03
 
 ### Added

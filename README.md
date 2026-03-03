@@ -2,7 +2,7 @@
 
 > Lightweight, container-native Python daemon that moves and transforms telecom data (PM/FM/Logs) across protocols.
 
-**Version:** 0.1.0 | **Status:** Active development | **Python:** 3.11+
+**Version:** 0.2.0 | **Status:** Active development | **Python:** 3.11+
 
 ---
 
@@ -46,14 +46,16 @@ curl http://localhost:8765/api/pipelines
 
 ---
 
-## Plugin Registry (v0.1.0)
+## Plugin Registry (v0.2.0)
 
 | Category | Keys |
 |----------|------|
-| Sources | `sftp` |
-| Sinks | `sftp` |
+| Sources | `sftp`, `local`, `rest`, `kafka` |
+| Sinks | `sftp`, `local`, `rest`, `kafka`, `opensearch` |
 | Serializers | `json`, `csv`, `xml` |
-| Transforms | `rename`, `cast`, `add_field`, `drop`, `value_map`, `filter` |
+| Transforms | `rename`, `cast`, `add_field`, `drop`, `value_map`, `filter`, `flatten`, `timestamp_normalize`, `aggregate`, `enrich` |
+
+Optional extras: `pip install tram[kafka]` · `pip install tram[opensearch]`
 
 ---
 
