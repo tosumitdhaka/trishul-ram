@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "tram"
-version = "0.6.0"
+version = "0.7.0"
 description = "Trishul Real-time Adapter & Mapper — telecom data pipeline daemon"
 readme = "README.md"
 requires-python = ">=3.11"
@@ -29,6 +29,7 @@ dependencies = [
     "apscheduler>=3.10",
     "rich>=13.7",
     "httpx>=0.27",
+    "sqlalchemy>=2.0",
 ]
 
 [project.optional-dependencies]
@@ -46,6 +47,8 @@ nats = ["nats-py>=2.3"]
 gnmi = ["pygnmi>=0.8"]
 jmespath = ["jmespath>=1.0"]
 sql = ["sqlalchemy>=2.0"]
+postgresql = ["psycopg2-binary>=2.9"]
+mysql = ["PyMySQL>=1.1"]
 influxdb = ["influxdb-client>=3.0"]
 redis = ["redis>=5.0"]
 gcs = ["google-cloud-storage>=2.0"]

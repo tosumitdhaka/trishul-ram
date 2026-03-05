@@ -1,9 +1,7 @@
-"""Tests for SQLite persistence layer (v0.5.0)."""
+"""Tests for SQLAlchemy-backed persistence layer (v0.7.0)."""
 from __future__ import annotations
 
-import tempfile
 from datetime import datetime, timezone
-from pathlib import Path
 
 import pytest
 
@@ -11,7 +9,7 @@ from tram.core.context import RunResult, RunStatus
 from tram.persistence.db import TramDB
 
 
-def _make_result(pipeline="test", status=RunStatus.SUCCESS, run_id="abc123"):
+def _make_result(pipeline="test", status=RunStatus.SUCCESS, run_id="abc123", dlq_count=0):
     now = datetime.now(timezone.utc)
     return RunResult(
         run_id=run_id,
@@ -23,14 +21,15 @@ def _make_result(pipeline="test", status=RunStatus.SUCCESS, run_id="abc123"):
         records_out=8,
         records_skipped=2,
         error=None,
+        dlq_count=dlq_count,
     )
 
 
 @pytest.fixture
 def db(tmp_path):
-    """Create a TramDB backed by a temp file."""
+    """Create a TramDB backed by a temp SQLite file."""
     p = tmp_path / "test.db"
-    d = TramDB(path=p)
+    d = TramDB(url=f"sqlite:///{p}")
     yield d
     d.close()
 

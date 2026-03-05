@@ -25,6 +25,14 @@ persistence:
 env:
   TRAM_LOG_LEVEL: INFO
   TRAM_LOG_FORMAT: json
+  # TRAM_NODE_ID: ""            # defaults to hostname; set explicitly in multi-replica deployments
+  # TRAM_SHUTDOWN_TIMEOUT_SECONDS: "30"  # drain timeout before forced stop
+  # --- Database (v0.7.0) ---
+  # TRAM_DB_URL: ""             # SQLAlchemy URL; if empty, uses SQLite at TRAM_DB_PATH
+  #                             # SQLite:     sqlite:////data/tram.db
+  #                             # PostgreSQL: postgresql+psycopg2://user:pass@host/db
+  #                             # MySQL:      mysql+pymysql://user:pass@host/db
+  # --- SMTP (for alert email actions) ---
   # TRAM_SMTP_HOST: localhost
   # TRAM_SMTP_PORT: "587"
   # TRAM_SMTP_TLS: "true"

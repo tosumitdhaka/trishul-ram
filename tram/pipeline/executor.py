@@ -158,7 +158,7 @@ class PipelineExecutor:
         dlq_sink=None,
     ) -> bool:
         """Process one (raw, meta) chunk. Returns True on success."""
-        from tram.metrics.registry import RECORDS_IN, RECORDS_OUT, RECORDS_SKIP, ERRORS, DURATION
+        from tram.metrics.registry import RECORDS_IN, RECORDS_OUT, RECORDS_SKIP, ERRORS, DLQ_RECORDS, DURATION
 
         meta = dict(meta)
         meta["pipeline_name"] = ctx.pipeline_name
@@ -175,6 +175,7 @@ class PipelineExecutor:
                         stage="parse", error=str(exc), record=None, raw=raw,
                     )
                     ctx.record_dlq()
+                    DLQ_RECORDS.labels(pipeline=ctx.pipeline_name).inc()
                 raise TramError(f"Parse error: {exc}") from exc
 
             ctx.records_in += len(records)
@@ -195,6 +196,7 @@ class PipelineExecutor:
                             stage="transform", error=str(exc), record=record,
                         )
                         ctx.record_dlq()
+                        DLQ_RECORDS.labels(pipeline=ctx.pipeline_name).inc()
                     ctx.record_error(str(exc))
             records = surviving_records
 
@@ -223,6 +225,7 @@ class PipelineExecutor:
                                 stage="transform", error=str(exc), record=pre_transform,
                             )
                             ctx.record_dlq()
+                            DLQ_RECORDS.labels(pipeline=ctx.pipeline_name).inc()
                         ctx.record_error(str(exc))
                         sink_transform_failed = True
                         break
@@ -245,6 +248,7 @@ class PipelineExecutor:
                             stage="sink", error=str(exc), record=sink_records,
                         )
                         ctx.record_dlq()
+                        DLQ_RECORDS.labels(pipeline=ctx.pipeline_name).inc()
                     if on_error == "abort":
                         raise TramError(f"Sink write error: {exc}") from exc
                     ctx.record_error(str(exc))

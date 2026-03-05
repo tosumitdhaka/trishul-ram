@@ -54,10 +54,11 @@ Every record is a plain Python `dict`. Global transforms apply per-record so a s
 │  │  └────────────────────┘  │                                               │
 │  └──────────────────────────┘                                               │
 │               │                                                              │
-│  PipelineManager ── TramDB (SQLite)  ── AlertEvaluator                      │
-│        │            run_history             │  check(result, config)         │
-│        │            pipeline_versions       │  → webhook (httpx)             │
-│        │            alert_state (cooldown)  │  → email (smtplib)             │
+│  PipelineManager ── TramDB (SQLAlchemy)  ── AlertEvaluator                  │
+│        │            run_history (+ node_id,   │  check(result, config)       │
+│        │              dlq_count)              │  → webhook (httpx)           │
+│        │            pipeline_versions         │  → email (smtplib)           │
+│        │            alert_state (cooldown)    │                              │
 │        │                                                                     │
 │  PipelineExecutor                                                            │
 │  ┌─────┴──────────────────────┐                                              │
@@ -71,7 +72,7 @@ Every record is a plain Python `dict`. Global transforms apply per-record so a s
 │  _rate_limit()           _rate_limit()                                       │
 │                                                                              │
 │  Metrics (prometheus_client or no-ops)                                       │
-│  tram_records_in/out/skipped/errors + chunk duration histogram               │
+│  tram_records_in/out/skipped/errors/dlq_total + chunk duration histogram     │
 └──────────────────────────────────────────────────────────────────────────────┘
 ```
 
@@ -86,7 +87,7 @@ class KafkaSource(BaseSource): ...
 
 The three `__init__.py` files in `connectors/`, `transforms/`, and `serializers/` import all submodules, firing decorators during package import at startup.
 
-### Plugin Registry Keys (v0.6.0)
+### Plugin Registry Keys (v0.7.0)
 
 | Category | Keys |
 |----------|------|
@@ -184,12 +185,24 @@ When configured, failed records are written as JSON envelopes:
 
 Cooldown is persisted in `alert_state` SQLite table so it survives daemon restarts.
 
-## Persistence (SQLite)
+## Persistence (SQLAlchemy Core — v0.7.0)
 
-`TramDB` at `~/.tram/tram.db` (or `$TRAM_DB_PATH`):
-- `run_history` — every `RunResult` saved by `PipelineManager.record_run()`
-- `pipeline_versions` — every YAML registered, auto-incremented version number
-- `alert_state` — last-alerted timestamp per `(pipeline_name, rule_name)` for cooldown
+`TramDB` uses **SQLAlchemy Core** so any backend is supported:
+
+| Backend | `TRAM_DB_URL` example |
+|---------|----------------------|
+| SQLite (default) | `sqlite:////data/tram.db` or leave unset |
+| PostgreSQL | `postgresql+psycopg2://user:pass@host/db` |
+| MySQL | `mysql+pymysql://user:pass@host/db` |
+
+Tables:
+- `run_history` — every `RunResult`; includes `node_id` (TRAM_NODE_ID) and `dlq_count`
+- `pipeline_versions` — every YAML registered; UUID primary key
+- `alert_state` — last-alerted timestamp per `(pipeline_name, rule_name)`
+
+**Schema migrations**: `_create_tables()` runs `CREATE TABLE IF NOT EXISTS` + `ALTER TABLE ADD COLUMN` guards at startup. Existing databases from v0.6.0 are upgraded automatically.
+
+**Node identity**: `TRAM_NODE_ID` (defaults to hostname) is stored in each `run_history` row — essential for diagnosing which instance produced which runs in multi-node deployments.
 
 ## Webhook Bridge
 

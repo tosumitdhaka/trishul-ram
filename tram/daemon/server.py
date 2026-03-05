@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import logging
+import os
+import signal
 
 from tram.core.config import AppConfig
 from tram.core.log_config import setup_logging
@@ -23,9 +25,25 @@ def serve(config: AppConfig | None = None) -> None:
 
     app = create_app(config)
 
+    # Install SIGTERM handler so the OS / container runtime gets a clean exit.
+    # Uvicorn handles SIGINT (Ctrl-C) natively; SIGTERM needs an explicit handler
+    # when running as PID 1 (Docker / Kubernetes).
+    _orig_sigterm = signal.getsignal(signal.SIGTERM)
+
+    def _on_sigterm(signum, frame):  # noqa: ANN001
+        logger.info("SIGTERM received — initiating graceful shutdown")
+        os.kill(os.getpid(), signal.SIGINT)  # uvicorn responds to SIGINT for graceful stop
+        signal.signal(signal.SIGTERM, _orig_sigterm)  # restore
+
+    signal.signal(signal.SIGTERM, _on_sigterm)
+
     logger.info(
         "Starting TRAM daemon",
-        extra={"host": config.host, "port": config.port},
+        extra={
+            "host": config.host,
+            "port": config.port,
+            "node_id": config.node_id,
+        },
     )
 
     uvicorn.run(
