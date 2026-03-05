@@ -40,6 +40,10 @@ spec:
                   fieldPath: metadata.name
             - name: TRAM_CLUSTER_ENABLED
               value: "true"
+            {{- if gt (len .Values.pipelines) 0 }}
+            - name: TRAM_PIPELINE_DIR
+              value: /pipelines
+            {{- end }}
             {{- range $key, $val := .Values.env }}
             - name: {{ $key }}
               value: {{ $val | quote }}
