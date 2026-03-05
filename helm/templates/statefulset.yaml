@@ -22,6 +22,7 @@ spec:
         {{- include "tram.selectorLabels" . | nindent 8 }}
     spec:
       serviceAccountName: {{ include "tram.serviceAccountName" . }}
+      enableServiceLinks: false
       containers:
         - name: tram
           image: "{{ .Values.image.repository }}:{{ .Values.image.tag }}"
