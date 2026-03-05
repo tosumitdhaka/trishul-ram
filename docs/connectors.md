@@ -56,6 +56,7 @@ That's it. The pipeline YAML immediately supports `source.type: myproto`.
 | `file_pattern` | `"*"` | Glob filter |
 | `move_after_read` | — | Move files here |
 | `delete_after_read` | false | Delete after reading |
+| `skip_processed` | false | Skip files already recorded in the DB for this pipeline (requires SQLite/DB persistence) |
 
 ### local
 | Parameter | Default | Description |
@@ -64,6 +65,7 @@ That's it. The pipeline YAML immediately supports `source.type: myproto`.
 | `file_pattern` | `"*"` | Glob filter |
 | `recursive` | false | Recurse subdirectories |
 | `move_after_read` / `delete_after_read` | — | Post-read action |
+| `skip_processed` | false | Skip files already recorded in the DB for this pipeline |
 
 ### rest
 | Parameter | Default | Description |
@@ -79,7 +81,7 @@ That's it. The pipeline YAML immediately supports `source.type: myproto`.
 |-----------|---------|-------------|
 | `brokers` | required | Bootstrap servers |
 | `topic` | required | Topic or list of topics |
-| `group_id` | `tram` | Consumer group |
+| `group_id` | pipeline name | Consumer group (defaults to pipeline name for isolation) |
 | `auto_offset_reset` | latest | `latest` / `earliest` |
 | `security_protocol` | PLAINTEXT | SASL/SSL options |
 
@@ -90,6 +92,7 @@ That's it. The pipeline YAML immediately supports `source.type: myproto`.
 | `username` / `password` | required | FTP credentials |
 | `remote_path` | `/` | Remote directory |
 | `passive` | true | Passive mode |
+| `skip_processed` | false | Skip files already recorded in the DB for this pipeline |
 
 ### s3
 | Parameter | Default | Description |
@@ -98,6 +101,7 @@ That's it. The pipeline YAML immediately supports `source.type: myproto`.
 | `prefix` | `""` | Key prefix filter |
 | `endpoint_url` | — | Override (e.g. MinIO) |
 | `aws_access_key_id` / `aws_secret_access_key` | — | Credentials |
+| `skip_processed` | false | Skip keys already recorded in the DB for this pipeline |
 
 ### syslog
 UDP/TCP syslog receiver. `host`, `port` (514), `protocol` (udp/tcp).
@@ -128,7 +132,7 @@ SNMP GET/WALK polling. `host`, `oids: list[str]`, `operation` (get/walk).
 |-----------|---------|-------------|
 | `servers` | `["nats://localhost:4222"]` | NATS servers |
 | `subject` | required | Subject to subscribe |
-| `queue_group` | `""` | Load-balancing group |
+| `queue_group` | pipeline name | Load-balancing queue group (defaults to pipeline name; set `""` explicitly for broadcast to all nodes) |
 
 ### gnmi
 gNMI telemetry subscription. `host`, `subscriptions: list[dict]`.
@@ -159,12 +163,14 @@ gNMI telemetry subscription. `host`, `subscriptions: list[dict]`.
 |-----------|---------|-------------|
 | `bucket` | required | GCS bucket |
 | `service_account_json` | — | Path to service account key |
+| `skip_processed` | false | Skip objects already recorded in the DB for this pipeline |
 
 ### azure_blob
 | Parameter | Default | Description |
 |-----------|---------|-------------|
 | `container` | required | Container name |
 | `connection_string` or `account_name`+`account_key` | required | Auth |
+| `skip_processed` | false | Skip blobs already recorded in the DB for this pipeline |
 
 ### webhook *(v0.5.0)*
 | Parameter | Default | Description |
@@ -198,6 +204,24 @@ Receives HTTP POSTs at `POST /webhooks/{path}` on the daemon port.
 | `secret` | — | Bearer token |
 
 Accepts Prometheus `remote_write` payloads (Snappy+protobuf).
+
+### corba *(v0.9.0)*
+
+Invokes a remote CORBA operation using the Dynamic Invocation Interface (DII). No pre-compiled IDL stubs are required. Covers 3GPP Itf-N, TMN X.700, Ericsson ENM, Nokia NetAct, Huawei iManager.
+
+Requires: `pip install tram[corba]`
+
+| Parameter | Default | Description |
+|-----------|---------|-------------|
+| `ior` | — | Direct IOR string (mutually exclusive with `naming_service`) |
+| `naming_service` | — | corbaloc URI, e.g. `corbaloc:iiop:192.168.1.1:2809/NameService` |
+| `object_name` | — | Slash-separated path in NamingService, e.g. `PM/PMCollect` |
+| `operation` | required | CORBA operation name to invoke |
+| `args` | `[]` | Positional arguments (int, float, str, bool) |
+| `timeout_seconds` | `30` | ORB request timeout |
+| `skip_processed` | false | Skip if this `(operation, args)` combination has already run for this pipeline |
+
+One of `ior` or `naming_service` must be configured.
 
 ---
 
@@ -303,6 +327,7 @@ The same `simpleeval` sandbox is used as in the `filter` and `add_field` transfo
 | `websocket` | websockets | websocket source/sink |
 | `elasticsearch` | elasticsearch | elasticsearch source/sink |
 | `prometheus_rw` | protobuf, python-snappy | prometheus_rw source |
+| `corba` | omniORBpy | corba source |
 | `avro` | fastavro | avro serializer |
 | `parquet` | pyarrow | parquet serializer |
 | `msgpack_ser` | msgpack | msgpack serializer |

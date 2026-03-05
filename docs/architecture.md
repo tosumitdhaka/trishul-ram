@@ -67,6 +67,7 @@ Every record is a plain Python `dict`. Global transforms apply per-record so a s
 │        │            pipeline_versions         │  → email (smtplib)           │
 │        │            alert_state (cooldown)    │                              │
 │        │            node_registry             │                              │
+│        │            processed_files           │                              │
 │        │                                                                     │
 │  PipelineExecutor                                                            │
 │  ┌─────┴──────────────────────┐                                              │
@@ -95,11 +96,11 @@ class KafkaSource(BaseSource): ...
 
 The three `__init__.py` files in `connectors/`, `transforms/`, and `serializers/` import all submodules, firing decorators during package import at startup.
 
-### Plugin Registry Keys (v0.8.0)
+### Plugin Registry Keys (v0.9.0)
 
 | Category | Keys |
 |----------|------|
-| Sources | `sftp`, `local`, `rest`, `kafka`, `ftp`, `s3`, `syslog`, `snmp_trap`, `snmp_poll`, `mqtt`, `amqp`, `nats`, `gnmi`, `sql`, `influxdb`, `redis`, `gcs`, `azure_blob`, `webhook`, `websocket`, `elasticsearch`, `prometheus_rw` |
+| Sources | `sftp`, `local`, `rest`, `kafka`, `ftp`, `s3`, `syslog`, `snmp_trap`, `snmp_poll`, `mqtt`, `amqp`, `nats`, `gnmi`, `sql`, `influxdb`, `redis`, `gcs`, `azure_blob`, `webhook`, `websocket`, `elasticsearch`, `prometheus_rw`, `corba` |
 | Sinks | `sftp`, `local`, `rest`, `kafka`, `opensearch`, `ftp`, `ves`, `s3`, `snmp_trap`, `mqtt`, `amqp`, `nats`, `sql`, `influxdb`, `redis`, `gcs`, `azure_blob`, `websocket`, `elasticsearch` |
 | Serializers | `json`, `csv`, `xml`, `avro`, `parquet`, `msgpack`, `protobuf` |
 | Transforms | `rename`, `cast`, `add_field`, `drop`, `value_map`, `filter`, `flatten`, `timestamp_normalize`, `aggregate`, `enrich`, `explode`, `deduplicate`, `regex_extract`, `template`, `mask`, `validate`, `sort`, `limit`, `jmespath`, `unnest` |
@@ -156,6 +157,22 @@ for sink, condition, sink_transforms in sinks:
 ## Rate Limiting
 
 Token-bucket algorithm on `PipelineExecutor`. One token consumed per sink write. Tokens refill at `rate_limit_rps` per second. Blocks (sleeps) when bucket is empty.
+
+## Thread Workers (v0.9.0)
+
+`PipelineConfig.thread_workers: int = 1` — number of parallel worker threads per pipeline run.
+
+**Batch mode** (`thread_workers > 1`): source chunks are submitted to a `ThreadPoolExecutor`. N chunks process concurrently. `batch_size` checks are approximate across threads.
+
+**Stream mode** (`thread_workers > 1`): a bounded `Queue(maxsize=thread_workers * 2)` decouples the source producer from N worker threads, providing natural backpressure.
+
+`PipelineRunContext` is fully thread-safe — all counter mutations are Lock-protected.
+
+## Processed-File Tracking (v0.9.0)
+
+`skip_processed: true` on any file/object-storage source (`sftp`, `local`, `s3`, `ftp`, `gcs`, `azure_blob`) causes the connector to skip files that have been successfully processed in a previous run.
+
+State is persisted in the `processed_files` SQLite table, keyed by `(pipeline_name, source_key, filepath)`. `ProcessedFileTracker` is injected by `PipelineExecutor._build_source()` into the source config dict at runtime.
 
 ## Dead-Letter Queue (DLQ)
 
@@ -271,6 +288,7 @@ Tables:
 - `pipeline_versions` — every YAML registered; UUID primary key
 - `alert_state` — last-alerted timestamp per `(pipeline_name, rule_name)`
 - `node_registry` — cluster membership: `node_id, ordinal, registered_at, last_heartbeat, status`
+- `processed_files` — `(pipeline_name, source_key, filepath, processed_at)`; used by `skip_processed` to make file-source runs idempotent
 
 **Schema migrations**: `_create_tables()` runs `CREATE TABLE IF NOT EXISTS` + `ALTER TABLE ADD COLUMN` guards at startup. Existing databases from v0.6.0 are upgraded automatically.
 
@@ -288,6 +306,7 @@ Per-pipeline `on_error` policy:
 - `continue` — log error, skip record/chunk, continue
 - `abort` — raise exception, mark run failed, stop
 - `retry` — retry entire run up to `retry_count` times with `retry_delay_seconds` backoff
+- `dlq` — route ALL failures (parse/transform/sink) to the DLQ sink (requires `dlq:` to be configured)
 
 ## Security
 
