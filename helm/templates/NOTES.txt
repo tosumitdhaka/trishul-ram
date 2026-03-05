@@ -14,7 +14,7 @@ TRAM {{ .Chart.AppVersion }} has been deployed!
 {{- end }}
 
 2. Check daemon health:
-  curl http://127.0.0.1:8765/health
+  curl http://127.0.0.1:8765/api/health
 
 3. View metrics (Prometheus format):
   curl http://127.0.0.1:8765/metrics
@@ -22,3 +22,9 @@ TRAM {{ .Chart.AppVersion }} has been deployed!
 4. Mount pipeline YAMLs via values.pipelines:
   helm upgrade {{ .Release.Name }} tram/tram \
     --set-file "pipelines.my-pipeline\.yaml=./pipelines/my-pipeline.yaml"
+{{- if .Values.clusterMode.enabled }}
+
+5. Check cluster node topology:
+  kubectl exec --namespace {{ .Release.Namespace }} {{ include "tram.fullname" . }}-0 -- \
+    curl -s http://localhost:8765/api/cluster/nodes
+{{- end }}
