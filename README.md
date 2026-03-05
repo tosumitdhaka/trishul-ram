@@ -2,7 +2,7 @@
 
 > Lightweight, container-native Python daemon that moves and transforms telecom data (PM/FM/Logs) across protocols.
 
-**Version:** 0.8.0 | **Status:** Active development | **Python:** 3.11+
+**Version:** 0.9.0 | **Status:** Active development | **Python:** 3.11+
 
 ---
 
@@ -54,16 +54,16 @@ curl -X POST http://localhost:8765/webhooks/my-events -d '{"event":"pm"}'
 
 ---
 
-## Plugin Registry (v0.8.0)
+## Plugin Registry (v0.9.0)
 
 | Category | Keys |
 |----------|------|
-| **Sources** | `sftp`, `local`, `rest`, `kafka`, `ftp`, `s3`, `syslog`, `snmp_trap`, `snmp_poll`, `mqtt`, `amqp`, `nats`, `gnmi`, `sql`, `influxdb`, `redis`, `gcs`, `azure_blob`, `webhook`, `websocket`, `elasticsearch`, `prometheus_rw` |
+| **Sources** | `sftp`, `local`, `rest`, `kafka`, `ftp`, `s3`, `syslog`, `snmp_trap`, `snmp_poll`, `mqtt`, `amqp`, `nats`, `gnmi`, `sql`, `influxdb`, `redis`, `gcs`, `azure_blob`, `webhook`, `websocket`, `elasticsearch`, `prometheus_rw`, `corba` |
 | **Sinks** | `sftp`, `local`, `rest`, `kafka`, `opensearch`, `ftp`, `ves`, `s3`, `snmp_trap`, `mqtt`, `amqp`, `nats`, `sql`, `influxdb`, `redis`, `gcs`, `azure_blob`, `websocket`, `elasticsearch` |
 | **Serializers** | `json`, `csv`, `xml`, `avro`, `parquet`, `msgpack`, `protobuf` |
 | **Transforms** | `rename`, `cast`, `add_field`, `drop`, `value_map`, `filter`, `flatten`, `timestamp_normalize`, `aggregate`, `enrich`, `explode`, `deduplicate`, `regex_extract`, `template`, `mask`, `validate`, `sort`, `limit`, `jmespath`, `unnest` |
 
-Optional extras: `pip install tram[kafka]` · `pip install tram[opensearch]` · `pip install tram[elasticsearch]` · `pip install tram[metrics]`
+Optional extras: `pip install tram[kafka]` · `pip install tram[opensearch]` · `pip install tram[elasticsearch]` · `pip install tram[metrics]` · `pip install tram[corba]`
 
 ---
 
@@ -112,7 +112,7 @@ pipeline:
     remote_path: /ingest/pm/
 ```
 
-### Multi-sink with conditional routing + per-sink transforms (v0.5.0 / v0.6.0)
+### Multi-sink with conditional routing + per-sink transforms
 
 ```yaml
   sinks:
@@ -138,7 +138,33 @@ pipeline:
     path: /tmp/dlq
 ```
 
-### Alert rules (v0.6.0)
+### v0.9.0 — parallel workers, batch cap, skip_processed, CORBA
+
+```yaml
+  # Parallelism and throughput control (v0.9.0)
+  thread_workers: 4           # process 4 chunks in parallel (batch + stream)
+  batch_size: 10000           # cap records per run (nil = unlimited)
+  on_error: dlq               # explicit: route all failures to DLQ (requires dlq:)
+
+  # Skip files already processed in this pipeline (v0.9.0)
+  source:
+    type: sftp
+    host: ${NE_SFTP_HOST}
+    remote_path: /export/pm/
+    file_pattern: "*.csv"
+    skip_processed: true      # idempotent; uses SQLite to track processed paths
+
+  # CORBA source — DII, no IDL stubs required (v0.9.0)
+  # source:
+  #   type: corba
+  #   naming_service: "corbaloc:iiop:192.168.1.1:2809/NameService"
+  #   object_name: "PM/PMCollect"
+  #   operation: getPMData
+  #   args: ["ManagedElement=1", 900]
+  #   skip_processed: true
+```
+
+### Alert rules
 
 ```yaml
   alerts:
@@ -159,6 +185,37 @@ pipeline:
 All `${VAR}` and `${VAR:-default}` placeholders are resolved from environment at load time.
 
 ---
+
+## v0.9.0 Features
+
+| Feature | Description |
+|---------|-------------|
+| **`thread_workers`** | Intra-node parallel chunk processing — `thread_workers: N` in pipeline config; works for both batch and stream modes |
+| **`batch_size` cap** | Stop reading after N records per run — useful for catch-up scenarios and rate-controlled ingestion |
+| **`on_error: dlq`** | Explicit mode routing all failures (parse/transform/sink) to the DLQ sink; model validates that `dlq:` is configured |
+| **CORBA source** | DII-based connector using `omniORBpy` — no pre-compiled IDL stubs; covers 3GPP Itf-N, TMN X.700, Ericsson ENM, Nokia NetAct |
+| **Processed-file tracking** | `skip_processed: true` on file/object-storage sources — pipeline + source-key + path stored in SQLite; re-runs are idempotent |
+| **Helm ConfigMap checksum** | Pod template annotation `checksum/config` auto-triggers rolling restart when any pipeline YAML changes on `helm upgrade` |
+| **Kafka group_id isolation** | `group_id` defaults to pipeline name (was hardcoded `"tram"`) — each pipeline gets its own consumer group out of the box |
+| **NATS queue_group isolation** | `queue_group` defaults to pipeline name; empty string `""` = explicit broadcast; `null` was the previous default (broadcast on all nodes) |
+
+## v0.8.1 Bug Fixes
+
+| Fix | Description |
+|-----|-------------|
+| **Kafka group isolation** | `KafkaSourceConfig.group_id: Optional[str] = None` — defaults to pipeline name at runtime |
+| **NATS queue_group** | `NatsSourceConfig.queue_group: Optional[str] = None` — defaults to pipeline name; `""` = opt-in broadcast |
+| **Kafka explicit commit** | `consumer.commit()` called before `consumer.close()` to avoid re-delivering tail records |
+| **Helm image.tag** | Stale default `0.6.0` corrected to track current release |
+
+## v0.8.0 Features
+
+| Feature | Description |
+|---------|-------------|
+| **Cluster mode** | Self-organizing multi-node deployment — `TRAM_CLUSTER_ENABLED=true`; nodes hash-ring partition pipelines |
+| **StatefulSet Helm** | Chart migrated from Deployment to StatefulSet; headless service for stable `tram-N` pod identities |
+| **Cluster REST API** | `GET /api/cluster/nodes` returns live topology; `TRAM_NODE_ID` from pod name |
+| **Rebalance** | `ClusterCoordinator` heartbeat + partition rebalance loop; pipelines migrate on node join/leave |
 
 ## v0.7.0 Features
 
@@ -212,11 +269,11 @@ curl http://localhost:8765/api/ready
 ```bash
 # Standalone (default)
 helm install tram oci://ghcr.io/OWNER/charts/tram \
-  --set image.tag=0.8.0
+  --set image.tag=0.9.0
 
 # Cluster mode (3-replica StatefulSet + external PostgreSQL)
 helm install tram oci://ghcr.io/OWNER/charts/tram \
-  --set image.tag=0.8.0 \
+  --set image.tag=0.9.0 \
   --set clusterMode.enabled=true \
   --set replicaCount=3 \
   --set envSecret.TRAM_DB_URL.secretName=tram-db \
@@ -224,7 +281,7 @@ helm install tram oci://ghcr.io/OWNER/charts/tram \
   --set persistence.enabled=false
 ```
 
-> **v0.8.0**: always a `StatefulSet` — `replicaCount=1` for standalone (stable `tram-0` identity, PVC per pod), `replicaCount=N` + `clusterMode.enabled=true` for self-organizing cluster. See [`docs/deployment.md`](docs/deployment.md) for full setup.
+> **v0.8.0+**: always a `StatefulSet` — `replicaCount=1` for standalone (stable `tram-0` identity, PVC per pod), `replicaCount=N` + `clusterMode.enabled=true` for self-organizing cluster. See [`docs/deployment.md`](docs/deployment.md) for full setup.
 
 ---
 
@@ -259,9 +316,9 @@ tram/
 ├── models/           Pydantic v2 pipeline schema (dlq, per-sink transforms, AlertRuleConfig)
 ├── serializers/      json, csv, xml, avro, parquet, msgpack, protobuf
 ├── transforms/       20 transforms
-├── connectors/       22 source + 19 sink connectors
+├── connectors/       23 source + 19 sink connectors (incl. corba source)
 ├── cluster/          NodeRegistry + ClusterCoordinator (v0.8.0 cluster mode)
-├── persistence/      TramDB (SQLAlchemy Core): run_history, pipeline_versions, alert_state, node_registry
+├── persistence/      TramDB (SQLAlchemy Core): run_history, pipeline_versions, alert_state, node_registry, processed_files; ProcessedFileTracker
 ├── metrics/          Prometheus metrics registry
 ├── schema_registry/  Confluent/Apicurio client + magic-byte helpers
 ├── alerts/           AlertEvaluator (webhook + email actions, cooldown)
@@ -292,9 +349,9 @@ helm/                 Helm chart (StatefulSet, Service, Headless Service, Config
 
 ```bash
 pip install -e ".[dev]"
-pytest tests/unit/         # 453 unit tests (no network)
+pytest tests/unit/         # 535 unit tests (no network)
 pytest tests/integration/  # 3 integration tests (mocked SFTP)
-pytest tests/             # all 456 tests
+pytest tests/             # all 538 tests
 ```
 
 ---

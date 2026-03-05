@@ -38,6 +38,7 @@ class SFTPSourceConfig(BaseModel):
     file_pattern: str = "*"
     move_after_read: Optional[str] = None
     delete_after_read: bool = False
+    skip_processed: bool = False   # track processed files in DB; skip on re-run
 
     @model_validator(mode="after")
     def check_auth(self) -> "SFTPSourceConfig":
@@ -53,6 +54,7 @@ class LocalSourceConfig(BaseModel):
     move_after_read: Optional[str] = None
     delete_after_read: bool = False
     recursive: bool = False
+    skip_processed: bool = False
 
 
 class RestSourceConfig(BaseModel):
@@ -79,7 +81,7 @@ class KafkaSourceConfig(BaseModel):
     type: Literal["kafka"]
     brokers: list[str]
     topic: Union[str, list[str]]
-    group_id: str = "tram"
+    group_id: Optional[str] = None   # None → use pipeline name at runtime
     auto_offset_reset: Literal["latest", "earliest"] = "latest"
     enable_auto_commit: bool = True
     max_poll_records: int = 500
@@ -102,6 +104,7 @@ class FtpSourceConfig(BaseModel):
     move_after_read: Optional[str] = None
     delete_after_read: bool = False
     passive: bool = True
+    skip_processed: bool = False
 
 
 class S3SourceConfig(BaseModel):
@@ -115,6 +118,7 @@ class S3SourceConfig(BaseModel):
     aws_secret_access_key: str = ""
     move_after_read: Optional[str] = None
     delete_after_read: bool = False
+    skip_processed: bool = False
 
 
 class SyslogSourceConfig(BaseModel):
@@ -169,7 +173,7 @@ class NatsSourceConfig(BaseModel):
     type: Literal["nats"]
     servers: list[str] = Field(default_factory=lambda: ["nats://localhost:4222"])
     subject: str
-    queue_group: str = ""
+    queue_group: Optional[str] = None   # None → use pipeline name at runtime; "" → broadcast
     credentials_file: Optional[str] = None
 
 
@@ -223,6 +227,7 @@ class GcsSourceConfig(BaseModel):
     service_account_json: Optional[str] = None
     move_after_read: Optional[str] = None
     delete_after_read: bool = False
+    skip_processed: bool = False
 
 
 class AzureBlobSourceConfig(BaseModel):
@@ -235,6 +240,7 @@ class AzureBlobSourceConfig(BaseModel):
     file_pattern: str = "*"
     move_after_read: Optional[str] = None
     delete_after_read: bool = False
+    skip_processed: bool = False
 
 
 # v0.5.0 new sources
@@ -276,6 +282,36 @@ class PrometheusRWSourceConfig(BaseModel):
     secret: Optional[str] = None
 
 
+class CorbaSourceConfig(BaseModel):
+    """CORBA source — calls a remote CORBA operation via DII (no compiled stubs needed).
+
+    Requires omniORBpy: ``pip install tram[corba]``
+
+    Config keys:
+        ior              (str, optional)  Direct IOR string (mutually exclusive with naming_service)
+        naming_service   (str, optional)  corbaloc URI e.g. "corbaloc:iiop:host:2809/NameService"
+        object_name      (str, optional)  Path in NamingService e.g. "PM/PMCollect" (used with naming_service)
+        operation        (str, required)  CORBA operation name to invoke
+        args             (list, default [])  Positional arguments (simple Python scalars)
+        timeout_seconds  (int, default 30)  ORB request timeout
+        skip_processed   (bool, default False)  Skip invocations already recorded in DB
+    """
+    type: Literal["corba"]
+    ior: Optional[str] = None
+    naming_service: Optional[str] = None
+    object_name: Optional[str] = None
+    operation: str
+    args: list = Field(default_factory=list)
+    timeout_seconds: int = 30
+    skip_processed: bool = False
+
+    @model_validator(mode="after")
+    def check_endpoint(self) -> "CorbaSourceConfig":
+        if not self.ior and not self.naming_service:
+            raise ValueError("Either 'ior' or 'naming_service' must be provided")
+        return self
+
+
 SourceConfig = Annotated[
     Union[
         SFTPSourceConfig,
@@ -300,6 +336,7 @@ SourceConfig = Annotated[
         WebSocketSourceConfig,
         ElasticsearchSourceConfig,
         PrometheusRWSourceConfig,
+        CorbaSourceConfig,
     ],
     Field(discriminator="type"),
 ]
@@ -875,13 +912,25 @@ class PipelineConfig(BaseModel):
     # Rate limiting
     rate_limit_rps: Optional[float] = None
 
+    # Parallelism
+    thread_workers: int = 1   # intra-node worker threads per pipeline run
+
+    # Batch size cap (max records to process per batch run; None = unlimited)
+    batch_size: Optional[int] = None
+
     # Error handling
-    on_error: Literal["continue", "abort", "retry"] = "continue"
+    on_error: Literal["continue", "abort", "retry", "dlq"] = "continue"
     retry_count: int = 3
     retry_delay_seconds: int = 10
 
     # Alert rules
     alerts: list[AlertRuleConfig] = Field(default_factory=list)
+
+    @model_validator(mode="after")
+    def check_on_error_dlq(self) -> "PipelineConfig":
+        if self.on_error == "dlq" and self.dlq is None:
+            raise ValueError("on_error='dlq' requires a 'dlq' sink to be configured")
+        return self
 
     @field_validator("name")
     @classmethod

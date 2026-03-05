@@ -95,6 +95,12 @@ def create_app(config: AppConfig | None = None) -> FastAPI:
         logger.warning("Could not initialise AlertEvaluator: %s", exc)
         alert_evaluator = None
 
+    # Initialise processed-file tracker (requires DB)
+    file_tracker = None
+    if db is not None:
+        from tram.persistence.file_tracker import ProcessedFileTracker
+        file_tracker = ProcessedFileTracker(db=db)
+
     manager = PipelineManager(db=db, alert_evaluator=alert_evaluator)
 
     # Cluster setup (only when enabled + external DB is configured)
@@ -135,12 +141,13 @@ def create_app(config: AppConfig | None = None) -> FastAPI:
         manager,
         coordinator=coordinator,
         rebalance_interval=config.heartbeat_seconds,
+        file_tracker=file_tracker,
     )
 
     app = FastAPI(
         title="TRAM",
         description="Trishul Real-time Adapter & Mapper",
-        version="0.8.0",
+        version="0.9.0",
         lifespan=lifespan,
     )
 

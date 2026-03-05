@@ -42,6 +42,30 @@ class TestNatsSink:
         assert call_kwargs["credentials"] == "/tmp/creds.nk"
 
 
+class TestNatsSourceQueueGroup:
+    def test_default_queue_group_uses_pipeline_name(self):
+        src = NatsSource({"subject": "events", "_pipeline_name": "pm-ingest"})
+        assert src.queue_group == "pm-ingest"
+
+    def test_explicit_empty_string_means_broadcast(self):
+        # queue_group="" is an explicit opt-out — should NOT be replaced with pipeline name
+        src = NatsSource({"subject": "events", "queue_group": "", "_pipeline_name": "pm-ingest"})
+        assert src.queue_group == ""
+
+    def test_explicit_group_name_used_as_is(self):
+        src = NatsSource({"subject": "events", "queue_group": "workers", "_pipeline_name": "pm-ingest"})
+        assert src.queue_group == "workers"
+
+    def test_none_group_falls_back_to_pipeline_name(self):
+        # model_dump() returns None when queue_group not set
+        src = NatsSource({"subject": "events", "queue_group": None, "_pipeline_name": "fm-collect"})
+        assert src.queue_group == "fm-collect"
+
+    def test_no_pipeline_name_and_no_group_defaults_to_empty(self):
+        src = NatsSource({"subject": "events"})
+        assert src.queue_group == ""
+
+
 class TestNatsSource:
     def test_import_error_raises_source_error(self):
         with patch.dict(sys.modules, {"nats": None}):

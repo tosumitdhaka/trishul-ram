@@ -141,6 +141,21 @@ def _create_tables(engine: Engine) -> None:
             "CREATE INDEX IF NOT EXISTS idx_nr_status ON node_registry(status)"
         ))
 
+        # v0.9.0: processed-file tracking for batch file sources
+        conn.execute(text("""
+            CREATE TABLE IF NOT EXISTS processed_files (
+                pipeline_name  TEXT NOT NULL,
+                source_key     TEXT NOT NULL,
+                filepath       TEXT NOT NULL,
+                processed_at   TEXT NOT NULL,
+                PRIMARY KEY (pipeline_name, source_key, filepath)
+            )
+        """))
+        conn.execute(text(
+            "CREATE INDEX IF NOT EXISTS idx_pf_lookup "
+            "ON processed_files(pipeline_name, source_key)"
+        ))
+
         # v0.7.0 column migrations: add new columns to existing databases
         _add_column_if_missing(conn, dialect, "run_history", "node_id", "TEXT NOT NULL DEFAULT ''")
         _add_column_if_missing(conn, dialect, "run_history", "dlq_count", "INTEGER NOT NULL DEFAULT 0")
@@ -505,6 +520,69 @@ class TramDB:
             conn.execute(
                 text("UPDATE node_registry SET status = 'stopped' WHERE node_id = :node_id"),
                 {"node_id": node_id},
+            )
+
+    # ── Processed-file tracking (v0.9.0) ──────────────────────────────────
+
+    def is_processed(self, pipeline_name: str, source_key: str, filepath: str) -> bool:
+        """Return True if this file has already been processed by this pipeline."""
+        with self._engine.connect() as conn:
+            row = conn.execute(
+                text("""
+                    SELECT 1 FROM processed_files
+                    WHERE pipeline_name = :pn AND source_key = :sk AND filepath = :fp
+                """),
+                {"pn": pipeline_name, "sk": source_key, "fp": filepath},
+            ).fetchone()
+        return row is not None
+
+    def mark_processed(self, pipeline_name: str, source_key: str, filepath: str) -> None:
+        """Record a file as successfully processed. Silently ignores duplicates."""
+        now = datetime.now(timezone.utc).isoformat()
+        dialect = self._engine.dialect.name
+        try:
+            with self._engine.begin() as conn:
+                if dialect == "sqlite":
+                    conn.execute(
+                        text("""
+                            INSERT OR IGNORE INTO processed_files
+                              (pipeline_name, source_key, filepath, processed_at)
+                            VALUES (:pn, :sk, :fp, :now)
+                        """),
+                        {"pn": pipeline_name, "sk": source_key, "fp": filepath, "now": now},
+                    )
+                elif dialect in ("postgresql", "postgres"):
+                    conn.execute(
+                        text("""
+                            INSERT INTO processed_files
+                              (pipeline_name, source_key, filepath, processed_at)
+                            VALUES (:pn, :sk, :fp, :now)
+                            ON CONFLICT DO NOTHING
+                        """),
+                        {"pn": pipeline_name, "sk": source_key, "fp": filepath, "now": now},
+                    )
+                elif dialect == "mysql":
+                    conn.execute(
+                        text("""
+                            INSERT IGNORE INTO processed_files
+                              (pipeline_name, source_key, filepath, processed_at)
+                            VALUES (:pn, :sk, :fp, :now)
+                        """),
+                        {"pn": pipeline_name, "sk": source_key, "fp": filepath, "now": now},
+                    )
+                else:
+                    conn.execute(
+                        text("""
+                            INSERT INTO processed_files
+                              (pipeline_name, source_key, filepath, processed_at)
+                            VALUES (:pn, :sk, :fp, :now)
+                        """),
+                        {"pn": pipeline_name, "sk": source_key, "fp": filepath, "now": now},
+                    )
+        except Exception as exc:
+            logger.warning(
+                "Failed to mark file as processed",
+                extra={"pipeline": pipeline_name, "filepath": filepath, "error": str(exc)},
             )
 
     # ── Lifecycle ──────────────────────────────────────────────────────────

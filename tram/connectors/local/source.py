@@ -38,6 +38,9 @@ class LocalSource(BaseSource):
         )
         self.delete_after_read: bool = bool(config.get("delete_after_read", False))
         self.recursive: bool = bool(config.get("recursive", False))
+        self.skip_processed: bool = bool(config.get("skip_processed", False))
+        self._pipeline_name: str = config.get("_pipeline_name", "")
+        self._file_tracker = config.get("_file_tracker")
 
     def read(self) -> Iterator[tuple[bytes, dict]]:
         if not self.path.exists():
@@ -54,14 +57,22 @@ class LocalSource(BaseSource):
             extra={"path": str(self.path), "pattern": self.file_pattern, "matched": len(files)},
         )
 
+        source_key = f"local:{self.path}"
         for filepath in files:
+            fp_str = str(filepath)
+            if self.skip_processed and self._file_tracker:
+                if self._file_tracker.is_processed(self._pipeline_name, source_key, fp_str):
+                    logger.info("Skipping already-processed local file", extra={"filepath": fp_str})
+                    continue
             try:
                 content = filepath.read_bytes()
                 yield content, {
                     "source_filename": filepath.name,
-                    "source_path": str(filepath),
+                    "source_path": fp_str,
                 }
                 self._post_read(filepath)
+                if self.skip_processed and self._file_tracker:
+                    self._file_tracker.mark_processed(self._pipeline_name, source_key, fp_str)
             except SourceError:
                 raise
             except Exception as exc:

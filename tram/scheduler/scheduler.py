@@ -14,6 +14,7 @@ if TYPE_CHECKING:
     from tram.cluster.coordinator import ClusterCoordinator
     from tram.models.pipeline import PipelineConfig
     from tram.pipeline.manager import PipelineManager
+    from tram.persistence.file_tracker import ProcessedFileTracker
 
 logger = logging.getLogger(__name__)
 
@@ -26,11 +27,12 @@ class TramScheduler:
         manager: "PipelineManager",
         coordinator: Optional["ClusterCoordinator"] = None,
         rebalance_interval: int = 10,
+        file_tracker: Optional["ProcessedFileTracker"] = None,
     ) -> None:
         self.manager = manager
         self._coordinator = coordinator
         self._rebalance_interval = rebalance_interval
-        self.executor = PipelineExecutor()
+        self.executor = PipelineExecutor(file_tracker=file_tracker)
         self._stream_threads: dict[str, threading.Thread] = {}
         self._stop_events: dict[str, threading.Event] = {}
         self._thread_pool = ThreadPoolExecutor(max_workers=10, thread_name_prefix="tram-batch")
