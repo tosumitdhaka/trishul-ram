@@ -6,9 +6,15 @@ image:
   tag: "0.6.0"
   pullPolicy: IfNotPresent
 
-## Single replica — TRAM v0.6.0 is a standalone daemon.
-## Multi-replica / clustering support is planned for a future release.
+## Standalone mode: replicaCount=1 (default).
+## Cluster mode: set clusterMode.enabled=true, replicaCount>1, and TRAM_DB_URL.
 replicaCount: 1
+
+## Cluster mode (v0.8.0)
+## Requires an external DB (PostgreSQL recommended, MariaDB supported).
+## When enabled, a StatefulSet is deployed instead of a Deployment.
+clusterMode:
+  enabled: false
 
 service:
   type: ClusterIP
@@ -25,10 +31,14 @@ persistence:
 env:
   TRAM_LOG_LEVEL: INFO
   TRAM_LOG_FORMAT: json
-  # TRAM_NODE_ID: ""            # defaults to hostname; set explicitly in multi-replica deployments
+  # TRAM_NODE_ID: ""            # defaults to hostname (auto-set from pod name in StatefulSet)
   # TRAM_SHUTDOWN_TIMEOUT_SECONDS: "30"  # drain timeout before forced stop
+  # --- Cluster (v0.8.0) ---
+  # TRAM_CLUSTER_ENABLED: "true"         # enable when clusterMode.enabled=true
+  # TRAM_HEARTBEAT_SECONDS: "10"
+  # TRAM_NODE_TTL_SECONDS: "30"
   # --- Database (v0.7.0) ---
-  # TRAM_DB_URL: ""             # SQLAlchemy URL; if empty, uses SQLite at TRAM_DB_PATH
+  # TRAM_DB_URL: ""             # Required for cluster mode (PostgreSQL or MariaDB)
   #                             # SQLite:     sqlite:////data/tram.db
   #                             # PostgreSQL: postgresql+psycopg2://user:pass@host/db
   #                             # MySQL:      mysql+pymysql://user:pass@host/db

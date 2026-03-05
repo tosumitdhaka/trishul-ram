@@ -48,17 +48,25 @@ Every record is a plain Python `dict`. Global transforms apply per-record so a s
 │  │  │  APScheduler       │  │   │  /api/runs      /api/plugins             │ │
 │  │  │  (batch/cron)      │  │   │  /api/pipelines/{name}/versions          │ │
 │  │  └────────────────────┘  │   │  /api/pipelines/{name}/rollback          │ │
-│  │  ┌────────────────────┐  │   │  /webhooks/{path}   /metrics             │ │
-│  │  │  ThreadPool        │  │   └──────────────────────────────────────────┘ │
-│  │  │  (stream)          │  │                                               │
+│  │  ┌────────────────────┐  │   │  /api/cluster/nodes                      │ │
+│  │  │  ThreadPool        │  │   │  /webhooks/{path}   /metrics             │ │
+│  │  │  (stream)          │  │   └──────────────────────────────────────────┘ │
+│  │  └────────────────────┘  │                                               │
+│  │  ┌────────────────────┐  │                                               │
+│  │  │  Rebalance thread  │  │                                               │
+│  │  │  (cluster mode)    │  │                                               │
 │  │  └────────────────────┘  │                                               │
 │  └──────────────────────────┘                                               │
+│               │                                                              │
+│  NodeRegistry ── ClusterCoordinator  (cluster mode only)                    │
+│  heartbeat thread  consistent hashing                                        │
 │               │                                                              │
 │  PipelineManager ── TramDB (SQLAlchemy)  ── AlertEvaluator                  │
 │        │            run_history (+ node_id,   │  check(result, config)       │
 │        │              dlq_count)              │  → webhook (httpx)           │
 │        │            pipeline_versions         │  → email (smtplib)           │
 │        │            alert_state (cooldown)    │                              │
+│        │            node_registry             │                              │
 │        │                                                                     │
 │  PipelineExecutor                                                            │
 │  ┌─────┴──────────────────────┐                                              │
@@ -87,7 +95,7 @@ class KafkaSource(BaseSource): ...
 
 The three `__init__.py` files in `connectors/`, `transforms/`, and `serializers/` import all submodules, firing decorators during package import at startup.
 
-### Plugin Registry Keys (v0.7.0)
+### Plugin Registry Keys (v0.8.0)
 
 | Category | Keys |
 |----------|------|
@@ -185,6 +193,69 @@ When configured, failed records are written as JSON envelopes:
 
 Cooldown is persisted in `alert_state` SQLite table so it survives daemon restarts.
 
+## Cluster Mode (v0.8.0)
+
+TRAM v0.8.0 adds a self-organising cluster with no external coordinator. Every pod participates in lightweight leader-election-free ownership via a shared database.
+
+### How it works
+
+```
+┌──────────────────────────────────────────────────────────────────┐
+│  Kubernetes StatefulSet                                           │
+│                                                                   │
+│  tram-0 ─────┐                                                   │
+│  tram-1 ─────┼──── node_registry table (PostgreSQL / MariaDB) ───┤
+│  tram-2 ─────┘         node_id  │  last_heartbeat  │  status     │
+│                                                                   │
+│  Each pod:                                                        │
+│    1. NodeRegistry.start() → INSERT/UPSERT own row               │
+│    2. Heartbeat thread → UPDATE last_heartbeat every N seconds   │
+│    3. expire_nodes()  → mark peers with old heartbeat 'dead'     │
+│    4. ClusterCoordinator.refresh() → read live peers             │
+│    5. owns(pipeline)  → sha1(name) % live_count == my_position  │
+│    6. Rebalance loop  → start/stop local pipelines on change     │
+└──────────────────────────────────────────────────────────────────┘
+```
+
+### Consistent hashing
+
+```python
+_stable_hash(name) % len(live_nodes) == my_position
+```
+
+- `_stable_hash(name)`: `sha1(name.encode())` — deterministic across all pods and restarts (unlike Python `hash()`)
+- `live_nodes`: sorted by `node_id` — order is identical on every pod
+- `my_position`: index of `this_node_id` in the sorted list — NOT the StatefulSet ordinal
+  - Example: if `tram-1` fails, `tram-0` = position 0, `tram-2` = position 1; full coverage is maintained
+
+### Failure recovery
+
+When a node stops heartbeating for `TRAM_NODE_TTL_SECONDS` (default 30s), peers mark it `'dead'` via `expire_nodes()`. On the next `coordinator.refresh()` call, the rebalance loop detects the topology change and absorbs the dead node's pipelines. No human intervention required.
+
+### Standalone fallback
+
+- `TRAM_CLUSTER_ENABLED=false` (default): `coordinator = None`; scheduler runs all pipelines normally
+- SQLite as `TRAM_DB_URL`: cluster mode is silently disabled with a warning (SQLite cannot handle concurrent multi-node writes)
+- If live nodes list is empty (startup race): node owns all pipelines as a safe fallback
+
+### API
+
+`GET /api/cluster/nodes` — returns topology state:
+
+```json
+{
+  "cluster_enabled": true,
+  "node_id": "tram-1",
+  "my_position": 1,
+  "live_node_count": 3,
+  "nodes": [
+    {"node_id": "tram-0"},
+    {"node_id": "tram-1"},
+    {"node_id": "tram-2"}
+  ]
+}
+```
+
 ## Persistence (SQLAlchemy Core — v0.7.0)
 
 `TramDB` uses **SQLAlchemy Core** so any backend is supported:
@@ -199,6 +270,7 @@ Tables:
 - `run_history` — every `RunResult`; includes `node_id` (TRAM_NODE_ID) and `dlq_count`
 - `pipeline_versions` — every YAML registered; UUID primary key
 - `alert_state` — last-alerted timestamp per `(pipeline_name, rule_name)`
+- `node_registry` — cluster membership: `node_id, ordinal, registered_at, last_heartbeat, status`
 
 **Schema migrations**: `_create_tables()` runs `CREATE TABLE IF NOT EXISTS` + `ALTER TABLE ADD COLUMN` guards at startup. Existing databases from v0.6.0 are upgraded automatically.
 

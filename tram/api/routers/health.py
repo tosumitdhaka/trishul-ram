@@ -51,3 +51,17 @@ async def meta() -> dict:
 async def plugins() -> dict:
     """All registered plugin keys by category."""
     return list_plugins()
+
+
+@router.get("/api/cluster/nodes")
+async def cluster_nodes(request: Request) -> dict:
+    """Cluster node registry — live nodes and ownership state.
+
+    Returns ``{"cluster_enabled": false}`` when running in standalone mode.
+    """
+    coordinator = getattr(request.app.state, "coordinator", None)
+    if coordinator is None:
+        return {"cluster_enabled": False}
+    state = coordinator.get_state()
+    state["cluster_enabled"] = True
+    return state

@@ -23,9 +23,10 @@ async def lifespan(app: FastAPI):
     config: AppConfig = app.state.config
     manager: PipelineManager = app.state.manager
     scheduler: TramScheduler = app.state.scheduler
+    node_registry = getattr(app.state, "node_registry", None)
 
     # ── Startup ────────────────────────────────────────────────────────────
-    logger.info("TRAM daemon starting")
+    logger.info("TRAM daemon starting", extra={"node_id": config.node_id})
 
     # Import plugins to trigger registration
     import tram.connectors  # noqa: F401
@@ -45,6 +46,12 @@ async def lifespan(app: FastAPI):
                     extra={"pipeline": pipeline_config.name, "error": str(exc)},
                 )
 
+    # Start node registry (heartbeat) before scheduler so coordinator
+    # has an initial topology before the first pipeline is scheduled
+    if node_registry is not None:
+        node_registry.start()
+        logger.info("Cluster mode active", extra={"node_id": config.node_id})
+
     # Start scheduler
     scheduler.start()
     logger.info("TRAM daemon ready", extra={"port": config.port})
@@ -54,6 +61,10 @@ async def lifespan(app: FastAPI):
     # ── Shutdown ───────────────────────────────────────────────────────────
     logger.info("TRAM daemon shutting down")
     scheduler.stop(timeout=config.shutdown_timeout)
+
+    # Stop node registry (deregisters from cluster) after scheduler drain
+    if node_registry is not None:
+        node_registry.stop()
 
     # Close DB if present
     db = getattr(app.state, "db", None)
@@ -85,12 +96,51 @@ def create_app(config: AppConfig | None = None) -> FastAPI:
         alert_evaluator = None
 
     manager = PipelineManager(db=db, alert_evaluator=alert_evaluator)
-    scheduler = TramScheduler(manager)
+
+    # Cluster setup (only when enabled + external DB is configured)
+    node_registry = None
+    coordinator = None
+    if config.cluster_enabled:
+        if not config.db_url:
+            logger.warning(
+                "TRAM_CLUSTER_ENABLED=true but TRAM_DB_URL is not set — "
+                "cluster mode requires an external DB (PostgreSQL or MariaDB). "
+                "Falling back to standalone mode."
+            )
+        elif db is not None:
+            try:
+                from tram.cluster.coordinator import ClusterCoordinator
+                from tram.cluster.registry import NodeRegistry
+                node_registry = NodeRegistry(
+                    db=db,
+                    node_id=config.node_id,
+                    ordinal=config.node_ordinal,
+                    heartbeat_seconds=config.heartbeat_seconds,
+                    ttl_seconds=config.node_ttl_seconds,
+                )
+                coordinator = ClusterCoordinator(
+                    registry=node_registry,
+                    node_id=config.node_id,
+                )
+                logger.info(
+                    "Cluster mode initialised",
+                    extra={"node_id": config.node_id, "ordinal": config.node_ordinal},
+                )
+            except Exception as exc:
+                logger.error("Failed to initialise cluster — running standalone: %s", exc)
+                node_registry = None
+                coordinator = None
+
+    scheduler = TramScheduler(
+        manager,
+        coordinator=coordinator,
+        rebalance_interval=config.heartbeat_seconds,
+    )
 
     app = FastAPI(
         title="TRAM",
         description="Trishul Real-time Adapter & Mapper",
-        version="0.7.0",
+        version="0.8.0",
         lifespan=lifespan,
     )
 
@@ -100,6 +150,8 @@ def create_app(config: AppConfig | None = None) -> FastAPI:
     app.state.scheduler = scheduler
     app.state.db = db
     app.state.alert_evaluator = alert_evaluator
+    app.state.node_registry = node_registry
+    app.state.coordinator = coordinator
 
     # Register routers
     app.include_router(health.router)

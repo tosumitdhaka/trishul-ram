@@ -9,6 +9,59 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ---
 
+## [0.8.0] — 2026-03-05
+
+### Added
+
+**StatefulSet self-organizing cluster**
+- `tram/cluster/registry.py` — `NodeRegistry`: registers the local node in the shared DB, runs a
+  periodic heartbeat thread, expires stale peers (`status='dead'`), deregisters on clean shutdown
+- `tram/cluster/coordinator.py` — `ClusterCoordinator`: caches live node topology, determines
+  pipeline ownership via consistent hashing: `sha1(pipeline_name) % live_node_count == my_position`
+- Ownership uses **sorted position** in live node list (not static ordinal) — handles non-sequential
+  ordinals gracefully when a node fails (tram-0, tram-2 become positions 0 and 1)
+- Safe fallback: if no live nodes in DB (startup race), the node owns all pipelines
+- `detect_ordinal(node_id)` helper: extracts ordinal suffix from StatefulSet hostname (`tram-2` → `2`)
+
+**DB: node_registry table**
+- `node_registry` table: `node_id, ordinal, registered_at, last_heartbeat, status`
+- New `TramDB` methods: `register_node()` (dialect-aware upsert), `heartbeat()`, `expire_nodes()`,
+  `get_live_nodes()`, `deregister_node()`
+- Cluster mode requires an external DB (`TRAM_DB_URL`); SQLite is blocked with a warning
+
+**Cluster env vars (AppConfig)**
+- `TRAM_CLUSTER_ENABLED` — enable cluster mode (default: `false`)
+- `TRAM_NODE_ORDINAL` — override ordinal (default: auto-detected from hostname)
+- `TRAM_HEARTBEAT_SECONDS` — heartbeat interval in seconds (default: `10`)
+- `TRAM_NODE_TTL_SECONDS` — seconds before a silent node is marked dead (default: `30`)
+
+**Scheduler: dynamic rebalance**
+- `TramScheduler` gains `coordinator` and `rebalance_interval` parameters
+- Ownership check in `_schedule_pipeline()` — nodes skip pipelines they don't own
+- Background `tram-rebalance` thread: polls `coordinator.refresh()` every N seconds; on topology
+  change calls `_rebalance()` which starts newly owned pipelines and stops released ones
+
+**Cluster API endpoint**
+- `GET /api/cluster/nodes` — returns `cluster_enabled`, `node_id`, `my_position`,
+  `live_node_count`, `nodes` list; returns `{"cluster_enabled": false}` in standalone mode
+
+**Helm: StatefulSet + Headless Service**
+- New `helm/templates/statefulset.yaml` — rendered when `clusterMode.enabled: true`
+- New `helm/templates/headless-service.yaml` — headless Service (`clusterIP: None`) for pod DNS
+- `helm/templates/deployment.yaml` — wrapped in `{{- if not .Values.clusterMode.enabled }}`
+- `helm/values.yaml` — `clusterMode.enabled: false` section with cluster env var comments
+- `helm/Chart.yaml` — version bumped to `0.8.0`
+
+**Tests** — 22 new tests (`test_cluster.py`); **453 total, all passing**
+
+### Changed
+- `TramScheduler.__init__` gains optional `coordinator: ClusterCoordinator | None` and
+  `rebalance_interval: int` parameters (backward compatible — defaults to standalone behaviour)
+- `tram/api/app.py` wires `NodeRegistry` + `ClusterCoordinator` from `AppConfig` in lifespan
+- `tram/__init__.__version__` → `"0.8.0"`
+
+---
+
 ## [0.7.0] — 2026-03-05
 
 ### Added

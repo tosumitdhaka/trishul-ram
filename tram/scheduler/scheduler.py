@@ -5,12 +5,13 @@ from __future__ import annotations
 import logging
 import threading
 from concurrent.futures import ThreadPoolExecutor
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Optional
 
 from tram.core.context import RunStatus
 from tram.pipeline.executor import PipelineExecutor
 
 if TYPE_CHECKING:
+    from tram.cluster.coordinator import ClusterCoordinator
     from tram.models.pipeline import PipelineConfig
     from tram.pipeline.manager import PipelineManager
 
@@ -20,14 +21,23 @@ logger = logging.getLogger(__name__)
 class TramScheduler:
     """Manages lifecycle of batch and stream pipeline executions."""
 
-    def __init__(self, manager: "PipelineManager") -> None:
+    def __init__(
+        self,
+        manager: "PipelineManager",
+        coordinator: Optional["ClusterCoordinator"] = None,
+        rebalance_interval: int = 10,
+    ) -> None:
         self.manager = manager
+        self._coordinator = coordinator
+        self._rebalance_interval = rebalance_interval
         self.executor = PipelineExecutor()
         self._stream_threads: dict[str, threading.Thread] = {}
         self._stop_events: dict[str, threading.Event] = {}
         self._thread_pool = ThreadPoolExecutor(max_workers=10, thread_name_prefix="tram-batch")
         self._scheduler = None
         self._running = False
+        self._rebalance_stop = threading.Event()
+        self._rebalance_thread: threading.Thread | None = None
 
     # ── Lifecycle ──────────────────────────────────────────────────────────
 
@@ -38,12 +48,89 @@ class TramScheduler:
         self._scheduler = BackgroundScheduler(timezone="UTC")
         self._running = True
 
+        # Initial coordinator refresh so owns() reflects current topology
+        if self._coordinator:
+            self._coordinator.refresh()
+
         for state in self.manager.list_all():
             if state.config.enabled:
                 self._schedule_pipeline(state.config)
 
         self._scheduler.start()
-        logger.info("TramScheduler started")
+
+        # Start rebalance loop only in cluster mode
+        if self._coordinator:
+            self._rebalance_stop.clear()
+            self._rebalance_thread = threading.Thread(
+                target=self._rebalance_loop,
+                name="tram-rebalance",
+                daemon=True,
+            )
+            self._rebalance_thread.start()
+            logger.info(
+                "TramScheduler started (cluster mode)",
+                extra={"rebalance_interval": self._rebalance_interval},
+            )
+        else:
+            logger.info("TramScheduler started (standalone mode)")
+
+    # ── Cluster rebalancing ────────────────────────────────────────────────
+
+    def _rebalance_loop(self) -> None:
+        """Background thread: poll for topology changes and rebalance ownership."""
+        while not self._rebalance_stop.wait(self._rebalance_interval):
+            try:
+                if self._coordinator and self._coordinator.refresh():
+                    self._rebalance()
+            except Exception as exc:
+                logger.error("Rebalance error", extra={"error": str(exc)})
+
+    def _rebalance(self) -> None:
+        """Re-evaluate pipeline ownership; start newly owned, stop released pipelines."""
+        logger.info("Rebalancing pipeline ownership")
+        for state in self.manager.list_all():
+            config = state.config
+            if not config.enabled or not self._coordinator:
+                continue
+
+            owns = self._coordinator.owns(config.name)
+            sched_type = config.schedule.type
+
+            if sched_type == "stream":
+                is_running = config.name in self._stream_threads
+                if owns and not is_running:
+                    logger.info(
+                        "Rebalance: acquiring stream pipeline",
+                        extra={"pipeline": config.name},
+                    )
+                    self._start_stream(config)
+                elif not owns and is_running:
+                    logger.info(
+                        "Rebalance: releasing stream pipeline",
+                        extra={"pipeline": config.name},
+                    )
+                    self._stop_stream(config.name)
+                    if self.manager.exists(config.name):
+                        self.manager.set_status(config.name, "stopped")
+            elif sched_type in ("interval", "cron"):
+                job_id = f"batch-{config.name}"
+                job_exists = (
+                    self._scheduler is not None
+                    and self._scheduler.get_job(job_id) is not None
+                )
+                if owns and not job_exists:
+                    logger.info(
+                        "Rebalance: acquiring batch pipeline",
+                        extra={"pipeline": config.name},
+                    )
+                    self._schedule_pipeline(config)
+                elif not owns and job_exists:
+                    logger.info(
+                        "Rebalance: releasing batch pipeline",
+                        extra={"pipeline": config.name},
+                    )
+                    self._scheduler.remove_job(job_id)
+                    self.manager.set_status(config.name, "stopped")
 
     def stop(self, timeout: int = 30) -> None:
         """Stop scheduler and all running stream/batch pipelines.
@@ -53,6 +140,11 @@ class TramScheduler:
         """
         self._running = False
         logger.info("TramScheduler stopping", extra={"drain_timeout_seconds": timeout})
+
+        # Stop rebalance loop first
+        if self._rebalance_thread and self._rebalance_thread.is_alive():
+            self._rebalance_stop.set()
+            self._rebalance_thread.join(timeout=self._rebalance_interval + 2)
 
         # Signal all stream pipelines to stop
         for name in list(self._stop_events.keys()):
@@ -81,6 +173,14 @@ class TramScheduler:
 
     def _schedule_pipeline(self, config: "PipelineConfig") -> None:
         """Schedule a pipeline based on its schedule type."""
+        # In cluster mode, only schedule pipelines owned by this node
+        if self._coordinator and not self._coordinator.owns(config.name):
+            logger.debug(
+                "Pipeline not owned by this node — skipping",
+                extra={"pipeline": config.name},
+            )
+            return
+
         sched_type = config.schedule.type
 
         if sched_type == "stream":
