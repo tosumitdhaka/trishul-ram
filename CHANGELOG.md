@@ -9,6 +9,57 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ---
 
+## [0.7.0] — 2026-03-05
+
+### Added
+
+**SQLAlchemy Core DB abstraction**
+- `tram/persistence/db.py` rewritten on SQLAlchemy Core — any backend supported via `TRAM_DB_URL`
+- SQLite (default), PostgreSQL (`tram[postgresql]`), MySQL/MariaDB (`tram[mysql]`) all work out of the box
+- `TRAM_DB_URL` env var (SQLAlchemy URL); falls back to `TRAM_DB_PATH` → SQLite when unset
+- Connection pooling (`pool_size=5`, `max_overflow=10`, `pool_pre_ping=True`) for non-SQLite backends
+- `sqlalchemy>=2.0` added to core dependencies (was previously in `[sql]` optional only)
+- New optional extras: `postgresql = ["psycopg2-binary>=2.9"]`, `mysql = ["PyMySQL>=1.1"]`
+
+**Node identity**
+- `AppConfig.node_id` — from `TRAM_NODE_ID` env (default: `socket.gethostname()`)
+- `node_id` stored in every `run_history` row — essential for multi-node cluster debugging
+- `TramDB(url, node_id)` constructor; node_id auto-stamped on every `save_run()`
+
+**`dlq_count` persisted**
+- `RunResult.dlq_count: int = 0` field added; `from_context()` carries it from `PipelineRunContext`
+- `to_dict()` now includes `dlq_count`
+- `dlq_count` column added to `run_history` table
+- `tram_dlq_total` Prometheus counter (`pipeline` label) incremented on every DLQ write
+
+**Graceful shutdown**
+- `TramScheduler.stop(timeout: int = 30)` — signals all stream threads, waits for in-flight batch runs via `ThreadPoolExecutor.shutdown(wait=True)`, joins stream threads with timeout
+- `TRAM_SHUTDOWN_TIMEOUT_SECONDS` env var (default `30`) wired through `AppConfig` and `lifespan`
+- SIGTERM handler in `daemon/server.py` converts SIGTERM → SIGINT so uvicorn gets a clean shutdown (critical for Docker / Kubernetes PID 1)
+
+**Readiness DB check**
+- `TramDB.health_check()` executes `SELECT 1`; returns `True/False`
+- `GET /api/ready` returns `503` when DB is configured but unreachable
+
+**Run history pagination**
+- `GET /api/runs` gains `offset` and `from_dt` query params
+- `TramDB.get_runs(offset, from_dt)` — `OFFSET` clause + `started_at >=` filter
+- `PipelineManager.get_runs()` and in-memory fallback both support new params
+- `TramDB.get_run(run_id)` now queries DB directly (previously only searched in-memory deque)
+
+**Schema migration**
+- `_create_tables()` is idempotent: `CREATE TABLE IF NOT EXISTS` + `_add_column_if_missing()` helper
+- Existing v0.6.0 SQLite databases upgraded automatically on first start (adds `node_id`, `dlq_count` to `run_history`)
+
+**Tests** — 25 new tests (`test_db_v07.py` ×15, `test_config_v07.py` ×6, `test_runresult_v07.py` ×4); **431 total, all passing**
+
+### Changed
+- `TramDB.__init__` signature: `path: Path` → `url: str = "", node_id: str = ""` (uses SQLAlchemy URL)
+- `pipeline_versions.id` now TEXT UUID (generated in Python); fresh databases get UUID ids; existing SQLite databases keep their integer ids (SQLite flexible typing)
+- `AppConfig` gains `node_id`, `db_url`, `shutdown_timeout` fields (from env: `TRAM_NODE_ID`, `TRAM_DB_URL`, `TRAM_SHUTDOWN_TIMEOUT_SECONDS`)
+
+---
+
 ## [0.6.0] — 2026-03-05
 
 ### Added

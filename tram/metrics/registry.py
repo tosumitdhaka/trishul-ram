@@ -45,6 +45,11 @@ try:
         "Total processing errors",
         ["pipeline"],
     )
+    DLQ_RECORDS = Counter(
+        "tram_dlq_total",
+        "Total records routed to the dead-letter queue",
+        ["pipeline"],
+    )
     DURATION = Histogram(
         "tram_chunk_duration_seconds",
         "Time spent processing one chunk",
@@ -58,5 +63,6 @@ except ImportError:
     RECORDS_OUT = _NoOpCounter()  # type: ignore[assignment]
     RECORDS_SKIP = _NoOpCounter()  # type: ignore[assignment]
     ERRORS = _NoOpCounter()  # type: ignore[assignment]
+    DLQ_RECORDS = _NoOpCounter()  # type: ignore[assignment]
     DURATION = _NoOpHistogram()  # type: ignore[assignment]
     _PROMETHEUS_AVAILABLE = False

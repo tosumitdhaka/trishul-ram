@@ -1,112 +1,243 @@
-"""SQLite persistence layer for pipeline versions and run history."""
+"""Persistence layer — SQLAlchemy Core backend, database-agnostic.
+
+Supports any SQLAlchemy-compatible database via TRAM_DB_URL.
+Falls back to SQLite at ~/.tram/tram.db (or TRAM_DB_PATH) when TRAM_DB_URL is unset.
+
+Extras:
+  pip install tram[postgresql]   # psycopg2-binary
+  pip install tram[mysql]        # PyMySQL
+"""
 
 from __future__ import annotations
 
+import logging
 import os
-import sqlite3
+import uuid
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Optional
 
+from sqlalchemy import create_engine, text
+from sqlalchemy.engine import Engine
+from sqlalchemy.exc import IntegrityError
+
 from tram.core.context import RunResult, RunStatus
 
+logger = logging.getLogger(__name__)
 
-def _db_path() -> Path:
+
+# ── Engine factory ────────────────────────────────────────────────────────────
+
+
+def _build_engine(url: str = "") -> Engine:
+    """Build SQLAlchemy engine from an explicit URL, TRAM_DB_URL, or SQLite path fallback."""
+    resolved = url or os.environ.get("TRAM_DB_URL", "")
+
+    if resolved:
+        is_sqlite = resolved.startswith("sqlite")
+        kwargs: dict = {}
+        if is_sqlite:
+            kwargs["connect_args"] = {"check_same_thread": False}
+        else:
+            kwargs["pool_pre_ping"] = True
+            kwargs["pool_size"] = 5
+            kwargs["max_overflow"] = 10
+        return create_engine(resolved, **kwargs)
+
+    # Fallback: SQLite at TRAM_DB_PATH (or default)
     raw = os.environ.get("TRAM_DB_PATH", "~/.tram/tram.db")
-    return Path(raw).expanduser()
+    path = Path(raw).expanduser()
+    path.parent.mkdir(parents=True, exist_ok=True)
+    return create_engine(
+        f"sqlite:///{path}",
+        connect_args={"check_same_thread": False},
+    )
 
 
-_DDL = """\
-CREATE TABLE IF NOT EXISTS pipeline_versions (
-    id          INTEGER PRIMARY KEY AUTOINCREMENT,
-    name        TEXT NOT NULL,
-    version     INTEGER NOT NULL,
-    yaml_content TEXT NOT NULL,
-    created_at  TEXT NOT NULL,
-    is_active   INTEGER NOT NULL DEFAULT 1
-);
+# ── Schema migration ──────────────────────────────────────────────────────────
 
-CREATE TABLE IF NOT EXISTS run_history (
-    run_id          TEXT PRIMARY KEY,
-    pipeline_name   TEXT NOT NULL,
-    status          TEXT NOT NULL,
-    started_at      TEXT NOT NULL,
-    finished_at     TEXT NOT NULL,
-    records_in      INTEGER NOT NULL DEFAULT 0,
-    records_out     INTEGER NOT NULL DEFAULT 0,
-    records_skipped INTEGER NOT NULL DEFAULT 0,
-    error           TEXT
-);
 
-CREATE TABLE IF NOT EXISTS alert_state (
-    pipeline_name   TEXT NOT NULL,
-    rule_name       TEXT NOT NULL,
-    last_alerted_at TEXT NOT NULL,
-    PRIMARY KEY (pipeline_name, rule_name)
-);
+def _add_column_if_missing(conn, dialect: str, table: str, column: str, typedef: str) -> None:
+    """Add a column to an existing table, ignoring errors if it already exists."""
+    if dialect == "postgresql":
+        conn.execute(text(f"ALTER TABLE {table} ADD COLUMN IF NOT EXISTS {column} {typedef}"))
+    else:
+        try:
+            conn.execute(text(f"ALTER TABLE {table} ADD COLUMN {column} {typedef}"))
+        except Exception:
+            pass  # column already exists (SQLite has no IF NOT EXISTS for ADD COLUMN)
 
-CREATE INDEX IF NOT EXISTS idx_pv_name ON pipeline_versions(name);
-CREATE INDEX IF NOT EXISTS idx_rh_pipeline ON run_history(pipeline_name);
-CREATE INDEX IF NOT EXISTS idx_rh_status ON run_history(status);
-"""
+
+def _create_tables(engine: Engine) -> None:
+    """Idempotent schema setup: create tables + apply column migrations."""
+    dialect = engine.dialect.name
+
+    # pipeline_versions.id uses TEXT UUID (portable across all backends)
+    with engine.begin() as conn:
+        conn.execute(text("""
+            CREATE TABLE IF NOT EXISTS pipeline_versions (
+                id           TEXT PRIMARY KEY NOT NULL,
+                name         TEXT NOT NULL,
+                version      INTEGER NOT NULL,
+                yaml_content TEXT NOT NULL,
+                created_at   TEXT NOT NULL,
+                is_active    INTEGER NOT NULL DEFAULT 1
+            )
+        """))
+
+        conn.execute(text("""
+            CREATE TABLE IF NOT EXISTS run_history (
+                run_id          TEXT PRIMARY KEY,
+                pipeline_name   TEXT NOT NULL,
+                status          TEXT NOT NULL,
+                started_at      TEXT NOT NULL,
+                finished_at     TEXT NOT NULL,
+                records_in      INTEGER NOT NULL DEFAULT 0,
+                records_out     INTEGER NOT NULL DEFAULT 0,
+                records_skipped INTEGER NOT NULL DEFAULT 0,
+                error           TEXT,
+                node_id         TEXT NOT NULL DEFAULT '',
+                dlq_count       INTEGER NOT NULL DEFAULT 0
+            )
+        """))
+
+        conn.execute(text("""
+            CREATE TABLE IF NOT EXISTS alert_state (
+                pipeline_name   TEXT NOT NULL,
+                rule_name       TEXT NOT NULL,
+                last_alerted_at TEXT NOT NULL,
+                PRIMARY KEY (pipeline_name, rule_name)
+            )
+        """))
+
+        # Indexes
+        conn.execute(text(
+            "CREATE INDEX IF NOT EXISTS idx_pv_name ON pipeline_versions(name)"
+        ))
+        conn.execute(text(
+            "CREATE INDEX IF NOT EXISTS idx_rh_pipeline ON run_history(pipeline_name)"
+        ))
+        conn.execute(text(
+            "CREATE INDEX IF NOT EXISTS idx_rh_status ON run_history(status)"
+        ))
+        conn.execute(text(
+            "CREATE INDEX IF NOT EXISTS idx_rh_started ON run_history(started_at)"
+        ))
+
+        # v0.7.0 column migrations: add new columns to existing databases
+        _add_column_if_missing(conn, dialect, "run_history", "node_id", "TEXT NOT NULL DEFAULT ''")
+        _add_column_if_missing(conn, dialect, "run_history", "dlq_count", "INTEGER NOT NULL DEFAULT 0")
+
+
+# ── TramDB ────────────────────────────────────────────────────────────────────
 
 
 class TramDB:
-    """Thin wrapper around a SQLite connection for TRAM persistence."""
+    """Database persistence for TRAM — pipeline versions, run history, alert state."""
 
-    def __init__(self, path: Path | None = None) -> None:
-        self._path = path or _db_path()
-        self._path.parent.mkdir(parents=True, exist_ok=True)
-        self._conn = sqlite3.connect(str(self._path), check_same_thread=False)
-        self._conn.row_factory = sqlite3.Row
-        self._conn.executescript(_DDL)
-        self._conn.commit()
+    def __init__(self, url: str = "", node_id: str = "") -> None:
+        """
+        Args:
+            url: SQLAlchemy database URL. Falls back to TRAM_DB_URL env var,
+                 then to SQLite at TRAM_DB_PATH (default ~/.tram/tram.db).
+            node_id: Identifier for this daemon instance, stored in run_history.
+        """
+        self._engine = _build_engine(url)
+        self._node_id = node_id
+        _create_tables(self._engine)
+        logger.debug(
+            "TramDB initialised",
+            extra={"dialect": self._engine.dialect.name, "node_id": node_id},
+        )
+
+    # ── Health ─────────────────────────────────────────────────────────────
+
+    def health_check(self) -> bool:
+        """Execute SELECT 1 to verify DB connectivity. Returns True on success."""
+        try:
+            with self._engine.connect() as conn:
+                conn.execute(text("SELECT 1"))
+            return True
+        except Exception as exc:
+            logger.error("DB health check failed", extra={"error": str(exc)})
+            return False
 
     # ── Run history ────────────────────────────────────────────────────────
 
     def save_run(self, result: RunResult) -> None:
-        self._conn.execute(
-            """
-            INSERT OR REPLACE INTO run_history
-              (run_id, pipeline_name, status, started_at, finished_at,
-               records_in, records_out, records_skipped, error)
-            VALUES (?,?,?,?,?,?,?,?,?)
-            """,
-            (
-                result.run_id,
-                result.pipeline_name,
-                result.status.value,
-                result.started_at.isoformat(),
-                result.finished_at.isoformat(),
-                result.records_in,
-                result.records_out,
-                result.records_skipped,
-                result.error,
-            ),
-        )
-        self._conn.commit()
+        """Persist a RunResult. Silently ignores duplicate run_ids."""
+        try:
+            with self._engine.begin() as conn:
+                conn.execute(
+                    text("""
+                        INSERT INTO run_history
+                          (run_id, pipeline_name, status, started_at, finished_at,
+                           records_in, records_out, records_skipped, error,
+                           node_id, dlq_count)
+                        VALUES
+                          (:run_id, :pipeline_name, :status, :started_at, :finished_at,
+                           :records_in, :records_out, :records_skipped, :error,
+                           :node_id, :dlq_count)
+                    """),
+                    {
+                        "run_id": result.run_id,
+                        "pipeline_name": result.pipeline_name,
+                        "status": result.status.value,
+                        "started_at": result.started_at.isoformat(),
+                        "finished_at": result.finished_at.isoformat(),
+                        "records_in": result.records_in,
+                        "records_out": result.records_out,
+                        "records_skipped": result.records_skipped,
+                        "error": result.error,
+                        "node_id": self._node_id,
+                        "dlq_count": result.dlq_count,
+                    },
+                )
+        except IntegrityError:
+            logger.debug("Run %s already persisted — skipping duplicate", result.run_id)
 
     def get_runs(
         self,
         pipeline_name: Optional[str] = None,
         status: Optional[str] = None,
         limit: int = 100,
+        offset: int = 0,
+        from_dt: Optional[datetime] = None,
     ) -> list[RunResult]:
+        """Return run history with optional filtering and pagination."""
         sql = "SELECT * FROM run_history WHERE 1=1"
-        params: list = []
-        if pipeline_name:
-            sql += " AND pipeline_name = ?"
-            params.append(pipeline_name)
-        if status:
-            sql += " AND status = ?"
-            params.append(status)
-        sql += " ORDER BY finished_at DESC LIMIT ?"
-        params.append(limit)
+        params: dict = {}
 
-        rows = self._conn.execute(sql, params).fetchall()
+        if pipeline_name:
+            sql += " AND pipeline_name = :pipeline_name"
+            params["pipeline_name"] = pipeline_name
+        if status:
+            sql += " AND status = :status"
+            params["status"] = status
+        if from_dt:
+            sql += " AND started_at >= :from_dt"
+            params["from_dt"] = from_dt.isoformat()
+
+        sql += " ORDER BY finished_at DESC LIMIT :limit OFFSET :offset"
+        params["limit"] = limit
+        params["offset"] = offset
+
+        with self._engine.connect() as conn:
+            rows = conn.execute(text(sql), params).mappings().fetchall()
         return [self._row_to_run_result(r) for r in rows]
 
-    def _row_to_run_result(self, row: sqlite3.Row) -> RunResult:
+    def get_run(self, run_id: str) -> Optional[RunResult]:
+        """Fetch a single run by run_id."""
+        with self._engine.connect() as conn:
+            row = conn.execute(
+                text("SELECT * FROM run_history WHERE run_id = :run_id"),
+                {"run_id": run_id},
+            ).mappings().fetchone()
+        if row is None:
+            return None
+        return self._row_to_run_result(row)
+
+    def _row_to_run_result(self, row) -> RunResult:
         return RunResult(
             run_id=row["run_id"],
             pipeline_name=row["pipeline_name"],
@@ -117,54 +248,73 @@ class TramDB:
             records_out=row["records_out"],
             records_skipped=row["records_skipped"],
             error=row["error"],
+            dlq_count=row.get("dlq_count", 0) or 0,
         )
 
     # ── Pipeline versions ──────────────────────────────────────────────────
 
     def save_pipeline_version(self, name: str, yaml_content: str) -> int:
-        """Save a new version; deactivate previous versions. Returns new version number."""
-        row = self._conn.execute(
-            "SELECT COALESCE(MAX(version), 0) FROM pipeline_versions WHERE name = ?",
-            (name,),
-        ).fetchone()
-        next_version = row[0] + 1
+        """Save a new pipeline version; deactivate previous. Returns new version number."""
+        with self._engine.begin() as conn:
+            row = conn.execute(
+                text("SELECT COALESCE(MAX(version), 0) FROM pipeline_versions WHERE name = :name"),
+                {"name": name},
+            ).scalar()
+            next_version = (row or 0) + 1
 
-        # Deactivate old
-        self._conn.execute(
-            "UPDATE pipeline_versions SET is_active = 0 WHERE name = ?", (name,)
-        )
-        self._conn.execute(
-            """
-            INSERT INTO pipeline_versions (name, version, yaml_content, created_at, is_active)
-            VALUES (?,?,?,?,1)
-            """,
-            (name, next_version, yaml_content, datetime.now(timezone.utc).isoformat()),
-        )
-        self._conn.commit()
+            conn.execute(
+                text("UPDATE pipeline_versions SET is_active = 0 WHERE name = :name"),
+                {"name": name},
+            )
+            conn.execute(
+                text("""
+                    INSERT INTO pipeline_versions
+                      (id, name, version, yaml_content, created_at, is_active)
+                    VALUES (:id, :name, :version, :yaml_content, :created_at, 1)
+                """),
+                {
+                    "id": str(uuid.uuid4()),
+                    "name": name,
+                    "version": next_version,
+                    "yaml_content": yaml_content,
+                    "created_at": datetime.now(timezone.utc).isoformat(),
+                },
+            )
         return next_version
 
     def get_pipeline_versions(self, name: str) -> list[dict]:
-        rows = self._conn.execute(
-            "SELECT id, name, version, created_at, is_active FROM pipeline_versions "
-            "WHERE name = ? ORDER BY version DESC",
-            (name,),
-        ).fetchall()
+        with self._engine.connect() as conn:
+            rows = conn.execute(
+                text(
+                    "SELECT id, name, version, created_at, is_active "
+                    "FROM pipeline_versions WHERE name = :name ORDER BY version DESC"
+                ),
+                {"name": name},
+            ).mappings().fetchall()
         return [dict(r) for r in rows]
 
     def get_pipeline_version(self, name: str, version: int) -> str:
-        row = self._conn.execute(
-            "SELECT yaml_content FROM pipeline_versions WHERE name = ? AND version = ?",
-            (name, version),
-        ).fetchone()
+        with self._engine.connect() as conn:
+            row = conn.execute(
+                text(
+                    "SELECT yaml_content FROM pipeline_versions "
+                    "WHERE name = :name AND version = :version"
+                ),
+                {"name": name, "version": version},
+            ).mappings().fetchone()
         if row is None:
             raise KeyError(f"Pipeline '{name}' version {version} not found")
         return row["yaml_content"]
 
     def get_latest_version(self, name: str) -> str:
-        row = self._conn.execute(
-            "SELECT yaml_content FROM pipeline_versions WHERE name = ? AND is_active = 1",
-            (name,),
-        ).fetchone()
+        with self._engine.connect() as conn:
+            row = conn.execute(
+                text(
+                    "SELECT yaml_content FROM pipeline_versions "
+                    "WHERE name = :name AND is_active = 1"
+                ),
+                {"name": name},
+            ).mappings().fetchone()
         if row is None:
             raise KeyError(f"No active version found for pipeline '{name}'")
         return row["yaml_content"]
@@ -173,26 +323,68 @@ class TramDB:
 
     def get_alert_cooldown(self, pipeline_name: str, rule_name: str) -> Optional[datetime]:
         """Return the last-alerted datetime for a rule, or None if never alerted."""
-        row = self._conn.execute(
-            "SELECT last_alerted_at FROM alert_state WHERE pipeline_name = ? AND rule_name = ?",
-            (pipeline_name, rule_name),
-        ).fetchone()
+        with self._engine.connect() as conn:
+            row = conn.execute(
+                text(
+                    "SELECT last_alerted_at FROM alert_state "
+                    "WHERE pipeline_name = :pn AND rule_name = :rn"
+                ),
+                {"pn": pipeline_name, "rn": rule_name},
+            ).mappings().fetchone()
         if row is None:
             return None
         return datetime.fromisoformat(row["last_alerted_at"])
 
     def set_alert_cooldown(self, pipeline_name: str, rule_name: str, dt: datetime) -> None:
         """Upsert the last-alerted timestamp for a rule."""
-        self._conn.execute(
-            """
-            INSERT INTO alert_state (pipeline_name, rule_name, last_alerted_at)
-            VALUES (?, ?, ?)
-            ON CONFLICT(pipeline_name, rule_name)
-            DO UPDATE SET last_alerted_at = excluded.last_alerted_at
-            """,
-            (pipeline_name, rule_name, dt.isoformat()),
-        )
-        self._conn.commit()
+        dialect = self._engine.dialect.name
+        ts = dt.isoformat()
+        with self._engine.begin() as conn:
+            if dialect == "sqlite":
+                conn.execute(
+                    text("""
+                        INSERT OR REPLACE INTO alert_state
+                          (pipeline_name, rule_name, last_alerted_at)
+                        VALUES (:pn, :rn, :ts)
+                    """),
+                    {"pn": pipeline_name, "rn": rule_name, "ts": ts},
+                )
+            elif dialect in ("postgresql", "postgres"):
+                conn.execute(
+                    text("""
+                        INSERT INTO alert_state (pipeline_name, rule_name, last_alerted_at)
+                        VALUES (:pn, :rn, :ts)
+                        ON CONFLICT (pipeline_name, rule_name)
+                        DO UPDATE SET last_alerted_at = EXCLUDED.last_alerted_at
+                    """),
+                    {"pn": pipeline_name, "rn": rule_name, "ts": ts},
+                )
+            elif dialect == "mysql":
+                conn.execute(
+                    text("""
+                        INSERT INTO alert_state (pipeline_name, rule_name, last_alerted_at)
+                        VALUES (:pn, :rn, :ts)
+                        ON DUPLICATE KEY UPDATE last_alerted_at = VALUES(last_alerted_at)
+                    """),
+                    {"pn": pipeline_name, "rn": rule_name, "ts": ts},
+                )
+            else:
+                # Generic fallback: delete + insert
+                conn.execute(
+                    text(
+                        "DELETE FROM alert_state WHERE pipeline_name = :pn AND rule_name = :rn"
+                    ),
+                    {"pn": pipeline_name, "rn": rule_name},
+                )
+                conn.execute(
+                    text("""
+                        INSERT INTO alert_state (pipeline_name, rule_name, last_alerted_at)
+                        VALUES (:pn, :rn, :ts)
+                    """),
+                    {"pn": pipeline_name, "rn": rule_name, "ts": ts},
+                )
+
+    # ── Lifecycle ──────────────────────────────────────────────────────────
 
     def close(self) -> None:
-        self._conn.close()
+        self._engine.dispose()

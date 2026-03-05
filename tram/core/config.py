@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import os
+import socket
 from dataclasses import dataclass
 
 
@@ -19,6 +20,10 @@ class AppConfig:
     log_format: str
     workers: int
     reload_on_start: bool
+    # v0.7.0 additions
+    node_id: str
+    db_url: str
+    shutdown_timeout: int
 
     @classmethod
     def from_env(cls) -> "AppConfig":
@@ -32,4 +37,7 @@ class AppConfig:
             log_format=os.environ.get("TRAM_LOG_FORMAT", "json"),
             workers=int(os.environ.get("TRAM_WORKERS", "1")),
             reload_on_start=os.environ.get("TRAM_RELOAD_ON_START", "true").lower() == "true",
+            node_id=os.environ.get("TRAM_NODE_ID", socket.gethostname()),
+            db_url=os.environ.get("TRAM_DB_URL", ""),
+            shutdown_timeout=int(os.environ.get("TRAM_SHUTDOWN_TIMEOUT_SECONDS", "30")),
         )

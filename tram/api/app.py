@@ -53,7 +53,7 @@ async def lifespan(app: FastAPI):
 
     # ── Shutdown ───────────────────────────────────────────────────────────
     logger.info("TRAM daemon shutting down")
-    scheduler.stop()
+    scheduler.stop(timeout=config.shutdown_timeout)
 
     # Close DB if present
     db = getattr(app.state, "db", None)
@@ -71,7 +71,7 @@ def create_app(config: AppConfig | None = None) -> FastAPI:
     # Initialise persistence
     try:
         from tram.persistence.db import TramDB
-        db = TramDB()
+        db = TramDB(url=config.db_url, node_id=config.node_id)
     except Exception as exc:
         logger.warning("Could not initialise TramDB: %s — run history will be in-memory only", exc)
         db = None
@@ -90,7 +90,7 @@ def create_app(config: AppConfig | None = None) -> FastAPI:
     app = FastAPI(
         title="TRAM",
         description="Trishul Real-time Adapter & Mapper",
-        version="0.6.0",
+        version="0.7.0",
         lifespan=lifespan,
     )
 

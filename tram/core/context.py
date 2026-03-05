@@ -51,6 +51,7 @@ class RunResult:
     records_out: int
     records_skipped: int
     error: Optional[str] = None
+    dlq_count: int = 0
 
     @classmethod
     def from_context(
@@ -69,6 +70,7 @@ class RunResult:
             records_out=ctx.records_out,
             records_skipped=ctx.records_skipped,
             error=error,
+            dlq_count=ctx.dlq_count,
         )
 
     def to_dict(self) -> dict:
@@ -81,5 +83,6 @@ class RunResult:
             "records_in": self.records_in,
             "records_out": self.records_out,
             "records_skipped": self.records_skipped,
+            "dlq_count": self.dlq_count,
             "error": self.error,
         }

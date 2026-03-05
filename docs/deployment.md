@@ -18,7 +18,10 @@ All configuration is via environment variables (12-factor).
 | `TRAM_HOST` | `0.0.0.0` | API server bind address |
 | `TRAM_PORT` | `8765` | API server port |
 | `TRAM_PIPELINE_DIR` | `./pipelines` | Directory scanned for pipeline YAMLs at startup |
-| `TRAM_DB_PATH` | `~/.tram/tram.db` | SQLite path for run history + pipeline versions |
+| `TRAM_DB_URL` | _(empty)_ | SQLAlchemy database URL (see below); if empty, uses `TRAM_DB_PATH` |
+| `TRAM_DB_PATH` | `~/.tram/tram.db` | SQLite file path (used when `TRAM_DB_URL` is unset) |
+| `TRAM_NODE_ID` | hostname | Node identifier stored in run_history for multi-node tracing |
+| `TRAM_SHUTDOWN_TIMEOUT_SECONDS` | `30` | Seconds to drain in-flight runs before forced stop |
 | `TRAM_API_URL` | `http://localhost:8765` | Daemon URL used by CLI proxy commands |
 | `TRAM_LOG_LEVEL` | `INFO` | Log level: DEBUG, INFO, WARNING, ERROR |
 | `TRAM_LOG_FORMAT` | `json` | Log format: `json` or `text` |
@@ -30,6 +33,24 @@ All configuration is via environment variables (12-factor).
 | `TRAM_SMTP_PASS` | _(none)_ | SMTP password (optional) |
 | `TRAM_SMTP_TLS` | `true` | Use STARTTLS (`false` for plain SMTP) |
 | `TRAM_SMTP_FROM` | `tram@localhost` | Sender address for alert emails |
+
+### Database backends (v0.7.0)
+
+```bash
+# SQLite (default — zero config)
+# TRAM_DB_URL not set; uses ~/.tram/tram.db
+
+# SQLite at a custom path
+TRAM_DB_URL=sqlite:////data/tram.db
+
+# PostgreSQL (requires pip install tram[postgresql])
+TRAM_DB_URL=postgresql+psycopg2://tram:secret@postgres:5432/tramdb
+
+# MySQL / MariaDB (requires pip install tram[mysql])
+TRAM_DB_URL=mysql+pymysql://tram:secret@mysql:3306/tramdb
+```
+
+Schema migrations run automatically at startup: `CREATE TABLE IF NOT EXISTS` + `ALTER TABLE ADD COLUMN` guards handle upgrades from v0.6.0 databases.
 
 ## Docker
 

@@ -2,6 +2,9 @@
 
 from __future__ import annotations
 
+from datetime import datetime
+from typing import Optional
+
 from fastapi import APIRouter, HTTPException, Query, Request
 
 from tram.core.exceptions import PipelineNotFoundError
@@ -12,13 +15,21 @@ router = APIRouter(prefix="/api")
 @router.get("/runs")
 async def list_runs(
     request: Request,
-    pipeline: str | None = Query(None),
-    status: str | None = Query(None),
-    limit: int = Query(100, ge=1, le=1000),
+    pipeline: Optional[str] = Query(None, description="Filter by pipeline name"),
+    status: Optional[str] = Query(None, description="Filter by status (success/failed/aborted)"),
+    limit: int = Query(100, ge=1, le=1000, description="Maximum records to return"),
+    offset: int = Query(0, ge=0, description="Records to skip (for pagination)"),
+    from_dt: Optional[datetime] = Query(None, description="Only runs started at or after this ISO timestamp"),
 ) -> list[dict]:
-    """List run history, optionally filtered by pipeline name and status."""
+    """List run history with optional filtering and pagination."""
     manager = request.app.state.manager
-    runs = manager.get_runs(pipeline_name=pipeline, status=status, limit=limit)
+    runs = manager.get_runs(
+        pipeline_name=pipeline,
+        status=status,
+        limit=limit,
+        offset=offset,
+        from_dt=from_dt,
+    )
     return [r.to_dict() for r in runs]
 
 

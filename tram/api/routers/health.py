@@ -21,8 +21,15 @@ async def liveness() -> dict:
 
 @router.get("/api/ready")
 async def readiness(request: Request) -> dict:
-    """Readiness probe — returns 200 when daemon is fully initialized."""
+    """Readiness probe — returns 200 when daemon is fully initialized and DB is reachable."""
+    from fastapi import HTTPException
+
     manager = request.app.state.manager
+    db = getattr(request.app.state, "db", None)
+
+    if db is not None and not db.health_check():
+        raise HTTPException(status_code=503, detail="Database unreachable")
+
     pipelines = manager.list_all()
     return {
         "status": "ready",

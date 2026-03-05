@@ -2,7 +2,7 @@
 
 > Lightweight, container-native Python daemon that moves and transforms telecom data (PM/FM/Logs) across protocols.
 
-**Version:** 0.6.0 | **Status:** Active development | **Python:** 3.11+
+**Version:** 0.7.0 | **Status:** Active development | **Python:** 3.11+
 
 ---
 
@@ -160,6 +160,18 @@ All `${VAR}` and `${VAR:-default}` placeholders are resolved from environment at
 
 ---
 
+## v0.7.0 Features
+
+| Feature | Description |
+|---------|-------------|
+| **External DB support** | `TRAM_DB_URL` (SQLAlchemy URL) — SQLite (default), PostgreSQL, MySQL/MariaDB; `pip install tram[postgresql\|mysql]` |
+| **Node identity** | `TRAM_NODE_ID` stored in every run — `node_id` column in `run_history` for multi-node tracing |
+| **`dlq_count` persisted** | `RunResult.dlq_count` carried through to DB; `tram_dlq_total` Prometheus counter |
+| **Graceful shutdown** | SIGTERM → SIGINT bridge; `TRAM_SHUTDOWN_TIMEOUT_SECONDS` drain wait; stream threads joined |
+| **Readiness DB check** | `GET /api/ready` returns 503 when DB is unreachable |
+| **Run history pagination** | `?offset=N&from_dt=ISO` on `GET /api/runs` |
+| **Schema migrations** | Idempotent at startup — v0.6.0 SQLite databases upgraded automatically |
+
 ## v0.6.0 Features
 
 | Feature | Description |
@@ -167,7 +179,7 @@ All `${VAR}` and `${VAR:-default}` placeholders are resolved from environment at
 | **Dead-Letter Queue** | `dlq: <sink>` on pipeline config; failed records (parse/transform/sink) written as JSON envelopes |
 | **Per-sink transforms** | Each sink has its own `transforms:` chain, applied after global transforms + condition filter |
 | **Alert rules** | `alerts:` list on pipeline; simpleeval conditions; webhook (httpx) or email (smtplib) actions with cooldown |
-| **Helm chart** | Production-ready `helm/` with HPA, PVC, ConfigMap pipelines, envSecret, Prometheus annotations |
+| **Helm chart** | Production-ready `helm/` with PVC, ConfigMap pipelines, envSecret, Prometheus annotations |
 | **GitHub Actions** | `ci.yml` (ruff + pytest on PR/push); `release.yml` (multi-arch Docker + Helm OCI on `v*` tags) |
 
 ## v0.5.0 Features
@@ -229,7 +241,7 @@ helm install tram oci://ghcr.io/OWNER/charts/tram \
 | POST | `/api/pipelines/{name}/rollback?version=N` | Restore a version |
 | POST | `/webhooks/{path}` | Ingest HTTP payload to webhook source |
 | GET | `/metrics` | Prometheus metrics (text/plain) |
-| GET | `/api/runs` | Run history |
+| GET | `/api/runs` | Run history (`?pipeline=&status=&limit=&offset=&from_dt=`) |
 
 Full reference: [`docs/api.md`](docs/api.md)
 
@@ -277,9 +289,9 @@ helm/                 Helm chart (Deployment, Service, ConfigMap, PVC, HPA, SA)
 
 ```bash
 pip install -e ".[dev]"
-pytest tests/unit/         # 406 unit tests (no network)
+pytest tests/unit/         # 431 unit tests (no network)
 pytest tests/integration/  # 3 integration tests (mocked SFTP)
-pytest tests/             # all 409 tests
+pytest tests/             # all 434 tests
 ```
 
 ---

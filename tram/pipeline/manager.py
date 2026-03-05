@@ -7,6 +7,8 @@ from collections import deque
 from datetime import datetime, timezone
 from typing import TYPE_CHECKING, Optional
 
+from datetime import datetime
+
 from tram.core.context import RunResult
 from tram.core.exceptions import PipelineAlreadyExistsError, PipelineNotFoundError
 from tram.models.pipeline import PipelineConfig
@@ -129,11 +131,20 @@ class PipelineManager:
         pipeline_name: Optional[str] = None,
         status: Optional[str] = None,
         limit: int = 100,
+        offset: int = 0,
+        from_dt: Optional[datetime] = None,
     ) -> list[RunResult]:
-        """Return run history. Uses SQLite if available (survives restarts)."""
+        """Return run history. Uses DB if available (survives restarts)."""
         if self._db:
-            return self._db.get_runs(pipeline_name=pipeline_name, status=status, limit=limit)
+            return self._db.get_runs(
+                pipeline_name=pipeline_name,
+                status=status,
+                limit=limit,
+                offset=offset,
+                from_dt=from_dt,
+            )
 
+        # In-memory fallback (no persistence configured)
         all_runs: list[RunResult] = []
         for state in self._pipelines.values():
             if pipeline_name and state.config.name != pipeline_name:
@@ -144,10 +155,14 @@ class PipelineManager:
 
         if status:
             all_runs = [r for r in all_runs if r.status.value == status]
+        if from_dt:
+            all_runs = [r for r in all_runs if r.started_at >= from_dt]
 
-        return all_runs[:limit]
+        return all_runs[offset: offset + limit]
 
     def get_run(self, run_id: str) -> Optional[RunResult]:
+        if self._db:
+            return self._db.get_run(run_id)
         for state in self._pipelines.values():
             for result in state.run_history:
                 if result.run_id == run_id:

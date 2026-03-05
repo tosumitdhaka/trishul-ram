@@ -45,18 +45,36 @@ class TramScheduler:
         self._scheduler.start()
         logger.info("TramScheduler started")
 
-    def stop(self) -> None:
-        """Stop scheduler and all running stream pipelines."""
+    def stop(self, timeout: int = 30) -> None:
+        """Stop scheduler and all running stream/batch pipelines.
+
+        Args:
+            timeout: Seconds to wait for in-flight batch runs and stream threads to finish.
+        """
         self._running = False
+        logger.info("TramScheduler stopping", extra={"drain_timeout_seconds": timeout})
 
-        # Stop stream pipelines
-        for name in list(self._stream_threads.keys()):
-            self._stop_stream(name)
+        # Signal all stream pipelines to stop
+        for name in list(self._stop_events.keys()):
+            self._stop_events[name].set()
 
+        # Stop APScheduler (no new batch jobs dispatched after this)
         if self._scheduler and self._scheduler.running:
-            self._scheduler.shutdown(wait=True)
+            self._scheduler.shutdown(wait=False)
 
-        self._thread_pool.shutdown(wait=True)
+        # Wait for in-flight batch runs (thread pool)
+        self._thread_pool.shutdown(wait=True, cancel_futures=False)
+
+        # Wait for stream threads to drain
+        for name, thread in list(self._stream_threads.items()):
+            if thread.is_alive():
+                thread.join(timeout=timeout)
+                if thread.is_alive():
+                    logger.warning(
+                        "Stream thread did not stop within timeout",
+                        extra={"pipeline": name, "timeout_seconds": timeout},
+                    )
+
         logger.info("TramScheduler stopped")
 
     # ── Pipeline scheduling ────────────────────────────────────────────────
@@ -174,13 +192,13 @@ class TramScheduler:
                 if self.manager.get(config.name).status == "running":
                     self.manager.set_status(config.name, "stopped")
 
-    def _stop_stream(self, name: str) -> None:
+    def _stop_stream(self, name: str, timeout: int = 10) -> None:
         stop_event = self._stop_events.get(name)
         if stop_event:
             stop_event.set()
         thread = self._stream_threads.get(name)
         if thread and thread.is_alive():
-            thread.join(timeout=10)
+            thread.join(timeout=timeout)
         logger.info("Stopped stream pipeline", extra={"pipeline": name})
 
     # ── Runtime pipeline management ────────────────────────────────────────
