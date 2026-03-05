@@ -6,13 +6,15 @@ image:
   tag: "0.6.0"
   pullPolicy: IfNotPresent
 
-## Standalone mode: replicaCount=1 (default).
-## Cluster mode: set clusterMode.enabled=true, replicaCount>1, and TRAM_DB_URL.
+## TRAM always deploys as a StatefulSet (stable pod names: tram-0, tram-1, …).
+## replicaCount=1 → standalone daemon.
+## replicaCount>1 + clusterMode.enabled=true → self-organizing cluster.
 replicaCount: 1
 
 ## Cluster mode (v0.8.0)
-## Requires an external DB (PostgreSQL recommended, MariaDB supported).
-## When enabled, a StatefulSet is deployed instead of a Deployment.
+## Activates consistent-hashing pipeline ownership across replicas.
+## Requires an external DB (TRAM_DB_URL) — PostgreSQL recommended, MariaDB supported.
+## SQLite is not supported for cluster mode (single-writer limitation).
 clusterMode:
   enabled: false
 
