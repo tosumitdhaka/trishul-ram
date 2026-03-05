@@ -45,11 +45,13 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - `GET /api/cluster/nodes` — returns `cluster_enabled`, `node_id`, `my_position`,
   `live_node_count`, `nodes` list; returns `{"cluster_enabled": false}` in standalone mode
 
-**Helm: StatefulSet + Headless Service**
-- New `helm/templates/statefulset.yaml` — rendered when `clusterMode.enabled: true`
-- New `helm/templates/headless-service.yaml` — headless Service (`clusterIP: None`) for pod DNS
-- `helm/templates/deployment.yaml` — wrapped in `{{- if not .Values.clusterMode.enabled }}`
-- `helm/values.yaml` — `clusterMode.enabled: false` section with cluster env var comments
+**Helm: always-StatefulSet design**
+- `helm/templates/statefulset.yaml` — always rendered; `replicaCount=1` standalone, `N` cluster
+- `helm/templates/headless-service.yaml` — always rendered; headless Service for stable pod DNS
+- `deployment.yaml` and `pvc.yaml` removed — replaced by `volumeClaimTemplates` in StatefulSet
+- `volumeClaimTemplates` auto-provisions `data-tram-N` PVC per pod — survives pod restarts and
+  rescheduling; PVC stays bound to the same pod across node reschedules
+- `helm/values.yaml` — `clusterMode.enabled: false` controls `TRAM_CLUSTER_ENABLED` env var
 - `helm/Chart.yaml` — version bumped to `0.8.0`
 
 **Tests** — 22 new tests (`test_cluster.py`); **453 total, all passing**
@@ -146,8 +148,8 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 **Helm Chart** (`helm/`)
 - `Chart.yaml` — apiVersion v2, version 0.6.0
 - `values.yaml` — image, replicaCount (fixed at 1), service, persistence (SQLite PVC), env, envSecret, pipelines ConfigMap, resources, nodeSelector, tolerations, affinity, podAnnotations, serviceAccount
-- Templates: `deployment.yaml`, `service.yaml`, `configmap.yaml` (pipeline YAMLs), `pvc.yaml`, `serviceaccount.yaml`, `_helpers.tpl`, `NOTES.txt`
-- v0.6.0 is a standalone single-replica deployment; multi-replica clustering is planned for a future release
+- Templates: `statefulset.yaml`, `service.yaml`, `headless-service.yaml`, `configmap.yaml`, `serviceaccount.yaml`, `_helpers.tpl`, `NOTES.txt`
+- Storage managed via `volumeClaimTemplates` (introduced in v0.8.0; v0.6.0 used `deployment.yaml` + `pvc.yaml`)
 
 **GitHub Actions**
 - `.github/workflows/ci.yml` — triggers on push to `main`/`develop` and all PRs; runs ruff + pytest on Python 3.11 and 3.12

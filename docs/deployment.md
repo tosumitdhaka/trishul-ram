@@ -107,10 +107,10 @@ helm upgrade tram oci://ghcr.io/OWNER/charts/tram \
 |-------|---------|-------------|
 | `image.repository` | `ghcr.io/OWNER/tram` | Docker image repository |
 | `image.tag` | `"0.8.0"` | Image tag |
-| `replicaCount` | `1` | Replicas — set >1 with `clusterMode.enabled: true` |
-| `clusterMode.enabled` | `false` | Deploy StatefulSet instead of Deployment for clustering |
-| `persistence.enabled` | `true` | Mount SQLite PVC at `/data` (standalone) or ignored in cluster mode |
-| `persistence.size` | `1Gi` | PVC size |
+| `replicaCount` | `1` | Replicas — `1` = standalone, `N` = cluster |
+| `clusterMode.enabled` | `false` | Activate cluster mode (sets `TRAM_CLUSTER_ENABLED`, requires external DB) |
+| `persistence.enabled` | `true` | Provision a PVC per pod via `volumeClaimTemplates` (SQLite at `/data`) |
+| `persistence.size` | `1Gi` | PVC size per pod |
 | `persistence.accessMode` | `ReadWriteOnce` | PVC access mode |
 | `env` | `{}` | Plain env vars |
 | `envSecret` | `{}` | Env vars from Secret (`secretName`/`secretKey`) |
@@ -125,7 +125,7 @@ helm install tram oci://ghcr.io/OWNER/charts/tram \
   --set image.tag=0.8.0
 ```
 
-A single `Deployment` + PVC runs the full daemon. SQLite stores run history and pipeline versions locally.
+A single-replica `StatefulSet` with pod name `tram-0` runs the full daemon. A `PersistentVolumeClaim` (`data-tram-0`) is auto-provisioned via `volumeClaimTemplates` — SQLite run history survives pod restarts and rescheduling across nodes.
 
 ### Cluster mode (v0.8.0)
 
@@ -359,7 +359,9 @@ remote_write:
 
 ## Scaling
 
-TRAM v0.8.0 supports two deployment modes:
+TRAM always deploys as a `StatefulSet` (pod names `tram-0`, `tram-1`, …). Scale is controlled by `replicaCount` and `clusterMode.enabled`:
 
-- **Standalone** (`clusterMode.enabled: false`, default) — single `Deployment` replica with local SQLite. Zero configuration overhead.
-- **Cluster** (`clusterMode.enabled: true`) — `StatefulSet` with N replicas sharing an external PostgreSQL or MariaDB database. Pipelines are distributed automatically via consistent hashing. No external coordinator (ZooKeeper, etcd) required.
+- **Standalone** (`replicaCount: 1`, default) — single pod `tram-0` with local SQLite via auto-provisioned PVC `data-tram-0`. Zero configuration overhead.
+- **Cluster** (`replicaCount: N`, `clusterMode.enabled: true`) — N pods sharing an external PostgreSQL or MariaDB database. Pipelines distributed automatically via consistent hashing. No external coordinator required.
+
+Using a `StatefulSet` in both modes ensures stable pod identity (`tram-0` always stays `tram-0`), consistent `TRAM_NODE_ID` across restarts, and proper PVC affinity so the data volume follows the pod when it reschedules.
