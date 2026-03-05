@@ -224,7 +224,7 @@ helm install tram oci://ghcr.io/OWNER/charts/tram \
   --set persistence.enabled=false
 ```
 
-> **v0.8.0**: standalone Deployment (default) or self-organizing StatefulSet cluster — no external coordinator needed. See [`docs/deployment.md`](docs/deployment.md) for full setup.
+> **v0.8.0**: always a `StatefulSet` — `replicaCount=1` for standalone (stable `tram-0` identity, PVC per pod), `replicaCount=N` + `clusterMode.enabled=true` for self-organizing cluster. See [`docs/deployment.md`](docs/deployment.md) for full setup.
 
 ---
 
@@ -270,7 +270,7 @@ tram/
 ├── api/              FastAPI routers (health, pipelines, runs, webhooks, metrics, cluster)
 ├── daemon/           uvicorn server entrypoint
 └── cli/              Typer CLI
-helm/                 Helm chart (Deployment + StatefulSet, Service, Headless Service, ConfigMap, PVC, SA)
+helm/                 Helm chart (StatefulSet, Service, Headless Service, ConfigMap, SA, volumeClaimTemplates)
 .github/workflows/    ci.yml (test) + release.yml (Docker + Helm OCI publish)
 ```
 
