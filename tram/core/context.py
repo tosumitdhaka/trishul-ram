@@ -27,11 +27,15 @@ class PipelineRunContext:
     records_in: int = 0
     records_out: int = 0
     records_skipped: int = 0
+    dlq_count: int = 0
     errors: list[str] = field(default_factory=list)
 
     def record_error(self, msg: str) -> None:
         self.errors.append(msg)
         self.records_skipped += 1
+
+    def record_dlq(self) -> None:
+        self.dlq_count += 1
 
 
 @dataclass

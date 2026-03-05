@@ -1,0 +1,79 @@
+## TRAM Helm chart values
+## Ref: https://github.com/trishul/tram
+
+image:
+  repository: ghcr.io/OWNER/tram
+  tag: "0.6.0"
+  pullPolicy: IfNotPresent
+
+## Single replica — TRAM v0.6.0 is a standalone daemon.
+## Multi-replica / clustering support is planned for a future release.
+replicaCount: 1
+
+service:
+  type: ClusterIP
+  port: 8765
+
+## SQLite persistence for run history, pipeline versions, and alert state
+persistence:
+  enabled: true
+  size: 1Gi
+  storageClass: ""
+  accessMode: ReadWriteOnce
+
+## Environment variables (plain key/value)
+env:
+  TRAM_LOG_LEVEL: INFO
+  TRAM_LOG_FORMAT: json
+  # TRAM_SMTP_HOST: localhost
+  # TRAM_SMTP_PORT: "587"
+  # TRAM_SMTP_TLS: "true"
+  # TRAM_SMTP_FROM: tram@localhost
+
+## Environment variables sourced from a Kubernetes Secret
+## Example:
+##   envSecret:
+##     TRAM_SMTP_USER:
+##       secretName: tram-smtp
+##       secretKey: username
+##     TRAM_SMTP_PASS:
+##       secretName: tram-smtp
+##       secretKey: password
+envSecret: {}
+
+## Pipeline YAML files to mount as a ConfigMap at /pipelines
+## Example:
+##   pipelines:
+##     minimal.yaml: |
+##       pipeline:
+##         name: minimal
+##         ...
+pipelines: {}
+
+resources: {}
+  # limits:
+  #   cpu: 500m
+  #   memory: 512Mi
+  # requests:
+  #   cpu: 100m
+  #   memory: 128Mi
+
+nodeSelector: {}
+
+tolerations: []
+
+affinity: {}
+
+## Pod annotations (e.g., for Prometheus scraping)
+podAnnotations: {}
+  # prometheus.io/scrape: "true"
+  # prometheus.io/port: "8765"
+  # prometheus.io/path: "/metrics"
+
+serviceAccount:
+  create: true
+  ## If not set, a name is generated using the fullname template
+  name: ""
+
+## Extra labels to add to all resources
+extraLabels: {}

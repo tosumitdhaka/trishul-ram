@@ -15,12 +15,26 @@ TRAM (Trishul Real-time Adapter & Mapper) is a lightweight, container-native Pyt
 ## Data Flow
 
 ```
-Source → (bytes, meta) → Deserializer → list[dict] → Transforms → Serializer → bytes → Sinks
+Source → (bytes, meta) → Deserializer → list[dict] → Global Transforms (per-record)
+                                                                │
+                                             ┌─────────────────┴──────────────────┐
+                                        [parse error]                       [transform error]
+                                             │                                     │
+                                          DLQ sink                            DLQ sink
+                                       (stage=parse)                    (stage=transform)
+
+                               list[dict] (surviving records)
+                                             │
+                                  ┌──────────┴──────────┐
+                                  │    For each sink:    │
+                                  │  condition filter    │
+                                  │  per-sink transforms │──── [transform error] → DLQ sink
+                                  │  serializer_out      │
+                                  │  sink.write()        │──── [write error]     → DLQ sink
+                                  └──────────────────────┘
 ```
 
-Each sink may have an optional `condition:` expression. Records are fan-out-routed: all sinks with a matching condition (or no condition) receive a separately serialized copy.
-
-Every record is a plain Python `dict`. This universal in-memory representation allows transforms to be protocol-agnostic.
+Every record is a plain Python `dict`. Global transforms apply per-record so a single bad record cannot abort the whole chunk. Each sink can apply its own transform chain independently.
 
 ## Component Map
 
@@ -40,20 +54,24 @@ Every record is a plain Python `dict`. This universal in-memory representation a
 │  │  └────────────────────┘  │                                               │
 │  └──────────────────────────┘                                               │
 │               │                                                              │
-│         PipelineManager ──── TramDB (SQLite)                                 │
-│               │               run_history + pipeline_versions                │
-│         PipelineExecutor                                                     │
-│         ┌────┴──────────────────────┐                                       │
-│         │                           │                                        │
-│    batch_run()                 stream_run()                                  │
-│         │                           │                                        │
-│   _build_source()            _build_source()                                 │
-│   _build_sinks()             _build_sinks()    ← list of (sink, condition)  │
-│   _filter_by_condition()     _filter_by_condition()                          │
-│   _rate_limit()              _rate_limit()                                   │
+│  PipelineManager ── TramDB (SQLite)  ── AlertEvaluator                      │
+│        │            run_history             │  check(result, config)         │
+│        │            pipeline_versions       │  → webhook (httpx)             │
+│        │            alert_state (cooldown)  │  → email (smtplib)             │
+│        │                                                                     │
+│  PipelineExecutor                                                            │
+│  ┌─────┴──────────────────────┐                                              │
+│  │                            │                                              │
+│  batch_run()             stream_run()                                        │
+│  │                            │                                              │
+│  _build_source()         _build_source()                                     │
+│  _build_sinks()          _build_sinks()  ← list of (sink, cond, transforms) │
+│  _build_dlq_sink()       _build_dlq_sink()                                   │
+│  _filter_by_condition()  _filter_by_condition()                              │
+│  _rate_limit()           _rate_limit()                                       │
 │                                                                              │
-│         Metrics (prometheus_client or no-ops)                                │
-│         tram_records_in/out/skipped/errors + chunk duration histogram        │
+│  Metrics (prometheus_client or no-ops)                                       │
+│  tram_records_in/out/skipped/errors + chunk duration histogram               │
 └──────────────────────────────────────────────────────────────────────────────┘
 ```
 
@@ -68,7 +86,7 @@ class KafkaSource(BaseSource): ...
 
 The three `__init__.py` files in `connectors/`, `transforms/`, and `serializers/` import all submodules, firing decorators during package import at startup.
 
-### Plugin Registry Keys (v0.5.0)
+### Plugin Registry Keys (v0.6.0)
 
 | Category | Keys |
 |----------|------|
@@ -90,33 +108,88 @@ The three `__init__.py` files in `connectors/`, `transforms/`, and `serializers/
 - Runs in a dedicated thread per pipeline
 - Stopped only by `POST /api/pipelines/{name}/stop` or daemon shutdown
 
-## Multi-Sink Routing
+## Multi-Sink Routing + Per-Sink Transforms
 
-```
-records = serializer_in.parse(raw)
-records = transforms.apply(records)
+```python
+records = serializer_in.parse(raw)          # parse error → DLQ (stage=parse)
 
-for sink, condition in sinks:
+surviving = []
+for record in records:
+    try:
+        r = [record]
+        for t in global_transforms:
+            r = t.apply(r)                  # transform error → DLQ (stage=transform)
+        surviving.extend(r)
+    except Exception:
+        dlq_sink.write(envelope)
+
+for sink, condition, sink_transforms in sinks:
     subset = filter_by_condition(records, condition) if condition else records
-    if subset:
-        serialized = serializer_out.serialize(subset)
-        rate_limit()   # if rate_limit_rps configured
+    if not subset:
+        continue
+
+    for t in sink_transforms:              # per-sink transforms
+        subset = t.apply(subset)           # error → DLQ (stage=transform)
+
+    serialized = serializer_out.serialize(subset)
+    rate_limit()                            # if rate_limit_rps configured
+    try:
         sink.write(serialized, meta)
+    except Exception:
+        dlq_sink.write(envelope)           # error → DLQ (stage=sink)
 ```
 
 - No condition = catch-all (receives all records)
 - A record can be written to multiple sinks simultaneously
-- Empty subset → sink is skipped entirely
+- Each sink's transform chain is independent — different sinks can reshape the same records differently
+- Empty subset or failed sink transform → sink is skipped; other sinks continue
 
 ## Rate Limiting
 
 Token-bucket algorithm on `PipelineExecutor`. One token consumed per sink write. Tokens refill at `rate_limit_rps` per second. Blocks (sleeps) when bucket is empty.
+
+## Dead-Letter Queue (DLQ)
+
+`PipelineConfig.dlq: Optional[SinkConfig]` — any sink type (typically `local` or `kafka`).
+
+When configured, failed records are written as JSON envelopes:
+
+```json
+{
+  "_error":     "ValueError: cannot cast 'N/A' to int",
+  "_stage":     "transform",
+  "_pipeline":  "pm-ingest",
+  "_run_id":    "abc12345",
+  "_timestamp": "2026-03-05T12:00:00+00:00",
+  "record":     {"ne_id": "NE-01", "rx_bytes": "N/A"},
+  "raw":        null
+}
+```
+
+`raw` (base64) is only set when `_stage == "parse"`. DLQ write failures are logged and swallowed.
+
+## Alert Rules
+
+`AlertEvaluator.check(result, config)` is called by `PipelineManager.record_run()` after every batch run. Condition variables:
+
+| Variable | Type | Description |
+|----------|------|-------------|
+| `records_in` | int | Records read from source |
+| `records_out` | int | Records written to at least one sink |
+| `records_skipped` | int | Records filtered or failed |
+| `error_rate` | float | `records_skipped / records_in` (0 if no records) |
+| `status` | str | `"success"` \| `"failed"` \| `"aborted"` |
+| `failed` | bool | Shorthand for `status == "failed"` |
+| `duration_seconds` | float | Wall time of the run |
+
+Cooldown is persisted in `alert_state` SQLite table so it survives daemon restarts.
 
 ## Persistence (SQLite)
 
 `TramDB` at `~/.tram/tram.db` (or `$TRAM_DB_PATH`):
 - `run_history` — every `RunResult` saved by `PipelineManager.record_run()`
 - `pipeline_versions` — every YAML registered, auto-incremented version number
+- `alert_state` — last-alerted timestamp per `(pipeline_name, rule_name)` for cooldown
 
 ## Webhook Bridge
 

@@ -38,6 +38,13 @@ CREATE TABLE IF NOT EXISTS run_history (
     error           TEXT
 );
 
+CREATE TABLE IF NOT EXISTS alert_state (
+    pipeline_name   TEXT NOT NULL,
+    rule_name       TEXT NOT NULL,
+    last_alerted_at TEXT NOT NULL,
+    PRIMARY KEY (pipeline_name, rule_name)
+);
+
 CREATE INDEX IF NOT EXISTS idx_pv_name ON pipeline_versions(name);
 CREATE INDEX IF NOT EXISTS idx_rh_pipeline ON run_history(pipeline_name);
 CREATE INDEX IF NOT EXISTS idx_rh_status ON run_history(status);
@@ -161,6 +168,31 @@ class TramDB:
         if row is None:
             raise KeyError(f"No active version found for pipeline '{name}'")
         return row["yaml_content"]
+
+    # ── Alert cooldown state ───────────────────────────────────────────────
+
+    def get_alert_cooldown(self, pipeline_name: str, rule_name: str) -> Optional[datetime]:
+        """Return the last-alerted datetime for a rule, or None if never alerted."""
+        row = self._conn.execute(
+            "SELECT last_alerted_at FROM alert_state WHERE pipeline_name = ? AND rule_name = ?",
+            (pipeline_name, rule_name),
+        ).fetchone()
+        if row is None:
+            return None
+        return datetime.fromisoformat(row["last_alerted_at"])
+
+    def set_alert_cooldown(self, pipeline_name: str, rule_name: str, dt: datetime) -> None:
+        """Upsert the last-alerted timestamp for a rule."""
+        self._conn.execute(
+            """
+            INSERT INTO alert_state (pipeline_name, rule_name, last_alerted_at)
+            VALUES (?, ?, ?)
+            ON CONFLICT(pipeline_name, rule_name)
+            DO UPDATE SET last_alerted_at = excluded.last_alerted_at
+            """,
+            (pipeline_name, rule_name, dt.isoformat()),
+        )
+        self._conn.commit()
 
     def close(self) -> None:
         self._conn.close()

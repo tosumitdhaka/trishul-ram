@@ -305,348 +305,8 @@ SourceConfig = Annotated[
 ]
 
 
-# ── Sinks ──────────────────────────────────────────────────────────────────
-
-
-class SFTPSinkConfig(BaseModel):
-    type: Literal["sftp"]
-    host: str
-    port: int = 22
-    username: str
-    password: Optional[str] = None
-    private_key_path: Optional[str] = None
-    remote_path: str
-    filename_template: str = "{pipeline}_{timestamp}.bin"
-    condition: Optional[str] = None
-
-    @model_validator(mode="after")
-    def check_auth(self) -> "SFTPSinkConfig":
-        if self.password is None and self.private_key_path is None:
-            raise ValueError("Either password or private_key_path must be provided")
-        return self
-
-
-class LocalSinkConfig(BaseModel):
-    type: Literal["local"]
-    path: str
-    filename_template: str = "{pipeline}_{timestamp}.bin"
-    overwrite: bool = True
-    condition: Optional[str] = None
-
-
-class RestSinkConfig(BaseModel):
-    type: Literal["rest"]
-    url: str
-    method: str = "POST"
-    headers: dict[str, str] = Field(default_factory=dict)
-    content_type: str = "application/json"
-    auth_type: Literal["none", "basic", "bearer"] = "none"
-    username: Optional[str] = None
-    password: Optional[str] = None
-    token: Optional[str] = None
-    timeout: int = 30
-    verify_ssl: bool = True
-    expected_status: list[int] = Field(default_factory=lambda: [200, 201, 202, 204])
-    condition: Optional[str] = None
-
-
-class KafkaSinkConfig(BaseModel):
-    type: Literal["kafka"]
-    brokers: list[str]
-    topic: str
-    key_field: Optional[str] = None
-    security_protocol: str = "PLAINTEXT"
-    sasl_mechanism: Optional[str] = None
-    sasl_username: Optional[str] = None
-    sasl_password: Optional[str] = None
-    ssl_cafile: Optional[str] = None
-    acks: Union[str, int] = "all"
-    compression_type: Optional[str] = None
-    condition: Optional[str] = None
-
-
-class OpenSearchSinkConfig(BaseModel):
-    type: Literal["opensearch"]
-    hosts: list[str]
-    index: str
-    id_field: Optional[str] = None
-    pipeline: Optional[str] = None
-    username: Optional[str] = None
-    password: Optional[str] = None
-    verify_ssl: bool = True
-    use_ssl: bool = False
-    timeout: int = 30
-    chunk_size: int = 500
-    refresh: str = "false"
-    condition: Optional[str] = None
-
-
-class FtpSinkConfig(BaseModel):
-    type: Literal["ftp"]
-    host: str
-    port: int = 21
-    username: str
-    password: str
-    remote_path: str = "/"
-    filename_template: str = "{pipeline}_{timestamp}.bin"
-    passive: bool = True
-    condition: Optional[str] = None
-
-
-class VesSinkConfig(BaseModel):
-    type: Literal["ves"]
-    url: str
-    domain: str = "other"
-    source_name: str = "tram"
-    reporting_entity_name: str = "tram"
-    priority: str = "Normal"
-    version: str = "4.1"
-    auth_type: str = "none"
-    username: str = ""
-    password: str = ""
-    token: str = ""
-    expected_status: list[int] = Field(default_factory=lambda: [202])
-    condition: Optional[str] = None
-
-
-class S3SinkConfig(BaseModel):
-    type: Literal["s3"]
-    bucket: str
-    key_template: str = "{pipeline}_{timestamp}.bin"
-    endpoint_url: Optional[str] = None
-    region_name: str = "us-east-1"
-    aws_access_key_id: str = ""
-    aws_secret_access_key: str = ""
-    content_type: str = "application/json"
-    condition: Optional[str] = None
-
-
-class SnmpTrapSinkConfig(BaseModel):
-    type: Literal["snmp_trap"]
-    host: str
-    port: int = 162
-    community: str = "public"
-    version: str = "2c"
-    enterprise_oid: str = "1.3.6.1.4.1.0"
-    condition: Optional[str] = None
-
-
-class MqttSinkConfig(BaseModel):
-    type: Literal["mqtt"]
-    host: str
-    port: int = 1883
-    topic: str
-    qos: int = 0
-    retain: bool = False
-    username: Optional[str] = None
-    password: Optional[str] = None
-    tls: bool = False
-    client_id: str = ""
-    condition: Optional[str] = None
-
-
-class AmqpSinkConfig(BaseModel):
-    type: Literal["amqp"]
-    url: str = "amqp://guest:guest@localhost:5672/"
-    exchange: str = ""
-    routing_key: str = ""
-    content_type: str = "application/json"
-    condition: Optional[str] = None
-
-
-class NatsSinkConfig(BaseModel):
-    type: Literal["nats"]
-    servers: list[str] = Field(default_factory=lambda: ["nats://localhost:4222"])
-    subject: str
-    credentials_file: Optional[str] = None
-    condition: Optional[str] = None
-
-
-class SqlSinkConfig(BaseModel):
-    type: Literal["sql"]
-    connection_url: str
-    table: str
-    mode: Literal["insert", "upsert"] = "insert"
-    upsert_keys: list[str] = Field(default_factory=list)
-    condition: Optional[str] = None
-
-
-class InfluxDbSinkConfig(BaseModel):
-    type: Literal["influxdb"]
-    url: str
-    token: str
-    org: str
-    bucket: str
-    measurement: str
-    tag_fields: list[str] = Field(default_factory=list)
-    timestamp_field: Optional[str] = None
-    precision: Literal["ns", "us", "ms", "s"] = "ns"
-    condition: Optional[str] = None
-
-
-class RedisSinkConfig(BaseModel):
-    type: Literal["redis"]
-    host: str = "localhost"
-    port: int = 6379
-    db: int = 0
-    password: Optional[str] = None
-    mode: Literal["list", "pubsub", "stream"] = "list"
-    key: str
-    max_len: Optional[int] = None
-    condition: Optional[str] = None
-
-
-class GcsSinkConfig(BaseModel):
-    type: Literal["gcs"]
-    bucket: str
-    blob_template: str = "{pipeline}_{timestamp}.bin"
-    service_account_json: Optional[str] = None
-    content_type: str = "application/json"
-    condition: Optional[str] = None
-
-
-class AzureBlobSinkConfig(BaseModel):
-    type: Literal["azure_blob"]
-    connection_string: Optional[str] = None
-    account_name: Optional[str] = None
-    account_key: Optional[str] = None
-    container: str
-    blob_template: str = "{pipeline}_{timestamp}.bin"
-    content_type: str = "application/json"
-    overwrite: bool = True
-    condition: Optional[str] = None
-
-
-# v0.5.0 new sinks
-
-
-class WebSocketSinkConfig(BaseModel):
-    type: Literal["websocket"]
-    url: str
-    extra_headers: dict[str, str] = Field(default_factory=dict)
-    condition: Optional[str] = None
-
-
-class ElasticsearchSinkConfig(BaseModel):
-    type: Literal["elasticsearch"]
-    hosts: list[str]
-    index_template: str
-    id_field: Optional[str] = None
-    chunk_size: int = 500
-    refresh: str = "false"
-    username: Optional[str] = None
-    password: Optional[str] = None
-    api_key: Optional[str] = None
-    ca_certs: Optional[str] = None
-    pipeline: Optional[str] = None
-    condition: Optional[str] = None
-
-
-SinkConfig = Annotated[
-    Union[
-        SFTPSinkConfig,
-        LocalSinkConfig,
-        RestSinkConfig,
-        KafkaSinkConfig,
-        OpenSearchSinkConfig,
-        FtpSinkConfig,
-        VesSinkConfig,
-        S3SinkConfig,
-        SnmpTrapSinkConfig,
-        MqttSinkConfig,
-        AmqpSinkConfig,
-        NatsSinkConfig,
-        SqlSinkConfig,
-        InfluxDbSinkConfig,
-        RedisSinkConfig,
-        GcsSinkConfig,
-        AzureBlobSinkConfig,
-        WebSocketSinkConfig,
-        ElasticsearchSinkConfig,
-    ],
-    Field(discriminator="type"),
-]
-
-
-# ── Serializers ────────────────────────────────────────────────────────────
-
-
-class JsonSerializerConfig(BaseModel):
-    type: Literal["json"]
-    indent: Optional[int] = None
-    ensure_ascii: bool = True
-
-
-class CsvSerializerConfig(BaseModel):
-    type: Literal["csv"]
-    delimiter: str = ","
-    has_header: bool = True
-    quotechar: str = '"'
-
-
-class XmlSerializerConfig(BaseModel):
-    type: Literal["xml"]
-    root_element: str = "records"
-    record_element: str = "record"
-    encoding: str = "utf-8"
-
-
-class AvroSerializerConfig(BaseModel):
-    type: Literal["avro"]
-    avro_schema: Optional[str] = Field(default=None, alias="schema")
-    schema_file: Optional[str] = None
-    schema_registry_url: Optional[str] = None
-    schema_registry_subject: Optional[str] = None
-    schema_registry_id: Optional[int] = None
-    use_magic_bytes: bool = True
-
-    model_config = {"populate_by_name": True}
-
-    @model_validator(mode="after")
-    def check_schema(self) -> "AvroSerializerConfig":
-        has_inline = bool(self.avro_schema or self.schema_file)
-        has_registry = bool(self.schema_registry_url)
-        if not has_inline and not has_registry:
-            raise ValueError(
-                "Avro serializer requires either 'schema'/'schema_file' or 'schema_registry_url'"
-            )
-        return self
-
-
-class ProtobufSerializerConfig(BaseModel):
-    type: Literal["protobuf"]
-    schema_file: str
-    message_class: str
-    schema_registry_url: Optional[str] = None
-    schema_registry_subject: Optional[str] = None
-    schema_registry_id: Optional[int] = None
-    use_magic_bytes: bool = True
-
-
-class ParquetSerializerConfig(BaseModel):
-    type: Literal["parquet"]
-    compression: Literal["snappy", "gzip", "brotli", "none"] = "snappy"
-
-
-class MsgpackSerializerConfig(BaseModel):
-    type: Literal["msgpack"]
-
-
-SerializerConfig = Annotated[
-    Union[
-        JsonSerializerConfig,
-        CsvSerializerConfig,
-        XmlSerializerConfig,
-        AvroSerializerConfig,
-        ProtobufSerializerConfig,
-        ParquetSerializerConfig,
-        MsgpackSerializerConfig,
-    ],
-    Field(discriminator="type"),
-]
-
-
 # ── Transforms ─────────────────────────────────────────────────────────────
+# (defined before Sinks so sink classes can reference TransformConfig)
 
 
 class RenameTransformConfig(BaseModel):
@@ -806,6 +466,387 @@ TransformConfig = Annotated[
 ]
 
 
+# ── Sinks ──────────────────────────────────────────────────────────────────
+
+
+class SFTPSinkConfig(BaseModel):
+    type: Literal["sftp"]
+    host: str
+    port: int = 22
+    username: str
+    password: Optional[str] = None
+    private_key_path: Optional[str] = None
+    remote_path: str
+    filename_template: str = "{pipeline}_{timestamp}.bin"
+    condition: Optional[str] = None
+    transforms: list[TransformConfig] = Field(default_factory=list)
+
+    @model_validator(mode="after")
+    def check_auth(self) -> "SFTPSinkConfig":
+        if self.password is None and self.private_key_path is None:
+            raise ValueError("Either password or private_key_path must be provided")
+        return self
+
+
+class LocalSinkConfig(BaseModel):
+    type: Literal["local"]
+    path: str
+    filename_template: str = "{pipeline}_{timestamp}.bin"
+    overwrite: bool = True
+    condition: Optional[str] = None
+    transforms: list[TransformConfig] = Field(default_factory=list)
+
+
+class RestSinkConfig(BaseModel):
+    type: Literal["rest"]
+    url: str
+    method: str = "POST"
+    headers: dict[str, str] = Field(default_factory=dict)
+    content_type: str = "application/json"
+    auth_type: Literal["none", "basic", "bearer"] = "none"
+    username: Optional[str] = None
+    password: Optional[str] = None
+    token: Optional[str] = None
+    timeout: int = 30
+    verify_ssl: bool = True
+    expected_status: list[int] = Field(default_factory=lambda: [200, 201, 202, 204])
+    condition: Optional[str] = None
+    transforms: list[TransformConfig] = Field(default_factory=list)
+
+
+class KafkaSinkConfig(BaseModel):
+    type: Literal["kafka"]
+    brokers: list[str]
+    topic: str
+    key_field: Optional[str] = None
+    security_protocol: str = "PLAINTEXT"
+    sasl_mechanism: Optional[str] = None
+    sasl_username: Optional[str] = None
+    sasl_password: Optional[str] = None
+    ssl_cafile: Optional[str] = None
+    acks: Union[str, int] = "all"
+    compression_type: Optional[str] = None
+    condition: Optional[str] = None
+    transforms: list[TransformConfig] = Field(default_factory=list)
+
+
+class OpenSearchSinkConfig(BaseModel):
+    type: Literal["opensearch"]
+    hosts: list[str]
+    index: str
+    id_field: Optional[str] = None
+    pipeline: Optional[str] = None
+    username: Optional[str] = None
+    password: Optional[str] = None
+    verify_ssl: bool = True
+    use_ssl: bool = False
+    timeout: int = 30
+    chunk_size: int = 500
+    refresh: str = "false"
+    condition: Optional[str] = None
+    transforms: list[TransformConfig] = Field(default_factory=list)
+
+
+class FtpSinkConfig(BaseModel):
+    type: Literal["ftp"]
+    host: str
+    port: int = 21
+    username: str
+    password: str
+    remote_path: str = "/"
+    filename_template: str = "{pipeline}_{timestamp}.bin"
+    passive: bool = True
+    condition: Optional[str] = None
+    transforms: list[TransformConfig] = Field(default_factory=list)
+
+
+class VesSinkConfig(BaseModel):
+    type: Literal["ves"]
+    url: str
+    domain: str = "other"
+    source_name: str = "tram"
+    reporting_entity_name: str = "tram"
+    priority: str = "Normal"
+    version: str = "4.1"
+    auth_type: str = "none"
+    username: str = ""
+    password: str = ""
+    token: str = ""
+    expected_status: list[int] = Field(default_factory=lambda: [202])
+    condition: Optional[str] = None
+    transforms: list[TransformConfig] = Field(default_factory=list)
+
+
+class S3SinkConfig(BaseModel):
+    type: Literal["s3"]
+    bucket: str
+    key_template: str = "{pipeline}_{timestamp}.bin"
+    endpoint_url: Optional[str] = None
+    region_name: str = "us-east-1"
+    aws_access_key_id: str = ""
+    aws_secret_access_key: str = ""
+    content_type: str = "application/json"
+    condition: Optional[str] = None
+    transforms: list[TransformConfig] = Field(default_factory=list)
+
+
+class SnmpTrapSinkConfig(BaseModel):
+    type: Literal["snmp_trap"]
+    host: str
+    port: int = 162
+    community: str = "public"
+    version: str = "2c"
+    enterprise_oid: str = "1.3.6.1.4.1.0"
+    condition: Optional[str] = None
+    transforms: list[TransformConfig] = Field(default_factory=list)
+
+
+class MqttSinkConfig(BaseModel):
+    type: Literal["mqtt"]
+    host: str
+    port: int = 1883
+    topic: str
+    qos: int = 0
+    retain: bool = False
+    username: Optional[str] = None
+    password: Optional[str] = None
+    tls: bool = False
+    client_id: str = ""
+    condition: Optional[str] = None
+    transforms: list[TransformConfig] = Field(default_factory=list)
+
+
+class AmqpSinkConfig(BaseModel):
+    type: Literal["amqp"]
+    url: str = "amqp://guest:guest@localhost:5672/"
+    exchange: str = ""
+    routing_key: str = ""
+    content_type: str = "application/json"
+    condition: Optional[str] = None
+    transforms: list[TransformConfig] = Field(default_factory=list)
+
+
+class NatsSinkConfig(BaseModel):
+    type: Literal["nats"]
+    servers: list[str] = Field(default_factory=lambda: ["nats://localhost:4222"])
+    subject: str
+    credentials_file: Optional[str] = None
+    condition: Optional[str] = None
+    transforms: list[TransformConfig] = Field(default_factory=list)
+
+
+class SqlSinkConfig(BaseModel):
+    type: Literal["sql"]
+    connection_url: str
+    table: str
+    mode: Literal["insert", "upsert"] = "insert"
+    upsert_keys: list[str] = Field(default_factory=list)
+    condition: Optional[str] = None
+    transforms: list[TransformConfig] = Field(default_factory=list)
+
+
+class InfluxDbSinkConfig(BaseModel):
+    type: Literal["influxdb"]
+    url: str
+    token: str
+    org: str
+    bucket: str
+    measurement: str
+    tag_fields: list[str] = Field(default_factory=list)
+    timestamp_field: Optional[str] = None
+    precision: Literal["ns", "us", "ms", "s"] = "ns"
+    condition: Optional[str] = None
+    transforms: list[TransformConfig] = Field(default_factory=list)
+
+
+class RedisSinkConfig(BaseModel):
+    type: Literal["redis"]
+    host: str = "localhost"
+    port: int = 6379
+    db: int = 0
+    password: Optional[str] = None
+    mode: Literal["list", "pubsub", "stream"] = "list"
+    key: str
+    max_len: Optional[int] = None
+    condition: Optional[str] = None
+    transforms: list[TransformConfig] = Field(default_factory=list)
+
+
+class GcsSinkConfig(BaseModel):
+    type: Literal["gcs"]
+    bucket: str
+    blob_template: str = "{pipeline}_{timestamp}.bin"
+    service_account_json: Optional[str] = None
+    content_type: str = "application/json"
+    condition: Optional[str] = None
+    transforms: list[TransformConfig] = Field(default_factory=list)
+
+
+class AzureBlobSinkConfig(BaseModel):
+    type: Literal["azure_blob"]
+    connection_string: Optional[str] = None
+    account_name: Optional[str] = None
+    account_key: Optional[str] = None
+    container: str
+    blob_template: str = "{pipeline}_{timestamp}.bin"
+    content_type: str = "application/json"
+    overwrite: bool = True
+    condition: Optional[str] = None
+    transforms: list[TransformConfig] = Field(default_factory=list)
+
+
+# v0.5.0 new sinks
+
+
+class WebSocketSinkConfig(BaseModel):
+    type: Literal["websocket"]
+    url: str
+    extra_headers: dict[str, str] = Field(default_factory=dict)
+    condition: Optional[str] = None
+    transforms: list[TransformConfig] = Field(default_factory=list)
+
+
+class ElasticsearchSinkConfig(BaseModel):
+    type: Literal["elasticsearch"]
+    hosts: list[str]
+    index_template: str
+    id_field: Optional[str] = None
+    chunk_size: int = 500
+    refresh: str = "false"
+    username: Optional[str] = None
+    password: Optional[str] = None
+    api_key: Optional[str] = None
+    ca_certs: Optional[str] = None
+    pipeline: Optional[str] = None
+    condition: Optional[str] = None
+    transforms: list[TransformConfig] = Field(default_factory=list)
+
+
+SinkConfig = Annotated[
+    Union[
+        SFTPSinkConfig,
+        LocalSinkConfig,
+        RestSinkConfig,
+        KafkaSinkConfig,
+        OpenSearchSinkConfig,
+        FtpSinkConfig,
+        VesSinkConfig,
+        S3SinkConfig,
+        SnmpTrapSinkConfig,
+        MqttSinkConfig,
+        AmqpSinkConfig,
+        NatsSinkConfig,
+        SqlSinkConfig,
+        InfluxDbSinkConfig,
+        RedisSinkConfig,
+        GcsSinkConfig,
+        AzureBlobSinkConfig,
+        WebSocketSinkConfig,
+        ElasticsearchSinkConfig,
+    ],
+    Field(discriminator="type"),
+]
+
+
+# ── Serializers ────────────────────────────────────────────────────────────
+
+
+class JsonSerializerConfig(BaseModel):
+    type: Literal["json"]
+    indent: Optional[int] = None
+    ensure_ascii: bool = True
+
+
+class CsvSerializerConfig(BaseModel):
+    type: Literal["csv"]
+    delimiter: str = ","
+    has_header: bool = True
+    quotechar: str = '"'
+
+
+class XmlSerializerConfig(BaseModel):
+    type: Literal["xml"]
+    root_element: str = "records"
+    record_element: str = "record"
+    encoding: str = "utf-8"
+
+
+class AvroSerializerConfig(BaseModel):
+    type: Literal["avro"]
+    avro_schema: Optional[str] = Field(default=None, alias="schema")
+    schema_file: Optional[str] = None
+    schema_registry_url: Optional[str] = None
+    schema_registry_subject: Optional[str] = None
+    schema_registry_id: Optional[int] = None
+    use_magic_bytes: bool = True
+
+    model_config = {"populate_by_name": True}
+
+    @model_validator(mode="after")
+    def check_schema(self) -> "AvroSerializerConfig":
+        has_inline = bool(self.avro_schema or self.schema_file)
+        has_registry = bool(self.schema_registry_url)
+        if not has_inline and not has_registry:
+            raise ValueError(
+                "Avro serializer requires either 'schema'/'schema_file' or 'schema_registry_url'"
+            )
+        return self
+
+
+class ProtobufSerializerConfig(BaseModel):
+    type: Literal["protobuf"]
+    schema_file: str
+    message_class: str
+    schema_registry_url: Optional[str] = None
+    schema_registry_subject: Optional[str] = None
+    schema_registry_id: Optional[int] = None
+    use_magic_bytes: bool = True
+
+
+class ParquetSerializerConfig(BaseModel):
+    type: Literal["parquet"]
+    compression: Literal["snappy", "gzip", "brotli", "none"] = "snappy"
+
+
+class MsgpackSerializerConfig(BaseModel):
+    type: Literal["msgpack"]
+
+
+SerializerConfig = Annotated[
+    Union[
+        JsonSerializerConfig,
+        CsvSerializerConfig,
+        XmlSerializerConfig,
+        AvroSerializerConfig,
+        ProtobufSerializerConfig,
+        ParquetSerializerConfig,
+        MsgpackSerializerConfig,
+    ],
+    Field(discriminator="type"),
+]
+
+
+# ── Alert Rules ────────────────────────────────────────────────────────────
+
+
+class AlertRuleConfig(BaseModel):
+    name: str = ""
+    condition: str
+    action: Literal["webhook", "email"]
+    webhook_url: Optional[str] = None
+    email_to: Optional[str] = None
+    subject: str = "TRAM Alert: {pipeline}"
+    cooldown_seconds: int = 300
+
+    @model_validator(mode="after")
+    def check_target(self) -> "AlertRuleConfig":
+        if self.action == "webhook" and not self.webhook_url:
+            raise ValueError("webhook_url required when action=webhook")
+        if self.action == "email" and not self.email_to:
+            raise ValueError("email_to required when action=email")
+        return self
+
+
 # ── Pipeline (top-level) ───────────────────────────────────────────────────
 
 
@@ -828,6 +869,9 @@ class PipelineConfig(BaseModel):
     # Backward compat: singular `sink` auto-wrapped into `sinks`
     sink: Optional[SinkConfig] = Field(default=None, exclude=True)
 
+    # Dead-letter queue
+    dlq: Optional[SinkConfig] = None
+
     # Rate limiting
     rate_limit_rps: Optional[float] = None
 
@@ -835,6 +879,9 @@ class PipelineConfig(BaseModel):
     on_error: Literal["continue", "abort", "retry"] = "continue"
     retry_count: int = 3
     retry_delay_seconds: int = 10
+
+    # Alert rules
+    alerts: list[AlertRuleConfig] = Field(default_factory=list)
 
     @field_validator("name")
     @classmethod
