@@ -124,6 +124,23 @@ def _create_tables(engine: Engine) -> None:
             "CREATE INDEX IF NOT EXISTS idx_rh_started ON run_history(started_at)"
         ))
 
+        # v0.8.0: node registry for cluster coordination
+        conn.execute(text("""
+            CREATE TABLE IF NOT EXISTS node_registry (
+                node_id        TEXT PRIMARY KEY,
+                ordinal        INTEGER NOT NULL DEFAULT 0,
+                registered_at  TEXT NOT NULL,
+                last_heartbeat TEXT NOT NULL,
+                status         TEXT NOT NULL DEFAULT 'active'
+            )
+        """))
+        conn.execute(text(
+            "CREATE INDEX IF NOT EXISTS idx_nr_heartbeat ON node_registry(last_heartbeat)"
+        ))
+        conn.execute(text(
+            "CREATE INDEX IF NOT EXISTS idx_nr_status ON node_registry(status)"
+        ))
+
         # v0.7.0 column migrations: add new columns to existing databases
         _add_column_if_missing(conn, dialect, "run_history", "node_id", "TEXT NOT NULL DEFAULT ''")
         _add_column_if_missing(conn, dialect, "run_history", "dlq_count", "INTEGER NOT NULL DEFAULT 0")
@@ -383,6 +400,112 @@ class TramDB:
                     """),
                     {"pn": pipeline_name, "rn": rule_name, "ts": ts},
                 )
+
+    # ── Node registry (cluster coordination) ──────────────────────────────
+
+    def register_node(self, node_id: str, ordinal: int) -> None:
+        """Upsert node registration with current timestamp."""
+        now = datetime.now(timezone.utc).isoformat()
+        dialect = self._engine.dialect.name
+        with self._engine.begin() as conn:
+            if dialect == "sqlite":
+                conn.execute(
+                    text("""
+                        INSERT OR REPLACE INTO node_registry
+                          (node_id, ordinal, registered_at, last_heartbeat, status)
+                        VALUES (:node_id, :ordinal, :now, :now, 'active')
+                    """),
+                    {"node_id": node_id, "ordinal": ordinal, "now": now},
+                )
+            elif dialect in ("postgresql", "postgres"):
+                conn.execute(
+                    text("""
+                        INSERT INTO node_registry
+                          (node_id, ordinal, registered_at, last_heartbeat, status)
+                        VALUES (:node_id, :ordinal, :now, :now, 'active')
+                        ON CONFLICT (node_id) DO UPDATE
+                          SET ordinal = EXCLUDED.ordinal,
+                              last_heartbeat = EXCLUDED.last_heartbeat,
+                              status = 'active'
+                    """),
+                    {"node_id": node_id, "ordinal": ordinal, "now": now},
+                )
+            elif dialect == "mysql":
+                conn.execute(
+                    text("""
+                        INSERT INTO node_registry
+                          (node_id, ordinal, registered_at, last_heartbeat, status)
+                        VALUES (:node_id, :ordinal, :now, :now, 'active')
+                        ON DUPLICATE KEY UPDATE
+                          ordinal = VALUES(ordinal),
+                          last_heartbeat = VALUES(last_heartbeat),
+                          status = 'active'
+                    """),
+                    {"node_id": node_id, "ordinal": ordinal, "now": now},
+                )
+            else:
+                conn.execute(
+                    text("DELETE FROM node_registry WHERE node_id = :node_id"),
+                    {"node_id": node_id},
+                )
+                conn.execute(
+                    text("""
+                        INSERT INTO node_registry
+                          (node_id, ordinal, registered_at, last_heartbeat, status)
+                        VALUES (:node_id, :ordinal, :now, :now, 'active')
+                    """),
+                    {"node_id": node_id, "ordinal": ordinal, "now": now},
+                )
+
+    def heartbeat(self, node_id: str) -> None:
+        """Update last_heartbeat timestamp for a node."""
+        now = datetime.now(timezone.utc).isoformat()
+        with self._engine.begin() as conn:
+            conn.execute(
+                text("""
+                    UPDATE node_registry
+                    SET last_heartbeat = :now, status = 'active'
+                    WHERE node_id = :node_id
+                """),
+                {"now": now, "node_id": node_id},
+            )
+
+    def expire_nodes(self, ttl_seconds: int) -> None:
+        """Mark nodes with a stale heartbeat as 'dead'."""
+        from datetime import timedelta
+        cutoff = (datetime.now(timezone.utc) - timedelta(seconds=ttl_seconds)).isoformat()
+        with self._engine.begin() as conn:
+            conn.execute(
+                text("""
+                    UPDATE node_registry SET status = 'dead'
+                    WHERE status = 'active' AND last_heartbeat < :cutoff
+                """),
+                {"cutoff": cutoff},
+            )
+
+    def get_live_nodes(self, ttl_seconds: int) -> list[dict]:
+        """Return nodes whose heartbeat is within the TTL window."""
+        from datetime import timedelta
+        cutoff = (datetime.now(timezone.utc) - timedelta(seconds=ttl_seconds)).isoformat()
+        with self._engine.connect() as conn:
+            rows = conn.execute(
+                text("""
+                    SELECT node_id, ordinal, registered_at, last_heartbeat, status
+                    FROM node_registry
+                    WHERE status = 'active' AND last_heartbeat >= :cutoff
+                    ORDER BY node_id
+                """),
+                {"cutoff": cutoff},
+            ).mappings().fetchall()
+        return [dict(r) for r in rows]
+
+    def deregister_node(self, node_id: str) -> None:
+        """Mark a node as stopped (graceful shutdown)."""
+        with self._engine.begin() as conn:
+            conn.execute(
+                text("UPDATE node_registry SET status = 'stopped' WHERE node_id = :node_id"),
+                {"node_id": node_id},
+            )
 
     # ── Lifecycle ──────────────────────────────────────────────────────────
 

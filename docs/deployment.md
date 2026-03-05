@@ -33,6 +33,9 @@ All configuration is via environment variables (12-factor).
 | `TRAM_SMTP_PASS` | _(none)_ | SMTP password (optional) |
 | `TRAM_SMTP_TLS` | `true` | Use STARTTLS (`false` for plain SMTP) |
 | `TRAM_SMTP_FROM` | `tram@localhost` | Sender address for alert emails |
+| `TRAM_CLUSTER_ENABLED` | `false` | Enable cluster mode (requires external DB) |
+| `TRAM_HEARTBEAT_SECONDS` | `10` | Seconds between node heartbeats in cluster mode |
+| `TRAM_NODE_TTL_SECONDS` | `30` | Seconds before a silent node is marked dead |
 
 ### Database backends (v0.7.0)
 
@@ -103,9 +106,10 @@ helm upgrade tram oci://ghcr.io/OWNER/charts/tram \
 | Value | Default | Description |
 |-------|---------|-------------|
 | `image.repository` | `ghcr.io/OWNER/tram` | Docker image repository |
-| `image.tag` | `"0.6.0"` | Image tag |
-| `replicaCount` | `1` | Fixed at 1 — clustering planned for a future release |
-| `persistence.enabled` | `true` | Mount SQLite PVC at `/data` |
+| `image.tag` | `"0.8.0"` | Image tag |
+| `replicaCount` | `1` | Replicas — set >1 with `clusterMode.enabled: true` |
+| `clusterMode.enabled` | `false` | Deploy StatefulSet instead of Deployment for clustering |
+| `persistence.enabled` | `true` | Mount SQLite PVC at `/data` (standalone) or ignored in cluster mode |
 | `persistence.size` | `1Gi` | PVC size |
 | `persistence.accessMode` | `ReadWriteOnce` | PVC access mode |
 | `env` | `{}` | Plain env vars |
@@ -113,9 +117,61 @@ helm upgrade tram oci://ghcr.io/OWNER/charts/tram \
 | `pipelines` | `{}` | Pipeline YAMLs mounted as ConfigMap at `/pipelines` |
 | `podAnnotations` | `{}` | e.g. `prometheus.io/scrape: "true"` |
 
-### Scaling
+### Standalone (default)
 
-TRAM v0.6.0 runs as a single-replica standalone daemon. Multi-replica clustering (StatefulSet self-organising workers or Manager+Worker split) is planned for a future release.
+```bash
+helm install tram oci://ghcr.io/OWNER/charts/tram \
+  --namespace tram --create-namespace \
+  --set image.tag=0.8.0
+```
+
+A single `Deployment` + PVC runs the full daemon. SQLite stores run history and pipeline versions locally.
+
+### Cluster mode (v0.8.0)
+
+Cluster mode deploys a `StatefulSet` where every pod automatically discovers peers via a shared external database and partitions pipelines via consistent hashing — no external coordinator required.
+
+**Prerequisites**: PostgreSQL (recommended) or MariaDB accessible from the cluster.
+
+```bash
+# Create a Secret for DB credentials
+kubectl create secret generic tram-db \
+  --namespace tram \
+  --from-literal=url='postgresql+psycopg2://tram:secret@postgres:5432/tramdb'
+
+helm install tram oci://ghcr.io/OWNER/charts/tram \
+  --namespace tram --create-namespace \
+  --set image.tag=0.8.0 \
+  --set clusterMode.enabled=true \
+  --set replicaCount=3 \
+  --set envSecret.TRAM_DB_URL.secretName=tram-db \
+  --set envSecret.TRAM_DB_URL.secretKey=url \
+  --set persistence.enabled=false
+```
+
+Each pod (`tram-0`, `tram-1`, `tram-2`) registers in the shared DB, sends heartbeats, and owns pipelines computed by:
+
+```
+sha1(pipeline_name) % live_node_count == my_sorted_position
+```
+
+When a node fails, the remaining nodes detect it (after `TRAM_NODE_TTL_SECONDS`) and absorb its pipelines automatically. No manual intervention required.
+
+Check cluster state:
+
+```bash
+kubectl exec -n tram tram-0 -- curl -s http://localhost:8765/api/cluster/nodes | jq .
+```
+
+### Scale up / scale down
+
+```bash
+# Scale out
+kubectl scale statefulset tram -n tram --replicas=5
+
+# Scale in — surviving nodes absorb released pipelines within TRAM_NODE_TTL_SECONDS
+kubectl scale statefulset tram -n tram --replicas=2
+```
 
 ### Prometheus scraping
 
@@ -303,4 +359,7 @@ remote_write:
 
 ## Scaling
 
-TRAM v0.6.0 is a standalone single-replica daemon. Multi-replica clustering is planned for a future release. See the **Kubernetes — Helm** scaling note above.
+TRAM v0.8.0 supports two deployment modes:
+
+- **Standalone** (`clusterMode.enabled: false`, default) — single `Deployment` replica with local SQLite. Zero configuration overhead.
+- **Cluster** (`clusterMode.enabled: true`) — `StatefulSet` with N replicas sharing an external PostgreSQL or MariaDB database. Pipelines are distributed automatically via consistent hashing. No external coordinator (ZooKeeper, etcd) required.

@@ -2,7 +2,7 @@
 
 > Lightweight, container-native Python daemon that moves and transforms telecom data (PM/FM/Logs) across protocols.
 
-**Version:** 0.7.0 | **Status:** Active development | **Python:** 3.11+
+**Version:** 0.8.0 | **Status:** Active development | **Python:** 3.11+
 
 ---
 
@@ -54,7 +54,7 @@ curl -X POST http://localhost:8765/webhooks/my-events -d '{"event":"pm"}'
 
 ---
 
-## Plugin Registry (v0.6.0)
+## Plugin Registry (v0.8.0)
 
 | Category | Keys |
 |----------|------|
@@ -210,20 +210,21 @@ curl http://localhost:8765/api/ready
 ## Kubernetes (Helm)
 
 ```bash
-# Install from OCI registry
+# Standalone (default)
 helm install tram oci://ghcr.io/OWNER/charts/tram \
-  --set image.repository=ghcr.io/OWNER/tram \
-  --set image.tag=0.6.0
+  --set image.tag=0.8.0
 
-# With inline pipeline + alert SMTP config
+# Cluster mode (3-replica StatefulSet + external PostgreSQL)
 helm install tram oci://ghcr.io/OWNER/charts/tram \
-  --set-file "pipelines.pm-ingest\.yaml=./pipelines/pm-ingest.yaml" \
-  --set env.TRAM_SMTP_HOST=smtp.example.com \
-  --set envSecret.TRAM_SMTP_PASS.secretName=tram-smtp \
-  --set envSecret.TRAM_SMTP_PASS.secretKey=password
+  --set image.tag=0.8.0 \
+  --set clusterMode.enabled=true \
+  --set replicaCount=3 \
+  --set envSecret.TRAM_DB_URL.secretName=tram-db \
+  --set envSecret.TRAM_DB_URL.secretKey=url \
+  --set persistence.enabled=false
 ```
 
-> **v0.6.0 runs as a single replica (standalone daemon).** Multi-replica clustering is planned for a future release.
+> **v0.8.0**: standalone Deployment (default) or self-organizing StatefulSet cluster — no external coordinator needed. See [`docs/deployment.md`](docs/deployment.md) for full setup.
 
 ---
 
@@ -242,6 +243,7 @@ helm install tram oci://ghcr.io/OWNER/charts/tram \
 | POST | `/webhooks/{path}` | Ingest HTTP payload to webhook source |
 | GET | `/metrics` | Prometheus metrics (text/plain) |
 | GET | `/api/runs` | Run history (`?pipeline=&status=&limit=&offset=&from_dt=`) |
+| GET | `/api/cluster/nodes` | Cluster topology (node_id, position, live peers) |
 
 Full reference: [`docs/api.md`](docs/api.md)
 
@@ -258,16 +260,17 @@ tram/
 ├── serializers/      json, csv, xml, avro, parquet, msgpack, protobuf
 ├── transforms/       20 transforms
 ├── connectors/       22 source + 19 sink connectors
-├── persistence/      SQLite (run_history + pipeline_versions + alert_state)
+├── cluster/          NodeRegistry + ClusterCoordinator (v0.8.0 cluster mode)
+├── persistence/      TramDB (SQLAlchemy Core): run_history, pipeline_versions, alert_state, node_registry
 ├── metrics/          Prometheus metrics registry
 ├── schema_registry/  Confluent/Apicurio client + magic-byte helpers
 ├── alerts/           AlertEvaluator (webhook + email actions, cooldown)
 ├── pipeline/         loader, executor (DLQ + per-sink transforms), manager
-├── scheduler/        APScheduler (batch) + threads (stream)
-├── api/              FastAPI routers (health, pipelines, runs, webhooks, metrics)
+├── scheduler/        APScheduler (batch) + threads (stream) + rebalance loop
+├── api/              FastAPI routers (health, pipelines, runs, webhooks, metrics, cluster)
 ├── daemon/           uvicorn server entrypoint
 └── cli/              Typer CLI
-helm/                 Helm chart (Deployment, Service, ConfigMap, PVC, HPA, SA)
+helm/                 Helm chart (Deployment + StatefulSet, Service, Headless Service, ConfigMap, PVC, SA)
 .github/workflows/    ci.yml (test) + release.yml (Docker + Helm OCI publish)
 ```
 
@@ -289,9 +292,9 @@ helm/                 Helm chart (Deployment, Service, ConfigMap, PVC, HPA, SA)
 
 ```bash
 pip install -e ".[dev]"
-pytest tests/unit/         # 431 unit tests (no network)
+pytest tests/unit/         # 453 unit tests (no network)
 pytest tests/integration/  # 3 integration tests (mocked SFTP)
-pytest tests/             # all 434 tests
+pytest tests/             # all 456 tests
 ```
 
 ---
