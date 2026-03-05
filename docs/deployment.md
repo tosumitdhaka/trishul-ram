@@ -55,6 +55,17 @@ TRAM_DB_URL=mysql+pymysql://tram:secret@mysql:3306/tramdb
 
 Schema migrations run automatically at startup: `CREATE TABLE IF NOT EXISTS` + `ALTER TABLE ADD COLUMN` guards handle upgrades from v0.6.0 databases.
 
+## v0.9.0 Pipeline Config Fields
+
+These fields are set per-pipeline in the pipeline YAML (not environment variables):
+
+| Field | Default | Description |
+|-------|---------|-------------|
+| `thread_workers` | `1` | Worker threads for parallel chunk processing (batch + stream) |
+| `batch_size` | _(none)_ | Stop after N records per run; useful for controlled catch-up |
+| `on_error` | `continue` | Error policy: `continue` \| `abort` \| `retry` \| `dlq` |
+| `skip_processed` | `false` | On file/object sources: skip files already processed in this pipeline run (tracked in SQLite) |
+
 ## Docker
 
 ### Build and run
@@ -63,7 +74,8 @@ Schema migrations run automatically at startup: `CREATE TABLE IF NOT EXISTS` + `
 docker build -t tram:latest .
 docker run -p 8765:8765 \
   -v ./pipelines:/pipelines:ro \
-  -v tram-data:/root/.tram \
+  -v tram-data:/data \
+  -e TRAM_DB_PATH=/data/tram.db \
   -e TRAM_PIPELINE_DIR=/pipelines \
   -e NE_SFTP_HOST=10.0.0.1 \
   tram:latest
@@ -89,7 +101,7 @@ TRAM ships a production-ready Helm chart in `helm/`. Published to GHCR OCI on ev
 # Add chart from OCI registry
 helm install tram oci://ghcr.io/OWNER/charts/tram \
   --namespace tram --create-namespace \
-  --set image.tag=0.6.0
+  --set image.tag=0.9.0
 
 # Mount pipelines from local files
 helm upgrade tram oci://ghcr.io/OWNER/charts/tram \
@@ -106,7 +118,7 @@ helm upgrade tram oci://ghcr.io/OWNER/charts/tram \
 | Value | Default | Description |
 |-------|---------|-------------|
 | `image.repository` | `ghcr.io/OWNER/tram` | Docker image repository |
-| `image.tag` | `"0.8.0"` | Image tag |
+| `image.tag` | `"0.9.0"` | Image tag |
 | `replicaCount` | `1` | Replicas — `1` = standalone, `N` = cluster |
 | `clusterMode.enabled` | `false` | Activate cluster mode (sets `TRAM_CLUSTER_ENABLED`, requires external DB) |
 | `persistence.enabled` | `true` | Provision a PVC per pod via `volumeClaimTemplates` (SQLite at `/data`) |
@@ -122,7 +134,7 @@ helm upgrade tram oci://ghcr.io/OWNER/charts/tram \
 ```bash
 helm install tram oci://ghcr.io/OWNER/charts/tram \
   --namespace tram --create-namespace \
-  --set image.tag=0.8.0
+  --set image.tag=0.9.0
 ```
 
 A single-replica `StatefulSet` with pod name `tram-0` runs the full daemon. A `PersistentVolumeClaim` (`data-tram-0`) is auto-provisioned via `volumeClaimTemplates` — SQLite run history survives pod restarts and rescheduling across nodes.
@@ -141,7 +153,7 @@ kubectl create secret generic tram-db \
 
 helm install tram oci://ghcr.io/OWNER/charts/tram \
   --namespace tram --create-namespace \
-  --set image.tag=0.8.0 \
+  --set image.tag=0.9.0 \
   --set clusterMode.enabled=true \
   --set replicaCount=3 \
   --set envSecret.TRAM_DB_URL.secretName=tram-db \
@@ -222,7 +234,7 @@ spec:
     spec:
       containers:
       - name: tram
-        image: ghcr.io/OWNER/tram:0.6.0
+        image: ghcr.io/OWNER/tram:0.9.0
         command: ["tram", "daemon"]
         ports:
         - containerPort: 8765
