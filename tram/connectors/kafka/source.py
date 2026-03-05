@@ -22,7 +22,7 @@ class KafkaSource(BaseSource):
     Config keys:
         brokers           (list[str], required)    Bootstrap server list.
         topic             (str or list[str], req.)  Topic(s) to subscribe to.
-        group_id          (str, default "tram")     Consumer group ID.
+        group_id          (str, default pipeline name)  Consumer group ID.
         auto_offset_reset (str, default "latest")   "latest" | "earliest"
         enable_auto_commit (bool, default True)     Auto-commit offsets.
         max_poll_records  (int, default 500)        Max records per poll.
@@ -40,7 +40,7 @@ class KafkaSource(BaseSource):
         self.brokers: list[str] = brokers if isinstance(brokers, list) else [brokers]
         topics = config["topic"]
         self.topics: list[str] = topics if isinstance(topics, list) else [topics]
-        self.group_id: str = config.get("group_id", "tram")
+        self.group_id: str = config.get("group_id") or config.get("_pipeline_name", "tram")
         self.auto_offset_reset: str = config.get("auto_offset_reset", "latest")
         self.enable_auto_commit: bool = bool(config.get("enable_auto_commit", True))
         self.max_poll_records: int = int(config.get("max_poll_records", 500))
@@ -103,6 +103,10 @@ class KafkaSource(BaseSource):
         except Exception as exc:
             raise SourceError(f"Kafka consumer error: {exc}") from exc
         finally:
+            try:
+                consumer.commit()   # best-effort commit before close (supplements auto-commit)
+            except Exception:
+                pass
             try:
                 consumer.close()
                 logger.info("Kafka consumer closed", extra={"topics": self.topics})

@@ -40,3 +40,4 @@ from tram.connectors.ves import sink as _ves_sink  # noqa: F401
 from tram.connectors.webhook import source as _webhook_source  # noqa: F401
 from tram.connectors.websocket import sink as _websocket_sink  # noqa: F401
 from tram.connectors.websocket import source as _websocket_source  # noqa: F401
+from tram.connectors.corba import source as _corba_source  # noqa: F401

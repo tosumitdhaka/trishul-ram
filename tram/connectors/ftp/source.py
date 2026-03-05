@@ -34,6 +34,9 @@ class FTPSource(BaseSource):
         self.move_after_read: str | None = config.get("move_after_read")
         self.delete_after_read: bool = bool(config.get("delete_after_read", False))
         self.passive: bool = bool(config.get("passive", True))
+        self.skip_processed: bool = bool(config.get("skip_processed", False))
+        self._pipeline_name: str = config.get("_pipeline_name", "")
+        self._file_tracker = config.get("_file_tracker")
 
     def _connect(self):
         """Return an open FTP connection."""
@@ -74,7 +77,12 @@ class FTPSource(BaseSource):
                 },
             )
 
+            source_key = f"ftp:{self.host}:{self.remote_path}"
             for remote_file, filename in matching:
+                if self.skip_processed and self._file_tracker:
+                    if self._file_tracker.is_processed(self._pipeline_name, source_key, remote_file):
+                        logger.info("Skipping already-processed FTP file", extra={"filepath": remote_file})
+                        continue
                 buf = io.BytesIO()
                 try:
                     ftp.retrbinary(f"RETR {remote_file}", buf.write)
@@ -89,6 +97,8 @@ class FTPSource(BaseSource):
                         "source_host": self.host,
                     }
                     self._post_read(ftp, remote_file, filename)
+                    if self.skip_processed and self._file_tracker:
+                        self._file_tracker.mark_processed(self._pipeline_name, source_key, remote_file)
                 except SourceError:
                     raise
                 except Exception as exc:

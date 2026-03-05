@@ -29,6 +29,9 @@ class GcsSource(BaseSource):
         self.service_account_json: str | None = config.get("service_account_json")
         self.move_after_read: str | None = config.get("move_after_read")
         self.delete_after_read: bool = bool(config.get("delete_after_read", False))
+        self.skip_processed: bool = bool(config.get("skip_processed", False))
+        self._pipeline_name: str = config.get("_pipeline_name", "")
+        self._file_tracker = config.get("_file_tracker")
 
     def _get_client(self):
         try:
@@ -55,8 +58,13 @@ class GcsSource(BaseSource):
         matched = [b for b in blobs if fnmatch.fnmatch(b.name.rsplit("/", 1)[-1], self.file_pattern)]
         logger.info("GCS source found blobs", extra={"bucket": self.bucket, "matched": len(matched)})
 
+        source_key = f"gcs:{self.bucket}:{self.prefix}"
         for blob in matched:
             basename = blob.name.rsplit("/", 1)[-1]
+            if self.skip_processed and self._file_tracker:
+                if self._file_tracker.is_processed(self._pipeline_name, source_key, blob.name):
+                    logger.info("Skipping already-processed GCS blob", extra={"blob": blob.name})
+                    continue
             try:
                 content = blob.download_as_bytes()
                 logger.debug("Downloaded GCS blob", extra={"bucket": self.bucket, "blob": blob.name, "bytes": len(content)})
@@ -66,6 +74,8 @@ class GcsSource(BaseSource):
                     "source_bucket": self.bucket,
                 }
                 self._post_read(client, bucket, blob, basename)
+                if self.skip_processed and self._file_tracker:
+                    self._file_tracker.mark_processed(self._pipeline_name, source_key, blob.name)
             except SourceError:
                 raise
             except Exception as exc:

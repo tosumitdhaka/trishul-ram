@@ -46,6 +46,9 @@ class S3Source(BaseSource):
         self.aws_secret_access_key: str = config.get("aws_secret_access_key", "")
         self.move_after_read: str | None = config.get("move_after_read")
         self.delete_after_read: bool = bool(config.get("delete_after_read", False))
+        self.skip_processed: bool = bool(config.get("skip_processed", False))
+        self._pipeline_name: str = config.get("_pipeline_name", "")
+        self._file_tracker = config.get("_file_tracker")
 
     def _get_client(self):
         try:
@@ -94,8 +97,13 @@ class S3Source(BaseSource):
             },
         )
 
+        source_key = f"s3:{self.bucket}:{self.prefix}"
         for key in keys:
             basename = key.rsplit("/", 1)[-1]
+            if self.skip_processed and self._file_tracker:
+                if self._file_tracker.is_processed(self._pipeline_name, source_key, key):
+                    logger.info("Skipping already-processed S3 object", extra={"key": key})
+                    continue
             try:
                 resp = client.get_object(Bucket=self.bucket, Key=key)
                 content = resp["Body"].read()
@@ -109,6 +117,8 @@ class S3Source(BaseSource):
                     "source_bucket": self.bucket,
                 }
                 self._post_read(client, key, basename)
+                if self.skip_processed and self._file_tracker:
+                    self._file_tracker.mark_processed(self._pipeline_name, source_key, key)
             except SourceError:
                 raise
             except Exception as exc:

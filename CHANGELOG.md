@@ -9,6 +9,99 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ---
 
+## [0.9.0] — 2026-03-05
+
+### Added
+
+**`thread_workers` — intra-node parallelism**
+- `PipelineConfig.thread_workers: int = 1` — number of worker threads per pipeline run
+- `batch_run()`: when `thread_workers > 1`, chunks from the source are submitted to a
+  `ThreadPoolExecutor(max_workers=thread_workers)` so N chunks process concurrently; single-
+  threaded code path unchanged for `thread_workers=1`
+- `stream_run()`: when `thread_workers > 1`, a bounded `Queue(maxsize=thread_workers * 2)`
+  decouples the source producer from N worker threads, providing natural backpressure
+- `PipelineRunContext` is now fully thread-safe: all counter mutations go through
+  `threading.Lock`-protected helper methods (`inc_records_in`, `inc_records_out`,
+  `inc_records_skipped`, `record_error`, `record_dlq`)
+
+**`batch_size` — record cap per run**
+- `PipelineConfig.batch_size: Optional[int] = None` — limits records processed per batch run
+- Source read loop breaks once `ctx.records_in >= batch_size`; remaining source chunks skipped
+- Works in both single-threaded and multi-threaded modes
+- Useful for controlling run duration on large sources (Kafka backlog, large S3 buckets)
+
+**`on_error: "dlq"` — explicit DLQ routing**
+- `on_error` Literal extended with `"dlq"` value
+- Model validator raises `ValueError` if `on_error="dlq"` is set without a `dlq` sink configured
+- Runtime behavior identical to `on_error="continue"` with DLQ sink present — makes intent explicit
+
+**Processed-file tracking**
+- New DB table: `processed_files (pipeline_name, source_key, filepath, processed_at)` — PRIMARY KEY on all three name fields; indexed on `(pipeline_name, source_key)` for fast lookup
+- `TramDB.is_processed(pipeline, source_key, filepath) -> bool`
+- `TramDB.mark_processed(pipeline, source_key, filepath)` — dialect-aware upsert; errors logged and swallowed
+- `ProcessedFileTracker` wrapper in `tram/persistence/file_tracker.py` — silences DB errors, safe for use in connectors
+- `skip_processed: bool = False` added to `SFTPSourceConfig`, `LocalSourceConfig`, `S3SourceConfig`, `FtpSourceConfig`, `GcsSourceConfig`, `AzureBlobSourceConfig`
+- Source connectors check `is_processed` before reading and call `mark_processed` after successful yield + `_post_read`
+- `PipelineExecutor._build_source()` injects `_file_tracker` into source config dict when `file_tracker` is present on the executor
+- `TramScheduler` and `create_app()` wired to create and pass `ProcessedFileTracker` when DB is available
+
+**CORBA source connector**
+- `@register_source("corba")` — DII (Dynamic Invocation Interface) mode; no pre-compiled IDL stubs required
+- Supports: direct IOR (`ior:`) or NamingService resolution (`naming_service:` + `object_name:`)
+- `operation:` names the CORBA operation; `args:` passes positional scalar arguments via DII
+- Result normalised to `list[dict]` via `_corba_to_python()` (handles structs, nested sequences)
+- `skip_processed: bool` supported via `ProcessedFileTracker` — invocation key = `operation:args_json`
+- `pip install tram[corba]` (pulls `omniORBpy>=4.3`)
+- `CorbaSourceConfig` in Pydantic models with `model_validator` requiring `ior` or `naming_service`
+- Plugin key: `corba`
+
+**Helm: ConfigMap checksum annotation**
+- `checksum/config` annotation added to the StatefulSet pod template (when `pipelines` values are non-empty)
+- Value: `sha256sum` of the rendered `configmap.yaml` — changes when any pipeline YAML changes
+- Kubernetes detects the pod spec diff and triggers a rolling restart automatically on `helm upgrade`
+
+**Tests** — 62 new tests (`test_thread_workers.py` ×13, `test_batch_size_on_error.py` ×10,
+`test_processed_files.py` ×15, `test_corba_connector.py` ×24); **535 total, all passing**
+
+### Changed
+- `PipelineExecutor.__init__` gains `file_tracker: ProcessedFileTracker | None = None`
+- `TramScheduler.__init__` gains `file_tracker: ProcessedFileTracker | None = None`
+- `executor._build_source()` injects both `_pipeline_name` and `_file_tracker` into source config
+- `tram/__init__.__version__` → `"0.9.0"`
+
+---
+
+## [0.8.1] — 2026-03-05
+
+### Fixed
+
+**Kafka consumer group isolation**
+- `KafkaSourceConfig.group_id` default changed from `"tram"` (shared across every pipeline) to
+  `None` — resolved at runtime to the pipeline name, giving each pipeline its own consumer group
+- Pipelines that set `group_id:` explicitly in YAML are unaffected
+- Added explicit `consumer.commit()` before `consumer.close()` — best-effort offset flush on clean
+  shutdown (supplements `enable_auto_commit=True` timer; no-ops on abrupt kill)
+- Fallback chain: explicit `group_id` → pipeline name → `"tram"` (if no pipeline name available)
+
+**NATS queue group for cluster mode**
+- `NatsSourceConfig.queue_group` default changed from `""` (broadcast — all cluster nodes receive
+  every message) to `None` — resolved at runtime to the pipeline name (competing consumers, correct
+  for cluster mode where the same pipeline runs on all nodes)
+- `queue_group: ""` in YAML still works as an explicit broadcast opt-out
+- Fallback chain: explicit `queue_group` (including `""`) → pipeline name → `""` (broadcast)
+
+**Pipeline name injection**
+- `PipelineExecutor._build_source()` now injects `_pipeline_name` into the source config dict;
+  connectors can use `config.get("_pipeline_name")` as a safe default for group/queue identifiers
+
+**Helm chart**
+- `helm/values.yaml` `image.tag` corrected from `"0.6.0"` to `"0.8.1"`
+
+**Tests** — 20 new tests (`test_kafka_connectors.py` ×16, `test_nats_connectors.py` ×5 new);
+**473 total, all passing**
+
+---
+
 ## [0.8.0] — 2026-03-05
 
 ### Added

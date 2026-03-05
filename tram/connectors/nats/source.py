@@ -21,14 +21,18 @@ class NatsSource(BaseSource):
     Config keys:
         servers             (list[str], default ["nats://localhost:4222"])
         subject             (str, required)
-        queue_group         (str, default "")
+        queue_group         (str, default pipeline name)  Set to "" to broadcast to all consumers.
         credentials_file    (str, optional)
     """
     def __init__(self, config: dict) -> None:
         super().__init__(config)
         self.servers: list[str] = config.get("servers", ["nats://localhost:4222"])
         self.subject: str = config["subject"]
-        self.queue_group: str = config.get("queue_group", "")
+        _raw_qg = config.get("queue_group")
+        # None  → use pipeline name (competing consumers, correct for cluster mode)
+        # ""    → broadcast (explicit opt-out of queue group)
+        # "foo" → use explicit group name
+        self.queue_group: str = _raw_qg if _raw_qg is not None else config.get("_pipeline_name", "")
         self.credentials_file: str | None = config.get("credentials_file")
         self._stop_event = threading.Event()
         self._msg_queue: queue.SimpleQueue = queue.SimpleQueue()

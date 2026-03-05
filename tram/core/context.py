@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import threading
 import uuid
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
@@ -19,7 +20,11 @@ class RunStatus(str, Enum):
 
 @dataclass
 class PipelineRunContext:
-    """Mutable context passed through a single pipeline execution."""
+    """Mutable context passed through a single pipeline execution.
+
+    All counter mutations are protected by an internal lock so the context is
+    safe to share across multiple worker threads (thread_workers > 1).
+    """
 
     pipeline_name: str
     run_id: str = field(default_factory=lambda: str(uuid.uuid4())[:8])
@@ -30,12 +35,32 @@ class PipelineRunContext:
     dlq_count: int = 0
     errors: list[str] = field(default_factory=list)
 
+    def __post_init__(self) -> None:
+        # Not a dataclass field — invisible to from_context / to_dict
+        object.__setattr__(self, "_lock", threading.Lock())
+
+    # ── Thread-safe counter helpers ────────────────────────────────────────
+
+    def inc_records_in(self, n: int) -> None:
+        with self._lock:  # type: ignore[attr-defined]
+            self.records_in += n
+
+    def inc_records_out(self, n: int) -> None:
+        with self._lock:  # type: ignore[attr-defined]
+            self.records_out += n
+
+    def inc_records_skipped(self, n: int) -> None:
+        with self._lock:  # type: ignore[attr-defined]
+            self.records_skipped += n
+
     def record_error(self, msg: str) -> None:
-        self.errors.append(msg)
-        self.records_skipped += 1
+        with self._lock:  # type: ignore[attr-defined]
+            self.errors.append(msg)
+            self.records_skipped += 1
 
     def record_dlq(self) -> None:
-        self.dlq_count += 1
+        with self._lock:  # type: ignore[attr-defined]
+            self.dlq_count += 1
 
 
 @dataclass

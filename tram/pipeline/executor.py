@@ -1,12 +1,14 @@
-"""PipelineExecutor — two execution modes: batch_run() and stream_run()."""
+"""PipelineExecutor — execution modes: batch_run(), stream_run(), dry_run()."""
 
 from __future__ import annotations
 
 import base64
 import json
 import logging
+import queue as _queue
 import threading
 import time
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime, timezone
 from typing import TYPE_CHECKING
 
@@ -16,6 +18,7 @@ from tram.registry.registry import get_serializer, get_sink, get_source, get_tra
 
 if TYPE_CHECKING:
     from tram.models.pipeline import PipelineConfig
+    from tram.persistence.file_tracker import ProcessedFileTracker
 
 logger = logging.getLogger(__name__)
 
@@ -83,9 +86,10 @@ def _write_dlq_envelope(
 class PipelineExecutor:
     """Executes pipeline configurations in batch or stream mode."""
 
-    def __init__(self) -> None:
+    def __init__(self, file_tracker: "ProcessedFileTracker | None" = None) -> None:
         self._last_refill: float = 0.0
         self._tokens: float = 0.0
+        self._file_tracker = file_tracker
 
     # ── Rate limiting ──────────────────────────────────────────────────────
 
@@ -107,7 +111,11 @@ class PipelineExecutor:
 
     def _build_source(self, config: "PipelineConfig"):
         src_cls = get_source(config.source.type)
-        return src_cls(config.source.model_dump())
+        src_conf = config.source.model_dump()
+        src_conf["_pipeline_name"] = config.name   # connectors use as default group/queue id
+        if self._file_tracker is not None:
+            src_conf["_file_tracker"] = self._file_tracker
+        return src_cls(src_conf)
 
     def _build_sinks(self, config: "PipelineConfig") -> list[tuple]:
         """Returns list of (sink_instance, condition_str | None, sink_transforms)."""
@@ -157,7 +165,10 @@ class PipelineExecutor:
         rate_limit_rps: float | None = None,
         dlq_sink=None,
     ) -> bool:
-        """Process one (raw, meta) chunk. Returns True on success."""
+        """Process one (raw, meta) chunk. Returns True on success.
+
+        Thread-safe: all ctx mutations go through locked helper methods.
+        """
         from tram.metrics.registry import RECORDS_IN, RECORDS_OUT, RECORDS_SKIP, ERRORS, DLQ_RECORDS, DURATION
 
         meta = dict(meta)
@@ -178,7 +189,7 @@ class PipelineExecutor:
                     DLQ_RECORDS.labels(pipeline=ctx.pipeline_name).inc()
                 raise TramError(f"Parse error: {exc}") from exc
 
-            ctx.records_in += len(records)
+            ctx.inc_records_in(len(records))
             RECORDS_IN.labels(pipeline=ctx.pipeline_name).inc(len(records))
 
             # ── Per-record global transforms ───────────────────────────────
@@ -254,10 +265,10 @@ class PipelineExecutor:
                     ctx.record_error(str(exc))
 
             if wrote_any:
-                ctx.records_out += len(records)
+                ctx.inc_records_out(len(records))
                 RECORDS_OUT.labels(pipeline=ctx.pipeline_name).inc(len(records))
             else:
-                ctx.records_skipped += len(records)
+                ctx.inc_records_skipped(len(records))
                 RECORDS_SKIP.labels(pipeline=ctx.pipeline_name).inc(len(records))
 
             duration = time.monotonic() - t_start
@@ -295,12 +306,10 @@ class PipelineExecutor:
 
         for attempt in range(max(1, retry_count + 1)):
             try:
-                for raw, meta in source.read():
-                    self._process_chunk(
-                        raw, meta, serializer_in, transforms,
-                        serializer_out, sinks, ctx, config.on_error,
-                        config.rate_limit_rps, dlq_sink,
-                    )
+                self._run_batch_chunks(
+                    config, source, sinks, serializer_in, serializer_out,
+                    transforms, dlq_sink, ctx,
+                )
 
                 result = RunResult.from_context(ctx, RunStatus.SUCCESS)
                 logger.info(
@@ -339,8 +348,69 @@ class PipelineExecutor:
                     )
                     return result
 
-        # Should not reach here, but safety net
         return RunResult.from_context(ctx, RunStatus.FAILED, error="Max retries exceeded")
+
+    def _run_batch_chunks(
+        self,
+        config: "PipelineConfig",
+        source,
+        sinks,
+        serializer_in,
+        serializer_out,
+        transforms,
+        dlq_sink,
+        ctx: PipelineRunContext,
+    ) -> None:
+        """Inner loop: read source chunks and process with optional thread pool."""
+        batch_size = config.batch_size
+        on_error = config.on_error
+        rate_limit_rps = config.rate_limit_rps
+
+        if config.thread_workers > 1:
+            # Multi-threaded: submit chunks to a thread pool
+            with ThreadPoolExecutor(max_workers=config.thread_workers) as pool:
+                futures = []
+                for raw, meta in source.read():
+                    fut = pool.submit(
+                        self._process_chunk,
+                        raw, meta, serializer_in, transforms,
+                        serializer_out, sinks, ctx, on_error,
+                        rate_limit_rps, dlq_sink,
+                    )
+                    futures.append(fut)
+                    # batch_size is checked after ctx.records_in is updated by workers
+                    # slight over-submission is acceptable
+                    if batch_size and ctx.records_in >= batch_size:
+                        logger.info(
+                            "batch_size limit reached, stopping source read",
+                            extra={"pipeline": config.name, "batch_size": batch_size},
+                        )
+                        break
+
+                for f in as_completed(futures):
+                    try:
+                        f.result()
+                    except TramError as exc:
+                        if on_error == "abort":
+                            # Cancel remaining futures (best-effort)
+                            for remaining in futures:
+                                remaining.cancel()
+                            raise
+                        ctx.record_error(str(exc))
+        else:
+            # Single-threaded
+            for raw, meta in source.read():
+                self._process_chunk(
+                    raw, meta, serializer_in, transforms,
+                    serializer_out, sinks, ctx, on_error,
+                    rate_limit_rps, dlq_sink,
+                )
+                if batch_size and ctx.records_in >= batch_size:
+                    logger.info(
+                        "batch_size limit reached, stopping source read",
+                        extra={"pipeline": config.name, "batch_size": batch_size},
+                    )
+                    break
 
     # ── Stream run ─────────────────────────────────────────────────────────
 
@@ -358,15 +428,21 @@ class PipelineExecutor:
         ctx = PipelineRunContext(pipeline_name=config.name)
 
         try:
-            for raw, meta in source.read():
-                if stop_event.is_set():
-                    logger.info("Stream stop requested", extra={"pipeline": config.name})
-                    break
-                self._process_chunk(
-                    raw, meta, serializer_in, transforms,
-                    serializer_out, sinks, ctx, config.on_error,
-                    config.rate_limit_rps, dlq_sink,
+            if config.thread_workers > 1:
+                self._stream_run_threaded(
+                    config, source, sinks, serializer_in, serializer_out,
+                    transforms, dlq_sink, ctx, stop_event,
                 )
+            else:
+                for raw, meta in source.read():
+                    if stop_event.is_set():
+                        logger.info("Stream stop requested", extra={"pipeline": config.name})
+                        break
+                    self._process_chunk(
+                        raw, meta, serializer_in, transforms,
+                        serializer_out, sinks, ctx, config.on_error,
+                        config.rate_limit_rps, dlq_sink,
+                    )
         except Exception as exc:
             logger.error(
                 "Stream run error",
@@ -384,6 +460,63 @@ class PipelineExecutor:
                     "records_skipped": ctx.records_skipped,
                 },
             )
+
+    def _stream_run_threaded(
+        self,
+        config: "PipelineConfig",
+        source,
+        sinks,
+        serializer_in,
+        serializer_out,
+        transforms,
+        dlq_sink,
+        ctx: PipelineRunContext,
+        stop_event: threading.Event,
+    ) -> None:
+        """Stream mode with N worker threads. Producer reads; workers process."""
+        # Bounded queue gives backpressure: producer blocks if workers are slow
+        chunk_q: _queue.Queue = _queue.Queue(maxsize=config.thread_workers * 2)
+        on_error = config.on_error
+
+        def _worker() -> None:
+            while True:
+                item = chunk_q.get()
+                if item is None:
+                    return
+                raw, meta = item
+                try:
+                    self._process_chunk(
+                        raw, meta, serializer_in, transforms,
+                        serializer_out, sinks, ctx, on_error,
+                        config.rate_limit_rps, dlq_sink,
+                    )
+                except Exception as exc:
+                    logger.error(
+                        "Stream worker error",
+                        extra={"pipeline": config.name, "error": str(exc)},
+                    )
+                finally:
+                    chunk_q.task_done()
+
+        threads = [
+            threading.Thread(target=_worker, daemon=True, name=f"tram-stream-{i}")
+            for i in range(config.thread_workers)
+        ]
+        for t in threads:
+            t.start()
+
+        try:
+            for raw, meta in source.read():
+                if stop_event.is_set():
+                    logger.info("Stream stop requested", extra={"pipeline": config.name})
+                    break
+                chunk_q.put((raw, meta))  # blocks if queue full (backpressure)
+        finally:
+            # Signal all workers to stop
+            for _ in threads:
+                chunk_q.put(None)
+            for t in threads:
+                t.join(timeout=30)
 
     # ── Dry run ────────────────────────────────────────────────────────────
 

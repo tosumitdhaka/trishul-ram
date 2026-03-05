@@ -33,6 +33,9 @@ class AzureBlobSource(BaseSource):
         self.file_pattern: str = config.get("file_pattern", "*")
         self.move_after_read: str | None = config.get("move_after_read")
         self.delete_after_read: bool = bool(config.get("delete_after_read", False))
+        self.skip_processed: bool = bool(config.get("skip_processed", False))
+        self._pipeline_name: str = config.get("_pipeline_name", "")
+        self._file_tracker = config.get("_file_tracker")
 
     def _get_service_client(self):
         try:
@@ -64,9 +67,14 @@ class AzureBlobSource(BaseSource):
         matched = [b for b in blob_list if fnmatch.fnmatch(b.name.rsplit("/", 1)[-1], self.file_pattern)]
         logger.info("Azure Blob source found blobs", extra={"container": self.container, "matched": len(matched)})
 
+        source_key = f"azure_blob:{self.account_name or 'conn'}:{self.container}"
         for blob_props in matched:
             blob_name = blob_props.name
             basename = blob_name.rsplit("/", 1)[-1]
+            if self.skip_processed and self._file_tracker:
+                if self._file_tracker.is_processed(self._pipeline_name, source_key, blob_name):
+                    logger.info("Skipping already-processed Azure blob", extra={"blob": blob_name})
+                    continue
             try:
                 blob_client = service_client.get_blob_client(container=self.container, blob=blob_name)
                 content = blob_client.download_blob().readall()
@@ -77,6 +85,8 @@ class AzureBlobSource(BaseSource):
                     "source_container": self.container,
                 }
                 self._post_read(service_client, blob_client, blob_name, basename)
+                if self.skip_processed and self._file_tracker:
+                    self._file_tracker.mark_processed(self._pipeline_name, source_key, blob_name)
             except SourceError:
                 raise
             except Exception as exc:

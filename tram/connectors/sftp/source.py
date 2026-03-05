@@ -32,6 +32,9 @@ class SFTPSource(BaseSource):
         self.file_pattern: str = config.get("file_pattern", "*")
         self.move_after_read: str | None = config.get("move_after_read")
         self.delete_after_read: bool = bool(config.get("delete_after_read", False))
+        self.skip_processed: bool = bool(config.get("skip_processed", False))
+        self._pipeline_name: str = config.get("_pipeline_name", "")
+        self._file_tracker = config.get("_file_tracker")
 
     def _connect(self):
         """Return an open (transport, sftp) pair."""
@@ -71,8 +74,18 @@ class SFTPSource(BaseSource):
                 },
             )
 
+            source_key = f"sftp:{self.host}:{self.remote_path}"
             for filename in matching:
                 remote_file = f"{self.remote_path}/{filename}"
+
+                if self.skip_processed and self._file_tracker:
+                    if self._file_tracker.is_processed(self._pipeline_name, source_key, remote_file):
+                        logger.info(
+                            "Skipping already-processed SFTP file",
+                            extra={"filepath": remote_file},
+                        )
+                        continue
+
                 try:
                     with sftp.open(remote_file, "rb") as fh:
                         content = fh.read()
@@ -86,6 +99,10 @@ class SFTPSource(BaseSource):
                         "source_host": self.host,
                     }
                     self._post_read(sftp, remote_file, filename)
+                    if self.skip_processed and self._file_tracker:
+                        self._file_tracker.mark_processed(
+                            self._pipeline_name, source_key, remote_file
+                        )
                 except SourceError:
                     raise
                 except Exception as exc:
