@@ -12,6 +12,7 @@ from tram.core.exceptions import PipelineAlreadyExistsError, PipelineNotFoundErr
 from tram.models.pipeline import PipelineConfig
 
 if TYPE_CHECKING:
+    from tram.alerts.evaluator import AlertEvaluator
     from tram.persistence.db import TramDB
 
 logger = logging.getLogger(__name__)
@@ -51,9 +52,14 @@ class PipelineState:
 class PipelineManager:
     """Thread-safe registry of pipeline configurations and their live state."""
 
-    def __init__(self, db: Optional["TramDB"] = None) -> None:
+    def __init__(
+        self,
+        db: Optional["TramDB"] = None,
+        alert_evaluator: Optional["AlertEvaluator"] = None,
+    ) -> None:
         self._pipelines: dict[str, PipelineState] = {}
         self._db = db
+        self._alert_evaluator = alert_evaluator
 
     # ── CRUD ───────────────────────────────────────────────────────────────
 
@@ -103,9 +109,18 @@ class PipelineManager:
         self.get(name).status = status
 
     def record_run(self, name: str, result: RunResult) -> None:
-        self.get(name).record_run(result)
+        state = self.get(name)
+        state.record_run(result)
         if self._db:
             self._db.save_run(result)
+        if self._alert_evaluator is not None:
+            try:
+                self._alert_evaluator.check(result, state.config)
+            except Exception as exc:
+                logger.error(
+                    "Alert evaluator error",
+                    extra={"pipeline": name, "error": str(exc)},
+                )
 
     # ── Run history ────────────────────────────────────────────────────────
 

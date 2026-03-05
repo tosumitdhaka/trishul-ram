@@ -1,0 +1,16 @@
+apiVersion: v2
+name: tram
+description: TRAM — Trishul Real-time Adapter & Mapper
+type: application
+version: 0.6.0
+appVersion: "0.6.0"
+keywords:
+  - data-pipeline
+  - adapter
+  - mapper
+  - streaming
+home: https://github.com/trishul/tram
+sources:
+  - https://github.com/trishul/tram
+maintainers:
+  - name: TRAM Maintainers

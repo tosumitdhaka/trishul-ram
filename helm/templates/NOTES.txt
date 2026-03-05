@@ -1,0 +1,24 @@
+TRAM {{ .Chart.AppVersion }} has been deployed!
+
+1. Get the application URL:
+{{- if contains "NodePort" .Values.service.type }}
+  export NODE_PORT=$(kubectl get --namespace {{ .Release.Namespace }} -o jsonpath="{.spec.ports[0].nodePort}" services {{ include "tram.fullname" . }})
+  export NODE_IP=$(kubectl get nodes --namespace {{ .Release.Namespace }} -o jsonpath="{.items[0].status.addresses[0].address}")
+  echo http://$NODE_IP:$NODE_PORT
+{{- else if contains "LoadBalancer" .Values.service.type }}
+  NOTE: It may take a few minutes for the LoadBalancer IP to be available.
+  watch kubectl get --namespace {{ .Release.Namespace }} svc -w {{ include "tram.fullname" . }}
+{{- else if contains "ClusterIP" .Values.service.type }}
+  kubectl --namespace {{ .Release.Namespace }} port-forward svc/{{ include "tram.fullname" . }} 8765:{{ .Values.service.port }}
+  echo "Visit http://127.0.0.1:8765"
+{{- end }}
+
+2. Check daemon health:
+  curl http://127.0.0.1:8765/health
+
+3. View metrics (Prometheus format):
+  curl http://127.0.0.1:8765/metrics
+
+4. Mount pipeline YAMLs via values.pipelines:
+  helm upgrade {{ .Release.Name }} tram/tram \
+    --set-file "pipelines.my-pipeline\.yaml=./pipelines/my-pipeline.yaml"

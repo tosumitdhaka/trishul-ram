@@ -9,6 +9,58 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ---
 
+## [0.6.0] — 2026-03-05
+
+### Added
+
+**Dead-Letter Queue (DLQ)**
+- `PipelineConfig.dlq: Optional[SinkConfig]` — any sink type can serve as DLQ; receives failed records as JSON envelopes
+- Envelope schema: `{_error, _stage, _pipeline, _run_id, _timestamp, record, raw}` where `raw` (base64) is only present for parse-stage failures
+- Three failure stages captured: `parse` (serializer_in failed), `transform` (global or per-sink transform raised), `sink` (sink.write() raised)
+- Per-record transform isolation: global transforms applied record-by-record; a single bad record no longer aborts the entire chunk
+- DLQ write errors are logged and swallowed — never propagate to main pipeline
+- `PipelineRunContext.dlq_count` tracks how many records were DLQ'd in a run
+
+**Per-Sink Transform Chains**
+- Each sink config gains `transforms: list[TransformConfig]` (default empty)
+- Applied **after** global pipeline transforms and **after** condition filtering, **before** serializing for that specific sink
+- Sink transforms are independent: different sinks can reshape the same records differently
+- Sink transform failures route to DLQ (if configured) and skip that sink; other sinks continue
+- `_build_sinks()` now returns `list[tuple[BaseSink, condition, list[BaseTransform]]]`
+
+**Alert Rules**
+- `AlertRuleConfig` model: `condition` (simpleeval), `action` (webhook|email), `webhook_url`, `email_to`, `subject`, `cooldown_seconds` (default 300)
+- `PipelineConfig.alerts: list[AlertRuleConfig]`
+- `AlertEvaluator` in `tram/alerts/evaluator.py` — evaluated after every batch run
+- Alert condition namespace: `records_in`, `records_out`, `records_skipped`, `error_rate`, `status`, `failed`, `duration_seconds`
+- Cooldown persisted in new SQLite `alert_state` table — survives daemon restarts
+- Webhook action: `httpx.POST` with full run payload; email action: `smtplib` STARTTLS
+- SMTP configured via env vars: `TRAM_SMTP_HOST/PORT/USER/PASS/TLS/FROM`
+- All action errors logged and swallowed
+- `PipelineManager` accepts `alert_evaluator: AlertEvaluator | None`; `AlertEvaluator(db=db)` instantiated in `create_app()`
+
+**Helm Chart** (`helm/`)
+- `Chart.yaml` — apiVersion v2, version 0.6.0
+- `values.yaml` — image, replicaCount (fixed at 1), service, persistence (SQLite PVC), env, envSecret, pipelines ConfigMap, resources, nodeSelector, tolerations, affinity, podAnnotations, serviceAccount
+- Templates: `deployment.yaml`, `service.yaml`, `configmap.yaml` (pipeline YAMLs), `pvc.yaml`, `serviceaccount.yaml`, `_helpers.tpl`, `NOTES.txt`
+- v0.6.0 is a standalone single-replica deployment; multi-replica clustering is planned for a future release
+
+**GitHub Actions**
+- `.github/workflows/ci.yml` — triggers on push to `main`/`develop` and all PRs; runs ruff + pytest on Python 3.11 and 3.12
+- `.github/workflows/release.yml` — triggers on `v*` tags; builds multi-arch Docker image (linux/amd64 + linux/arm64) → `ghcr.io/{owner}/tram:{semver}`; packages + pushes Helm chart → `oci://ghcr.io/{owner}/charts/tram`
+
+**SQLite**
+- New `alert_state` table: `(pipeline_name, rule_name, last_alerted_at)` primary key
+- `TramDB.get_alert_cooldown()` / `set_alert_cooldown()` methods
+
+**Tests** — 35 new tests (test_dlq.py ×11, test_sink_transforms.py ×8, test_alerts.py ×16); **406 total, all passing**
+
+### Changed
+- `tram/models/pipeline.py` — Transforms section moved before Sinks section to avoid Pydantic v2 forward-reference issues with `list[TransformConfig]` on sink classes
+- `_build_sinks()` return type widened to 3-tuple `(BaseSink, condition | None, list[BaseTransform])`
+
+---
+
 ## [0.5.0] — 2026-03-03
 
 ### Added

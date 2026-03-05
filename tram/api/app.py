@@ -76,13 +76,21 @@ def create_app(config: AppConfig | None = None) -> FastAPI:
         logger.warning("Could not initialise TramDB: %s — run history will be in-memory only", exc)
         db = None
 
-    manager = PipelineManager(db=db)
+    # Initialise alert evaluator
+    try:
+        from tram.alerts.evaluator import AlertEvaluator
+        alert_evaluator = AlertEvaluator(db=db)
+    except Exception as exc:
+        logger.warning("Could not initialise AlertEvaluator: %s", exc)
+        alert_evaluator = None
+
+    manager = PipelineManager(db=db, alert_evaluator=alert_evaluator)
     scheduler = TramScheduler(manager)
 
     app = FastAPI(
         title="TRAM",
         description="Trishul Real-time Adapter & Mapper",
-        version="0.5.0",
+        version="0.6.0",
         lifespan=lifespan,
     )
 
@@ -91,6 +99,7 @@ def create_app(config: AppConfig | None = None) -> FastAPI:
     app.state.manager = manager
     app.state.scheduler = scheduler
     app.state.db = db
+    app.state.alert_evaluator = alert_evaluator
 
     # Register routers
     app.include_router(health.router)

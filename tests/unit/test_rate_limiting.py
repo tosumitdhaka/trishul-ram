@@ -61,7 +61,7 @@ def test_process_chunk_with_rate_limit():
     ctx = PipelineRunContext(pipeline_name="test")
     executor._process_chunk(
         b"raw", {}, serializer_in, [], serializer_out,
-        [(sink, None)], ctx, "continue",
+        [(sink, None, [])], ctx, "continue",
         rate_limit_rps=50.0,
     )
 
@@ -86,7 +86,7 @@ def test_process_chunk_no_rate_limit():
     ctx = PipelineRunContext(pipeline_name="test")
     executor._process_chunk(
         b"raw", {}, serializer_in, [], serializer_out,
-        [(sink, None)], ctx, "continue",
+        [(sink, None, [])], ctx, "continue",
         rate_limit_rps=None,
     )
 

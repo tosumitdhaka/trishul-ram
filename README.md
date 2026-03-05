@@ -2,7 +2,7 @@
 
 > Lightweight, container-native Python daemon that moves and transforms telecom data (PM/FM/Logs) across protocols.
 
-**Version:** 0.5.0 | **Status:** Active development | **Python:** 3.11+
+**Version:** 0.6.0 | **Status:** Active development | **Python:** 3.11+
 
 ---
 
@@ -11,7 +11,11 @@
 TRAM is a pipeline daemon for telecom data integration. It runs as an always-on service, accepting pipeline definitions as YAML files, and executing them on a schedule (interval, cron) or continuously (stream). Each pipeline wires together:
 
 ```
-Source → Deserialize → Transform chain → Serialize → Sinks (with optional conditions)
+Source → Deserialize → Transform chain → [per-record] → Serialize → Sinks
+                                                                       ↓ (condition filter)
+                                                              Per-sink transforms → Serialize → Sink
+                                                                       ↓ (on any error)
+                                                                      DLQ sink (JSON envelope)
 ```
 
 Plugins for sources, sinks, serializers, and transforms self-register via decorators — adding a new protocol requires zero changes to the core engine.
@@ -50,7 +54,7 @@ curl -X POST http://localhost:8765/webhooks/my-events -d '{"event":"pm"}'
 
 ---
 
-## Plugin Registry (v0.5.0)
+## Plugin Registry (v0.6.0)
 
 | Category | Keys |
 |----------|------|
@@ -108,7 +112,7 @@ pipeline:
     remote_path: /ingest/pm/
 ```
 
-### Multi-sink with conditional routing (v0.5.0)
+### Multi-sink with conditional routing + per-sink transforms (v0.5.0 / v0.6.0)
 
 ```yaml
   sinks:
@@ -119,16 +123,52 @@ pipeline:
       hosts: [http://os:9200]
       index: pm-critical
       condition: "rx_mbps > 500"   # only high-traffic records
+      transforms:                  # per-sink transform chain (v0.6.0)
+        - type: drop
+          fields: [raw_bytes]
     - type: local
       path: /tmp/overflow
       condition: "rx_mbps <= 0"    # zero-traffic anomalies
 
   rate_limit_rps: 1000            # token-bucket, across all sinks
+
+  # Dead-letter queue (v0.6.0) — captures parse/transform/sink failures
+  dlq:
+    type: local
+    path: /tmp/dlq
+```
+
+### Alert rules (v0.6.0)
+
+```yaml
+  alerts:
+    - name: high-error-rate
+      condition: "error_rate > 0.1"
+      action: webhook
+      webhook_url: "https://hooks.slack.com/..."
+      cooldown_seconds: 300
+
+    - name: pipeline-failed
+      condition: "failed"
+      action: email
+      email_to: "ops@example.com"
+      subject: "TRAM Alert: {pipeline} failed"
+      cooldown_seconds: 600
 ```
 
 All `${VAR}` and `${VAR:-default}` placeholders are resolved from environment at load time.
 
 ---
+
+## v0.6.0 Features
+
+| Feature | Description |
+|---------|-------------|
+| **Dead-Letter Queue** | `dlq: <sink>` on pipeline config; failed records (parse/transform/sink) written as JSON envelopes |
+| **Per-sink transforms** | Each sink has its own `transforms:` chain, applied after global transforms + condition filter |
+| **Alert rules** | `alerts:` list on pipeline; simpleeval conditions; webhook (httpx) or email (smtplib) actions with cooldown |
+| **Helm chart** | Production-ready `helm/` with HPA, PVC, ConfigMap pipelines, envSecret, Prometheus annotations |
+| **GitHub Actions** | `ci.yml` (ruff + pytest on PR/push); `release.yml` (multi-arch Docker + Helm OCI on `v*` tags) |
 
 ## v0.5.0 Features
 
@@ -154,6 +194,24 @@ cp .env.example .env       # fill in credentials
 docker compose up
 curl http://localhost:8765/api/ready
 ```
+
+## Kubernetes (Helm)
+
+```bash
+# Install from OCI registry
+helm install tram oci://ghcr.io/OWNER/charts/tram \
+  --set image.repository=ghcr.io/OWNER/tram \
+  --set image.tag=0.6.0
+
+# With inline pipeline + alert SMTP config
+helm install tram oci://ghcr.io/OWNER/charts/tram \
+  --set-file "pipelines.pm-ingest\.yaml=./pipelines/pm-ingest.yaml" \
+  --set env.TRAM_SMTP_HOST=smtp.example.com \
+  --set envSecret.TRAM_SMTP_PASS.secretName=tram-smtp \
+  --set envSecret.TRAM_SMTP_PASS.secretKey=password
+```
+
+> **v0.6.0 runs as a single replica (standalone daemon).** Multi-replica clustering is planned for a future release.
 
 ---
 
@@ -181,21 +239,24 @@ Full reference: [`docs/api.md`](docs/api.md)
 
 ```
 tram/
-├── core/             exceptions, context, config, logging
+├── core/             exceptions, context (dlq_count), config, logging
 ├── interfaces/       BaseSource, BaseSink, BaseTransform, BaseSerializer
 ├── registry/         @register_* decorators + lookup
-├── models/           Pydantic v2 pipeline schema
+├── models/           Pydantic v2 pipeline schema (dlq, per-sink transforms, AlertRuleConfig)
 ├── serializers/      json, csv, xml, avro, parquet, msgpack, protobuf
 ├── transforms/       20 transforms
 ├── connectors/       22 source + 19 sink connectors
-├── persistence/      SQLite (run history + pipeline versions)
+├── persistence/      SQLite (run_history + pipeline_versions + alert_state)
 ├── metrics/          Prometheus metrics registry
 ├── schema_registry/  Confluent/Apicurio client + magic-byte helpers
-├── pipeline/         loader, executor (multi-sink routing), manager
+├── alerts/           AlertEvaluator (webhook + email actions, cooldown)
+├── pipeline/         loader, executor (DLQ + per-sink transforms), manager
 ├── scheduler/        APScheduler (batch) + threads (stream)
 ├── api/              FastAPI routers (health, pipelines, runs, webhooks, metrics)
 ├── daemon/           uvicorn server entrypoint
 └── cli/              Typer CLI
+helm/                 Helm chart (Deployment, Service, ConfigMap, PVC, HPA, SA)
+.github/workflows/    ci.yml (test) + release.yml (Docker + Helm OCI publish)
 ```
 
 ---
@@ -216,9 +277,9 @@ tram/
 
 ```bash
 pip install -e ".[dev]"
-pytest tests/unit/         # 371 unit tests (no network)
+pytest tests/unit/         # 406 unit tests (no network)
 pytest tests/integration/  # 3 integration tests (mocked SFTP)
-pytest tests/             # all 374 tests
+pytest tests/             # all 409 tests
 ```
 
 ---

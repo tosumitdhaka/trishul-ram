@@ -57,7 +57,7 @@ def test_process_chunk_no_condition_writes_all():
     serializer_out = MagicMock()
     serializer_out.serialize.return_value = b"data"
 
-    sinks = [(sink1, None), (sink2, None)]
+    sinks = [(sink1, None, []), (sink2, None, [])]
     ctx = PipelineRunContext(pipeline_name="test")
 
     executor._process_chunk(
@@ -80,7 +80,7 @@ def test_process_chunk_condition_filters_sink():
     serializer_out = MagicMock()
     serializer_out.serialize.return_value = b"data"
 
-    sinks = [(sink_high, 'level == "high"'), (sink_low, 'level == "low"')]
+    sinks = [(sink_high, 'level == "high"', []), (sink_low, 'level == "low"', [])]
     ctx = PipelineRunContext(pipeline_name="test")
 
     executor._process_chunk(
@@ -110,7 +110,7 @@ def test_process_chunk_condition_no_match_skips_sink():
     serializer_out = MagicMock()
     serializer_out.serialize.return_value = b"data"
 
-    sinks = [(sink_special, "x > 999"), (sink_catch_all, None)]
+    sinks = [(sink_special, "x > 999", []), (sink_catch_all, None, [])]
     ctx = PipelineRunContext(pipeline_name="test")
 
     executor._process_chunk(

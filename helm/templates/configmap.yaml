@@ -1,0 +1,13 @@
+{{- if .Values.pipelines }}
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ include "tram.fullname" . }}-pipelines
+  labels:
+    {{- include "tram.labels" . | nindent 4 }}
+data:
+  {{- range $filename, $content := .Values.pipelines }}
+  {{ $filename }}: |
+    {{- $content | nindent 4 }}
+  {{- end }}
+{{- end }}
