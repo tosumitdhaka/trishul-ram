@@ -47,6 +47,7 @@ class S3Source(BaseSource):
         self.move_after_read: str | None = config.get("move_after_read")
         self.delete_after_read: bool = bool(config.get("delete_after_read", False))
         self.skip_processed: bool = bool(config.get("skip_processed", False))
+        self.read_chunk_bytes: int = int(config.get("read_chunk_bytes", 0))
         self._pipeline_name: str = config.get("_pipeline_name", "")
         self._file_tracker = config.get("_file_tracker")
 
@@ -106,16 +107,31 @@ class S3Source(BaseSource):
                     continue
             try:
                 resp = client.get_object(Bucket=self.bucket, Key=key)
-                content = resp["Body"].read()
-                logger.debug(
-                    "Downloaded S3 object",
-                    extra={"bucket": self.bucket, "key": key, "bytes": len(content)},
-                )
-                yield content, {
+                body = resp["Body"]
+                base_meta = {
                     "source_filename": basename,
                     "source_path": key,
                     "source_bucket": self.bucket,
                 }
+                if self.read_chunk_bytes > 0:
+                    chunk_index = 0
+                    while True:
+                        chunk = body.read(self.read_chunk_bytes)
+                        if not chunk:
+                            break
+                        logger.debug(
+                            "Downloaded S3 chunk",
+                            extra={"bucket": self.bucket, "key": key, "chunk": chunk_index, "bytes": len(chunk)},
+                        )
+                        yield chunk, {**base_meta, "chunk_index": chunk_index}
+                        chunk_index += 1
+                else:
+                    content = body.read()
+                    logger.debug(
+                        "Downloaded S3 object",
+                        extra={"bucket": self.bucket, "key": key, "bytes": len(content)},
+                    )
+                    yield content, base_meta
                 self._post_read(client, key, basename)
                 if self.skip_processed and self._file_tracker:
                     self._file_tracker.mark_processed(self._pipeline_name, source_key, key)

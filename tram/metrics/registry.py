@@ -22,8 +22,22 @@ class _NoOpHistogram:
         pass
 
 
+class _NoOpGauge:
+    def labels(self, **_kwargs):
+        return self
+
+    def set(self, value: float) -> None:
+        pass
+
+    def inc(self, amount: float = 1) -> None:
+        pass
+
+    def dec(self, amount: float = 1) -> None:
+        pass
+
+
 try:
-    from prometheus_client import Counter, Histogram
+    from prometheus_client import Counter, Gauge, Histogram
 
     RECORDS_IN = Counter(
         "tram_records_in_total",
@@ -56,6 +70,16 @@ try:
         ["pipeline"],
         buckets=[0.001, 0.005, 0.01, 0.05, 0.1, 0.5, 1.0, 5.0, 10.0],
     )
+    KAFKA_LAG = Gauge(
+        "tram_kafka_consumer_lag",
+        "Kafka consumer lag (messages behind high watermark)",
+        ["pipeline", "topic", "partition"],
+    )
+    STREAM_QUEUE_DEPTH = Gauge(
+        "tram_stream_queue_depth",
+        "Number of messages buffered in the stream pipeline queue",
+        ["pipeline"],
+    )
     _PROMETHEUS_AVAILABLE = True
 
 except ImportError:
@@ -65,4 +89,6 @@ except ImportError:
     ERRORS = _NoOpCounter()  # type: ignore[assignment]
     DLQ_RECORDS = _NoOpCounter()  # type: ignore[assignment]
     DURATION = _NoOpHistogram()  # type: ignore[assignment]
+    KAFKA_LAG = _NoOpGauge()  # type: ignore[assignment]
+    STREAM_QUEUE_DEPTH = _NoOpGauge()  # type: ignore[assignment]
     _PROMETHEUS_AVAILABLE = False

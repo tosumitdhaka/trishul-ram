@@ -9,6 +9,53 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ---
 
+## [1.0.0] — 2026-03-06
+
+### Added
+
+**Security**
+- `APIKeyMiddleware`: protect all `/api/*` endpoints with `X-API-Key` header or `?api_key=` query param; `TRAM_API_KEY` env var (empty = auth disabled); health/metrics/webhooks paths always exempt
+- `RateLimitMiddleware`: sliding-window per-IP rate limiting for `/api/*`; `TRAM_RATE_LIMIT` (req/min, 0 = disabled), `TRAM_RATE_LIMIT_WINDOW` (seconds, default 60)
+- TLS support: set `TRAM_TLS_CERTFILE` + `TRAM_TLS_KEYFILE` to enable HTTPS via uvicorn `ssl_*` params
+- Helm: `apiKey` and `tls` sections in `values.yaml`; TLS secret volume mount + env vars in StatefulSet
+
+**Reliability**
+- Per-sink retry: `retry_count` (int, default 0) and `retry_delay_seconds` (float, default 1.0) on all 19 sink configs; exponential back-off with jitter; DLQ still receives record after all retries exhausted
+- Parallel sinks: `PipelineConfig.parallel_sinks: bool = False`; fans out to all sinks concurrently via `ThreadPoolExecutor` when true
+- Circuit breaker: `circuit_breaker_threshold` (int, default 0 = disabled) on all sink configs; skips sink for 60s after N consecutive failures; resets on success
+- Kafka reconnect: `reconnect_delay_seconds`, `max_reconnect_attempts` on `KafkaSourceConfig`; outer reconnect loop in `stream_run`
+- NATS reconnect: `max_reconnect_attempts`, `reconnect_time_wait` passed to `nats.connect()`
+- Chunked reads: `read_chunk_bytes` on `SFTPSourceConfig` and `S3SourceConfig`; yields file in N-byte chunks
+
+**SNMP MIB Integration**
+- New `tram/connectors/snmp/mib_utils.py`: `build_mib_view()`, `resolve_oid()`, `symbolic_to_oid()`, `oid_str_to_tuple()`, `get_mib_view()` (cached)
+- `SnmpPollConfig` + `SnmpTrapSourceConfig`: `mib_dirs`, `mib_modules`, `resolve_oids` fields; OIDs resolved to symbolic names in output records
+- `SnmpTrapSinkConfig`: `varbinds: list[VarbindConfig]` for explicit OID/type/field mapping; `symbolic_to_oid()` resolves IF-MIB-style names
+- New `VarbindConfig` model: `oid`, `value_field`, `type`
+- `tram mib compile <source.mib> --out <dir>`: CLI command to compile raw MIB files (requires `tram[mib]`)
+- New optional extra: `tram[mib]` = `pysmi-lextudio>=1.1`
+
+**Observability**
+- OpenTelemetry tracing: `tram/telemetry/tracing.py`; `init_tracing()` + `get_tracer()`; `TRAM_OTEL_ENDPOINT` + `TRAM_OTEL_SERVICE` env vars; no-op fallback when SDK not installed; `batch_run()` wrapped in `"batch_run"` span
+- Kafka lag metric: `tram_kafka_consumer_lag{pipeline,topic,partition}` Gauge updated after each message poll
+- Stream queue depth metric: `tram_stream_queue_depth{pipeline}` Gauge updated in threaded stream mode
+- Run history CSV export: `GET /api/runs?format=csv` returns `text/csv` via `StreamingResponse`
+- Enhanced readiness: `GET /api/ready` body now includes `db`, `scheduler`, `cluster` fields; returns 503 if DB or scheduler unavailable
+- New optional extra: `tram[otel]` = `opentelemetry-sdk>=1.20, opentelemetry-exporter-otlp-proto-grpc>=1.20`
+
+**Operations / DX**
+- Pipeline file watcher: `tram/watcher/pipeline_watcher.py`; `TRAM_WATCH_PIPELINES=true` watches `TRAM_PIPELINE_DIR` for YAML changes using watchdog; auto-reloads on create/modify, deregisters on delete
+- Pipeline linter: `tram/pipeline/linter.py`; five rules: L001 (source+no sinks), L002 (skip+no DLQ), L003 (stream+workers>1), L004 (batch_size on stream), L005 (email alert+no SMTP); integrated into `tram validate`
+- `tram pipeline init <name>`: scaffolds a minimal pipeline YAML to stdout or file
+- New optional extra: `tram[watch]` = `watchdog>=3.0`
+
+### Changed
+- `tram/api/app.py`: version `"1.0.0"`, middleware registration, OTel init, pipeline watcher in lifespan
+- `tram/cli/main.py`: all API calls inject `X-API-Key` header when `TRAM_API_KEY` is set; `validate` calls linter
+- `helm/Chart.yaml`, `helm/values.yaml`: version 1.0.0
+
+---
+
 ## [0.9.0] — 2026-03-05
 
 ### Added

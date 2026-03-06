@@ -2,10 +2,13 @@
 
 from __future__ import annotations
 
+import csv
+import io
 from datetime import datetime
-from typing import Optional
+from typing import Literal, Optional
 
 from fastapi import APIRouter, HTTPException, Query, Request
+from fastapi.responses import StreamingResponse
 
 from tram.core.exceptions import PipelineNotFoundError
 
@@ -20,7 +23,8 @@ async def list_runs(
     limit: int = Query(100, ge=1, le=1000, description="Maximum records to return"),
     offset: int = Query(0, ge=0, description="Records to skip (for pagination)"),
     from_dt: Optional[datetime] = Query(None, description="Only runs started at or after this ISO timestamp"),
-) -> list[dict]:
+    format: Optional[Literal["json", "csv"]] = Query(None, description="Response format (json or csv)"),
+):
     """List run history with optional filtering and pagination."""
     manager = request.app.state.manager
     runs = manager.get_runs(
@@ -30,7 +34,26 @@ async def list_runs(
         offset=offset,
         from_dt=from_dt,
     )
-    return [r.to_dict() for r in runs]
+    rows = [r.to_dict() for r in runs]
+
+    if format == "csv":
+        if not rows:
+            csv_content = ""
+        else:
+            buf = io.StringIO()
+            fieldnames = list(rows[0].keys())
+            writer = csv.DictWriter(buf, fieldnames=fieldnames)
+            writer.writeheader()
+            writer.writerows(rows)
+            csv_content = buf.getvalue()
+
+        return StreamingResponse(
+            iter([csv_content]),
+            media_type="text/csv",
+            headers={"Content-Disposition": "attachment; filename=runs.csv"},
+        )
+
+    return rows
 
 
 @router.get("/runs/{run_id}")

@@ -6,6 +6,7 @@ import base64
 import json
 import logging
 import queue as _queue
+import random
 import threading
 import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
@@ -90,6 +91,9 @@ class PipelineExecutor:
         self._last_refill: float = 0.0
         self._tokens: float = 0.0
         self._file_tracker = file_tracker
+        # Circuit breaker state: {sink_key: (failure_count, open_until_monotonic)}
+        self._cb_state: dict[str, tuple[int, float]] = {}
+        self._cb_lock = threading.Lock()
 
     # ── Rate limiting ──────────────────────────────────────────────────────
 
@@ -118,7 +122,7 @@ class PipelineExecutor:
         return src_cls(src_conf)
 
     def _build_sinks(self, config: "PipelineConfig") -> list[tuple]:
-        """Returns list of (sink_instance, condition_str | None, sink_transforms)."""
+        """Returns list of (sink_instance, condition_str | None, sink_transforms, sink_cfg)."""
         result = []
         for sink_cfg in config.sinks:
             sink_cls = get_sink(sink_cfg.type)
@@ -127,7 +131,7 @@ class PipelineExecutor:
             for t_cfg in getattr(sink_cfg, "transforms", []):
                 t_cls = get_transform(t_cfg.type)
                 sink_transforms.append(t_cls(t_cfg.model_dump()))
-            result.append((sink_cls(sink_cfg.model_dump()), condition, sink_transforms))
+            result.append((sink_cls(sink_cfg.model_dump()), condition, sink_transforms, sink_cfg))
         return result
 
     def _build_dlq_sink(self, config: "PipelineConfig"):
@@ -164,6 +168,7 @@ class PipelineExecutor:
         on_error: str,
         rate_limit_rps: float | None = None,
         dlq_sink=None,
+        parallel_sinks: bool = False,
     ) -> bool:
         """Process one (raw, meta) chunk. Returns True on success.
 
@@ -213,14 +218,24 @@ class PipelineExecutor:
 
             # ── Multi-sink routing with per-sink transforms ────────────────
             wrote_any = False
-            for sink_instance, condition, sink_transforms in sinks:
-                if condition:
-                    filtered = _filter_by_condition(records, condition)
+
+            def _write_one_sink(sink_tuple, records_in):
+                """Process one sink entry. Returns True if write succeeded."""
+                nonlocal wrote_any
+                # Accept 3-tuple (legacy / test) or 4-tuple (current)
+                if len(sink_tuple) == 4:
+                    sink_instance, condition, sink_transforms, sink_cfg = sink_tuple
                 else:
-                    filtered = list(records)
+                    sink_instance, condition, sink_transforms = sink_tuple
+                    sink_cfg = None
+
+                if condition:
+                    filtered = _filter_by_condition(records_in, condition)
+                else:
+                    filtered = list(records_in)
 
                 if not filtered:
-                    continue
+                    return False
 
                 # Apply per-sink transforms
                 sink_records = filtered
@@ -242,27 +257,97 @@ class PipelineExecutor:
                         break
 
                 if sink_transform_failed or not sink_records:
-                    continue
+                    return False
 
                 serialized = serializer_out.serialize(sink_records)
 
                 if rate_limit_rps is not None:
                     self._rate_limit(rate_limit_rps)
 
-                try:
-                    sink_instance.write(serialized, meta)
-                    wrote_any = True
-                except Exception as exc:
-                    if dlq_sink is not None:
-                        _write_dlq_envelope(
-                            dlq_sink, ctx,
-                            stage="sink", error=str(exc), record=sink_records,
+                # Circuit breaker check
+                cb_threshold = getattr(sink_cfg, "circuit_breaker_threshold", 0)
+                sink_key = id(sink_instance)
+                if cb_threshold > 0:
+                    with self._cb_lock:
+                        failures, open_until = self._cb_state.get(sink_key, (0, 0.0))
+                    if open_until > time.monotonic():
+                        logger.warning(
+                            "Circuit breaker open — skipping sink",
+                            extra={"pipeline": ctx.pipeline_name},
                         )
-                        ctx.record_dlq()
-                        DLQ_RECORDS.labels(pipeline=ctx.pipeline_name).inc()
-                    if on_error == "abort":
-                        raise TramError(f"Sink write error: {exc}") from exc
-                    ctx.record_error(str(exc))
+                        ctx.record_error("Circuit breaker open")
+                        return False
+
+                # Per-sink retry loop
+                retry_count = getattr(sink_cfg, "retry_count", 0)
+                retry_delay = getattr(sink_cfg, "retry_delay_seconds", 1.0)
+
+                last_exc = None
+                for attempt in range(retry_count + 1):
+                    try:
+                        sink_instance.write(serialized, meta)
+                        # Reset circuit breaker on success
+                        if cb_threshold > 0:
+                            with self._cb_lock:
+                                self._cb_state[sink_key] = (0, 0.0)
+                        return True
+                    except Exception as exc:
+                        last_exc = exc
+                        if attempt < retry_count:
+                            delay = retry_delay * (2 ** attempt) + random.uniform(0, 0.1)
+                            logger.warning(
+                                "Sink write failed, retrying",
+                                extra={
+                                    "pipeline": ctx.pipeline_name,
+                                    "attempt": attempt + 1,
+                                    "retry_count": retry_count,
+                                    "delay": delay,
+                                },
+                            )
+                            time.sleep(delay)
+
+                # All retries exhausted
+                exc = last_exc
+                # Update circuit breaker state
+                if cb_threshold > 0:
+                    with self._cb_lock:
+                        failures, _ = self._cb_state.get(sink_key, (0, 0.0))
+                        failures += 1
+                        if failures >= cb_threshold:
+                            open_until = time.monotonic() + 60.0
+                            logger.warning(
+                                "Circuit breaker tripped — disabling sink for 60s",
+                                extra={"pipeline": ctx.pipeline_name, "failures": failures},
+                            )
+                        else:
+                            open_until = 0.0
+                        self._cb_state[sink_key] = (failures, open_until)
+
+                if dlq_sink is not None:
+                    _write_dlq_envelope(
+                        dlq_sink, ctx,
+                        stage="sink", error=str(exc), record=sink_records,
+                    )
+                    ctx.record_dlq()
+                    DLQ_RECORDS.labels(pipeline=ctx.pipeline_name).inc()
+                if on_error == "abort":
+                    raise TramError(f"Sink write error: {exc}") from exc
+                ctx.record_error(str(exc))
+                return False
+
+            if parallel_sinks and len(sinks) > 1:
+                with ThreadPoolExecutor(max_workers=len(sinks)) as pool:
+                    futures = [pool.submit(_write_one_sink, s, records) for s in sinks]
+                    for f in futures:
+                        try:
+                            if f.result():
+                                wrote_any = True
+                        except TramError:
+                            raise
+            else:
+                for sink_tuple in sinks:
+                    if _write_one_sink(sink_tuple, records):
+                        wrote_any = True
 
             if wrote_any:
                 ctx.inc_records_out(len(records))
@@ -288,6 +373,18 @@ class PipelineExecutor:
 
     def batch_run(self, config: "PipelineConfig") -> RunResult:
         """Execute one discrete batch run."""
+        import contextlib
+        try:
+            from tram.telemetry.tracing import get_tracer
+            tracer = get_tracer()
+            span_ctx = tracer.start_as_current_span("batch_run")
+        except Exception:
+            span_ctx = contextlib.nullcontext()
+
+        with span_ctx:
+            return self._batch_run_inner(config)
+
+    def _batch_run_inner(self, config: "PipelineConfig") -> RunResult:
         ctx = PipelineRunContext(pipeline_name=config.name)
         logger.info(
             "Batch run started",
@@ -366,6 +463,8 @@ class PipelineExecutor:
         on_error = config.on_error
         rate_limit_rps = config.rate_limit_rps
 
+        parallel_sinks = getattr(config, "parallel_sinks", False)
+
         if config.thread_workers > 1:
             # Multi-threaded: submit chunks to a thread pool
             with ThreadPoolExecutor(max_workers=config.thread_workers) as pool:
@@ -375,7 +474,7 @@ class PipelineExecutor:
                         self._process_chunk,
                         raw, meta, serializer_in, transforms,
                         serializer_out, sinks, ctx, on_error,
-                        rate_limit_rps, dlq_sink,
+                        rate_limit_rps, dlq_sink, parallel_sinks,
                     )
                     futures.append(fut)
                     # batch_size is checked after ctx.records_in is updated by workers
@@ -403,7 +502,7 @@ class PipelineExecutor:
                 self._process_chunk(
                     raw, meta, serializer_in, transforms,
                     serializer_out, sinks, ctx, on_error,
-                    rate_limit_rps, dlq_sink,
+                    rate_limit_rps, dlq_sink, parallel_sinks,
                 )
                 if batch_size and ctx.records_in >= batch_size:
                     logger.info(
@@ -442,6 +541,7 @@ class PipelineExecutor:
                         raw, meta, serializer_in, transforms,
                         serializer_out, sinks, ctx, config.on_error,
                         config.rate_limit_rps, dlq_sink,
+                        getattr(config, "parallel_sinks", False),
                     )
         except Exception as exc:
             logger.error(
@@ -489,6 +589,7 @@ class PipelineExecutor:
                         raw, meta, serializer_in, transforms,
                         serializer_out, sinks, ctx, on_error,
                         config.rate_limit_rps, dlq_sink,
+                        getattr(config, "parallel_sinks", False),
                     )
                 except Exception as exc:
                     logger.error(
@@ -506,17 +607,32 @@ class PipelineExecutor:
             t.start()
 
         try:
+            from tram.metrics.registry import STREAM_QUEUE_DEPTH
+        except Exception:
+            STREAM_QUEUE_DEPTH = None
+
+        try:
             for raw, meta in source.read():
                 if stop_event.is_set():
                     logger.info("Stream stop requested", extra={"pipeline": config.name})
                     break
                 chunk_q.put((raw, meta))  # blocks if queue full (backpressure)
+                if STREAM_QUEUE_DEPTH is not None:
+                    try:
+                        STREAM_QUEUE_DEPTH.labels(pipeline=config.name).set(chunk_q.qsize())
+                    except Exception:
+                        pass
         finally:
             # Signal all workers to stop
             for _ in threads:
                 chunk_q.put(None)
             for t in threads:
                 t.join(timeout=30)
+            if STREAM_QUEUE_DEPTH is not None:
+                try:
+                    STREAM_QUEUE_DEPTH.labels(pipeline=config.name).set(0)
+                except Exception:
+                    pass
 
     # ── Dry run ────────────────────────────────────────────────────────────
 

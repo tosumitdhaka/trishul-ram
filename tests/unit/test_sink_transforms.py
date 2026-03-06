@@ -44,7 +44,8 @@ class TestBuildSinksReturnsTuple:
             sinks = executor._build_sinks(config)
 
         assert len(sinks) == 1
-        sink_instance, condition, sink_transforms = sinks[0]
+        # _build_sinks now returns 4-tuple: (instance, condition, transforms, cfg)
+        sink_instance, condition, sink_transforms, sink_cfg = sinks[0]
         assert sink_instance is mock_cls.return_value
         assert condition is None
         assert sink_transforms == []
@@ -79,7 +80,7 @@ class TestBuildSinksReturnsTuple:
              patch("tram.pipeline.executor.get_transform", return_value=mock_transform_cls):
             sinks = executor._build_sinks(config)
 
-        _, _, sink_transforms = sinks[0]
+        _, _, sink_transforms, _ = sinks[0]
         assert len(sink_transforms) == 1
         assert sink_transforms[0] is mock_transform_instance
 

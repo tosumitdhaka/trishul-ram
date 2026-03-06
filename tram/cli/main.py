@@ -17,9 +17,11 @@ app = typer.Typer(
 )
 pipeline_app = typer.Typer(help="Pipeline management commands (proxies to running daemon)")
 runs_app = typer.Typer(help="Run history commands")
+mib_app = typer.Typer(help="SNMP MIB utilities")
 
 app.add_typer(pipeline_app, name="pipeline")
 app.add_typer(runs_app, name="runs")
+app.add_typer(mib_app, name="mib")
 
 console = Console()
 err_console = Console(stderr=True)
@@ -33,11 +35,18 @@ def _get_api_url() -> str:
     return os.environ.get("TRAM_API_URL", "http://localhost:8765")
 
 
+def _auth_headers() -> dict[str, str]:
+    """Return X-API-Key header dict if TRAM_API_KEY is set."""
+    import os
+    key = os.environ.get("TRAM_API_KEY", "")
+    return {"X-API-Key": key} if key else {}
+
+
 def _api_get(path: str) -> dict | list:
     import httpx
     url = f"{_get_api_url()}{path}"
     try:
-        resp = httpx.get(url, timeout=10)
+        resp = httpx.get(url, headers=_auth_headers(), timeout=10)
         resp.raise_for_status()
         return resp.json()
     except httpx.ConnectError:
@@ -52,13 +61,15 @@ def _api_get(path: str) -> dict | list:
 def _api_post(path: str, body: str | dict | None = None, content_type: str = "application/json") -> dict:
     import httpx
     url = f"{_get_api_url()}{path}"
+    auth = _auth_headers()
     try:
         if isinstance(body, str):
-            resp = httpx.post(url, content=body.encode(), headers={"Content-Type": content_type}, timeout=30)
+            headers = {"Content-Type": content_type, **auth}
+            resp = httpx.post(url, content=body.encode(), headers=headers, timeout=30)
         elif isinstance(body, dict):
-            resp = httpx.post(url, json=body, timeout=30)
+            resp = httpx.post(url, json=body, headers=auth, timeout=30)
         else:
-            resp = httpx.post(url, timeout=30)
+            resp = httpx.post(url, headers=auth, timeout=30)
         resp.raise_for_status()
         if resp.status_code == 204:
             return {}
@@ -75,7 +86,7 @@ def _api_delete(path: str) -> None:
     import httpx
     url = f"{_get_api_url()}{path}"
     try:
-        resp = httpx.delete(url, timeout=10)
+        resp = httpx.delete(url, headers=_auth_headers(), timeout=10)
         resp.raise_for_status()
     except httpx.ConnectError:
         err_console.print(f"[red]Cannot connect to TRAM daemon at {_get_api_url()}[/red]")
@@ -113,17 +124,34 @@ def plugins():
 def validate(
     pipeline_file: Path = typer.Argument(..., help="Path to pipeline YAML file"),
 ):
-    """Validate a pipeline YAML file (Pydantic schema check). Exit 0 on success."""
+    """Validate a pipeline YAML file (schema check + lint). Exit 0 on success."""
     from tram.pipeline.loader import load_pipeline
     from tram.core.exceptions import ConfigError
 
     try:
         config = load_pipeline(pipeline_file)
-        console.print(f"[green]✓[/green] Pipeline '{config.name}' is valid")
-        raise typer.Exit(0)
     except ConfigError as exc:
         err_console.print(f"[red]✗ Validation failed:[/red]\n{exc}")
         raise typer.Exit(1)
+
+    console.print(f"[green]✓[/green] Pipeline '{config.name}' is valid")
+
+    # Run linter
+    try:
+        from tram.pipeline.linter import lint
+        findings = lint(config)
+        has_error = False
+        for f in findings:
+            color = "red" if f.severity == "error" else "yellow"
+            console.print(f"  [{color}]{f.severity.upper()}[/{color}] [{f.rule_id}] {f.message}")
+            if f.severity == "error":
+                has_error = True
+        if has_error:
+            raise typer.Exit(1)
+    except ImportError:
+        pass  # linter module not available
+
+    raise typer.Exit(0)
 
 
 @app.command()
@@ -377,3 +405,103 @@ def runs_get(run_id: str = typer.Argument(..., help="Run ID")):
     data = _api_get(f"/api/runs/{run_id}")
     for key, val in data.items():
         console.print(f"  [bold]{key}:[/bold] {val}")
+
+
+# ── Pipeline init ──────────────────────────────────────────────────────────
+
+
+@pipeline_app.command("init")
+def pipeline_init(
+    name: str = typer.Argument(..., help="Pipeline name (alphanumeric, hyphens, underscores)"),
+    source: str = typer.Option("local", "--source", "-s", help="Source type"),
+    sink: str = typer.Option("local", "--sink", "-k", help="Sink type"),
+    output: Optional[Path] = typer.Option(
+        None, "--output", "-o", help="Write to file (default: stdout)"
+    ),
+):
+    """Scaffold a minimal valid pipeline YAML."""
+    import re
+    if not re.match(r"^[a-zA-Z0-9_-]+$", name):
+        err_console.print(
+            f"[red]Invalid pipeline name:[/red] '{name}' — "
+            "use only alphanumeric characters, hyphens, or underscores"
+        )
+        raise typer.Exit(1)
+
+    yaml_text = f"""\
+version: "1"
+pipeline:
+  name: {name}
+  enabled: true
+  schedule:
+    type: manual
+  source:
+    type: {source}
+    path: ./input
+  serializer_in:
+    type: json
+  serializer_out:
+    type: json
+  sink:
+    type: {sink}
+    path: ./output
+  on_error: continue
+"""
+    if output:
+        output.parent.mkdir(parents=True, exist_ok=True)
+        output.write_text(yaml_text)
+        console.print(f"[green]✓[/green] Scaffolded pipeline '{name}' → {output}")
+    else:
+        console.print(yaml_text, end="")
+
+
+# ── MIB utilities ──────────────────────────────────────────────────────────
+
+
+@mib_app.command("compile")
+def mib_compile(
+    source_mib: Path = typer.Argument(..., help="Path to .mib source file"),
+    out: Path = typer.Option(
+        Path("./compiled_mibs"), "--out", "-o", help="Output directory for compiled .py files"
+    ),
+):
+    """Compile a raw .mib text file to Python format for use with tram[snmp].
+
+    Requires the tram[mib] optional extra (pysmi-lextudio).
+    """
+    try:
+        from pysmi.reader import FileReader
+        from pysmi.searcher import PyFileSearcher, StubSearcher
+        from pysmi.writer import PyFileWriter
+        from pysmi.parser.smi import parserFactory
+        from pysmi.codegen.pysnmp import PySnmpCodeGen
+        from pysmi.compiler import MibCompiler
+    except ImportError:
+        err_console.print(
+            "[red]pysmi-lextudio is required for MIB compilation.[/red]\n"
+            "  Install with: [bold]pip install tram[mib][/bold]"
+        )
+        raise typer.Exit(1)
+
+    if not source_mib.exists():
+        err_console.print(f"[red]File not found:[/red] {source_mib}")
+        raise typer.Exit(1)
+
+    out.mkdir(parents=True, exist_ok=True)
+    mib_dir = str(source_mib.parent)
+    mib_name = source_mib.stem
+
+    parser = parserFactory()()
+    codegen = PySnmpCodeGen()
+    writer = PyFileWriter(str(out))
+
+    compiler = MibCompiler(parser, codegen, writer)
+    compiler.addSources(FileReader(mib_dir))
+    compiler.addSearchers(PyFileSearcher(str(out)))
+    compiler.addSearchers(StubSearcher(*PySnmpCodeGen.PYSNMP_STUBS))
+
+    results = compiler.compile(mib_name)
+    for name, status in results.items():
+        color = "green" if status == "compiled" else "yellow"
+        console.print(f"  [{color}]{status}[/{color}] {name}")
+    console.print(f"[green]✓[/green] Compiled MIB '{mib_name}' → {out}")

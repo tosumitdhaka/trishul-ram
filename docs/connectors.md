@@ -109,8 +109,23 @@ UDP/TCP syslog receiver. `host`, `port` (514), `protocol` (udp/tcp).
 ### snmp_trap
 SNMP trap receiver. `host`, `port` (162), `community`, `version`.
 
+**MIB integration (v1.0.0):**
+| Parameter | Default | Description |
+|-----------|---------|-------------|
+| `mib_dirs` | `[]` | Paths to compiled (Python .py) MIB directories |
+| `mib_modules` | `[]` | MIB module names to load, e.g. `["IF-MIB", "SNMPv2-MIB"]` |
+| `resolve_oids` | `true` | Use symbolic names as JSON keys; `false` = numeric dotted-decimal |
+
 ### snmp_poll
 SNMP GET/WALK polling. `host`, `oids: list[str]`, `operation` (get/walk).
+
+**MIB integration (v1.0.0):** Same `mib_dirs`, `mib_modules`, `resolve_oids` fields as `snmp_trap`.
+
+Compile raw `.mib` files to Python format with:
+```bash
+pip install tram[mib]
+tram mib compile /path/to/IF-MIB.mib --out /mibs/compiled/
+```
 
 ### mqtt
 | Parameter | Default | Description |
@@ -268,6 +283,24 @@ ONAP VES event sink. `url`, `domain`, `source_name`, auth options.
 ### snmp_trap
 Sends SNMP v2c traps. `host`, `port`, `enterprise_oid`.
 
+**Explicit varbind config (v1.0.0):**
+```yaml
+sink:
+  type: snmp_trap
+  host: manager.example.com
+  port: 162
+  enterprise_oid: "1.3.6.1.4.1.99999"
+  mib_modules: ["IF-MIB"]
+  varbinds:
+    - oid: "IF-MIB::ifOperStatus"   # symbolic or numeric
+      value_field: status           # record key to read
+      type: Integer32
+    - oid: "1.3.6.1.2.1.2.2.1.5.1"
+      value_field: speed
+      type: Gauge32
+```
+When `varbinds` is empty, falls back to auto-typing (Integer32/OctetString based on value type).
+
 ### websocket *(v0.5.0)*
 Connects, sends serialized bytes, disconnects per write. `url`, `extra_headers`.
 
@@ -307,6 +340,26 @@ The same `simpleeval` sandbox is used as in the `filter` and `add_field` transfo
 
 ---
 
+## Per-Sink Reliability (v1.0.0)
+
+Every sink config accepts these optional fields:
+
+```yaml
+sink:
+  type: kafka
+  brokers: [kafka:9092]
+  topic: output
+  retry_count: 3              # retry on failure (0 = no retry)
+  retry_delay_seconds: 1.0   # base delay; doubled each attempt + small jitter
+  circuit_breaker_threshold: 5  # open circuit after N consecutive failures for 60s
+```
+
+**Retry back-off**: `delay = retry_delay_seconds × 2^attempt + random(0, 0.1)`
+
+**Circuit breaker**: after `circuit_breaker_threshold` consecutive failures the sink is bypassed for 60 seconds, then automatically reset on the next successful write.
+
+---
+
 ## Optional Dependencies
 
 | Extra | Installs | Connectors |
@@ -328,6 +381,9 @@ The same `simpleeval` sandbox is used as in the `filter` and `add_field` transfo
 | `elasticsearch` | elasticsearch | elasticsearch source/sink |
 | `prometheus_rw` | protobuf, python-snappy | prometheus_rw source |
 | `corba` | omniORBpy | corba source |
+| `mib` | pysmi-lextudio | `tram mib compile` (raw .mib → Python) |
+| `otel` | opentelemetry-sdk, opentelemetry-exporter-otlp-proto-grpc | OpenTelemetry tracing |
+| `watch` | watchdog | pipeline file watcher (`TRAM_WATCH_PIPELINES`) |
 | `avro` | fastavro | avro serializer |
 | `parquet` | pyarrow | parquet serializer |
 | `msgpack_ser` | msgpack | msgpack serializer |

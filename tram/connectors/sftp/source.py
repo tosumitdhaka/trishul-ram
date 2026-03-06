@@ -33,6 +33,7 @@ class SFTPSource(BaseSource):
         self.move_after_read: str | None = config.get("move_after_read")
         self.delete_after_read: bool = bool(config.get("delete_after_read", False))
         self.skip_processed: bool = bool(config.get("skip_processed", False))
+        self.read_chunk_bytes: int = int(config.get("read_chunk_bytes", 0))
         self._pipeline_name: str = config.get("_pipeline_name", "")
         self._file_tracker = config.get("_file_tracker")
 
@@ -88,16 +89,34 @@ class SFTPSource(BaseSource):
 
                 try:
                     with sftp.open(remote_file, "rb") as fh:
-                        content = fh.read()
-                    logger.debug(
-                        "Read file",
-                        extra={"filepath": remote_file, "bytes": len(content)},
-                    )
-                    yield content, {
-                        "source_filename": filename,
-                        "source_path": remote_file,
-                        "source_host": self.host,
-                    }
+                        if self.read_chunk_bytes > 0:
+                            chunk_meta = {
+                                "source_filename": filename,
+                                "source_path": remote_file,
+                                "source_host": self.host,
+                            }
+                            chunk_index = 0
+                            while True:
+                                chunk = fh.read(self.read_chunk_bytes)
+                                if not chunk:
+                                    break
+                                logger.debug(
+                                    "Read file chunk",
+                                    extra={"filepath": remote_file, "chunk": chunk_index, "bytes": len(chunk)},
+                                )
+                                yield chunk, {**chunk_meta, "chunk_index": chunk_index}
+                                chunk_index += 1
+                        else:
+                            content = fh.read()
+                            logger.debug(
+                                "Read file",
+                                extra={"filepath": remote_file, "bytes": len(content)},
+                            )
+                            yield content, {
+                                "source_filename": filename,
+                                "source_path": remote_file,
+                                "source_host": self.host,
+                            }
                     self._post_read(sftp, remote_file, filename)
                     if self.skip_processed and self._file_tracker:
                         self._file_tracker.mark_processed(

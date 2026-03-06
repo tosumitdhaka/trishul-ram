@@ -158,6 +158,7 @@ class TestKafkaSourceRead:
         mock_kafka.KafkaConsumer.return_value = mock_consumer
 
         with patch.dict(sys.modules, {"kafka": mock_kafka}):
-            src = _make_source()
+            # max_reconnect_attempts=1 ensures test exits after one retry
+            src = _make_source({"max_reconnect_attempts": 1})
             with pytest.raises(SourceError, match="Kafka consumer error"):
                 list(src.read())

@@ -63,6 +63,16 @@ spec:
                   name: {{ $ref.secretName }}
                   key: {{ $ref.secretKey }}
             {{- end }}
+            {{- if .Values.apiKey }}
+            - name: TRAM_API_KEY
+              value: {{ .Values.apiKey | quote }}
+            {{- end }}
+            {{- if .Values.tls.enabled }}
+            - name: TRAM_TLS_CERTFILE
+              value: /tls/tls.crt
+            - name: TRAM_TLS_KEYFILE
+              value: /tls/tls.key
+            {{- end }}
           volumeMounts:
             {{- if gt (len .Values.pipelines) 0 }}
             - name: pipelines
@@ -72,6 +82,11 @@ spec:
             {{- if .Values.persistence.enabled }}
             - name: data
               mountPath: /data
+            {{- end }}
+            {{- if .Values.tls.enabled }}
+            - name: tls
+              mountPath: /tls
+              readOnly: true
             {{- end }}
           livenessProbe:
             httpGet:
@@ -94,6 +109,11 @@ spec:
         - name: pipelines
           configMap:
             name: {{ include "tram.fullname" . }}-pipelines
+        {{- end }}
+        {{- if .Values.tls.enabled }}
+        - name: tls
+          secret:
+            secretName: {{ .Values.tls.secretName }}
         {{- end }}
       {{- with .Values.nodeSelector }}
       nodeSelector:

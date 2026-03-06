@@ -34,6 +34,8 @@ class NatsSource(BaseSource):
         # "foo" → use explicit group name
         self.queue_group: str = _raw_qg if _raw_qg is not None else config.get("_pipeline_name", "")
         self.credentials_file: str | None = config.get("credentials_file")
+        self.max_reconnect_attempts: int = int(config.get("max_reconnect_attempts", -1))
+        self.reconnect_time_wait: float = float(config.get("reconnect_time_wait", 2.0))
         self._stop_event = threading.Event()
         self._msg_queue: queue.SimpleQueue = queue.SimpleQueue()
 
@@ -53,10 +55,15 @@ class NatsSource(BaseSource):
         queue_group = self.queue_group
         credentials_file = self.credentials_file
 
+        max_reconnect_attempts = self.max_reconnect_attempts
+        reconnect_time_wait = self.reconnect_time_wait
+
         async def _run():
             kwargs = {"servers": servers}
             if credentials_file:
                 kwargs["credentials"] = credentials_file
+            kwargs["max_reconnect_attempts"] = max_reconnect_attempts
+            kwargs["reconnect_time_wait"] = reconnect_time_wait
             nc = await nats.connect(**kwargs)
 
             async def message_handler(msg):
