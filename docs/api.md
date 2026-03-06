@@ -16,17 +16,22 @@ Liveness probe. Returns 200 immediately if daemon is running.
 ```
 
 ### GET /api/ready
-Readiness probe. Returns 200 once startup is complete.
+Readiness probe. Returns 200 once startup is complete, 503 if DB or scheduler is unavailable.
 
 ```json
-{"status": "ready", "pipelines_loaded": 3}
+{
+  "status": "ready",
+  "db": "ok",
+  "scheduler": "running",
+  "cluster": "disabled"
+}
 ```
 
 ### GET /api/meta
 Build and version information.
 
 ```json
-{"version": "0.5.0", "python_version": "3.12.0"}
+{"version": "1.0.2", "python_version": "3.12.0"}
 ```
 
 ### GET /api/plugins
@@ -130,21 +135,32 @@ Restore pipeline to a previously saved version. Stops if running, reloads config
 ## Runs
 
 ### GET /api/runs
-Run history. Query params: `pipeline` (filter by name), `limit` (default 100), `status` (`success`/`failed`).
+Run history. Query params:
 
-With SQLite persistence, run history survives daemon restarts.
+| Param | Default | Description |
+|-------|---------|-------------|
+| `pipeline` | — | Filter by pipeline name |
+| `limit` | 100 | Max records to return |
+| `status` | — | Filter: `success` \| `failed` \| `partial` |
+| `offset` | 0 | Pagination offset (v0.7.0) |
+| `from_dt` | — | ISO8601 lower bound on `started_at` (v0.7.0) |
+| `format` | — | Set to `csv` to get `text/csv` export (v1.0.0) |
+
+With SQLite/DB persistence, run history survives daemon restarts.
 
 ```json
 [
   {
     "run_id": "abc12345",
     "pipeline": "pm-ingest",
+    "node_id": "tram-0",
     "status": "success",
     "started_at": "2026-03-03T12:00:00Z",
     "finished_at": "2026-03-03T12:00:05Z",
     "records_in": 1500,
     "records_out": 1487,
     "records_skipped": 13,
+    "dlq_count": 0,
     "error": null
   }
 ]
@@ -152,6 +168,24 @@ With SQLite persistence, run history survives daemon restarts.
 
 ### GET /api/runs/{run_id}
 Get a single run result.
+
+---
+
+## Authentication (v1.0.0)
+
+When `TRAM_API_KEY` is set (or `apiKey` in Helm values), all `/api/*` requests must include the key:
+
+```bash
+# Header (preferred)
+curl -H "X-API-Key: mysecret" http://localhost:8765/api/pipelines
+
+# Query param (convenience)
+curl "http://localhost:8765/api/pipelines?api_key=mysecret"
+```
+
+Exempt paths (always unauthenticated): `/api/health`, `/api/ready`, `/metrics`, `/webhooks/*`
+
+Returns `401 Unauthorized` when the key is missing or wrong.
 
 ---
 
@@ -222,8 +256,9 @@ Graceful shutdown.
 | Code | Meaning |
 |------|---------|
 | 400 | Invalid pipeline YAML or config |
-| 401 | Missing/invalid Authorization header (webhook secret) |
+| 401 | Missing/invalid `X-API-Key` header or query param (v1.0.0); or missing/invalid `Authorization: Bearer` for webhook secret |
 | 404 | Pipeline, run, or webhook path not found |
 | 409 | Pipeline already registered |
 | 422 | Pydantic validation error |
-| 503 | Feature unavailable (prometheus_client not installed, persistence not configured) |
+| 429 | Rate limit exceeded (v1.0.0) — retry after the `TRAM_RATE_LIMIT_WINDOW` window resets |
+| 503 | DB unavailable (readiness check); `prometheus_client` not installed (`/metrics`) |

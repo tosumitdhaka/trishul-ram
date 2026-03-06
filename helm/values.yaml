@@ -3,7 +3,7 @@
 
 image:
   repository: ghcr.io/OWNER/tram
-  tag: "1.0.0"
+  tag: "1.0.2"
   pullPolicy: IfNotPresent
 
 ## TRAM always deploys as a StatefulSet (stable pod names: tram-0, tram-1, …).
@@ -49,10 +49,24 @@ env:
   # TRAM_SMTP_PORT: "587"
   # TRAM_SMTP_TLS: "true"
   # TRAM_SMTP_FROM: tram@localhost
+  # --- Security (v1.0.0) ---
+  # Note: API key is preferably set via .Values.apiKey (injected as TRAM_API_KEY automatically)
+  # or via envSecret to avoid storing secrets in values.yaml.
+  # TRAM_RATE_LIMIT: "0"          # requests/minute per client IP; 0 = disabled
+  # TRAM_RATE_LIMIT_WINDOW: "60"  # sliding window in seconds
+  # --- Observability (v1.0.0) ---
+  # TRAM_OTEL_ENDPOINT: ""        # OTLP gRPC endpoint, e.g. http://otel-collector:4317
+  # TRAM_OTEL_SERVICE: tram       # OpenTelemetry service.name attribute
+  # --- Operations (v1.0.0) ---
+  # TRAM_WATCH_PIPELINES: "false" # hot-reload pipelines on YAML change (requires tram[watch])
 
 ## Environment variables sourced from a Kubernetes Secret
+## Use this for sensitive values (API keys, passwords) instead of plain env above.
 ## Example:
 ##   envSecret:
+##     TRAM_API_KEY:
+##       secretName: tram-secrets
+##       secretKey: apiKey
 ##     TRAM_SMTP_USER:
 ##       secretName: tram-smtp
 ##       secretKey: username

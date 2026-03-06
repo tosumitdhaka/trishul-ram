@@ -9,6 +9,39 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ---
 
+## [1.0.2] — 2026-03-06
+
+### Added
+
+**SNMPv3 USM support**
+- New `build_v3_auth()` helper in `tram/connectors/snmp/mib_utils.py`: builds a pysnmp `UsmUserData` object from human-readable config; security level auto-detected (noAuthNoPriv / authNoPriv / authPriv)
+- Auth protocols: MD5, SHA (default), SHA224, SHA256, SHA384, SHA512
+- Privacy protocols: DES, 3DES, AES / AES128 (default), AES192, AES256; unknown strings fall back gracefully to SHA / AES128
+- **`snmp_poll` source** (`SNMPPollSource`): `version: "3"` now issues GET/WALK with `UsmUserData` instead of `CommunityData`; `ContextData(contextName=...)` passed when `context_name` is set
+- **`snmp_trap` sink** (`SNMPTrapSink`): `version: "3"` sends traps with `UsmUserData`
+- **`snmp_trap` source** (`SNMPTrapSource`): v3 config fields accepted and stored; trap *decoding* is best-effort (falls back to raw hex for encrypted v3 packets — full USM receive engine planned)
+- New v3 config fields on `SnmpPollSourceConfig`, `SnmpTrapSourceConfig`, `SnmpTrapSinkConfig`: `security_name`, `auth_protocol`, `auth_key`, `priv_protocol`, `priv_key`, `context_name`
+
+---
+
+## [1.0.1] — 2026-03-06
+
+### Added
+
+**SNMP Poll enhancements**
+- `_polled_at` (UTC ISO8601) injected into every SNMP poll record payload and `meta` dict — timestamp reflects the moment the poll was issued
+- `yield_rows: bool = False` on `SnmpPollSourceConfig`: when `true`, yields one record per table row instead of one flat dict for the entire WALK result
+- `index_depth: int = 0` on `SnmpPollSourceConfig`: controls how the row index is extracted from WALK keys — `0` = auto (split on first dot, correct for MIB-resolved names such as `ifDescr.1`); `>0` = last N OID components form the index (for numeric OIDs or composite indexes)
+- Each per-row record carries `_index` (dot-separated compound index string, e.g. `"1.192.168.1.1"`) and `_index_parts` (list of strings, e.g. `["1","192","168","1","1"]`) for downstream parsing
+
+### Changed
+
+**Build / versioning**
+- `tram/__init__.py`: `__version__` now read from installed package metadata via `importlib.metadata.version("tram")` — `pyproject.toml` is the single source of truth; fallback to `"0.0.0-dev"` when running from an uninstalled source tree
+- `release.yml`: tag push (`v*`) now automatically patches `pyproject.toml`, `helm/Chart.yaml` (both `version` and `appVersion`), and `helm/values.yaml` (`image.tag`) in the ephemeral CI workspace before building — no manual version edits required for future releases
+
+---
+
 ## [1.0.0] — 2026-03-06
 
 ### Added

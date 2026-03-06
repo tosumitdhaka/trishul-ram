@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import datetime
 import logging
 import socket
 import threading
@@ -16,7 +17,7 @@ logger = logging.getLogger(__name__)
 
 @register_source("snmp_trap")
 class SNMPTrapSource(BaseSource):
-    """Receive SNMP traps (v1/v2c) over UDP, operating in stream mode.
+    """Receive SNMP traps (v1/v2c/v3) over UDP, operating in stream mode.
 
     Each trap is decoded into a dict of OID → value bindings and yielded as
     ``(json_bytes, meta)``.
@@ -24,10 +25,20 @@ class SNMPTrapSource(BaseSource):
     Requires ``pysnmp-lextudio>=6.2`` (``pip install tram[snmp]``).
 
     Config keys:
-        host       (str, default "0.0.0.0")   Bind address.
-        port       (int, default 162)          UDP port for traps.
-        community  (str, default "public")     SNMP community string.
-        version    (str, default "2c")         "2c" or "3" (v3 not fully supported).
+        host            (str, default "0.0.0.0")  Bind address.
+        port            (int, default 162)         UDP port for traps.
+        community       (str, default "public")    SNMP v1/v2c community string.
+        version         (str, default "2c")        "1", "2c", or "3".
+        security_name   (str)   SNMPv3 USM username.
+        auth_protocol   (str)   MD5 | SHA | SHA224 | SHA256 | SHA384 | SHA512.
+        auth_key        (str)   Auth passphrase (None → noAuthNoPriv).
+        priv_protocol   (str)   DES | 3DES | AES | AES128 | AES192 | AES256.
+        priv_key        (str)   Privacy passphrase (None → authNoPriv).
+        context_name    (str)   SNMPv3 context name.
+
+    Note: SNMPv3 trap *receiving* stores the config for future full USM decode
+    support.  Incoming v3 packets are currently decoded on a best-effort basis
+    and fall back to ``{"_raw": "<hex>"}`` when USM decryption is required.
     """
 
     def __init__(self, config: dict) -> None:
@@ -39,6 +50,13 @@ class SNMPTrapSource(BaseSource):
         self.mib_dirs: list[str] = list(config.get("mib_dirs", []))
         self.mib_modules: list[str] = list(config.get("mib_modules", []))
         self.resolve_oids: bool = bool(config.get("resolve_oids", True))
+        # SNMPv3 USM
+        self.security_name: str = config.get("security_name", "")
+        self.auth_protocol: str = config.get("auth_protocol", "SHA")
+        self.auth_key: str | None = config.get("auth_key")
+        self.priv_protocol: str = config.get("priv_protocol", "AES128")
+        self.priv_key: str | None = config.get("priv_key")
+        self.context_name: str = config.get("context_name", "")
         self._stop_event: threading.Event = threading.Event()
 
     def stop(self) -> None:
@@ -137,20 +155,29 @@ class SNMPTrapSource(BaseSource):
 
 @register_source("snmp_poll")
 class SNMPPollSource(BaseSource):
-    """Poll an SNMP agent (GET or WALK), operating in batch mode.
+    """Poll an SNMP agent (GET or WALK) using SNMPv1, v2c, or v3.
 
-    Each run issues the configured GET or WALK operation and yields a single
-    ``(json_bytes, meta)`` tuple containing all OID bindings.
+    Each run issues the configured GET or WALK operation and yields one or more
+    ``(json_bytes, meta)`` tuples.  Every record contains ``_polled_at`` (UTC
+    ISO8601).  Set ``yield_rows=True`` to receive one record per table row.
 
     Requires ``pysnmp-lextudio>=6.2`` (``pip install tram[snmp]``).
 
     Config keys:
-        host       (str, required)             SNMP agent hostname or IP.
-        port       (int, default 161)          SNMP agent port.
-        community  (str, default "public")     Community string.
-        version    (str, default "2c")         SNMP version.
-        oids       (list[str], required)       OIDs to GET or WALK.
-        operation  (str, default "get")        "get" or "walk".
+        host            (str, required)        SNMP agent hostname or IP.
+        port            (int, default 161)     SNMP agent port.
+        community       (str, default "public") Community string (v1/v2c).
+        version         (str, default "2c")    "1", "2c", or "3".
+        oids            (list[str], required)  OIDs to GET or WALK.
+        operation       (str, default "get")   "get" or "walk".
+        yield_rows      (bool, default False)  Yield one record per table row.
+        index_depth     (int, default 0)       Index split depth (0=auto).
+        security_name   (str)   SNMPv3 USM username.
+        auth_protocol   (str)   MD5 | SHA | SHA224 | SHA256 | SHA384 | SHA512.
+        auth_key        (str)   Auth passphrase (None → noAuthNoPriv).
+        priv_protocol   (str)   DES | 3DES | AES | AES128 | AES192 | AES256.
+        priv_key        (str)   Privacy passphrase (None → authNoPriv).
+        context_name    (str)   SNMPv3 context name.
     """
 
     def __init__(self, config: dict) -> None:
@@ -164,10 +191,79 @@ class SNMPPollSource(BaseSource):
         self.mib_dirs: list[str] = list(config.get("mib_dirs", []))
         self.mib_modules: list[str] = list(config.get("mib_modules", []))
         self.resolve_oids: bool = bool(config.get("resolve_oids", True))
+        self.yield_rows: bool = bool(config.get("yield_rows", False))
+        self.index_depth: int = int(config.get("index_depth", 0))
+        # SNMPv3 USM
+        self.security_name: str = config.get("security_name", "")
+        self.auth_protocol: str = config.get("auth_protocol", "SHA")
+        self.auth_key: str | None = config.get("auth_key")
+        self.priv_protocol: str = config.get("priv_protocol", "AES128")
+        self.priv_key: str | None = config.get("priv_key")
+        self.context_name: str = config.get("context_name", "")
+
+    # ------------------------------------------------------------------
+    # Internal helpers
+    # ------------------------------------------------------------------
+
+    @staticmethod
+    def _group_by_index(bindings: dict, index_depth: int) -> list[dict]:
+        """Group flat ``{oid_key: value}`` bindings into per-row dicts.
+
+        Each key is split into a *column* name and a *row index*:
+
+        * ``index_depth == 0`` (auto) — split on the **first dot**.
+          Works correctly for MIB-resolved names such as ``ifDescr.1`` or
+          ``atPhysAddress.1.192.168.1.1``.
+
+        * ``index_depth > 0`` — last *N* OID components form the index.
+          Use this for numeric OIDs when you know the table instance depth
+          (e.g. ``index_depth=4`` for single IPv4-addressed rows, or
+          ``index_depth=5`` for interface-index + IPv4 composite keys).
+
+        The returned list contains one dict per unique index value.  Each
+        dict carries:
+
+        * ``_index`` — the compound row index as a dot-separated string
+          (e.g. ``"1"``, ``"10.0.0.1"``, ``"1.192.168.1.1"``).
+        * ``_index_parts`` — the index split into a list of strings for
+          easy downstream parsing of composite indexes.
+        * One key per column/symbol with the corresponding value.
+        """
+        rows: dict[str, dict] = {}
+        for key, val in bindings.items():
+            if index_depth == 0:
+                # Auto: split on first dot → (symbol, instance)
+                dot_pos = key.find(".")
+                if dot_pos == -1:
+                    col, idx = key, ""
+                else:
+                    col, idx = key[:dot_pos], key[dot_pos + 1:]
+            else:
+                parts = key.split(".")
+                if len(parts) > index_depth:
+                    col = ".".join(parts[:-index_depth])
+                    idx = ".".join(parts[-index_depth:])
+                else:
+                    col, idx = key, ""
+
+            if idx not in rows:
+                rows[idx] = {
+                    "_index": idx,
+                    "_index_parts": idx.split(".") if idx else [],
+                }
+            rows[idx][col] = val
+
+        # Stable order: sort by index string
+        return [rows[k] for k in sorted(rows)]
+
+    # ------------------------------------------------------------------
+    # read()
+    # ------------------------------------------------------------------
 
     def read(self) -> Iterator[tuple[bytes, dict]]:
         import json
         try:
+            import pysnmp.hlapi as _hlapi
             from pysnmp.hlapi import (
                 CommunityData,
                 ContextData,
@@ -184,16 +280,35 @@ class SNMPPollSource(BaseSource):
             ) from exc
 
         engine = SnmpEngine()
-        community = CommunityData(self.community)
+
+        if self.version == "3":
+            from tram.connectors.snmp.mib_utils import build_v3_auth
+            auth_data = build_v3_auth(
+                _hlapi,
+                security_name=self.security_name,
+                auth_protocol=self.auth_protocol,
+                auth_key=self.auth_key,
+                priv_protocol=self.priv_protocol,
+                priv_key=self.priv_key,
+            )
+        else:
+            auth_data = CommunityData(self.community)
+
         target = UdpTransportTarget((self.host, self.port))
-        context = ContextData()
+        context = (
+            ContextData(contextName=self.context_name)
+            if self.context_name
+            else ContextData()
+        )
         object_types = [ObjectType(ObjectIdentity(oid)) for oid in self.oids]
+
+        polled_at = datetime.datetime.now(datetime.timezone.utc).isoformat()
 
         bindings: dict = {}
         try:
             if self.operation == "get":
                 error_indication, error_status, error_index, var_binds = next(
-                    getCmd(engine, community, target, context, *object_types)
+                    getCmd(engine, auth_data, target, context, *object_types)
                 )
                 if error_indication:
                     raise SourceError(f"SNMP GET error: {error_indication}")
@@ -206,7 +321,7 @@ class SNMPPollSource(BaseSource):
                     bindings[str(oid)] = str(val)
             elif self.operation == "walk":
                 for error_indication, error_status, error_index, var_binds in nextCmd(
-                    engine, community, target, context, *object_types, lexicographicMode=False
+                    engine, auth_data, target, context, *object_types, lexicographicMode=False
                 ):
                     if error_indication:
                         raise SourceError(f"SNMP WALK error: {error_indication}")
@@ -233,15 +348,24 @@ class SNMPPollSource(BaseSource):
             except Exception:
                 pass  # Keep numeric OIDs on resolution failure
 
-        payload = json.dumps(bindings).encode("utf-8")
         meta = {
             "source_host": self.host,
             "source_port": self.port,
             "operation": self.operation,
             "oids": self.oids,
+            "polled_at": polled_at,
         }
+
         logger.info(
             "SNMP poll completed",
             extra={"host": self.host, "operation": self.operation, "bindings": len(bindings)},
         )
-        yield payload, meta
+
+        if self.yield_rows:
+            rows = self._group_by_index(bindings, self.index_depth)
+            for row in rows:
+                row["_polled_at"] = polled_at
+                yield json.dumps(row).encode("utf-8"), meta
+        else:
+            bindings["_polled_at"] = polled_at
+            yield json.dumps(bindings).encode("utf-8"), meta

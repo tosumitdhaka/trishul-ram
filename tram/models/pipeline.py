@@ -143,6 +143,13 @@ class SnmpTrapSourceConfig(BaseModel):
     mib_dirs: list[str] = Field(default_factory=list)
     mib_modules: list[str] = Field(default_factory=list)
     resolve_oids: bool = True
+    # SNMPv3 USM (used when version="3"; trap decoding is best-effort for v3)
+    security_name: str = ""
+    auth_protocol: str = "SHA"
+    auth_key: Optional[str] = None
+    priv_protocol: str = "AES128"
+    priv_key: Optional[str] = None
+    context_name: str = ""
 
 
 class SnmpPollSourceConfig(BaseModel):
@@ -156,6 +163,16 @@ class SnmpPollSourceConfig(BaseModel):
     mib_dirs: list[str] = Field(default_factory=list)
     mib_modules: list[str] = Field(default_factory=list)
     resolve_oids: bool = True
+    yield_rows: bool = False   # True → yield one record per table row (WALK only)
+    index_depth: int = 0       # 0=split on first dot (auto, for resolved names);
+                               # >0=last N OID components form the row index
+    # SNMPv3 USM (used when version="3")
+    security_name: str = ""
+    auth_protocol: str = "SHA"        # MD5 | SHA | SHA224 | SHA256 | SHA384 | SHA512
+    auth_key: Optional[str] = None    # auth passphrase; None → noAuthNoPriv
+    priv_protocol: str = "AES128"     # DES | 3DES | AES | AES128 | AES192 | AES256
+    priv_key: Optional[str] = None    # priv passphrase; None → authNoPriv
+    context_name: str = ""            # SNMPv3 contextName (usually empty)
 
 
 class MqttSourceConfig(BaseModel):
@@ -681,6 +698,13 @@ class SnmpTrapSinkConfig(BaseModel):
     mib_dirs: list[str] = Field(default_factory=list)
     mib_modules: list[str] = Field(default_factory=list)
     varbinds: list[VarbindConfig] = Field(default_factory=list)
+    # SNMPv3 USM (used when version="3")
+    security_name: str = ""
+    auth_protocol: str = "SHA"
+    auth_key: Optional[str] = None
+    priv_protocol: str = "AES128"
+    priv_key: Optional[str] = None
+    context_name: str = ""
     condition: Optional[str] = None
     transforms: list[TransformConfig] = Field(default_factory=list)
     retry_count: int = 0

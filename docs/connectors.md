@@ -107,7 +107,7 @@ That's it. The pipeline YAML immediately supports `source.type: myproto`.
 UDP/TCP syslog receiver. `host`, `port` (514), `protocol` (udp/tcp).
 
 ### snmp_trap
-SNMP trap receiver. `host`, `port` (162), `community`, `version`.
+SNMP trap receiver (v1/v2c/v3). `host`, `port` (162), `community`, `version`.
 
 **MIB integration (v1.0.0):**
 | Parameter | Default | Description |
@@ -116,10 +116,80 @@ SNMP trap receiver. `host`, `port` (162), `community`, `version`.
 | `mib_modules` | `[]` | MIB module names to load, e.g. `["IF-MIB", "SNMPv2-MIB"]` |
 | `resolve_oids` | `true` | Use symbolic names as JSON keys; `false` = numeric dotted-decimal |
 
+**SNMPv3 USM (v1.0.2):**
+| Parameter | Default | Description |
+|-----------|---------|-------------|
+| `version` | `2c` | Set to `3` to enable SNMPv3 |
+| `security_name` | `""` | USM username |
+| `auth_protocol` | `SHA` | `MD5` \| `SHA` \| `SHA224` \| `SHA256` \| `SHA384` \| `SHA512` |
+| `auth_key` | `null` | Auth passphrase — omit for noAuthNoPriv |
+| `priv_protocol` | `AES128` | `DES` \| `3DES` \| `AES` \| `AES128` \| `AES192` \| `AES256` |
+| `priv_key` | `null` | Privacy passphrase — omit for authNoPriv |
+| `context_name` | `""` | SNMPv3 context name |
+
+> **Note:** SNMPv3 trap *receiving* currently falls back to `{"_raw": "<hex>"}` for encrypted packets — config fields are stored and full USM receive is planned.
+
 ### snmp_poll
 SNMP GET/WALK polling. `host`, `oids: list[str]`, `operation` (get/walk).
 
 **MIB integration (v1.0.0):** Same `mib_dirs`, `mib_modules`, `resolve_oids` fields as `snmp_trap`.
+
+| Parameter | Default | Description |
+|-----------|---------|-------------|
+| `host` | required | SNMP agent hostname or IP |
+| `port` | 161 | SNMP agent UDP port |
+| `community` | `public` | Community string |
+| `version` | `2c` | SNMP version: `1`, `2c`, or `3` (SNMPv3 USM added in v1.0.2) |
+| `oids` | required | List of OIDs or symbolic names to GET/WALK |
+| `operation` | `get` | `get` — fetch exact instances; `walk` — subtree traversal |
+| `mib_dirs` | `[]` | Paths to compiled (Python .py) MIB directories |
+| `mib_modules` | `[]` | MIB module names to load, e.g. `["IF-MIB", "SNMPv2-MIB"]` |
+| `resolve_oids` | `true` | Resolve OIDs to symbolic names when MIBs are loaded |
+| `yield_rows` | `false` | **`true`** → yield one record per table row (use with WALK); **`false`** → yield one flat dict for all results |
+| `index_depth` | `0` | `0` = auto (split on first dot, works for MIB-resolved names); `>0` = last N OID components form the row index (use for numeric OIDs or composite indexes) |
+
+Every yielded record always contains `_polled_at` (UTC ISO8601 timestamp of the poll), and the `meta` dict carries `polled_at` as well.
+
+**GET vs WALK decision** is explicit via the `operation` field — TRAM does not auto-detect. Rule: use `get` for scalar/instance OIDs; use `walk` for table subtrees.
+
+**Table rows with `yield_rows: true`:**
+
+```yaml
+source:
+  type: snmp_poll
+  host: 192.168.1.1
+  operation: walk
+  oids: ["IF-MIB::ifTable"]
+  mib_modules: ["IF-MIB"]
+  resolve_oids: true
+  yield_rows: true
+  # index_depth: 0  # auto — split on first dot (correct for resolved names)
+```
+
+Produces one record per interface row:
+```json
+{"_index": "1", "_index_parts": ["1"], "ifDescr": "eth0", "ifOperStatus": "1", "_polled_at": "2026-03-06T12:00:00+00:00"}
+{"_index": "2", "_index_parts": ["2"], "ifDescr": "lo",   "ifOperStatus": "1", "_polled_at": "2026-03-06T12:00:00+00:00"}
+```
+
+**Composite (multi-component) indexes** — e.g. ARP table keyed by `(ifIndex, IP)`:
+
+```yaml
+source:
+  type: snmp_poll
+  host: 192.168.1.1
+  operation: walk
+  oids: ["1.3.6.1.2.1.3.1"]   # atTable (numeric, no MIB resolution)
+  yield_rows: true
+  index_depth: 5               # 1 (ifIndex) + 4 (IPv4 octets) = 5 components
+```
+
+Produces:
+```json
+{"_index": "1.192.168.1.10", "_index_parts": ["1","192","168","1","10"], "1.3.6.1.2.1.3.1.2": "00:11:22:33:44:55", "_polled_at": "..."}
+```
+
+Downstream transforms (`regex_extract` or `add_field` with `simpleeval`) can further parse `_index` or `_index_parts`.
 
 Compile raw `.mib` files to Python format with:
 ```bash
@@ -281,7 +351,22 @@ Writes line-protocol. `measurement`, `tag_fields`, `timestamp_field`, `precision
 ONAP VES event sink. `url`, `domain`, `source_name`, auth options.
 
 ### snmp_trap
-Sends SNMP v2c traps. `host`, `port`, `enterprise_oid`.
+Sends SNMP v1/v2c/v3 traps. `host`, `port`, `enterprise_oid`.
+
+**SNMPv3 USM (v1.0.2)** — same fields as the `snmp_trap` source above (`security_name`, `auth_key`, `auth_protocol`, `priv_key`, `priv_protocol`, `context_name`). Example:
+
+```yaml
+sink:
+  type: snmp_trap
+  host: nms.example.com
+  version: "3"
+  security_name: trapuser
+  auth_protocol: SHA256
+  auth_key: ${AUTH_KEY}
+  priv_protocol: AES128
+  priv_key: ${PRIV_KEY}
+  enterprise_oid: "1.3.6.1.4.1.99999"
+```
 
 **Explicit varbind config (v1.0.0):**
 ```yaml
