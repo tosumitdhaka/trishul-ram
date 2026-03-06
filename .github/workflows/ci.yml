@@ -38,6 +38,9 @@ jobs:
             --cov-report=term-missing \
             --cov-report=xml
 
+      - name: Run integration tests
+        run: pytest tests/integration/ -q --tb=short
+
       - name: Upload coverage
         uses: actions/upload-artifact@v4
         if: matrix.python-version == '3.11'

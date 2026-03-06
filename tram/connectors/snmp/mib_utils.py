@@ -1,4 +1,5 @@
-"""SNMP MIB utilities — build MIB view, resolve OIDs, symbolic name lookup.
+"""SNMP MIB utilities — build MIB view, resolve OIDs, symbolic name lookup,
+and SNMPv3 USM authentication builder.
 
 Requires ``pysnmp-lextudio`` (``pip install tram[snmp]``).
 Raw .mib compilation requires ``pysmi-lextudio`` (``pip install tram[mib]``).
@@ -11,6 +12,85 @@ from functools import lru_cache
 from typing import Optional
 
 logger = logging.getLogger(__name__)
+
+
+# ── SNMPv3 USM auth builder ─────────────────────────────────────────────────
+
+# Maps human-readable protocol strings → pysnmp.hlapi attribute names.
+# Looked up via getattr(hlapi, name) at call time — keeps this module
+# importable without pysnmp installed.
+
+_AUTH_PROTO_NAMES: dict[str, str] = {
+    "MD5":    "usmHMACMD5AuthProtocol",
+    "SHA":    "usmHMACSHAAuthProtocol",      # SHA-1 / HMAC-96
+    "SHA224": "usmHMAC128SHA224AuthProtocol",
+    "SHA256": "usmHMAC192SHA256AuthProtocol",
+    "SHA384": "usmHMAC256SHA384AuthProtocol",
+    "SHA512": "usmHMAC384SHA512AuthProtocol",
+}
+
+_PRIV_PROTO_NAMES: dict[str, str] = {
+    "DES":    "usmDESPrivProtocol",
+    "3DES":   "usm3DESEDEPrivProtocol",
+    "AES":    "usmAesCfb128Protocol",    # alias for AES-128
+    "AES128": "usmAesCfb128Protocol",
+    "AES192": "usmAesCfb192Protocol",
+    "AES256": "usmAesCfb256Protocol",
+}
+
+
+def build_v3_auth(
+    hlapi,
+    security_name: str,
+    auth_protocol: str = "SHA",
+    auth_key: Optional[str] = None,
+    priv_protocol: str = "AES128",
+    priv_key: Optional[str] = None,
+):
+    """Build a ``UsmUserData`` object for SNMPv3 USM authentication.
+
+    Security level is auto-detected from the supplied credentials:
+
+    * no ``auth_key``              → **noAuthNoPriv** (username only)
+    * ``auth_key`` only            → **authNoPriv**
+    * ``auth_key`` + ``priv_key``  → **authPriv**
+
+    Args:
+        hlapi:          The ``pysnmp.hlapi`` module (passed in to avoid a
+                        top-level import; allows this module to stay importable
+                        when pysnmp is not installed).
+        security_name:  USM username.
+        auth_protocol:  Auth algorithm — MD5 | SHA | SHA224 | SHA256 | SHA384 | SHA512.
+                        Defaults to SHA.  Unknown values fall back to SHA.
+        auth_key:       Auth passphrase.  ``None`` → noAuthNoPriv.
+        priv_protocol:  Privacy algorithm — DES | 3DES | AES | AES128 | AES192 | AES256.
+                        Defaults to AES128.  Unknown values fall back to AES128.
+        priv_key:       Privacy passphrase.  ``None`` → authNoPriv (when auth_key set).
+
+    Returns:
+        Configured ``UsmUserData`` instance ready to pass to pysnmp hlapi calls.
+    """
+    kwargs: dict = {"userName": security_name}
+
+    if auth_key:
+        auth_proto_attr = _AUTH_PROTO_NAMES.get(
+            auth_protocol.upper(), "usmHMACSHAAuthProtocol"
+        )
+        auth_proto = getattr(hlapi, auth_proto_attr, None)
+        kwargs["authKey"] = auth_key
+        if auth_proto is not None:
+            kwargs["authProtocol"] = auth_proto
+
+        if priv_key:
+            priv_proto_attr = _PRIV_PROTO_NAMES.get(
+                priv_protocol.upper(), "usmAesCfb128Protocol"
+            )
+            priv_proto = getattr(hlapi, priv_proto_attr, None)
+            kwargs["privKey"] = priv_key
+            if priv_proto is not None:
+                kwargs["privProtocol"] = priv_proto
+
+    return hlapi.UsmUserData(**kwargs)
 
 
 def build_mib_view(mib_dirs: list[str], mib_modules: list[str]):

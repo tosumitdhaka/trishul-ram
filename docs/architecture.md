@@ -82,6 +82,8 @@ Every record is a plain Python `dict`. Global transforms apply per-record so a s
 │                                                                              │
 │  Metrics (prometheus_client or no-ops)                                       │
 │  tram_records_in/out/skipped/errors/dlq_total + chunk duration histogram     │
+│  tram_kafka_consumer_lag{pipeline,topic,partition} (v1.0.0)                  │
+│  tram_stream_queue_depth{pipeline} (v1.0.0)                                  │
 └──────────────────────────────────────────────────────────────────────────────┘
 ```
 
@@ -96,7 +98,7 @@ class KafkaSource(BaseSource): ...
 
 The three `__init__.py` files in `connectors/`, `transforms/`, and `serializers/` import all submodules, firing decorators during package import at startup.
 
-### Plugin Registry Keys (v0.9.0)
+### Plugin Registry Keys (v1.0.2)
 
 | Category | Keys |
 |----------|------|
