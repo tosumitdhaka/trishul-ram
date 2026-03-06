@@ -3,7 +3,7 @@
 
 image:
   repository: ghcr.io/OWNER/tram
-  tag: "0.9.0"
+  tag: "1.0.0"
   pullPolicy: IfNotPresent
 
 ## TRAM always deploys as a StatefulSet (stable pod names: tram-0, tram-1, …).
@@ -94,6 +94,19 @@ serviceAccount:
   create: true
   ## If not set, a name is generated using the fullname template
   name: ""
+
+## API key authentication (v1.0.0)
+## Set apiKey to enable X-API-Key authentication on /api/* endpoints.
+## Health probes (/api/health, /api/ready) and webhooks (/webhooks/) are always exempt.
+apiKey: ""   # Also configurable via TRAM_API_KEY env var
+
+## TLS configuration (v1.0.0)
+## Mount a Kubernetes TLS secret and enable TLS for the uvicorn server.
+## Create the secret with: kubectl create secret tls tram-tls --cert=tls.crt --key=tls.key
+tls:
+  enabled: false
+  secretName: ""           # Name of a Kubernetes TLS secret (tls.crt / tls.key)
+  certManagerIssuer: ""    # Optional: cert-manager ClusterIssuer name for automatic issuance
 
 ## Extra labels to add to all resources
 extraLabels: {}

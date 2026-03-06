@@ -36,6 +36,9 @@ class SNMPTrapSource(BaseSource):
         self.port: int = int(config.get("port", 162))
         self.community: str = config.get("community", "public")
         self.version: str = str(config.get("version", "2c"))
+        self.mib_dirs: list[str] = list(config.get("mib_dirs", []))
+        self.mib_modules: list[str] = list(config.get("mib_modules", []))
+        self.resolve_oids: bool = bool(config.get("resolve_oids", True))
         self._stop_event: threading.Event = threading.Event()
 
     def stop(self) -> None:
@@ -82,7 +85,23 @@ class SNMPTrapSource(BaseSource):
                     logger.warning("SNMP trap recv error: %s", exc)
                     continue
                 source_ip, src_port = addr
-                bindings = self._decode_trap(raw)
+                raw_bindings = self._decode_trap(raw)
+                if self.resolve_oids and (self.mib_dirs or self.mib_modules):
+                    try:
+                        from tram.connectors.snmp.mib_utils import get_mib_view, resolve_oid, oid_str_to_tuple
+                        mib_view = get_mib_view(self.mib_dirs, self.mib_modules)
+                        bindings = {
+                            resolve_oid(mib_view, oid_str_to_tuple(oid)): val
+                            for oid, val in raw_bindings.items()
+                            if not oid.startswith("_")
+                        }
+                        # preserve _raw if present
+                        if "_raw" in raw_bindings:
+                            bindings["_raw"] = raw_bindings["_raw"]
+                    except Exception:
+                        bindings = raw_bindings
+                else:
+                    bindings = raw_bindings
                 meta = {
                     "source_ip": source_ip,
                     "port": src_port,
@@ -142,6 +161,9 @@ class SNMPPollSource(BaseSource):
         self.version: str = str(config.get("version", "2c"))
         self.oids: list[str] = list(config.get("oids", []))
         self.operation: str = config.get("operation", "get").lower()
+        self.mib_dirs: list[str] = list(config.get("mib_dirs", []))
+        self.mib_modules: list[str] = list(config.get("mib_modules", []))
+        self.resolve_oids: bool = bool(config.get("resolve_oids", True))
 
     def read(self) -> Iterator[tuple[bytes, dict]]:
         import json
@@ -198,6 +220,18 @@ class SNMPPollSource(BaseSource):
             raise
         except Exception as exc:
             raise SourceError(f"SNMP poll failed: {exc}") from exc
+
+        # Optional MIB-based OID resolution
+        if self.resolve_oids and (self.mib_dirs or self.mib_modules):
+            try:
+                from tram.connectors.snmp.mib_utils import get_mib_view, resolve_oid, oid_str_to_tuple
+                mib_view = get_mib_view(self.mib_dirs, self.mib_modules)
+                bindings = {
+                    resolve_oid(mib_view, oid_str_to_tuple(oid)): val
+                    for oid, val in bindings.items()
+                }
+            except Exception:
+                pass  # Keep numeric OIDs on resolution failure
 
         payload = json.dumps(bindings).encode("utf-8")
         meta = {

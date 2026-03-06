@@ -39,6 +39,7 @@ class SFTPSourceConfig(BaseModel):
     move_after_read: Optional[str] = None
     delete_after_read: bool = False
     skip_processed: bool = False   # track processed files in DB; skip on re-run
+    read_chunk_bytes: int = 0      # 0 = read all at once; >0 = stream in chunks
 
     @model_validator(mode="after")
     def check_auth(self) -> "SFTPSourceConfig":
@@ -91,6 +92,8 @@ class KafkaSourceConfig(BaseModel):
     sasl_username: Optional[str] = None
     sasl_password: Optional[str] = None
     ssl_cafile: Optional[str] = None
+    reconnect_delay_seconds: float = 5.0
+    max_reconnect_attempts: int = 0   # 0 = infinite
 
 
 class FtpSourceConfig(BaseModel):
@@ -119,6 +122,7 @@ class S3SourceConfig(BaseModel):
     move_after_read: Optional[str] = None
     delete_after_read: bool = False
     skip_processed: bool = False
+    read_chunk_bytes: int = 0      # 0 = read all at once; >0 = stream in chunks
 
 
 class SyslogSourceConfig(BaseModel):
@@ -136,6 +140,9 @@ class SnmpTrapSourceConfig(BaseModel):
     port: int = 162
     community: str = "public"
     version: str = "2c"
+    mib_dirs: list[str] = Field(default_factory=list)
+    mib_modules: list[str] = Field(default_factory=list)
+    resolve_oids: bool = True
 
 
 class SnmpPollSourceConfig(BaseModel):
@@ -146,6 +153,9 @@ class SnmpPollSourceConfig(BaseModel):
     version: str = "2c"
     oids: list[str]
     operation: str = "get"
+    mib_dirs: list[str] = Field(default_factory=list)
+    mib_modules: list[str] = Field(default_factory=list)
+    resolve_oids: bool = True
 
 
 class MqttSourceConfig(BaseModel):
@@ -175,6 +185,8 @@ class NatsSourceConfig(BaseModel):
     subject: str
     queue_group: Optional[str] = None   # None → use pipeline name at runtime; "" → broadcast
     credentials_file: Optional[str] = None
+    max_reconnect_attempts: int = -1   # -1 = infinite
+    reconnect_time_wait: float = 2.0
 
 
 class GnmiSourceConfig(BaseModel):
@@ -517,6 +529,9 @@ class SFTPSinkConfig(BaseModel):
     filename_template: str = "{pipeline}_{timestamp}.bin"
     condition: Optional[str] = None
     transforms: list[TransformConfig] = Field(default_factory=list)
+    retry_count: int = 0
+    retry_delay_seconds: float = 1.0
+    circuit_breaker_threshold: int = 0
 
     @model_validator(mode="after")
     def check_auth(self) -> "SFTPSinkConfig":
@@ -532,6 +547,9 @@ class LocalSinkConfig(BaseModel):
     overwrite: bool = True
     condition: Optional[str] = None
     transforms: list[TransformConfig] = Field(default_factory=list)
+    retry_count: int = 0
+    retry_delay_seconds: float = 1.0
+    circuit_breaker_threshold: int = 0
 
 
 class RestSinkConfig(BaseModel):
@@ -549,6 +567,9 @@ class RestSinkConfig(BaseModel):
     expected_status: list[int] = Field(default_factory=lambda: [200, 201, 202, 204])
     condition: Optional[str] = None
     transforms: list[TransformConfig] = Field(default_factory=list)
+    retry_count: int = 0
+    retry_delay_seconds: float = 1.0
+    circuit_breaker_threshold: int = 0
 
 
 class KafkaSinkConfig(BaseModel):
@@ -565,6 +586,9 @@ class KafkaSinkConfig(BaseModel):
     compression_type: Optional[str] = None
     condition: Optional[str] = None
     transforms: list[TransformConfig] = Field(default_factory=list)
+    retry_count: int = 0
+    retry_delay_seconds: float = 1.0
+    circuit_breaker_threshold: int = 0
 
 
 class OpenSearchSinkConfig(BaseModel):
@@ -582,6 +606,9 @@ class OpenSearchSinkConfig(BaseModel):
     refresh: str = "false"
     condition: Optional[str] = None
     transforms: list[TransformConfig] = Field(default_factory=list)
+    retry_count: int = 0
+    retry_delay_seconds: float = 1.0
+    circuit_breaker_threshold: int = 0
 
 
 class FtpSinkConfig(BaseModel):
@@ -595,6 +622,9 @@ class FtpSinkConfig(BaseModel):
     passive: bool = True
     condition: Optional[str] = None
     transforms: list[TransformConfig] = Field(default_factory=list)
+    retry_count: int = 0
+    retry_delay_seconds: float = 1.0
+    circuit_breaker_threshold: int = 0
 
 
 class VesSinkConfig(BaseModel):
@@ -612,6 +642,9 @@ class VesSinkConfig(BaseModel):
     expected_status: list[int] = Field(default_factory=lambda: [202])
     condition: Optional[str] = None
     transforms: list[TransformConfig] = Field(default_factory=list)
+    retry_count: int = 0
+    retry_delay_seconds: float = 1.0
+    circuit_breaker_threshold: int = 0
 
 
 class S3SinkConfig(BaseModel):
@@ -625,6 +658,17 @@ class S3SinkConfig(BaseModel):
     content_type: str = "application/json"
     condition: Optional[str] = None
     transforms: list[TransformConfig] = Field(default_factory=list)
+    retry_count: int = 0
+    retry_delay_seconds: float = 1.0
+    circuit_breaker_threshold: int = 0
+
+
+class VarbindConfig(BaseModel):
+    """Explicit varbind specification for SNMP trap sink."""
+
+    oid: str
+    value_field: str
+    type: Literal["Integer32", "OctetString", "Counter32", "Gauge32", "TimeTicks"] = "OctetString"
 
 
 class SnmpTrapSinkConfig(BaseModel):
@@ -634,8 +678,14 @@ class SnmpTrapSinkConfig(BaseModel):
     community: str = "public"
     version: str = "2c"
     enterprise_oid: str = "1.3.6.1.4.1.0"
+    mib_dirs: list[str] = Field(default_factory=list)
+    mib_modules: list[str] = Field(default_factory=list)
+    varbinds: list[VarbindConfig] = Field(default_factory=list)
     condition: Optional[str] = None
     transforms: list[TransformConfig] = Field(default_factory=list)
+    retry_count: int = 0
+    retry_delay_seconds: float = 1.0
+    circuit_breaker_threshold: int = 0
 
 
 class MqttSinkConfig(BaseModel):
@@ -651,6 +701,9 @@ class MqttSinkConfig(BaseModel):
     client_id: str = ""
     condition: Optional[str] = None
     transforms: list[TransformConfig] = Field(default_factory=list)
+    retry_count: int = 0
+    retry_delay_seconds: float = 1.0
+    circuit_breaker_threshold: int = 0
 
 
 class AmqpSinkConfig(BaseModel):
@@ -661,6 +714,9 @@ class AmqpSinkConfig(BaseModel):
     content_type: str = "application/json"
     condition: Optional[str] = None
     transforms: list[TransformConfig] = Field(default_factory=list)
+    retry_count: int = 0
+    retry_delay_seconds: float = 1.0
+    circuit_breaker_threshold: int = 0
 
 
 class NatsSinkConfig(BaseModel):
@@ -670,6 +726,9 @@ class NatsSinkConfig(BaseModel):
     credentials_file: Optional[str] = None
     condition: Optional[str] = None
     transforms: list[TransformConfig] = Field(default_factory=list)
+    retry_count: int = 0
+    retry_delay_seconds: float = 1.0
+    circuit_breaker_threshold: int = 0
 
 
 class SqlSinkConfig(BaseModel):
@@ -680,6 +739,9 @@ class SqlSinkConfig(BaseModel):
     upsert_keys: list[str] = Field(default_factory=list)
     condition: Optional[str] = None
     transforms: list[TransformConfig] = Field(default_factory=list)
+    retry_count: int = 0
+    retry_delay_seconds: float = 1.0
+    circuit_breaker_threshold: int = 0
 
 
 class InfluxDbSinkConfig(BaseModel):
@@ -694,6 +756,9 @@ class InfluxDbSinkConfig(BaseModel):
     precision: Literal["ns", "us", "ms", "s"] = "ns"
     condition: Optional[str] = None
     transforms: list[TransformConfig] = Field(default_factory=list)
+    retry_count: int = 0
+    retry_delay_seconds: float = 1.0
+    circuit_breaker_threshold: int = 0
 
 
 class RedisSinkConfig(BaseModel):
@@ -707,6 +772,9 @@ class RedisSinkConfig(BaseModel):
     max_len: Optional[int] = None
     condition: Optional[str] = None
     transforms: list[TransformConfig] = Field(default_factory=list)
+    retry_count: int = 0
+    retry_delay_seconds: float = 1.0
+    circuit_breaker_threshold: int = 0
 
 
 class GcsSinkConfig(BaseModel):
@@ -717,6 +785,9 @@ class GcsSinkConfig(BaseModel):
     content_type: str = "application/json"
     condition: Optional[str] = None
     transforms: list[TransformConfig] = Field(default_factory=list)
+    retry_count: int = 0
+    retry_delay_seconds: float = 1.0
+    circuit_breaker_threshold: int = 0
 
 
 class AzureBlobSinkConfig(BaseModel):
@@ -730,6 +801,9 @@ class AzureBlobSinkConfig(BaseModel):
     overwrite: bool = True
     condition: Optional[str] = None
     transforms: list[TransformConfig] = Field(default_factory=list)
+    retry_count: int = 0
+    retry_delay_seconds: float = 1.0
+    circuit_breaker_threshold: int = 0
 
 
 # v0.5.0 new sinks
@@ -741,6 +815,9 @@ class WebSocketSinkConfig(BaseModel):
     extra_headers: dict[str, str] = Field(default_factory=dict)
     condition: Optional[str] = None
     transforms: list[TransformConfig] = Field(default_factory=list)
+    retry_count: int = 0
+    retry_delay_seconds: float = 1.0
+    circuit_breaker_threshold: int = 0
 
 
 class ElasticsearchSinkConfig(BaseModel):
@@ -757,6 +834,9 @@ class ElasticsearchSinkConfig(BaseModel):
     pipeline: Optional[str] = None
     condition: Optional[str] = None
     transforms: list[TransformConfig] = Field(default_factory=list)
+    retry_count: int = 0
+    retry_delay_seconds: float = 1.0
+    circuit_breaker_threshold: int = 0
 
 
 SinkConfig = Annotated[
@@ -914,6 +994,7 @@ class PipelineConfig(BaseModel):
 
     # Parallelism
     thread_workers: int = 1   # intra-node worker threads per pipeline run
+    parallel_sinks: bool = False   # fan-out sink writes concurrently
 
     # Batch size cap (max records to process per batch run; None = unlimited)
     batch_size: Optional[int] = None

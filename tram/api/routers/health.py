@@ -25,15 +25,32 @@ async def readiness(request: Request) -> dict:
     from fastapi import HTTPException
 
     manager = request.app.state.manager
+    scheduler = request.app.state.scheduler
     db = getattr(request.app.state, "db", None)
+    coordinator = getattr(request.app.state, "coordinator", None)
 
+    # DB check
+    db_status = "ok"
     if db is not None and not db.health_check():
+        db_status = "unreachable"
         raise HTTPException(status_code=503, detail="Database unreachable")
 
-    pipelines = manager.list_all()
+    # Scheduler check
+    scheduler_status = "running" if getattr(scheduler, "_running", False) else "stopped"
+    if scheduler_status == "stopped":
+        raise HTTPException(status_code=503, detail="Scheduler stopped")
+
+    # Cluster status
+    cluster_status = "disabled"
+    if coordinator is not None:
+        cluster_status = "enabled"
+
     return {
         "status": "ready",
-        "pipelines_loaded": len(pipelines),
+        "db": db_status,
+        "scheduler": scheduler_status,
+        "cluster": cluster_status,
+        "pipelines_loaded": len(manager.list_all()),
     }
 
 

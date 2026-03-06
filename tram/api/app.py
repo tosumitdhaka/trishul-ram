@@ -28,6 +28,15 @@ async def lifespan(app: FastAPI):
     # ── Startup ────────────────────────────────────────────────────────────
     logger.info("TRAM daemon starting", extra={"node_id": config.node_id})
 
+    # Init OpenTelemetry tracing if configured
+    if config.otel_endpoint:
+        try:
+            from tram.telemetry.tracing import init_tracing
+            init_tracing(service_name=config.otel_service, otlp_endpoint=config.otel_endpoint)
+            logger.info("OpenTelemetry tracing initialised", extra={"endpoint": config.otel_endpoint})
+        except Exception as exc:
+            logger.warning("OTel init failed: %s", exc)
+
     # Import plugins to trigger registration
     import tram.connectors  # noqa: F401
     import tram.serializers  # noqa: F401
@@ -54,12 +63,33 @@ async def lifespan(app: FastAPI):
 
     # Start scheduler
     scheduler.start()
+
+    # Start pipeline file watcher if enabled
+    watcher = None
+    if config.watch_pipelines:
+        try:
+            from tram.watcher.pipeline_watcher import PipelineWatcher
+            watcher = PipelineWatcher(pipeline_dir=config.pipeline_dir, manager=manager)
+            watcher.start()
+            logger.info("Pipeline file watcher started", extra={"dir": config.pipeline_dir})
+        except ImportError:
+            logger.warning(
+                "Pipeline watcher requires watchdog — install with: pip install tram[watch]"
+            )
+        except Exception as exc:
+            logger.warning("Pipeline watcher failed to start: %s", exc)
+
     logger.info("TRAM daemon ready", extra={"port": config.port})
 
     yield  # application runs here
 
     # ── Shutdown ───────────────────────────────────────────────────────────
     logger.info("TRAM daemon shutting down")
+
+    # Stop file watcher first
+    if watcher is not None:
+        watcher.stop()
+
     scheduler.stop(timeout=config.shutdown_timeout)
 
     # Stop node registry (deregisters from cluster) after scheduler drain
@@ -147,7 +177,7 @@ def create_app(config: AppConfig | None = None) -> FastAPI:
     app = FastAPI(
         title="TRAM",
         description="Trishul Real-time Adapter & Mapper",
-        version="0.9.0",
+        version="1.0.0",
         lifespan=lifespan,
     )
 
@@ -159,6 +189,16 @@ def create_app(config: AppConfig | None = None) -> FastAPI:
     app.state.alert_evaluator = alert_evaluator
     app.state.node_registry = node_registry
     app.state.coordinator = coordinator
+
+    # Add security + rate-limit middleware (outermost = last applied)
+    from tram.api.middleware import APIKeyMiddleware, RateLimitMiddleware
+    if config.rate_limit > 0:
+        app.add_middleware(
+            RateLimitMiddleware,
+            rate_limit=config.rate_limit,
+            window_seconds=config.rate_limit_window,
+        )
+    app.add_middleware(APIKeyMiddleware)
 
     # Register routers
     app.include_router(health.router)

@@ -36,6 +36,14 @@ All configuration is via environment variables (12-factor).
 | `TRAM_CLUSTER_ENABLED` | `false` | Enable cluster mode (requires external DB) |
 | `TRAM_HEARTBEAT_SECONDS` | `10` | Seconds between node heartbeats in cluster mode |
 | `TRAM_NODE_TTL_SECONDS` | `30` | Seconds before a silent node is marked dead |
+| `TRAM_API_KEY` | _(empty)_ | API key for request authentication; empty = auth disabled |
+| `TRAM_RATE_LIMIT` | `0` | Max requests per minute per IP for `/api/*`; 0 = disabled |
+| `TRAM_RATE_LIMIT_WINDOW` | `60` | Sliding window in seconds for rate limiting |
+| `TRAM_TLS_CERTFILE` | _(empty)_ | Path to TLS certificate file for HTTPS |
+| `TRAM_TLS_KEYFILE` | _(empty)_ | Path to TLS key file for HTTPS |
+| `TRAM_OTEL_ENDPOINT` | _(empty)_ | OTLP gRPC endpoint (e.g. `http://jaeger:4317`) for OpenTelemetry traces |
+| `TRAM_OTEL_SERVICE` | `tram` | Service name reported to OTel collector |
+| `TRAM_WATCH_PIPELINES` | `false` | Watch `TRAM_PIPELINE_DIR` for YAML changes and auto-reload pipelines |
 
 ### Database backends (v0.7.0)
 
@@ -55,7 +63,62 @@ TRAM_DB_URL=mysql+pymysql://tram:secret@mysql:3306/tramdb
 
 Schema migrations run automatically at startup: `CREATE TABLE IF NOT EXISTS` + `ALTER TABLE ADD COLUMN` guards handle upgrades from v0.6.0 databases.
 
-## v0.9.0 Pipeline Config Fields
+## API Key Authentication (v1.0.0)
+
+Set `TRAM_API_KEY` to a secret string to require authentication on all `/api/*` endpoints.
+Clients must pass the key via:
+
+```bash
+# Header (recommended)
+curl -H "X-API-Key: $TRAM_API_KEY" http://localhost:8765/api/pipelines
+
+# Query parameter (useful for webhooks)
+curl "http://localhost:8765/api/pipelines?api_key=$TRAM_API_KEY"
+```
+
+Exempt paths (no key needed): `/api/health`, `/api/ready`, `/metrics`, `/webhooks/*`
+
+When `TRAM_API_KEY` is empty (default), all requests pass through without authentication.
+
+## TLS / HTTPS (v1.0.0)
+
+```bash
+TRAM_TLS_CERTFILE=/certs/tls.crt
+TRAM_TLS_KEYFILE=/certs/tls.key
+tram daemon  # now serves HTTPS
+```
+
+**Helm** — use cert-manager or pre-existing TLS secret:
+```yaml
+tls:
+  enabled: true
+  secretName: tram-tls        # Kubernetes secret with tls.crt / tls.key
+  certManagerIssuer: letsencrypt-prod  # optional: cert-manager ClusterIssuer
+```
+
+## Pipeline File Watcher (v1.0.0)
+
+Enable auto-reload when pipeline YAML files change:
+
+```bash
+TRAM_WATCH_PIPELINES=true tram daemon
+```
+
+- New/modified YAML files in `TRAM_PIPELINE_DIR` trigger reload
+- Deleted YAML files deregister the pipeline
+- Requires: `pip install tram[watch]` (watchdog)
+
+## OpenTelemetry Tracing (v1.0.0)
+
+```bash
+pip install tram[otel]
+TRAM_OTEL_ENDPOINT=http://jaeger:4317 tram daemon
+```
+
+Traces are emitted for each `batch_run()` execution with `pipeline`, `run_id`, `records_in`, `records_out` attributes.
+Compatible with Jaeger, Grafana Tempo, and any OTLP-compatible backend.
+
+## v1.0.0 Pipeline Config Fields
 
 These fields are set per-pipeline in the pipeline YAML (not environment variables):
 
@@ -64,7 +127,21 @@ These fields are set per-pipeline in the pipeline YAML (not environment variable
 | `thread_workers` | `1` | Worker threads for parallel chunk processing (batch + stream) |
 | `batch_size` | _(none)_ | Stop after N records per run; useful for controlled catch-up |
 | `on_error` | `continue` | Error policy: `continue` \| `abort` \| `retry` \| `dlq` |
-| `skip_processed` | `false` | On file/object sources: skip files already processed in this pipeline run (tracked in SQLite) |
+| `skip_processed` | `false` | On file/object sources: skip files already processed |
+| `parallel_sinks` | `false` | Fan out to all sinks concurrently via thread pool |
+
+### Per-sink reliability fields (v1.0.0)
+
+Add to any `sink:` block:
+
+```yaml
+sink:
+  type: kafka
+  # ... existing fields ...
+  retry_count: 3              # retry up to 3 times on failure
+  retry_delay_seconds: 1.0   # base delay; doubles each attempt (exponential back-off)
+  circuit_breaker_threshold: 5  # skip sink for 60s after 5 consecutive failures
+```
 
 ## Docker
 

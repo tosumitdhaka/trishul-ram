@@ -50,6 +50,8 @@ class KafkaSource(BaseSource):
         self.sasl_username: str | None = config.get("sasl_username")
         self.sasl_password: str | None = config.get("sasl_password")
         self.ssl_cafile: str | None = config.get("ssl_cafile")
+        self.reconnect_delay_seconds: float = float(config.get("reconnect_delay_seconds", 5.0))
+        self.max_reconnect_attempts: int = int(config.get("max_reconnect_attempts", 0))
 
     def _build_consumer(self):
         try:
@@ -82,33 +84,79 @@ class KafkaSource(BaseSource):
             "Kafka consumer starting",
             extra={"brokers": self.brokers, "topics": self.topics, "group": self.group_id},
         )
-        try:
-            consumer = self._build_consumer()
-        except SourceError:
-            raise
-        except Exception as exc:
-            raise SourceError(f"Kafka consumer init failed: {exc}") from exc
+        from tram.metrics.registry import KAFKA_LAG
 
-        try:
-            for msg in consumer:
-                value = msg.value
-                if value is None:
-                    continue
-                yield value, {
-                    "kafka_topic": msg.topic,
-                    "kafka_partition": msg.partition,
-                    "kafka_offset": msg.offset,
-                    "kafka_key": msg.key.decode("utf-8") if msg.key else None,
-                }
-        except Exception as exc:
-            raise SourceError(f"Kafka consumer error: {exc}") from exc
-        finally:
+        attempt = 0
+        max_attempts = self.max_reconnect_attempts  # 0 = infinite
+
+        while True:
+            consumer = None
             try:
-                consumer.commit()   # best-effort commit before close (supplements auto-commit)
-            except Exception:
-                pass
-            try:
-                consumer.close()
-                logger.info("Kafka consumer closed", extra={"topics": self.topics})
-            except Exception:
-                pass
+                try:
+                    consumer = self._build_consumer()
+                except SourceError:
+                    raise
+                except Exception as exc:
+                    raise SourceError(f"Kafka consumer init failed: {exc}") from exc
+
+                attempt = 0  # Reset on successful connect
+                for msg in consumer:
+                    value = msg.value
+                    if value is None:
+                        continue
+
+                    # Update lag metric
+                    try:
+                        partitions = consumer.assignment()
+                        end_offsets = consumer.end_offsets(list(partitions))
+                        for tp, end in end_offsets.items():
+                            pos = consumer.position(tp)
+                            lag = max(0, end - pos)
+                            KAFKA_LAG.labels(
+                                pipeline=self.group_id,
+                                topic=tp.topic,
+                                partition=str(tp.partition),
+                            ).set(lag)
+                    except Exception:
+                        pass  # Lag metric is best-effort
+
+                    yield value, {
+                        "kafka_topic": msg.topic,
+                        "kafka_partition": msg.partition,
+                        "kafka_offset": msg.offset,
+                        "kafka_key": msg.key.decode("utf-8") if msg.key else None,
+                    }
+
+                # Consumer exhausted normally — exit
+                break
+
+            except SourceError:
+                raise
+            except Exception as exc:
+                attempt += 1
+                if max_attempts > 0 and attempt >= max_attempts:
+                    raise SourceError(
+                        f"Kafka consumer error after {attempt} reconnect attempts: {exc}"
+                    ) from exc
+                logger.warning(
+                    "Kafka consumer error — reconnecting",
+                    extra={
+                        "topics": self.topics,
+                        "attempt": attempt,
+                        "delay": self.reconnect_delay_seconds,
+                        "error": str(exc),
+                    },
+                )
+                import time
+                time.sleep(self.reconnect_delay_seconds)
+            finally:
+                if consumer is not None:
+                    try:
+                        consumer.commit()   # best-effort commit before close
+                    except Exception:
+                        pass
+                    try:
+                        consumer.close()
+                        logger.info("Kafka consumer closed", extra={"topics": self.topics})
+                    except Exception:
+                        pass

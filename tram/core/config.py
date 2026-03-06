@@ -29,6 +29,17 @@ class AppConfig:
     node_ordinal: int
     heartbeat_seconds: int
     node_ttl_seconds: int
+    # v1.0.0 security additions
+    api_key: str
+    rate_limit: int
+    rate_limit_window: int
+    tls_certfile: str
+    tls_keyfile: str
+    # v1.0.0 observability additions
+    otel_endpoint: str
+    otel_service: str
+    # v1.0.0 operations additions
+    watch_pipelines: bool
 
     @classmethod
     def from_env(cls) -> "AppConfig":
@@ -50,6 +61,14 @@ class AppConfig:
             node_ordinal=int(os.environ.get("TRAM_NODE_ORDINAL", str(_detect_ordinal(node_id)))),
             heartbeat_seconds=int(os.environ.get("TRAM_HEARTBEAT_SECONDS", "10")),
             node_ttl_seconds=int(os.environ.get("TRAM_NODE_TTL_SECONDS", "30")),
+            api_key=os.environ.get("TRAM_API_KEY", ""),
+            rate_limit=int(os.environ.get("TRAM_RATE_LIMIT", "0")),
+            rate_limit_window=int(os.environ.get("TRAM_RATE_LIMIT_WINDOW", "60")),
+            tls_certfile=os.environ.get("TRAM_TLS_CERTFILE", ""),
+            tls_keyfile=os.environ.get("TRAM_TLS_KEYFILE", ""),
+            otel_endpoint=os.environ.get("TRAM_OTEL_ENDPOINT", ""),
+            otel_service=os.environ.get("TRAM_OTEL_SERVICE", "tram"),
+            watch_pipelines=os.environ.get("TRAM_WATCH_PIPELINES", "false").lower() == "true",
         )
 
 

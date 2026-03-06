@@ -36,6 +36,9 @@ class SNMPTrapSink(BaseSink):
         self.community: str = config.get("community", "public")
         self.version: str = str(config.get("version", "2c"))
         self.enterprise_oid: str = config.get("enterprise_oid", "1.3.6.1.4.1.0")
+        self.mib_dirs: list[str] = list(config.get("mib_dirs", []))
+        self.mib_modules: list[str] = list(config.get("mib_modules", []))
+        self.varbinds: list[dict] = list(config.get("varbinds", []))
 
     def write(self, data: bytes, meta: dict) -> None:
         try:
@@ -65,16 +68,62 @@ class SNMPTrapSink(BaseSink):
         if not isinstance(bindings_raw, dict):
             raise SinkError("SNMP trap sink: expected a JSON object (dict) of OID→value bindings")
 
-        # Build VarBind objects
+        # Map of pysnmp type name → class
+        _type_map = {
+            "Integer32": Integer32,
+            "OctetString": OctetString,
+        }
+        try:
+            from pysnmp.hlapi import Counter32, Gauge32, TimeTicks
+            _type_map["Counter32"] = Counter32
+            _type_map["Gauge32"] = Gauge32
+            _type_map["TimeTicks"] = TimeTicks
+        except ImportError:
+            pass
+
         var_binds = []
-        for oid, val in bindings_raw.items():
-            try:
-                if isinstance(val, int):
-                    var_binds.append(ObjectType(ObjectIdentity(oid), Integer32(val)))
-                else:
-                    var_binds.append(ObjectType(ObjectIdentity(oid), OctetString(str(val))))
-            except Exception as exc:
-                logger.warning("Skipping invalid OID binding %s=%s: %s", oid, val, exc)
+
+        if self.varbinds:
+            # Explicit varbind spec with optional symbolic OID resolution
+            mib_view = None
+            if self.mib_dirs or self.mib_modules:
+                try:
+                    from tram.connectors.snmp.mib_utils import get_mib_view, symbolic_to_oid
+                    mib_view = get_mib_view(self.mib_dirs, self.mib_modules)
+                except Exception:
+                    pass
+
+            for vb in self.varbinds:
+                oid_str = vb.get("oid", "")
+                value_field = vb.get("value_field", "")
+                type_name = vb.get("type", "OctetString")
+                val = bindings_raw.get(value_field)
+                if val is None:
+                    continue
+
+                # Resolve symbolic OID if needed
+                if "::" in oid_str or not oid_str[0].isdigit():
+                    if mib_view is not None:
+                        from tram.connectors.snmp.mib_utils import symbolic_to_oid
+                        resolved = symbolic_to_oid(mib_view, oid_str)
+                        if resolved:
+                            oid_str = ".".join(str(x) for x in resolved)
+
+                try:
+                    snmp_type_cls = _type_map.get(type_name, OctetString)
+                    var_binds.append(ObjectType(ObjectIdentity(oid_str), snmp_type_cls(val)))
+                except Exception as exc:
+                    logger.warning("Skipping varbind %s=%s: %s", oid_str, val, exc)
+        else:
+            # Auto-typing from raw dict (legacy behavior)
+            for oid, val in bindings_raw.items():
+                try:
+                    if isinstance(val, int):
+                        var_binds.append(ObjectType(ObjectIdentity(oid), Integer32(val)))
+                    else:
+                        var_binds.append(ObjectType(ObjectIdentity(oid), OctetString(str(val))))
+                except Exception as exc:
+                    logger.warning("Skipping invalid OID binding %s=%s: %s", oid, val, exc)
 
         engine = SnmpEngine()
         community = CommunityData(self.community)

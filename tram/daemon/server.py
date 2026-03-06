@@ -46,11 +46,19 @@ def serve(config: AppConfig | None = None) -> None:
         },
     )
 
-    uvicorn.run(
-        app,
+    uvicorn_kwargs: dict = dict(
         host=config.host,
         port=config.port,
         workers=config.workers,
         log_config=None,  # We handle logging ourselves
         access_log=False,
     )
+    if config.tls_certfile and config.tls_keyfile:
+        uvicorn_kwargs["ssl_certfile"] = config.tls_certfile
+        uvicorn_kwargs["ssl_keyfile"] = config.tls_keyfile
+        logger.info(
+            "TLS enabled",
+            extra={"certfile": config.tls_certfile},
+        )
+
+    uvicorn.run(app, **uvicorn_kwargs)
