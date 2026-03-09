@@ -8,9 +8,9 @@ services:
       - tram_data:/data                  # Persistent SQLite DB + state
     environment:
       TRAM_PIPELINE_DIR: /pipelines
-      # SQLite (standalone). For cluster mode use TRAM_DB_URL instead:
+      # SQLite (standalone). For cluster mode switch to an external DB:
       #   TRAM_DB_URL: postgresql+psycopg2://user:pass@postgres/tram
-      TRAM_DB_PATH: /data/tram.db
+      TRAM_DB_URL: sqlite:////data/tram.db
       TRAM_PORT: 8765
       TRAM_HOST: 0.0.0.0
       TRAM_LOG_LEVEL: ${TRAM_LOG_LEVEL:-INFO}

@@ -4,7 +4,6 @@ on:
   push:
     branches:
       - main
-      - develop
   pull_request:
 
 jobs:
@@ -36,7 +35,8 @@ jobs:
           pytest tests/unit/ -q --tb=short \
             --cov=tram \
             --cov-report=term-missing \
-            --cov-report=xml
+            --cov-report=xml \
+            --cov-fail-under=75
 
       - name: Run integration tests
         run: pytest tests/integration/ -q --tb=short
