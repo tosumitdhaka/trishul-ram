@@ -8,7 +8,7 @@ from contextlib import asynccontextmanager
 from fastapi import FastAPI
 
 from tram.api.routers import health, pipelines, runs
-from tram.api.routers import metrics_router, webhooks
+from tram.api.routers import metrics_router, webhooks, mibs, schemas
 from tram import __version__
 from tram.core.config import AppConfig
 from tram.pipeline.loader import scan_pipeline_dir
@@ -207,5 +207,7 @@ def create_app(config: AppConfig | None = None) -> FastAPI:
     app.include_router(runs.router)
     app.include_router(webhooks.router)
     app.include_router(metrics_router.router)
+    app.include_router(mibs.router)
+    app.include_router(schemas.router)
 
     return app

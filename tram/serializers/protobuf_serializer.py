@@ -32,6 +32,7 @@ class ProtobufSerializer(BaseSerializer):
             raise SerializerError("Protobuf serializer requires 'message_class' config")
         self.schema_file: str = os.path.abspath(config["schema_file"])
         self.message_class: str = config["message_class"]
+        self.framing: str = config.get("framing", "length_delimited")
         self.registry_url: str | None = config.get("schema_registry_url")
         self.registry_subject: str | None = config.get("schema_registry_subject")
         self.registry_id: int | None = config.get("schema_registry_id")
@@ -69,12 +70,19 @@ class ProtobufSerializer(BaseSerializer):
         tmpdir = tempfile.mkdtemp(prefix="tram_proto_")
         self._tmpdir = tmpdir
 
+        # Compile the entry-point schema AND all other .proto files in the same
+        # directory so that import statements (e.g. import "Custom.proto") resolve
+        # at Python import time.
+        import glob as _glob
+        all_protos = _glob.glob(os.path.join(proto_dir, "*.proto"))
+        if not all_protos:
+            all_protos = [schema_abs]
+
         ret = protoc.main([
             "",
             f"-I{proto_dir}",
             f"--python_out={tmpdir}",
-            schema_abs,
-        ])
+        ] + all_protos)
         if ret != 0:
             raise SerializerError(f"protoc compilation failed (exit code {ret}) for {schema_abs}")
 
@@ -132,6 +140,17 @@ class ProtobufSerializer(BaseSerializer):
             _, data = decode_magic(data)
 
         MsgClass = self._get_message_class()
+
+        # framing=none: entire file is a single serialized message (no length prefix)
+        if self.framing == "none":
+            try:
+                msg = MsgClass()
+                msg.ParseFromString(data)
+                return [MessageToDict(msg)]
+            except Exception as exc:
+                raise SerializerError(f"Protobuf parse error: {exc}") from exc
+
+        # framing=length_delimited (default): [4-byte BE length][proto bytes] per record
         records = []
         buf = io.BytesIO(data)
         while True:

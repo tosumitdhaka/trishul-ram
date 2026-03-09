@@ -6,6 +6,15 @@ services:
     volumes:
       - ./pipelines:/pipelines:ro        # Pipeline YAMLs — mounted read-only
       - tram_data:/data                  # Persistent SQLite DB + state
+      # Optional: persist custom MIBs added via the API across container restarts.
+      # NOTE: mounting a volume here shadows the MIBs baked into the image.
+      # Pre-populate the volume from the image first (see docs/deployment.md).
+      # - tram_mibs:/mibs
+      # Optional: persist schemas uploaded via the API across container restarts.
+      # NOTE: mounting a volume here shadows the /schemas directory created in the image.
+      # Use a bind mount for a host-managed schema repository:
+      #   - ./schemas:/schemas
+      # - tram_schemas:/schemas
     environment:
       TRAM_PIPELINE_DIR: /pipelines
       # SQLite (standalone). For cluster mode switch to an external DB:
@@ -34,6 +43,9 @@ services:
       # TRAM_OTEL_SERVICE: tram       # service.name attribute
       # --- Operations (v1.0.0) ---
       # TRAM_WATCH_PIPELINES: "false" # auto-reload pipelines on YAML change (requires tram[watch])
+      # --- SNMP MIBs (v1.0.0) ---
+      TRAM_MIB_DIR: /mibs               # compiled MIB .py files; bundled in image at build time
+      TRAM_SCHEMA_DIR: /schemas         # serialization schemas (.proto/.avsc/.json/.xsd); mount or upload via API
       # Source SFTP credentials (from host .env file)
       NE_SFTP_HOST: ${NE_SFTP_HOST:-localhost}
       NE_SFTP_PORT: ${NE_SFTP_PORT:-22}

@@ -45,6 +45,13 @@ class SNMPTrapSink(BaseSink):
         self.mib_dirs: list[str] = list(config.get("mib_dirs", []))
         self.mib_modules: list[str] = list(config.get("mib_modules", []))
         self.varbinds: list[dict] = list(config.get("varbinds", []))
+        # Auto-prepend MIB dirs: always include the image-baked /mibs dir plus TRAM_MIB_DIR
+        import os as _os
+        _BUILTIN = "/mibs"
+        _custom = _os.environ.get("TRAM_MIB_DIR", "")
+        for _d in [_BUILTIN, _custom]:
+            if _d and _os.path.isdir(_d) and _d not in self.mib_dirs:
+                self.mib_dirs.insert(0, _d)
         # SNMPv3 USM
         self.security_name: str = config.get("security_name", "")
         self.auth_protocol: str = config.get("auth_protocol", "SHA")

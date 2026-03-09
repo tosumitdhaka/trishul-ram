@@ -50,6 +50,14 @@ class SNMPTrapSource(BaseSource):
         self.mib_dirs: list[str] = list(config.get("mib_dirs", []))
         self.mib_modules: list[str] = list(config.get("mib_modules", []))
         self.resolve_oids: bool = bool(config.get("resolve_oids", True))
+        # Auto-prepend MIB dirs: always include the image-baked /mibs dir plus TRAM_MIB_DIR
+        # (may differ when persistence is enabled and TRAM_MIB_DIR=/data/mibs).
+        import os as _os
+        _BUILTIN = "/mibs"
+        _custom = _os.environ.get("TRAM_MIB_DIR", "")
+        for _d in [_BUILTIN, _custom]:
+            if _d and _os.path.isdir(_d) and _d not in self.mib_dirs:
+                self.mib_dirs.insert(0, _d)
         # SNMPv3 USM
         self.security_name: str = config.get("security_name", "")
         self.auth_protocol: str = config.get("auth_protocol", "SHA")
@@ -195,6 +203,13 @@ class SNMPPollSource(BaseSource):
         self.resolve_oids: bool = bool(config.get("resolve_oids", True))
         self.yield_rows: bool = bool(config.get("yield_rows", False))
         self.index_depth: int = int(config.get("index_depth", 0))
+        # Auto-prepend MIB dirs: always include the image-baked /mibs dir plus TRAM_MIB_DIR
+        import os as _os
+        _BUILTIN = "/mibs"
+        _custom = _os.environ.get("TRAM_MIB_DIR", "")
+        for _d in [_BUILTIN, _custom]:
+            if _d and _os.path.isdir(_d) and _d not in self.mib_dirs:
+                self.mib_dirs.insert(0, _d)
         # SNMPv3 USM
         self.security_name: str = config.get("security_name", "")
         self.auth_protocol: str = config.get("auth_protocol", "SHA")

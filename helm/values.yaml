@@ -3,7 +3,7 @@
 
 image:
   repository: ghcr.io/OWNER/tram
-  tag: "1.0.2"
+  tag: "1.0.3"
   pullPolicy: IfNotPresent
 
 ## TRAM always deploys as a StatefulSet (stable pod names: tram-0, tram-1, …).
@@ -22,7 +22,14 @@ service:
   type: ClusterIP
   port: 8765
 
-## SQLite persistence for run history, pipeline versions, and alert state
+## SQLite persistence for run history, pipeline versions, alert state, schemas, and MIBs.
+## When enabled, a PVC is auto-provisioned per pod via volumeClaimTemplates and mounted at /data.
+## TRAM_DB_PATH, TRAM_SCHEMA_DIR (/data/schemas), and TRAM_MIB_DIR (/data/mibs) are automatically
+## pointed into this single volume — no separate PVCs needed.
+## Standard MIBs (IF-MIB, ENTITY-MIB, HOST-RESOURCES-MIB, …) baked into the image at /mibs are
+## still searched by SNMP connectors even when TRAM_MIB_DIR points to /data/mibs.
+## NOTE: in cluster mode each pod gets its own /data PVC. Schemas/MIBs uploaded to tram-0 are not
+## visible on tram-1. Pre-bake shared schemas into the image for cluster deployments.
 persistence:
   enabled: true
   size: 1Gi
@@ -59,6 +66,9 @@ env:
   # TRAM_OTEL_SERVICE: tram       # OpenTelemetry service.name attribute
   # --- Operations (v1.0.0) ---
   # TRAM_WATCH_PIPELINES: "false" # hot-reload pipelines on YAML change (requires tram[watch])
+  # --- SNMP MIBs / Schemas (v1.0.3) ---
+  # TRAM_MIB_DIR and TRAM_SCHEMA_DIR are auto-set to /data/mibs and /data/schemas when
+  # persistence.enabled=true. Override here only if you need a custom location.
 
 ## Environment variables sourced from a Kubernetes Secret
 ## Use this for sensitive values (API keys, passwords) instead of plain env above.

@@ -242,6 +242,130 @@ tram_chunk_duration_seconds_bucket{le="0.01",pipeline="pm-ingest"} 120.0
 
 ---
 
+## SNMP MIBs (v1.0.3)
+
+Manages compiled pysnmp MIB `.py` files in `TRAM_MIB_DIR` (default `/mibs`).
+Standard MIBs (`IF-MIB`, `ENTITY-MIB`, `HOST-RESOURCES-MIB`, `IP-MIB`, `TCP-MIB`, `UDP-MIB`, `IANAifType-MIB`) are pre-compiled in the Docker image.
+
+### GET /api/mibs
+List all compiled MIB modules in `TRAM_MIB_DIR`.
+
+```json
+[
+  {"name": "IF-MIB", "file": "IF-MIB.py", "size_bytes": 14823},
+  {"name": "ENTITY-MIB", "file": "ENTITY-MIB.py", "size_bytes": 22104}
+]
+```
+
+### POST /api/mibs/upload
+Upload a raw `.mib` text file and compile it. Requires `tram[mib]`; returns `501` if not installed.
+
+```bash
+curl -X POST http://localhost:8765/api/mibs/upload \
+  -F "file=@MY-CUSTOM-MIB.mib"
+```
+
+Response:
+```json
+{"compiled": ["MY-CUSTOM-MIB"], "mib_dir": "/mibs", "results": {"MY-CUSTOM-MIB": "compiled"}}
+```
+
+### POST /api/mibs/download
+Download and compile MIB modules by name from `mibs.pysnmp.com`. Requires internet access and `tram[mib]`.
+
+```bash
+curl -X POST http://localhost:8765/api/mibs/download \
+  -H "Content-Type: application/json" \
+  -d '{"names": ["CISCO-ENTITY-FRU-CONTROL-MIB", "CISCO-TC-MIB"]}'
+```
+
+### DELETE /api/mibs/{name}
+Delete a compiled MIB module from `TRAM_MIB_DIR`.
+
+```bash
+curl -X DELETE http://localhost:8765/api/mibs/MY-CUSTOM-MIB
+```
+
+---
+
+## Schemas (v1.0.3)
+
+Manages serialization schema files (`.proto`, `.avsc`, `.json`, `.xsd`, `.yaml`, `.yml`)
+in `TRAM_SCHEMA_DIR` (default `/schemas`). No compilation — files are stored as-is.
+Pipeline executors compile or read them at run time.
+
+### GET /api/schemas
+List all schema files under `TRAM_SCHEMA_DIR` recursively.
+
+```json
+[
+  {
+    "path": "cisco/GenericRecord.proto",
+    "type": "protobuf",
+    "size_bytes": 3421,
+    "schema_file": "/schemas/cisco/GenericRecord.proto"
+  },
+  {
+    "path": "events.avsc",
+    "type": "avro",
+    "size_bytes": 892,
+    "schema_file": "/schemas/events.avsc"
+  }
+]
+```
+
+`schema_file` is the absolute path ready to paste into a pipeline `schema_file:` field.
+
+`type` is inferred from the extension: `protobuf`, `avro`, `json`, `xml`, `yaml`, `other`.
+
+### GET /api/schemas/{filepath}
+Return the raw text content of a schema file. `filepath` is relative to `TRAM_SCHEMA_DIR`.
+
+```bash
+curl http://localhost:8765/api/schemas/cisco/GenericRecord.proto
+```
+
+Returns `404` if not found, `400` if the path escapes `TRAM_SCHEMA_DIR`.
+
+### POST /api/schemas/upload
+Upload a schema file. Accepts `.proto`, `.avsc`, `.json`, `.xsd`, `.yaml`, `.yml`.
+Returns `400` for other extensions.
+
+| Query param | Description |
+|-------------|-------------|
+| `subdir` | Optional subdirectory within `TRAM_SCHEMA_DIR` (e.g. `cisco`). Must not contain `..`. |
+
+Upload all Cisco EMS proto files to a shared subdirectory:
+
+```bash
+for f in *.proto; do
+  curl -F "file=@$f" \
+    "http://localhost:8765/api/schemas/upload?subdir=cisco"
+done
+```
+
+Response:
+```json
+{
+  "path": "cisco/GenericRecord.proto",
+  "type": "protobuf",
+  "size_bytes": 3421,
+  "schema_file": "/schemas/cisco/GenericRecord.proto",
+  "schema_dir": "/schemas"
+}
+```
+
+### DELETE /api/schemas/{filepath}
+Delete a schema file. `filepath` is relative to `TRAM_SCHEMA_DIR`.
+
+```bash
+curl -X DELETE http://localhost:8765/api/schemas/cisco/GenericRecord.proto
+```
+
+Returns `404` if not found, `400` on path-traversal attempt.
+
+---
+
 ## Daemon
 
 ### GET /api/daemon/status

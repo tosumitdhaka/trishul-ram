@@ -53,6 +53,10 @@ class AppConfig:
     otel_service: str
     # v1.0.0 operations additions
     watch_pipelines: bool
+    # v1.0.0 SNMP MIB directory
+    mib_dir: str
+    # v1.0.0 schema directory
+    schema_dir: str
 
     @classmethod
     def from_env(cls) -> "AppConfig":
@@ -82,6 +86,8 @@ class AppConfig:
             otel_endpoint=os.environ.get("TRAM_OTEL_ENDPOINT", ""),
             otel_service=os.environ.get("TRAM_OTEL_SERVICE", "tram"),
             watch_pipelines=os.environ.get("TRAM_WATCH_PIPELINES", "false").lower() == "true",
+            mib_dir=os.environ.get("TRAM_MIB_DIR", "/mibs"),
+            schema_dir=os.environ.get("TRAM_SCHEMA_DIR", "/schemas"),
         )
 
 

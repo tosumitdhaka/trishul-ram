@@ -938,6 +938,7 @@ class ProtobufSerializerConfig(BaseModel):
     type: Literal["protobuf"]
     schema_file: str
     message_class: str
+    framing: Literal["length_delimited", "none"] = "length_delimited"
     schema_registry_url: Optional[str] = None
     schema_registry_subject: Optional[str] = None
     schema_registry_id: Optional[int] = None
