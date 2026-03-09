@@ -23,7 +23,8 @@ Readiness probe. Returns 200 once startup is complete, 503 if DB or scheduler is
   "status": "ready",
   "db": "ok",
   "scheduler": "running",
-  "cluster": "disabled"
+  "cluster": "disabled",
+  "pipelines_loaded": 3
 }
 ```
 
