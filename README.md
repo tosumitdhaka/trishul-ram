@@ -2,7 +2,7 @@
 
 > Lightweight, container-native Python daemon that moves and transforms telecom data (PM/FM/Logs) across protocols.
 
-**Version:** 0.9.0 | **Status:** Active development | **Python:** 3.11+
+**Version:** 1.0.2 | **Status:** Production-ready | **Python:** 3.11+
 
 ---
 
@@ -29,7 +29,10 @@ pip install -e ".[dev]"
 tram version
 tram plugins
 
-# Validate a pipeline
+# Scaffold a new pipeline
+tram pipeline init my-pipeline --source sftp --sink local
+
+# Validate a pipeline (includes lint checks)
 tram validate pipelines/minimal.yaml
 
 # Run once (no daemon)
@@ -47,14 +50,24 @@ tram pipeline rollback my-pipeline --version 1
 
 # Or via REST
 curl http://localhost:8765/api/health
+curl http://localhost:8765/api/ready
 curl http://localhost:8765/api/pipelines
 curl http://localhost:8765/metrics
+
+# API key authentication (v1.0.0)
+TRAM_API_KEY=secret tram daemon &
+curl -H "X-API-Key: secret" http://localhost:8765/api/pipelines
+
+# Webhook ingestion
 curl -X POST http://localhost:8765/webhooks/my-events -d '{"event":"pm"}'
+
+# MIB compilation (v1.0.0)
+tram mib compile IF-MIB.mib --out /mibs/compiled/
 ```
 
 ---
 
-## Plugin Registry (v0.9.0)
+## Plugin Registry (v1.0.2)
 
 | Category | Keys |
 |----------|------|
@@ -63,7 +76,7 @@ curl -X POST http://localhost:8765/webhooks/my-events -d '{"event":"pm"}'
 | **Serializers** | `json`, `csv`, `xml`, `avro`, `parquet`, `msgpack`, `protobuf` |
 | **Transforms** | `rename`, `cast`, `add_field`, `drop`, `value_map`, `filter`, `flatten`, `timestamp_normalize`, `aggregate`, `enrich`, `explode`, `deduplicate`, `regex_extract`, `template`, `mask`, `validate`, `sort`, `limit`, `jmespath`, `unnest` |
 
-Optional extras: `pip install tram[kafka]` · `pip install tram[opensearch]` · `pip install tram[elasticsearch]` · `pip install tram[metrics]` · `pip install tram[corba]`
+Optional extras: `pip install tram[kafka]` · `pip install tram[snmp]` · `pip install tram[mib]` · `pip install tram[otel]` · `pip install tram[watch]` · `pip install tram[metrics]` · `pip install tram[corba]` · `pip install tram[all]`
 
 ---
 
@@ -104,7 +117,7 @@ pipeline:
   serializer_out:
     type: json
 
-  sink:                        # legacy single-sink (auto-wrapped)
+  sink:
     type: sftp
     host: ${MED_SFTP_HOST}
     username: ${MED_SFTP_USER}
@@ -119,49 +132,25 @@ pipeline:
     - type: kafka
       brokers: [kafka:9092]
       topic: pm-all             # no condition = catch-all
+      retry_count: 3            # per-sink retry (v1.0.0)
+      circuit_breaker_threshold: 5
     - type: opensearch
       hosts: [http://os:9200]
       index: pm-critical
-      condition: "rx_mbps > 500"   # only high-traffic records
-      transforms:                  # per-sink transform chain (v0.6.0)
+      condition: "rx_mbps > 500"
+      transforms:
         - type: drop
           fields: [raw_bytes]
     - type: local
       path: /tmp/overflow
-      condition: "rx_mbps <= 0"    # zero-traffic anomalies
+      condition: "rx_mbps <= 0"
 
-  rate_limit_rps: 1000            # token-bucket, across all sinks
+  parallel_sinks: true          # fan-out to all sinks concurrently (v1.0.0)
+  rate_limit_rps: 1000
 
-  # Dead-letter queue (v0.6.0) — captures parse/transform/sink failures
   dlq:
     type: local
     path: /tmp/dlq
-```
-
-### v0.9.0 — parallel workers, batch cap, skip_processed, CORBA
-
-```yaml
-  # Parallelism and throughput control (v0.9.0)
-  thread_workers: 4           # process 4 chunks in parallel (batch + stream)
-  batch_size: 10000           # cap records per run (nil = unlimited)
-  on_error: dlq               # explicit: route all failures to DLQ (requires dlq:)
-
-  # Skip files already processed in this pipeline (v0.9.0)
-  source:
-    type: sftp
-    host: ${NE_SFTP_HOST}
-    remote_path: /export/pm/
-    file_pattern: "*.csv"
-    skip_processed: true      # idempotent; uses SQLite to track processed paths
-
-  # CORBA source — DII, no IDL stubs required (v0.9.0)
-  # source:
-  #   type: corba
-  #   naming_service: "corbaloc:iiop:192.168.1.1:2809/NameService"
-  #   object_name: "PM/PMCollect"
-  #   operation: getPMData
-  #   args: ["ManagedElement=1", 900]
-  #   skip_processed: true
 ```
 
 ### Alert rules
@@ -186,73 +175,52 @@ All `${VAR}` and `${VAR:-default}` placeholders are resolved from environment at
 
 ---
 
+## v1.0.2 Features
+
+| Feature | Description |
+|---------|-------------|
+| **SNMPv3 USM** | Full USM auth/priv on `snmp_poll` source, `snmp_trap` sink; `security_name`, `auth_protocol` (MD5/SHA/SHA256/SHA512), `auth_key`, `priv_protocol` (DES/AES128/AES192/AES256), `priv_key`, `context_name` |
+| **SNMP trap v3 config** | v3 fields stored on `snmp_trap` source; trap *receiving* is best-effort (encrypted v3 falls back to raw hex; full USM receive planned) |
+
+## v1.0.1 Features
+
+| Feature | Description |
+|---------|-------------|
+| **SNMP poll `yield_rows`** | `yield_rows: true` yields one record per WALK table row; `index_depth` controls index split (0=auto on first dot, N=last N components for composite keys) |
+| **`_polled_at` timestamp** | Every SNMP poll record contains `_polled_at` (UTC ISO8601) and `_index`/`_index_parts` when using `yield_rows` |
+| **Dynamic version** | `tram.__version__` from `importlib.metadata`; `pyproject.toml` is the single version source; release workflow patches it from git tag |
+
+## v1.0.0 Features
+
+| Feature | Description |
+|---------|-------------|
+| **API key auth** | `TRAM_API_KEY` env var — `X-API-Key` header or `?api_key=` query param; exempt paths: health, ready, metrics, webhooks |
+| **Rate limiting** | `TRAM_RATE_LIMIT` (req/min per IP), `TRAM_RATE_LIMIT_WINDOW`; 429 with `Retry-After` header |
+| **TLS** | `TRAM_TLS_CERTFILE`/`TRAM_TLS_KEYFILE` — passed to uvicorn; Helm `tls:` section for cert-manager or manual secret |
+| **Per-sink retry** | `retry_count`, `retry_delay_seconds` on every sink; exponential backoff + jitter |
+| **Circuit breaker** | `circuit_breaker_threshold` — sink bypassed 60s after N consecutive failures |
+| **Parallel sinks** | `parallel_sinks: true` on pipeline — all sinks written concurrently via ThreadPoolExecutor |
+| **SNMP MIB integration** | `mib_dirs`, `mib_modules`, `resolve_oids` on snmp sources/sink; `VarbindConfig` for explicit trap varbinds; `tram mib compile` CLI |
+| **OpenTelemetry** | `TRAM_OTEL_ENDPOINT` + `TRAM_OTEL_SERVICE`; batch_run and sink writes traced; `pip install tram[otel]` |
+| **Kafka consumer lag** | `tram_kafka_consumer_lag{pipeline,topic,partition}` Prometheus gauge |
+| **Stream queue depth** | `tram_stream_queue_depth{pipeline}` Prometheus gauge |
+| **CSV run export** | `GET /api/runs?format=csv` downloads run history as CSV |
+| **Enhanced readiness** | `/api/ready` returns `{db, scheduler, cluster, pipelines_loaded}` |
+| **Pipeline linter** | `tram validate` runs 5 lint rules (L001–L005) after schema validation |
+| **File watcher** | `TRAM_WATCH_PIPELINES=true` hot-reloads pipeline YAMLs on change; `pip install tram[watch]` |
+| **`tram pipeline init`** | Scaffolds minimal valid pipeline YAML to stdout or file |
+| **Kafka reconnect** | `reconnect_delay_seconds`, `max_reconnect_attempts` on `kafka` source |
+| **NATS reconnect** | `max_reconnect_attempts`, `reconnect_time_wait` on `nats` source |
+
 ## v0.9.0 Features
 
 | Feature | Description |
 |---------|-------------|
-| **`thread_workers`** | Intra-node parallel chunk processing — `thread_workers: N` in pipeline config; works for both batch and stream modes |
-| **`batch_size` cap** | Stop reading after N records per run — useful for catch-up scenarios and rate-controlled ingestion |
-| **`on_error: dlq`** | Explicit mode routing all failures (parse/transform/sink) to the DLQ sink; model validates that `dlq:` is configured |
-| **CORBA source** | DII-based connector using `omniORBpy` — no pre-compiled IDL stubs; covers 3GPP Itf-N, TMN X.700, Ericsson ENM, Nokia NetAct |
-| **Processed-file tracking** | `skip_processed: true` on file/object-storage sources — pipeline + source-key + path stored in SQLite; re-runs are idempotent |
-| **Helm ConfigMap checksum** | Pod template annotation `checksum/config` auto-triggers rolling restart when any pipeline YAML changes on `helm upgrade` |
-| **Kafka group_id isolation** | `group_id` defaults to pipeline name (was hardcoded `"tram"`) — each pipeline gets its own consumer group out of the box |
-| **NATS queue_group isolation** | `queue_group` defaults to pipeline name; empty string `""` = explicit broadcast; `null` was the previous default (broadcast on all nodes) |
-
-## v0.8.1 Bug Fixes
-
-| Fix | Description |
-|-----|-------------|
-| **Kafka group isolation** | `KafkaSourceConfig.group_id: Optional[str] = None` — defaults to pipeline name at runtime |
-| **NATS queue_group** | `NatsSourceConfig.queue_group: Optional[str] = None` — defaults to pipeline name; `""` = opt-in broadcast |
-| **Kafka explicit commit** | `consumer.commit()` called before `consumer.close()` to avoid re-delivering tail records |
-| **Helm image.tag** | Stale default `0.6.0` corrected to track current release |
-
-## v0.8.0 Features
-
-| Feature | Description |
-|---------|-------------|
-| **Cluster mode** | Self-organizing multi-node deployment — `TRAM_CLUSTER_ENABLED=true`; nodes hash-ring partition pipelines |
-| **StatefulSet Helm** | Chart migrated from Deployment to StatefulSet; headless service for stable `tram-N` pod identities |
-| **Cluster REST API** | `GET /api/cluster/nodes` returns live topology; `TRAM_NODE_ID` from pod name |
-| **Rebalance** | `ClusterCoordinator` heartbeat + partition rebalance loop; pipelines migrate on node join/leave |
-
-## v0.7.0 Features
-
-| Feature | Description |
-|---------|-------------|
-| **External DB support** | `TRAM_DB_URL` (SQLAlchemy URL) — SQLite (default), PostgreSQL, MySQL/MariaDB; `pip install tram[postgresql\|mysql]` |
-| **Node identity** | `TRAM_NODE_ID` stored in every run — `node_id` column in `run_history` for multi-node tracing |
-| **`dlq_count` persisted** | `RunResult.dlq_count` carried through to DB; `tram_dlq_total` Prometheus counter |
-| **Graceful shutdown** | SIGTERM → SIGINT bridge; `TRAM_SHUTDOWN_TIMEOUT_SECONDS` drain wait; stream threads joined |
-| **Readiness DB check** | `GET /api/ready` returns 503 when DB is unreachable |
-| **Run history pagination** | `?offset=N&from_dt=ISO` on `GET /api/runs` |
-| **Schema migrations** | Idempotent at startup — v0.6.0 SQLite databases upgraded automatically |
-
-## v0.6.0 Features
-
-| Feature | Description |
-|---------|-------------|
-| **Dead-Letter Queue** | `dlq: <sink>` on pipeline config; failed records (parse/transform/sink) written as JSON envelopes |
-| **Per-sink transforms** | Each sink has its own `transforms:` chain, applied after global transforms + condition filter |
-| **Alert rules** | `alerts:` list on pipeline; simpleeval conditions; webhook (httpx) or email (smtplib) actions with cooldown |
-| **Helm chart** | Production-ready `helm/` with PVC, ConfigMap pipelines, envSecret, Prometheus annotations |
-| **GitHub Actions** | `ci.yml` (ruff + pytest on PR/push); `release.yml` (multi-arch Docker + Helm OCI on `v*` tags) |
-
-## v0.5.0 Features
-
-| Feature | Description |
-|---------|-------------|
-| **Conditional routing** | Per-sink `condition:` expression; records fan-out to matched sinks |
-| **Rate limiting** | `rate_limit_rps:` in pipeline config; token-bucket implementation |
-| **SQLite persistence** | Run history + pipeline versions survive daemon restarts (`~/.tram/tram.db`) |
-| **Prometheus metrics** | `GET /metrics` — counters for records in/out/skipped, errors, chunk duration |
-| **Webhook source** | Receives HTTP POSTs at `/webhooks/{path}` on the daemon port |
-| **WebSocket** | `websocket` source (consumer) + sink (producer) |
-| **Elasticsearch** | `elasticsearch` source (scroll) + sink (bulk API) |
-| **Prometheus remote_write** | `prometheus_rw` source decodes Snappy+protobuf WriteRequests |
-| **Schema Registry** | Avro + Protobuf serializers support Confluent/Apicurio magic-byte framing |
-| **Pipeline versioning** | Auto-saved on register; `tram pipeline history` / `rollback` |
+| **`thread_workers`** | Parallel chunk processing per pipeline; works for batch + stream |
+| **`batch_size` cap** | Stop reading after N records per run |
+| **`on_error: dlq`** | Route all failures to DLQ sink |
+| **CORBA source** | DII-based, no IDL stubs; covers 3GPP Itf-N, TMN X.700, Ericsson ENM, Nokia NetAct |
+| **Processed-file tracking** | `skip_processed: true` — idempotent re-runs via SQLite |
 
 ---
 
@@ -269,19 +237,28 @@ curl http://localhost:8765/api/ready
 ```bash
 # Standalone (default)
 helm install tram oci://ghcr.io/OWNER/charts/tram \
-  --set image.tag=0.9.0
+  --set image.tag=1.0.2
+
+# With API key authentication
+helm install tram oci://ghcr.io/OWNER/charts/tram \
+  --set image.tag=1.0.2 \
+  --set apiKey=mysecret
 
 # Cluster mode (3-replica StatefulSet + external PostgreSQL)
 helm install tram oci://ghcr.io/OWNER/charts/tram \
-  --set image.tag=0.9.0 \
+  --set image.tag=1.0.2 \
   --set clusterMode.enabled=true \
   --set replicaCount=3 \
   --set envSecret.TRAM_DB_URL.secretName=tram-db \
-  --set envSecret.TRAM_DB_URL.secretKey=url \
-  --set persistence.enabled=false
+  --set envSecret.TRAM_DB_URL.secretKey=url
+
+# TLS (cert-manager)
+helm install tram oci://ghcr.io/OWNER/charts/tram \
+  --set tls.enabled=true \
+  --set tls.certManagerIssuer=letsencrypt-prod
 ```
 
-> **v0.8.0+**: always a `StatefulSet` — `replicaCount=1` for standalone (stable `tram-0` identity, PVC per pod), `replicaCount=N` + `clusterMode.enabled=true` for self-organizing cluster. See [`docs/deployment.md`](docs/deployment.md) for full setup.
+> Always a `StatefulSet` — `replicaCount=1` standalone, `replicaCount=N` + `clusterMode.enabled=true` cluster. See [`docs/deployment.md`](docs/deployment.md) for full setup.
 
 ---
 
@@ -290,7 +267,8 @@ helm install tram oci://ghcr.io/OWNER/charts/tram \
 | Method | Path | Purpose |
 |--------|------|---------|
 | GET | `/api/health` | Liveness probe |
-| GET | `/api/ready` | Readiness probe |
+| GET | `/api/ready` | Readiness probe (db/scheduler/cluster status) |
+| GET | `/api/meta` | Version info |
 | GET | `/api/plugins` | Registered plugin keys |
 | GET | `/api/pipelines` | List all pipelines |
 | POST | `/api/pipelines` | Register pipeline (YAML body) |
@@ -299,8 +277,11 @@ helm install tram oci://ghcr.io/OWNER/charts/tram \
 | POST | `/api/pipelines/{name}/rollback?version=N` | Restore a version |
 | POST | `/webhooks/{path}` | Ingest HTTP payload to webhook source |
 | GET | `/metrics` | Prometheus metrics (text/plain) |
-| GET | `/api/runs` | Run history (`?pipeline=&status=&limit=&offset=&from_dt=`) |
-| GET | `/api/cluster/nodes` | Cluster topology (node_id, position, live peers) |
+| GET | `/api/runs` | Run history (`?pipeline=&status=&limit=&offset=&from_dt=&format=csv`) |
+| GET | `/api/cluster/nodes` | Cluster topology |
+| GET | `/api/daemon/status` | Scheduler state, active streams |
+
+All `/api/*` endpoints require `X-API-Key` header when `TRAM_API_KEY` is set. Health, ready, metrics, and webhooks are always exempt.
 
 Full reference: [`docs/api.md`](docs/api.md)
 
@@ -313,22 +294,24 @@ tram/
 ├── core/             exceptions, context (dlq_count), config, logging
 ├── interfaces/       BaseSource, BaseSink, BaseTransform, BaseSerializer
 ├── registry/         @register_* decorators + lookup
-├── models/           Pydantic v2 pipeline schema (dlq, per-sink transforms, AlertRuleConfig)
+├── models/           Pydantic v2 pipeline schema
 ├── serializers/      json, csv, xml, avro, parquet, msgpack, protobuf
 ├── transforms/       20 transforms
-├── connectors/       23 source + 19 sink connectors (incl. corba source)
-├── cluster/          NodeRegistry + ClusterCoordinator (v0.8.0 cluster mode)
-├── persistence/      TramDB (SQLAlchemy Core): run_history, pipeline_versions, alert_state, node_registry, processed_files; ProcessedFileTracker
-├── metrics/          Prometheus metrics registry
+├── connectors/       23 source + 19 sink connectors
+├── cluster/          NodeRegistry + ClusterCoordinator (v0.8.0)
+├── persistence/      TramDB (SQLAlchemy Core) + ProcessedFileTracker
+├── metrics/          Prometheus metrics registry (incl. Kafka lag, stream depth)
+├── telemetry/        OpenTelemetry tracing (v1.0.0)
+├── watcher/          Pipeline file watcher (v1.0.0)
 ├── schema_registry/  Confluent/Apicurio client + magic-byte helpers
-├── alerts/           AlertEvaluator (webhook + email actions, cooldown)
-├── pipeline/         loader, executor (DLQ + per-sink transforms), manager
+├── alerts/           AlertEvaluator (webhook + email, cooldown)
+├── pipeline/         loader, executor, manager, linter (v1.0.0)
 ├── scheduler/        APScheduler (batch) + threads (stream) + rebalance loop
-├── api/              FastAPI routers (health, pipelines, runs, webhooks, metrics, cluster)
-├── daemon/           uvicorn server entrypoint
-└── cli/              Typer CLI
-helm/                 Helm chart (StatefulSet, Service, Headless Service, ConfigMap, SA, volumeClaimTemplates)
-.github/workflows/    ci.yml (test) + release.yml (Docker + Helm OCI publish)
+├── api/              FastAPI routers + middleware (auth, rate-limit)
+├── daemon/           uvicorn server entrypoint (TLS support)
+└── cli/              Typer CLI (pipeline init, mib compile, validate)
+helm/                 Helm chart (StatefulSet, TLS, apiKey, cluster mode)
+.github/workflows/    ci.yml (lint + unit + integration tests) + release.yml
 ```
 
 ---
@@ -337,11 +320,11 @@ helm/                 Helm chart (StatefulSet, Service, Headless Service, Config
 
 | Doc | Contents |
 |-----|----------|
-| [`docs/architecture.md`](docs/architecture.md) | Design, data flow, execution modes |
-| [`docs/connectors.md`](docs/connectors.md) | All connectors + how to add new ones |
+| [`docs/architecture.md`](docs/architecture.md) | Design, data flow, execution modes, cluster |
+| [`docs/connectors.md`](docs/connectors.md) | All connectors, SNMP MIB, SNMPv3, retry/circuit-breaker |
 | [`docs/transforms.md`](docs/transforms.md) | All 20 transforms + expression syntax |
-| [`docs/api.md`](docs/api.md) | REST API reference |
-| [`docs/deployment.md`](docs/deployment.md) | Docker, k8s, env vars |
+| [`docs/api.md`](docs/api.md) | REST API reference, auth, rate limiting |
+| [`docs/deployment.md`](docs/deployment.md) | Docker, k8s, TLS, OTel, env vars |
 
 ---
 
@@ -349,9 +332,9 @@ helm/                 Helm chart (StatefulSet, Service, Headless Service, Config
 
 ```bash
 pip install -e ".[dev]"
-pytest tests/unit/         # 535 unit tests (no network)
-pytest tests/integration/  # 3 integration tests (mocked SFTP)
-pytest tests/             # all 538 tests
+pytest tests/unit/         # 606 unit tests (no network required)
+pytest tests/integration/  # 42 tests (2 skipped when pysnmp not installed)
+pytest tests/              # all 648 tests
 ```
 
 ---

@@ -9,6 +9,7 @@ from fastapi import FastAPI
 
 from tram.api.routers import health, pipelines, runs
 from tram.api.routers import metrics_router, webhooks
+from tram import __version__
 from tram.core.config import AppConfig
 from tram.pipeline.loader import scan_pipeline_dir
 from tram.pipeline.manager import PipelineManager
@@ -177,7 +178,7 @@ def create_app(config: AppConfig | None = None) -> FastAPI:
     app = FastAPI(
         title="TRAM",
         description="Trishul Real-time Adapter & Mapper",
-        version="1.0.0",
+        version=__version__,
         lifespan=lifespan,
     )
 
