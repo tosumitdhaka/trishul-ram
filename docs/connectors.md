@@ -84,6 +84,8 @@ That's it. The pipeline YAML immediately supports `source.type: myproto`.
 | `group_id` | pipeline name | Consumer group (defaults to pipeline name for isolation) |
 | `auto_offset_reset` | latest | `latest` / `earliest` |
 | `security_protocol` | PLAINTEXT | SASL/SSL options |
+| `reconnect_delay_seconds` | `5.0` | Seconds to wait between reconnect attempts on stream disconnect (v1.0.0) |
+| `max_reconnect_attempts` | `0` | Max reconnects before giving up; `0` = infinite retry (v1.0.0) |
 
 ### ftp
 | Parameter | Default | Description |

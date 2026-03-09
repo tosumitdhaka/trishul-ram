@@ -91,6 +91,10 @@ all = [
     "tram[elasticsearch]",
     "tram[metrics]",
     "tram[prometheus_rw]",
+    "tram[corba]",
+    "tram[mib]",
+    "tram[otel]",
+    "tram[watch]",
 ]
 
 [project.scripts]

@@ -178,7 +178,7 @@ TRAM ships a production-ready Helm chart in `helm/`. Published to GHCR OCI on ev
 # Add chart from OCI registry
 helm install tram oci://ghcr.io/OWNER/charts/tram \
   --namespace tram --create-namespace \
-  --set image.tag=0.9.0
+  --set image.tag=1.0.2
 
 # Mount pipelines from local files
 helm upgrade tram oci://ghcr.io/OWNER/charts/tram \
@@ -195,7 +195,7 @@ helm upgrade tram oci://ghcr.io/OWNER/charts/tram \
 | Value | Default | Description |
 |-------|---------|-------------|
 | `image.repository` | `ghcr.io/OWNER/tram` | Docker image repository |
-| `image.tag` | `"0.9.0"` | Image tag |
+| `image.tag` | `"1.0.2"` | Image tag |
 | `replicaCount` | `1` | Replicas — `1` = standalone, `N` = cluster |
 | `clusterMode.enabled` | `false` | Activate cluster mode (sets `TRAM_CLUSTER_ENABLED`, requires external DB) |
 | `persistence.enabled` | `true` | Provision a PVC per pod via `volumeClaimTemplates` (SQLite at `/data`) |
@@ -211,7 +211,7 @@ helm upgrade tram oci://ghcr.io/OWNER/charts/tram \
 ```bash
 helm install tram oci://ghcr.io/OWNER/charts/tram \
   --namespace tram --create-namespace \
-  --set image.tag=0.9.0
+  --set image.tag=1.0.2
 ```
 
 A single-replica `StatefulSet` with pod name `tram-0` runs the full daemon. A `PersistentVolumeClaim` (`data-tram-0`) is auto-provisioned via `volumeClaimTemplates` — SQLite run history survives pod restarts and rescheduling across nodes.
@@ -230,7 +230,7 @@ kubectl create secret generic tram-db \
 
 helm install tram oci://ghcr.io/OWNER/charts/tram \
   --namespace tram --create-namespace \
-  --set image.tag=0.9.0 \
+  --set image.tag=1.0.2 \
   --set clusterMode.enabled=true \
   --set replicaCount=3 \
   --set envSecret.TRAM_DB_URL.secretName=tram-db \
@@ -311,7 +311,7 @@ spec:
     spec:
       containers:
       - name: tram
-        image: ghcr.io/OWNER/tram:0.9.0
+        image: ghcr.io/OWNER/tram:1.0.2
         command: ["tram", "daemon"]
         ports:
         - containerPort: 8765
@@ -327,11 +327,11 @@ spec:
         - name: data
           mountPath: /data
         livenessProbe:
-          httpGet: {path: /health, port: 8765}
+          httpGet: {path: /api/health, port: 8765}
           initialDelaySeconds: 10
           periodSeconds: 30
         readinessProbe:
-          httpGet: {path: /health, port: 8765}
+          httpGet: {path: /api/ready, port: 8765}
           initialDelaySeconds: 5
           periodSeconds: 10
       volumes:
@@ -393,7 +393,10 @@ Available metrics (all labeled by `pipeline`):
 | `tram_records_out_total` | Counter | Records written to sinks |
 | `tram_records_skipped_total` | Counter | Records skipped (filtered or error) |
 | `tram_errors_total` | Counter | Processing errors |
+| `tram_dlq_total` | Counter | Records sent to dead-letter queue |
 | `tram_chunk_duration_seconds` | Histogram | Chunk processing time |
+| `tram_kafka_consumer_lag` | Gauge | Kafka consumer lag per topic+partition (v1.0.0) |
+| `tram_stream_queue_depth` | Gauge | Internal stream queue depth per pipeline (v1.0.0) |
 
 ## Webhook Integration
 
