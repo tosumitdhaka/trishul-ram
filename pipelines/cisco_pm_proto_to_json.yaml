@@ -1,0 +1,91 @@
+################################################################################
+# Cisco EMS Performance Monitoring — Protobuf binary → JSON (SFTP → SFTP)
+#
+# Source:  SFTP directory containing pm_message_*.bin files
+#          Each file is a single serialized PerformanceMonitoringMessage
+#          (raw protobuf, no length-framing, Cisco EMS format)
+#
+# Schema:  GenericRecord.proto  +  17 imported .proto files
+#          All files must reside in the same directory (proto_dir)
+#          message_class: PerformanceMonitoringMessage  (oneof pm_data)
+#
+# Output:  One JSON file per binary file on the sink SFTP.
+#          Each JSON record carries:
+#            deviceuuid, devicename, _pm_type,
+#            and the nested records list under the pm_data key.
+#
+# To use:  Set env vars before starting tram daemon:
+#            NE_SFTP_HOST / NE_SFTP_PORT / NE_SFTP_USER / NE_SFTP_PASS
+#            MED_SFTP_HOST / MED_SFTP_PORT / MED_SFTP_USER / MED_SFTP_PASS
+################################################################################
+
+pipeline:
+  name: cisco-pm-proto-to-json
+  enabled: true
+  schedule:
+    type: interval
+    seconds: 60               # poll source SFTP every 60 s
+
+  # ── Source ──────────────────────────────────────────────────────────────────
+  source:
+    type: sftp
+    host: ${NE_SFTP_HOST:-localhost}
+    port: ${NE_SFTP_PORT:-22}
+    username: ${NE_SFTP_USER:-pmuser}
+    password: ${NE_SFTP_PASS}
+    remote_path: /data/pm/incoming/
+    file_pattern: "pm_message_*.bin"
+    move_after_read: /data/pm/processed/   # archive originals after reading
+    skip_processed: true                   # idempotent — never re-process a file
+
+  # ── Deserialize ─────────────────────────────────────────────────────────────
+  serializer_in:
+    type: protobuf
+    schema_file: /schemas/GenericRecord.proto   # all 17 imported .proto files
+                                                # must be in the same directory
+    message_class: PerformanceMonitoringMessage
+    framing: none          # each file is a single raw proto message (no length prefix)
+
+  # ── Transforms ──────────────────────────────────────────────────────────────
+  transforms:
+    # Detect which oneof pm_data field is populated and surface it as _pm_type.
+    # The 17 possible values: cepmcrc, cepminterface, dvavailability, cpu,
+    # envtemp, memory, opticalsfp, opticslane, otucontrollersinfo, cepmpower,
+    # srpolicy, cepmqos, cepmptp, cepmsynce, cepmgnss, srv6locator, custom
+    - type: add_field
+      field: _pm_type
+      expr: >
+        'cepmcrc' if 'cepmcrc' in record else
+        'cepminterface' if 'cepminterface' in record else
+        'dvavailability' if 'dvavailability' in record else
+        'cpu' if 'cpu' in record else
+        'envtemp' if 'envtemp' in record else
+        'memory' if 'memory' in record else
+        'opticalsfp' if 'opticalsfp' in record else
+        'opticslane' if 'opticslane' in record else
+        'otucontrollersinfo' if 'otucontrollersinfo' in record else
+        'cepmpower' if 'cepmpower' in record else
+        'srpolicy' if 'srpolicy' in record else
+        'cepmqos' if 'cepmqos' in record else
+        'cepmptp' if 'cepmptp' in record else
+        'cepmsynce' if 'cepmsynce' in record else
+        'cepmgnss' if 'cepmgnss' in record else
+        'srv6locator' if 'srv6locator' in record else
+        'custom'
+
+  # ── Serialize output ────────────────────────────────────────────────────────
+  serializer_out:
+    type: json
+
+  # ── Sink ─────────────────────────────────────────────────────────────────────
+  sink:
+    type: sftp
+    host: ${MED_SFTP_HOST:-localhost}
+    port: ${MED_SFTP_PORT:-22}
+    username: ${MED_SFTP_USER:-meduser}
+    password: ${MED_SFTP_PASS}
+    remote_path: /data/pm/json/
+    filename_template: "{source_filename}.json"   # pm_message_007.bin → pm_message_007.bin.json
+
+  # ── Error handling ───────────────────────────────────────────────────────────
+  on_error: continue     # skip unparseable files, log error, keep going

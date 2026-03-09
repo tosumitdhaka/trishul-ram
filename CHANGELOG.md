@@ -9,6 +9,59 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ---
 
+## [1.0.3] — 2026-03-09
+
+### Added
+
+**SNMP MIB management**
+- `TRAM_MIB_DIR` env var (default `/mibs`) — global MIB directory; SNMP source/sink connectors auto-prepend it to `mib_dirs` at startup so OID resolution works without per-pipeline config
+- `AppConfig.mib_dir` field
+- `tram mib download <NAMES...> --out <dir>` — new CLI command; downloads and compiles MIB modules from `mibs.pysnmp.com` using `pysmi-lextudio` (requires `tram[mib]`)
+- `tram mib compile` enhanced: now accepts a **directory** in addition to a single file; all `.mib` files in the directory are compiled in one pass so cross-file imports resolve correctly
+- MIB management REST API:
+  - `GET /api/mibs` — list compiled MIB modules in `TRAM_MIB_DIR`
+  - `POST /api/mibs/upload` — upload a raw `.mib` file and compile it (requires `tram[mib]`)
+  - `POST /api/mibs/download` — `{"names": [...]}` download+compile from `mibs.pysnmp.com` (requires `tram[mib]`)
+  - `DELETE /api/mibs/{name}` — delete a compiled MIB module
+- Dockerfile: **three-stage build** — new `mib-builder` stage downloads + compiles `IF-MIB`, `ENTITY-MIB`, `HOST-RESOURCES-MIB`, `IP-MIB`, `TCP-MIB`, `UDP-MIB`, `IANAifType-MIB` from `mibs.pysnmp.com` at build time; compiled `.py` files copied to runtime image; MIB download failures are non-fatal (empty `/mibs` on air-gapped builds)
+- Helm: `mibPersistence` section — optional `volumeClaimTemplate` at `/mibs` for persisting runtime-downloaded MIBs across pod restarts
+
+**Schema file management**
+- `TRAM_SCHEMA_DIR` env var (default `/schemas`) — global schema directory for serialization schemas
+- `AppConfig.schema_dir` field
+- Schema management REST API:
+  - `GET /api/schemas` — list all schema files under `TRAM_SCHEMA_DIR` recursively; returns `path`, `type`, `size_bytes`, `schema_file` (paste-ready for pipeline YAML)
+  - `GET /api/schemas/{filepath}` — read a schema file's raw text content
+  - `POST /api/schemas/upload?subdir=<dir>` — upload a `.proto`, `.avsc`, `.json`, `.xsd`, `.yaml`, or `.yml` file; optional `subdir` for multi-file proto packages; atomic write (`.tmp` → rename)
+  - `DELETE /api/schemas/{filepath}` — delete a schema file
+- Path-traversal protection on all schema endpoints (`_safe_join` with `os.path.normpath`)
+- Dockerfile: `/schemas` directory created at build time, `ENV TRAM_SCHEMA_DIR=/schemas` set
+- Helm: `schemaPersistence` section — optional `volumeClaimTemplate` at `/schemas` so schemas uploaded via the API survive pod restarts
+
+**Protobuf serializer improvements**
+- `framing: none` mode — each file is a single raw serialized proto message (no 4-byte length prefix); required for Cisco EMS PM binary files
+- Multi-file proto compile fix: `_compile_proto()` now compiles **all** `.proto` files in the same directory in one `protoc` invocation so import statements resolve correctly at Python import time
+- `ProtobufSerializerConfig`: new `framing: Literal["length_delimited", "none"]` field (default `"length_delimited"`)
+- Example pipeline: `pipelines/cisco_pm_proto_to_json.yaml` — SFTP binary PM files → protobuf decode → `_pm_type` detection → JSON output on SFTP
+
+**Dependency**
+- `python-multipart>=0.0.9` added to core dependencies (required for `UploadFile` in MIB/schema upload endpoints)
+- `mib` extra (`pysmi-lextudio`) now included in the default Docker image
+
+### Changed
+- Dockerfile: `pip install "${whl}[metrics,postgresql,mysql,snmp,mib]"` — `mib` added to default installed extras; connector extras (`kafka`, `s3`, `avro`, `protobuf_ser`, etc.) remain opt-in via a custom `FROM tram:1.0.3` layer
+- Helm `values.yaml` / `Chart.yaml` / `image.tag` → `1.0.3`
+
+### Fixed
+- `APIKeyMiddleware`: `AppConfig.from_env()` moved from `dispatch()` to `__init__()` — config is now cached once at startup instead of re-read on every request
+- `RateLimitMiddleware._windows`: periodic eviction of idle client entries when dict exceeds 500 keys — prevents unbounded memory growth in long-running daemons
+- `tram/core/config.py`: all bare `int()` env var reads replaced with `_env_int()` helper — raises `ValueError` with the variable name on invalid input instead of a cryptic Python traceback
+- CI (`ci.yml`): removed dead `develop` branch trigger; added `--cov-fail-under=75` coverage gate to unit test step
+- Release (`release.yml`): added `test` job (ruff + unit + integration) that must pass before Docker image is built and pushed
+- `docker-compose.yml`: `TRAM_DB_PATH` replaced with `TRAM_DB_URL: sqlite:////data/tram.db`
+
+---
+
 ## [1.0.2] — 2026-03-06
 
 ### Added

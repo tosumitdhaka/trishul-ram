@@ -2,7 +2,7 @@
 
 > Lightweight, container-native Python daemon that moves and transforms telecom data (PM/FM/Logs) across protocols.
 
-**Version:** 1.0.2 | **Status:** Production-ready | **Python:** 3.11+
+**Version:** 1.0.3 | **Status:** Production-ready | **Python:** 3.11+
 
 ---
 
@@ -61,13 +61,21 @@ curl -H "X-API-Key: secret" http://localhost:8765/api/pipelines
 # Webhook ingestion
 curl -X POST http://localhost:8765/webhooks/my-events -d '{"event":"pm"}'
 
-# MIB compilation (v1.0.0)
+# MIB management (v1.0.3)
 tram mib compile IF-MIB.mib --out /mibs/compiled/
+tram mib download CISCO-ENTITY-FRU-CONTROL-MIB --out /mibs/
+curl http://localhost:8765/api/mibs
+curl -F "file=@MY-CUSTOM-MIB.mib" http://localhost:8765/api/mibs/upload
+
+# Schema management (v1.0.3)
+curl http://localhost:8765/api/schemas
+curl -F "file=@GenericRecord.proto" "http://localhost:8765/api/schemas/upload?subdir=cisco"
+curl http://localhost:8765/api/schemas/cisco/GenericRecord.proto
 ```
 
 ---
 
-## Plugin Registry (v1.0.2)
+## Plugin Registry (v1.0.3)
 
 | Category | Keys |
 |----------|------|
@@ -175,6 +183,18 @@ All `${VAR}` and `${VAR:-default}` placeholders are resolved from environment at
 
 ---
 
+## v1.0.3 Features
+
+| Feature | Description |
+|---------|-------------|
+| **SNMP MIB management API** | `GET/POST /api/mibs/upload`, `POST /api/mibs/download`, `DELETE /api/mibs/{name}` — list, upload, download, and delete compiled MIB modules at runtime |
+| **Schema management API** | `GET/POST /api/schemas/upload`, `GET /api/schemas/{path}`, `DELETE /api/schemas/{path}` — manage `.proto`, `.avsc`, `.json`, `.xsd`, `.yaml` schema files; optional `?subdir=` grouping |
+| **Standard MIBs in image** | IF-MIB, ENTITY-MIB, HOST-RESOURCES-MIB, IP-MIB, TCP-MIB, UDP-MIB, IANAifType-MIB baked into Docker image at build time |
+| **`tram mib download`** | CLI command to download + compile MIBs from mibs.pysnmp.com |
+| **`tram mib compile` dirs** | `tram mib compile <dir>` compiles all `.mib` files in a directory |
+| **All connectors in image** | Docker image now installs every connector/serializer/observability extra (all except `corba` which requires a source build) |
+| **Single PVC for all data** | Helm chart uses one `/data` PVC for SQLite, schemas (`/data/schemas`), and MIBs (`/data/mibs`); no separate PVCs needed |
+
 ## v1.0.2 Features
 
 | Feature | Description |
@@ -232,21 +252,23 @@ docker compose up
 curl http://localhost:8765/api/ready
 ```
 
+The default image includes **all connector, serializer, and observability extras** (Kafka, S3, MQTT, AMQP, NATS, gNMI, Redis, InfluxDB, GCS, Azure Blob, OpenSearch, Elasticsearch, Avro, Protobuf, Parquet, MsgPack, Prometheus, OpenTelemetry, watchdog, and more). Only `corba` is excluded (requires a source build — extend with a custom `FROM` layer).
+
 ## Kubernetes (Helm)
 
 ```bash
-# Standalone (default)
+# Standalone (default) — single PVC at /data holds SQLite DB, schemas, and MIBs
 helm install tram oci://ghcr.io/OWNER/charts/tram \
-  --set image.tag=1.0.2
+  --set image.tag=1.0.3
 
 # With API key authentication
 helm install tram oci://ghcr.io/OWNER/charts/tram \
-  --set image.tag=1.0.2 \
+  --set image.tag=1.0.3 \
   --set apiKey=mysecret
 
 # Cluster mode (3-replica StatefulSet + external PostgreSQL)
 helm install tram oci://ghcr.io/OWNER/charts/tram \
-  --set image.tag=1.0.2 \
+  --set image.tag=1.0.3 \
   --set clusterMode.enabled=true \
   --set replicaCount=3 \
   --set envSecret.TRAM_DB_URL.secretName=tram-db \
@@ -280,6 +302,14 @@ helm install tram oci://ghcr.io/OWNER/charts/tram \
 | GET | `/api/runs` | Run history (`?pipeline=&status=&limit=&offset=&from_dt=&format=csv`) |
 | GET | `/api/cluster/nodes` | Cluster topology |
 | GET | `/api/daemon/status` | Scheduler state, active streams |
+| GET | `/api/mibs` | List compiled MIB modules |
+| POST | `/api/mibs/upload` | Upload + compile a `.mib` file |
+| POST | `/api/mibs/download` | Download + compile MIBs from mibs.pysnmp.com |
+| DELETE | `/api/mibs/{name}` | Delete a compiled MIB module |
+| GET | `/api/schemas` | List all schema files |
+| GET | `/api/schemas/{path}` | Read raw schema file content |
+| POST | `/api/schemas/upload` | Upload a schema file (optional `?subdir=`) |
+| DELETE | `/api/schemas/{path}` | Delete a schema file |
 
 All `/api/*` endpoints require `X-API-Key` header when `TRAM_API_KEY` is set. Health, ready, metrics, and webhooks are always exempt.
 
@@ -332,9 +362,9 @@ helm/                 Helm chart (StatefulSet, TLS, apiKey, cluster mode)
 
 ```bash
 pip install -e ".[dev]"
-pytest tests/unit/         # 606 unit tests (no network required)
-pytest tests/integration/  # 42 tests (2 skipped when pysnmp not installed)
-pytest tests/              # all 648 tests
+pytest tests/unit/         # 633 unit tests (no network required)
+pytest tests/integration/  # 44 tests (2 skipped when pysnmp not installed)
+pytest tests/              # all 677 tests
 ```
 
 ---

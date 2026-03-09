@@ -460,12 +460,16 @@ pipeline:
 
 @mib_app.command("compile")
 def mib_compile(
-    source_mib: Path = typer.Argument(..., help="Path to .mib source file"),
+    source_mib: Path = typer.Argument(..., help="Path to .mib source file or directory containing .mib files"),
     out: Path = typer.Option(
         Path("./compiled_mibs"), "--out", "-o", help="Output directory for compiled .py files"
     ),
 ):
-    """Compile a raw .mib text file to Python format for use with tram[snmp].
+    """Compile raw .mib text file(s) to Python format for use with tram[snmp].
+
+    Accepts a single .mib file or a directory.  When a directory is supplied,
+    all .mib files found directly inside it are compiled in one pass so that
+    cross-file imports resolve correctly.
 
     Requires the tram[mib] optional extra (pysmi-lextudio).
     """
@@ -484,24 +488,93 @@ def mib_compile(
         raise typer.Exit(1)
 
     if not source_mib.exists():
-        err_console.print(f"[red]File not found:[/red] {source_mib}")
+        err_console.print(f"[red]Path not found:[/red] {source_mib}")
         raise typer.Exit(1)
 
     out.mkdir(parents=True, exist_ok=True)
-    mib_dir = str(source_mib.parent)
-    mib_name = source_mib.stem
+
+    # Collect MIB names and source directory
+    if source_mib.is_dir():
+        mib_files = list(source_mib.glob("*.mib"))
+        if not mib_files:
+            err_console.print(f"[yellow]No .mib files found in {source_mib}[/yellow]")
+            raise typer.Exit(0)
+        mib_src_dir = str(source_mib)
+        mib_names = [f.stem for f in mib_files]
+        console.print(f"Found {len(mib_names)} .mib file(s) in [bold]{source_mib}[/bold]")
+    else:
+        mib_src_dir = str(source_mib.parent)
+        mib_names = [source_mib.stem]
 
     parser = parserFactory()()
     codegen = PySnmpCodeGen()
     writer = PyFileWriter(str(out))
 
     compiler = MibCompiler(parser, codegen, writer)
-    compiler.addSources(FileReader(mib_dir))
+    compiler.addSources(FileReader(mib_src_dir))
     compiler.addSearchers(PyFileSearcher(str(out)))
     compiler.addSearchers(StubSearcher(*PySnmpCodeGen.PYSNMP_STUBS))
 
-    results = compiler.compile(mib_name)
+    results = compiler.compile(*mib_names)
     for name, status in results.items():
         color = "green" if status == "compiled" else "yellow"
         console.print(f"  [{color}]{status}[/{color}] {name}")
-    console.print(f"[green]✓[/green] Compiled MIB '{mib_name}' → {out}")
+    compiled_count = sum(1 for s in results.values() if s == "compiled")
+    console.print(f"[green]✓[/green] Compiled {compiled_count} MIB module(s) → {out}")
+
+
+@mib_app.command("download")
+def mib_download(
+    names: list[str] = typer.Argument(..., help="MIB module name(s) to download, e.g. IF-MIB ENTITY-MIB"),
+    out: Path = typer.Option(
+        Path("/mibs"), "--out", "-o", help="Output directory for compiled .py files"
+    ),
+):
+    """Download and compile MIB modules from mibs.pysnmp.com.
+
+    Downloads the named MIB modules (plus any dependencies) from the public
+    mibs.pysnmp.com repository and compiles them to Python format.
+
+    Requires the tram[mib] optional extra (pysmi-lextudio) and internet access.
+
+    Example:
+        tram mib download IF-MIB ENTITY-MIB HOST-RESOURCES-MIB --out /mibs
+    """
+    try:
+        from pysmi.reader import HttpReader
+        from pysmi.searcher import PyFileSearcher, StubSearcher
+        from pysmi.writer import PyFileWriter
+        from pysmi.parser.smi import parserFactory
+        from pysmi.codegen.pysnmp import PySnmpCodeGen
+        from pysmi.compiler import MibCompiler
+    except ImportError:
+        err_console.print(
+            "[red]pysmi-lextudio is required for MIB download.[/red]\n"
+            "  Install with: [bold]pip install tram[mib][/bold]"
+        )
+        raise typer.Exit(1)
+
+    out.mkdir(parents=True, exist_ok=True)
+
+    console.print(f"Downloading {len(names)} MIB module(s) from mibs.pysnmp.com → [bold]{out}[/bold]")
+
+    parser = parserFactory()()
+    codegen = PySnmpCodeGen()
+    writer = PyFileWriter(str(out))
+
+    compiler = MibCompiler(parser, codegen, writer)
+    compiler.addSources(HttpReader("https://mibs.pysnmp.com/asn1/", ("",)))
+    compiler.addSearchers(PyFileSearcher(str(out)))
+    compiler.addSearchers(StubSearcher(*PySnmpCodeGen.PYSNMP_STUBS))
+
+    try:
+        results = compiler.compile(*names)
+    except Exception as exc:
+        err_console.print(f"[red]Download failed:[/red] {exc}")
+        raise typer.Exit(1)
+
+    for name, status in results.items():
+        color = "green" if status == "compiled" else "yellow"
+        console.print(f"  [{color}]{status}[/{color}] {name}")
+    compiled_count = sum(1 for s in results.values() if s == "compiled")
+    console.print(f"[green]✓[/green] Downloaded and compiled {compiled_count} MIB module(s) → {out}")

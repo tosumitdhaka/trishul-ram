@@ -44,6 +44,8 @@ All configuration is via environment variables (12-factor).
 | `TRAM_OTEL_ENDPOINT` | _(empty)_ | OTLP gRPC endpoint (e.g. `http://jaeger:4317`) for OpenTelemetry traces |
 | `TRAM_OTEL_SERVICE` | `tram` | Service name reported to OTel collector |
 | `TRAM_WATCH_PIPELINES` | `false` | Watch `TRAM_PIPELINE_DIR` for YAML changes and auto-reload pipelines |
+| `TRAM_MIB_DIR` | `/mibs` | Directory containing compiled pysnmp MIB `.py` files; standard MIBs baked into Docker image at build time (v1.0.3) |
+| `TRAM_SCHEMA_DIR` | `/schemas` | Directory containing serialization schema files (`.proto`, `.avsc`, etc.); managed via `POST /api/schemas/upload` (v1.0.3) |
 
 ### Database backends (v0.7.0)
 
@@ -143,6 +145,89 @@ sink:
   circuit_breaker_threshold: 5  # skip sink for 60s after 5 consecutive failures
 ```
 
+## SNMP MIB Management (v1.0.3)
+
+The Docker image includes pre-compiled versions of the most commonly needed SNMP MIBs:
+`IF-MIB`, `ENTITY-MIB`, `HOST-RESOURCES-MIB`, `IP-MIB`, `TCP-MIB`, `UDP-MIB`, `IANAifType-MIB`.
+
+SNMP connectors automatically look for MIBs in `TRAM_MIB_DIR` (`/mibs`) without any pipeline-level configuration.
+
+**Add more MIBs at runtime:**
+
+```bash
+# Via CLI (requires tram[mib])
+tram mib download CISCO-ENTITY-FRU-CONTROL-MIB --out /mibs
+
+# Via REST API
+curl -X POST http://localhost:8765/api/mibs/download \
+  -H "Content-Type: application/json" \
+  -d '{"names": ["CISCO-ENTITY-FRU-CONTROL-MIB"]}'
+
+# Upload a local .mib file
+curl -X POST http://localhost:8765/api/mibs/upload \
+  -F "file=@/path/to/MY-CUSTOM-MIB.mib"
+
+# List compiled MIBs
+curl http://localhost:8765/api/mibs
+```
+
+**Compile a directory of .mib files:**
+
+```bash
+tram mib compile /path/to/vendor-mibs/ --out /mibs
+```
+
+**Air-gapped environments** — copy pre-compiled MIB `.py` files into the image:
+
+```dockerfile
+FROM ghcr.io/OWNER/tram:1.0.3
+COPY compiled-mibs/*.py /mibs/
+```
+
+## Schema Management (v1.0.3)
+
+Serialization schemas (Protobuf `.proto`, Avro `.avsc`, JSON Schema `.json`, XML Schema `.xsd`)
+are stored in `TRAM_SCHEMA_DIR` (`/schemas`). Reference them in pipeline YAML:
+
+```yaml
+serializer_in:
+  type: protobuf
+  schema_file: /schemas/cisco/GenericRecord.proto
+  message_class: PerformanceMonitoringMessage
+  framing: none
+```
+
+**Upload schemas via REST API:**
+
+```bash
+# Upload a single file
+curl -X POST http://localhost:8765/api/schemas/upload \
+  -F "file=@GenericRecord.proto"
+
+# Upload all Cisco EMS proto files to a subdirectory (imports resolve correctly)
+for f in *.proto; do
+  curl -F "file=@$f" \
+    "http://localhost:8765/api/schemas/upload?subdir=cisco"
+done
+
+# List all schemas
+curl http://localhost:8765/api/schemas
+
+# Read a schema file
+curl http://localhost:8765/api/schemas/cisco/GenericRecord.proto
+
+# Delete a schema
+curl -X DELETE http://localhost:8765/api/schemas/cisco/GenericRecord.proto
+```
+
+**Accepted extensions:** `.proto`, `.avsc`, `.json`, `.xsd`, `.yaml`, `.yml`
+
+**Mount host directory** for development (read-write):
+
+```bash
+docker run -v ./schemas:/schemas tram:1.0.3
+```
+
 ## Docker
 
 ### Build and run
@@ -151,14 +236,30 @@ sink:
 docker build -t tram:latest .
 docker run -p 8765:8765 \
   -v ./pipelines:/pipelines:ro \
+  -v ./schemas:/schemas \
   -v tram-data:/data \
-  -e TRAM_DB_PATH=/data/tram.db \
+  -e TRAM_DB_URL=sqlite:////data/tram.db \
   -e TRAM_PIPELINE_DIR=/pipelines \
   -e NE_SFTP_HOST=10.0.0.1 \
   tram:latest
 ```
 
-Mount a volume at `/root/.tram` (or set `TRAM_DB_PATH`) to persist run history and pipeline versions across container restarts.
+Mount a volume at `/data` (or set `TRAM_DB_URL`) to persist run history and pipeline versions across container restarts.
+
+### Installed extras in the default image
+
+The default `tram:1.0.3` image installs **all** connector, serializer, and observability extras:
+
+`kafka`, `opensearch`, `s3`, `snmp`, `avro`, `protobuf_ser`, `parquet`, `msgpack_ser`, `mqtt`,
+`amqp`, `nats`, `gnmi`, `jmespath`, `sql`, `influxdb`, `redis`, `gcs`, `azure`, `websocket`,
+`elasticsearch`, `metrics`, `prometheus_rw`, `mib`, `otel`, `watch`, `postgresql`, `mysql`
+
+The only excluded extra is **`corba`** (`omniORBpy`) — it has no PyPI wheel and requires a system-level source build. To add it:
+
+```dockerfile
+FROM ghcr.io/OWNER/tram:1.0.3
+RUN apt-get update && apt-get install -y omniorb-dev && pip install "tram[corba]"
+```
 
 ### docker-compose
 
@@ -195,11 +296,11 @@ helm upgrade tram oci://ghcr.io/OWNER/charts/tram \
 | Value | Default | Description |
 |-------|---------|-------------|
 | `image.repository` | `ghcr.io/OWNER/tram` | Docker image repository |
-| `image.tag` | `"1.0.2"` | Image tag |
+| `image.tag` | `"1.0.3"` | Image tag |
 | `replicaCount` | `1` | Replicas — `1` = standalone, `N` = cluster |
 | `clusterMode.enabled` | `false` | Activate cluster mode (sets `TRAM_CLUSTER_ENABLED`, requires external DB) |
-| `persistence.enabled` | `true` | Provision a PVC per pod via `volumeClaimTemplates` (SQLite at `/data`) |
-| `persistence.size` | `1Gi` | PVC size per pod |
+| `persistence.enabled` | `true` | Provision a PVC per pod via `volumeClaimTemplates` mounted at `/data`; auto-sets `TRAM_DB_PATH=/data/tram.db`, `TRAM_SCHEMA_DIR=/data/schemas`, `TRAM_MIB_DIR=/data/mibs` |
+| `persistence.size` | `1Gi` | PVC size per pod (holds SQLite DB + schemas + runtime MIBs) |
 | `persistence.accessMode` | `ReadWriteOnce` | PVC access mode |
 | `env` | `{}` | Plain env vars |
 | `envSecret` | `{}` | Env vars from Secret (`secretName`/`secretKey`) |
@@ -211,10 +312,10 @@ helm upgrade tram oci://ghcr.io/OWNER/charts/tram \
 ```bash
 helm install tram oci://ghcr.io/OWNER/charts/tram \
   --namespace tram --create-namespace \
-  --set image.tag=1.0.2
+  --set image.tag=1.0.3
 ```
 
-A single-replica `StatefulSet` with pod name `tram-0` runs the full daemon. A `PersistentVolumeClaim` (`data-tram-0`) is auto-provisioned via `volumeClaimTemplates` — SQLite run history survives pod restarts and rescheduling across nodes.
+A single-replica `StatefulSet` with pod name `tram-0` runs the full daemon. A `PersistentVolumeClaim` (`data-tram-0`) is auto-provisioned via `volumeClaimTemplates` and mounted at `/data`. SQLite run history, API-uploaded schemas (`/data/schemas`), and runtime MIBs (`/data/mibs`) all share this single PVC and survive pod restarts. Standard MIBs baked into the image at `/mibs` remain available alongside any runtime-downloaded ones.
 
 ### Cluster mode (v0.8.0)
 
