@@ -116,7 +116,8 @@ class SNMPTrapSource(BaseSource):
                         # preserve _raw if present
                         if "_raw" in raw_bindings:
                             bindings["_raw"] = raw_bindings["_raw"]
-                    except Exception:
+                    except Exception as _mib_exc:
+                        logger.warning("MIB OID resolution failed for trap: %s", _mib_exc)
                         bindings = raw_bindings
                 else:
                     bindings = raw_bindings
@@ -142,8 +143,9 @@ class SNMPTrapSource(BaseSource):
         """Attempt to decode SNMP trap using pysnmp; fall back to raw hex."""
         try:
             from pysnmp.proto import api as snmp_api
+            from pysnmp.proto import decoder
             pMod = snmp_api.protoModules[snmp_api.protoVersion2c]
-            reqMsg, _ = decoder.decode(raw, asn1Spec=pMod.Message())  # type: ignore[name-defined]
+            reqMsg, _ = decoder.decode(raw, asn1Spec=pMod.Message())
             reqPDU = pMod.apiMessage.getPDU(reqMsg)
             bindings: dict = {}
             for oid, val in pMod.apiPDU.getVarBinds(reqPDU):
@@ -345,8 +347,8 @@ class SNMPPollSource(BaseSource):
                     resolve_oid(mib_view, oid_str_to_tuple(oid)): val
                     for oid, val in bindings.items()
                 }
-            except Exception:
-                pass  # Keep numeric OIDs on resolution failure
+            except Exception as _mib_exc:
+                logger.warning("MIB OID resolution failed for poll: %s", _mib_exc)
 
         meta = {
             "source_host": self.host,

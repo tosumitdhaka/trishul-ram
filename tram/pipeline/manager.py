@@ -7,8 +7,6 @@ from collections import deque
 from datetime import datetime, timezone
 from typing import TYPE_CHECKING, Optional
 
-from datetime import datetime
-
 from tram.core.context import RunResult
 from tram.core.exceptions import PipelineAlreadyExistsError, PipelineNotFoundError
 from tram.models.pipeline import PipelineConfig
