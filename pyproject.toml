@@ -95,6 +95,8 @@ all = [
     "tram[mib]",
     "tram[otel]",
     "tram[watch]",
+    "tram[postgresql]",
+    "tram[mysql]",
 ]
 
 [project.scripts]

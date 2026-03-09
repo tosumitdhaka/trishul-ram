@@ -25,8 +25,12 @@ class APIKeyMiddleware(BaseHTTPMiddleware):
     EXEMPT = {"/api/health", "/api/ready", "/metrics"}
     EXEMPT_PREFIX = "/webhooks/"
 
+    def __init__(self, app) -> None:
+        super().__init__(app)
+        self._settings = AppConfig.from_env()
+
     async def dispatch(self, request: "Request", call_next):
-        settings = AppConfig.from_env()
+        settings = self._settings
 
         if not settings.api_key:
             return await call_next(request)
@@ -87,4 +91,11 @@ class RateLimitMiddleware(BaseHTTPMiddleware):
             )
 
         window.append(now)
+
+        # Periodically evict idle client entries (empty deques whose last request
+        # fell outside the window) to prevent unbounded dict growth under
+        # high-cardinality client traffic.
+        if len(self._windows) > 500:
+            self._windows = {k: v for k, v in self._windows.items() if v}
+
         return await call_next(request)

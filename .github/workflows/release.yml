@@ -6,8 +6,35 @@ on:
       - "v*"
 
 jobs:
+  test:
+    name: Test
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+
+      - name: Install dependencies
+        run: pip install -e ".[dev]"
+
+      - name: Lint with ruff
+        run: ruff check .
+
+      - name: Run unit tests
+        run: pytest tests/unit/ -q --tb=short
+
+      - name: Run integration tests
+        run: pytest tests/integration/ -q --tb=short
+
   docker:
     name: Build & Push Docker image
+    needs: test
     runs-on: ubuntu-latest
     permissions:
       contents: read

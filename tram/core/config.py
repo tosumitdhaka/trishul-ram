@@ -7,6 +7,19 @@ import socket
 from dataclasses import dataclass
 
 
+def _env_int(name: str, default: int) -> int:
+    """Read an integer env var; raise ValueError with the variable name on bad input."""
+    raw = os.environ.get(name)
+    if raw is None:
+        return default
+    try:
+        return int(raw)
+    except ValueError:
+        raise ValueError(
+            f"Environment variable {name}={raw!r} is not a valid integer"
+        ) from None
+
+
 @dataclass(frozen=True)
 class AppConfig:
     """Application-wide configuration loaded from environment variables."""
@@ -46,24 +59,24 @@ class AppConfig:
         node_id = os.environ.get("TRAM_NODE_ID", socket.gethostname())
         return cls(
             host=os.environ.get("TRAM_HOST", "0.0.0.0"),
-            port=int(os.environ.get("TRAM_PORT", "8765")),
+            port=_env_int("TRAM_PORT", 8765),
             pipeline_dir=os.environ.get("TRAM_PIPELINE_DIR", "./pipelines"),
             state_dir=os.environ.get("TRAM_STATE_DIR") or None,
             api_url=os.environ.get("TRAM_API_URL", "http://localhost:8765"),
             log_level=os.environ.get("TRAM_LOG_LEVEL", "INFO").upper(),
             log_format=os.environ.get("TRAM_LOG_FORMAT", "json"),
-            workers=int(os.environ.get("TRAM_WORKERS", "1")),
+            workers=_env_int("TRAM_WORKERS", 1),
             reload_on_start=os.environ.get("TRAM_RELOAD_ON_START", "true").lower() == "true",
             node_id=node_id,
             db_url=os.environ.get("TRAM_DB_URL", ""),
-            shutdown_timeout=int(os.environ.get("TRAM_SHUTDOWN_TIMEOUT_SECONDS", "30")),
+            shutdown_timeout=_env_int("TRAM_SHUTDOWN_TIMEOUT_SECONDS", 30),
             cluster_enabled=os.environ.get("TRAM_CLUSTER_ENABLED", "false").lower() == "true",
-            node_ordinal=int(os.environ.get("TRAM_NODE_ORDINAL", str(_detect_ordinal(node_id)))),
-            heartbeat_seconds=int(os.environ.get("TRAM_HEARTBEAT_SECONDS", "10")),
-            node_ttl_seconds=int(os.environ.get("TRAM_NODE_TTL_SECONDS", "30")),
+            node_ordinal=_env_int("TRAM_NODE_ORDINAL", _detect_ordinal(node_id)),
+            heartbeat_seconds=_env_int("TRAM_HEARTBEAT_SECONDS", 10),
+            node_ttl_seconds=_env_int("TRAM_NODE_TTL_SECONDS", 30),
             api_key=os.environ.get("TRAM_API_KEY", ""),
-            rate_limit=int(os.environ.get("TRAM_RATE_LIMIT", "0")),
-            rate_limit_window=int(os.environ.get("TRAM_RATE_LIMIT_WINDOW", "60")),
+            rate_limit=_env_int("TRAM_RATE_LIMIT", 0),
+            rate_limit_window=_env_int("TRAM_RATE_LIMIT_WINDOW", 60),
             tls_certfile=os.environ.get("TRAM_TLS_CERTFILE", ""),
             tls_keyfile=os.environ.get("TRAM_TLS_KEYFILE", ""),
             otel_endpoint=os.environ.get("TRAM_OTEL_ENDPOINT", ""),
