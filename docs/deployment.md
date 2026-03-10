@@ -248,14 +248,29 @@ Mount a volume at `/data` (or set `TRAM_DB_URL`) to persist run history and pipe
 
 ### Installed extras in the default image
 
-The default `tram:1.0.3` image installs **all** connector, serializer, and observability extras:
+The default `tram:1.0.3` image installs:
 
-`kafka`, `opensearch`, `s3`, `snmp`, `avro`, `protobuf_ser`, `parquet`, `msgpack_ser`, `mqtt`,
-`amqp`, `nats`, `gnmi`, `jmespath`, `sql`, `influxdb`, `redis`, `gcs`, `azure`, `websocket`,
-`elasticsearch`, `metrics`, `prometheus_rw`, `corba`, `mib`, `otel`, `watch`, `postgresql`, `mysql`
+`kafka`, `opensearch`, `snmp`, `avro`, `protobuf_ser`, `msgpack_ser`, `mqtt`, `amqp`, `nats`,
+`gnmi`, `jmespath`, `sql`, `influxdb`, `redis`, `websocket`, `elasticsearch`, `metrics`,
+`prometheus_rw`, `corba`, `mib`, `watch`, `postgresql`, `mysql`
 
 `corba` (`omniORBpy`) is included — the image pre-installs the required omniORB runtime libraries
 (`libomniorb4-2`, `libomnithread4`) so the pre-built PyPI wheel installs without a source build.
+
+The following extras are **excluded by default** to keep the image lean. Extend with a custom layer:
+
+| Extra | Reason excluded | ~Size |
+|-------|----------------|-------|
+| `parquet` | pyarrow is large | ~150 MB |
+| `s3` | boto3/botocore | ~60 MB |
+| `gcs` | google-cloud-storage + deps | ~50 MB |
+| `azure` | azure-storage-blob + SDK | ~30 MB |
+| `otel` | only needed when `TRAM_OTEL_ENDPOINT` is set; no-op fallback when absent | ~15 MB |
+
+```dockerfile
+FROM ghcr.io/OWNER/tram:1.0.3
+RUN pip install "tram[parquet,s3,gcs,azure,otel]"
+```
 
 ### docker-compose
 

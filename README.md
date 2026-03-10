@@ -192,7 +192,7 @@ All `${VAR}` and `${VAR:-default}` placeholders are resolved from environment at
 | **Standard MIBs in image** | IF-MIB, ENTITY-MIB, HOST-RESOURCES-MIB, IP-MIB, TCP-MIB, UDP-MIB, IANAifType-MIB baked into Docker image at build time |
 | **`tram mib download`** | CLI command to download + compile MIBs from mibs.pysnmp.com |
 | **`tram mib compile` dirs** | `tram mib compile <dir>` compiles all `.mib` files in a directory |
-| **All connectors in image** | Docker image now installs every connector/serializer/observability extra including `corba` (omniORB runtime libs pre-installed via apt) |
+| **All connectors in image** | Docker image installs all common extras including `corba` (omniORB runtime libs pre-installed); `parquet`, `s3`, `gcs`, `azure`, `otel` excluded by default (~300 MB savings) — extend via custom `FROM` layer |
 | **Single PVC for all data** | Helm chart uses one `/data` PVC for SQLite, schemas (`/data/schemas`), and MIBs (`/data/mibs`); no separate PVCs needed |
 
 ## v1.0.2 Features
@@ -252,7 +252,7 @@ docker compose up
 curl http://localhost:8765/api/ready
 ```
 
-The default image includes **all connector, serializer, and observability extras** — Kafka, S3, MQTT, AMQP, NATS, gNMI, Redis, InfluxDB, GCS, Azure Blob, OpenSearch, Elasticsearch, Avro, Protobuf, Parquet, MsgPack, Prometheus, OpenTelemetry, watchdog, and CORBA. The omniORB runtime libraries are pre-installed so no source build is needed.
+The default image includes most connector and serializer extras — Kafka, MQTT, AMQP, NATS, gNMI, Redis, InfluxDB, OpenSearch, Elasticsearch, Avro, Protobuf, MsgPack, Prometheus, watchdog, and CORBA (omniORB runtime libs pre-installed). Excluded to keep the image lean: `parquet` (~150 MB), `s3` (~60 MB), `gcs` (~50 MB), `azure` (~30 MB), and `otel` (~15 MB, only needed when `TRAM_OTEL_ENDPOINT` is set). Extend with a custom `FROM` layer to add them.
 
 ## Kubernetes (Helm)
 
