@@ -2,7 +2,7 @@
 
 ## Overview
 
-TRAM (Trishul Real-time Adapter & Mapper) is a lightweight, container-native Python daemon that moves and transforms telecom data (PM/FM/Logs) across protocols.
+TRAM (Trishul Real-time Aggregation & Mediation) is a lightweight, container-native Python daemon that moves and transforms telecom data (PM/FM/Logs) across protocols.
 
 ## Design Principles
 
