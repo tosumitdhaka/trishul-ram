@@ -77,11 +77,18 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
         libomniorb4-2 libomnithread4 \
     && rm -rf /var/lib/apt/lists/*
 
-# Install wheel with ALL connector/serializer/observability extras including corba.
+# Install connector/serializer/observability extras.
+# Excluded to keep the image lean (add a custom FROM layer to extend):
+#   parquet   — pyarrow (~150 MB)
+#   s3        — boto3/botocore (~60 MB)
+#   gcs       — google-cloud-storage (~50 MB)
+#   azure     — azure-storage-blob (~30 MB)
+#   otel      — opentelemetry-sdk + OTLP exporter; no-op fallback when absent,
+#               only needed when TRAM_OTEL_ENDPOINT is set (~15 MB)
 COPY --from=builder /build/dist/*.whl .
 RUN whl=$(ls *.whl) && \
     pip install --no-cache-dir \
-        "${whl}[kafka,opensearch,s3,snmp,avro,protobuf_ser,parquet,msgpack_ser,mqtt,amqp,nats,gnmi,jmespath,sql,influxdb,redis,gcs,azure,websocket,elasticsearch,metrics,prometheus_rw,corba,mib,otel,watch,postgresql,mysql]" && \
+        "${whl}[kafka,opensearch,snmp,avro,protobuf_ser,msgpack_ser,mqtt,amqp,nats,gnmi,jmespath,sql,influxdb,redis,websocket,elasticsearch,metrics,prometheus_rw,corba,mib,watch,postgresql,mysql]" && \
     rm *.whl
 
 # Copy compiled MIBs from mib-builder stage
