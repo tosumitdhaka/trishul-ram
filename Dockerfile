@@ -72,13 +72,16 @@ RUN useradd -m -u 1000 -s /bin/bash tram
 
 WORKDIR /app
 
-# Install wheel with ALL connector/serializer/observability extras.
-# Only `corba` (omniORBpy) is excluded — it has no PyPI wheel and requires a source build.
-# To add corba support, extend with: FROM tram:1.0.3 + apt-get install omniorb-dev + pip install tram[corba]
+# omniORBpy (CORBA) requires the omniORB shared runtime libraries
+RUN apt-get update && apt-get install -y --no-install-recommends \
+        libomniorb4-2 libomnithread4 \
+    && rm -rf /var/lib/apt/lists/*
+
+# Install wheel with ALL connector/serializer/observability extras including corba.
 COPY --from=builder /build/dist/*.whl .
 RUN whl=$(ls *.whl) && \
     pip install --no-cache-dir \
-        "${whl}[kafka,opensearch,s3,snmp,avro,protobuf_ser,parquet,msgpack_ser,mqtt,amqp,nats,gnmi,jmespath,sql,influxdb,redis,gcs,azure,websocket,elasticsearch,metrics,prometheus_rw,mib,otel,watch,postgresql,mysql]" && \
+        "${whl}[kafka,opensearch,s3,snmp,avro,protobuf_ser,parquet,msgpack_ser,mqtt,amqp,nats,gnmi,jmespath,sql,influxdb,redis,gcs,azure,websocket,elasticsearch,metrics,prometheus_rw,corba,mib,otel,watch,postgresql,mysql]" && \
     rm *.whl
 
 # Copy compiled MIBs from mib-builder stage

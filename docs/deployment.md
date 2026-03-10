@@ -252,14 +252,10 @@ The default `tram:1.0.3` image installs **all** connector, serializer, and obser
 
 `kafka`, `opensearch`, `s3`, `snmp`, `avro`, `protobuf_ser`, `parquet`, `msgpack_ser`, `mqtt`,
 `amqp`, `nats`, `gnmi`, `jmespath`, `sql`, `influxdb`, `redis`, `gcs`, `azure`, `websocket`,
-`elasticsearch`, `metrics`, `prometheus_rw`, `mib`, `otel`, `watch`, `postgresql`, `mysql`
+`elasticsearch`, `metrics`, `prometheus_rw`, `corba`, `mib`, `otel`, `watch`, `postgresql`, `mysql`
 
-The only excluded extra is **`corba`** (`omniORBpy`) — it has no PyPI wheel and requires a system-level source build. To add it:
-
-```dockerfile
-FROM ghcr.io/OWNER/tram:1.0.3
-RUN apt-get update && apt-get install -y omniorb-dev && pip install "tram[corba]"
-```
+`corba` (`omniORBpy`) is included — the image pre-installs the required omniORB runtime libraries
+(`libomniorb4-2`, `libomnithread4`) so the pre-built PyPI wheel installs without a source build.
 
 ### docker-compose
 
