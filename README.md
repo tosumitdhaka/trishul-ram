@@ -1,4 +1,4 @@
-# TRAM — Trishul Real-time Adapter & Mapper
+# TRAM — Trishul Real-time Aggregation & Mediation
 
 > Lightweight, container-native Python daemon that moves and transforms telecom data (PM/FM/Logs) across protocols.
 

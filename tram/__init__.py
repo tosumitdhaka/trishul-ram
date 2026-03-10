@@ -1,4 +1,4 @@
-"""TRAM — Trishul Real-time Adapter & Mapper."""
+"""TRAM — Trishul Real-time Aggregation & Mediation."""
 
 from importlib.metadata import PackageNotFoundError, version
 

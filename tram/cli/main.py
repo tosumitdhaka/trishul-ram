@@ -12,7 +12,7 @@ from rich.table import Table
 
 app = typer.Typer(
     name="tram",
-    help="TRAM — Trishul Real-time Adapter & Mapper",
+    help="TRAM — Trishul Real-time Aggregation & Mediation",
     add_completion=False,
 )
 pipeline_app = typer.Typer(help="Pipeline management commands (proxies to running daemon)")

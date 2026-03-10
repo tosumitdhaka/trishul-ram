@@ -177,7 +177,7 @@ def create_app(config: AppConfig | None = None) -> FastAPI:
 
     app = FastAPI(
         title="TRAM",
-        description="Trishul Real-time Adapter & Mapper",
+        description="Trishul Real-time Aggregation & Mediation",
         version=__version__,
         lifespan=lifespan,
     )

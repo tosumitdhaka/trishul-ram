@@ -5,7 +5,7 @@ build-backend = "setuptools.build_meta"
 [project]
 name = "tram"
 version = "1.0.3"
-description = "Trishul Real-time Adapter & Mapper — telecom data pipeline daemon"
+description = "Trishul Real-time Aggregation & Mediation — telecom data pipeline daemon"
 readme = "README.md"
 requires-python = ">=3.11"
 license = {text = "Apache-2.0"}
