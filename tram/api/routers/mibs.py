@@ -89,7 +89,7 @@ async def upload_mib(file: UploadFile = File(...)) -> dict:
         compiler = MibCompiler(parser, codegen, writer)
         compiler.addSources(FileReader(tmpdir))
         compiler.addSearchers(PyFileSearcher(mib_dir))
-        compiler.addSearchers(StubSearcher(*PySnmpCodeGen.PYSNMP_STUBS))
+        compiler.addSearchers(StubSearcher(*(PySnmpCodeGen.baseMibs + PySnmpCodeGen.fakeMibs)))
 
         try:
             results = compiler.compile(mib_name)
@@ -148,9 +148,9 @@ def download_mibs(body: MibDownloadRequest) -> dict:
     writer = PyFileWriter(mib_dir)
 
     compiler = MibCompiler(parser, codegen, writer)
-    compiler.addSources(HttpReader("https://mibs.pysnmp.com/asn1/", ("",)))
+    compiler.addSources(HttpReader("https://mibs.pysnmp.com/asn1/@mib@"))
     compiler.addSearchers(PyFileSearcher(mib_dir))
-    compiler.addSearchers(StubSearcher(*PySnmpCodeGen.PYSNMP_STUBS))
+    compiler.addSearchers(StubSearcher(*(PySnmpCodeGen.baseMibs + PySnmpCodeGen.fakeMibs)))
 
     try:
         results = compiler.compile(*body.names)
