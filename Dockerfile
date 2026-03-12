@@ -51,9 +51,9 @@ try:
     writer  = PyFileWriter("/mibs")
 
     compiler = MibCompiler(parser, codegen, writer)
-    compiler.addSources(HttpReader("https://mibs.pysnmp.com/asn1/", ("",)))
+    compiler.addSources(HttpReader("https://mibs.pysnmp.com/asn1/@mib@"))
     compiler.addSearchers(PyFileSearcher("/mibs"))
-    compiler.addSearchers(StubSearcher(*PySnmpCodeGen.PYSNMP_STUBS))
+    compiler.addSearchers(StubSearcher(*(PySnmpCodeGen.baseMibs + PySnmpCodeGen.fakeMibs)))
 
     results = compiler.compile(*STANDARD_MIBS)
     for name, status in results.items():
@@ -73,9 +73,11 @@ RUN useradd -m -u 1000 -s /bin/bash tram
 WORKDIR /app
 
 # omniORBpy (CORBA) requires the omniORB shared runtime libraries
-RUN apt-get update && apt-get install -y --no-install-recommends \
-        libomniorb4-2 libomnithread4 \
-    && rm -rf /var/lib/apt/lists/*
+# Package was renamed libomniorb4-2 → libomniorb4-3t64 in newer Debian
+RUN apt-get update && \
+    ( apt-get install -y --no-install-recommends libomniorb4-3t64 libomnithread4 || \
+      apt-get install -y --no-install-recommends libomniorb4-2 libomnithread4 ) && \
+    rm -rf /var/lib/apt/lists/*
 
 # Install connector/serializer/observability extras.
 # Excluded to keep the image lean (add a custom FROM layer to extend):
@@ -86,9 +88,10 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 #   otel      — opentelemetry-sdk + OTLP exporter; no-op fallback when absent,
 #               only needed when TRAM_OTEL_ENDPOINT is set (~15 MB)
 COPY --from=builder /build/dist/*.whl .
+# corba (omniORBpy) is excluded: not on PyPI; install python3-omniorb via apt in a custom layer
 RUN whl=$(ls *.whl) && \
     pip install --no-cache-dir \
-        "${whl}[kafka,opensearch,snmp,avro,protobuf_ser,msgpack_ser,mqtt,amqp,nats,gnmi,jmespath,sql,influxdb,redis,websocket,elasticsearch,metrics,prometheus_rw,corba,mib,watch,postgresql,mysql]" && \
+        "${whl}[kafka,opensearch,snmp,avro,protobuf_ser,msgpack_ser,mqtt,amqp,nats,gnmi,jmespath,sql,influxdb,redis,websocket,elasticsearch,metrics,prometheus_rw,mib,watch,postgresql,mysql]" && \
     rm *.whl
 
 # Copy compiled MIBs from mib-builder stage

@@ -513,7 +513,7 @@ def mib_compile(
     compiler = MibCompiler(parser, codegen, writer)
     compiler.addSources(FileReader(mib_src_dir))
     compiler.addSearchers(PyFileSearcher(str(out)))
-    compiler.addSearchers(StubSearcher(*PySnmpCodeGen.PYSNMP_STUBS))
+    compiler.addSearchers(StubSearcher(*(PySnmpCodeGen.baseMibs + PySnmpCodeGen.fakeMibs)))
 
     results = compiler.compile(*mib_names)
     for name, status in results.items():
@@ -563,9 +563,9 @@ def mib_download(
     writer = PyFileWriter(str(out))
 
     compiler = MibCompiler(parser, codegen, writer)
-    compiler.addSources(HttpReader("https://mibs.pysnmp.com/asn1/", ("",)))
+    compiler.addSources(HttpReader("https://mibs.pysnmp.com/asn1/@mib@"))
     compiler.addSearchers(PyFileSearcher(str(out)))
-    compiler.addSearchers(StubSearcher(*PySnmpCodeGen.PYSNMP_STUBS))
+    compiler.addSearchers(StubSearcher(*(PySnmpCodeGen.baseMibs + PySnmpCodeGen.fakeMibs)))
 
     try:
         results = compiler.compile(*names)
