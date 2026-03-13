@@ -1,0 +1,49 @@
+version: "1"
+
+pipeline:
+  name: proto-device-event
+  description: >
+    Validate multi-file Protobuf schema: device_event.proto imports
+    severity.proto, location.proto, interface_stats.proto, identity.proto.
+
+    The serializer_in compiles ALL *.proto files in /schemas/telecom/ with
+    a single protoc invocation (same -I dir), so cross-file imports resolve.
+
+    Test: POST length-delimited binary protobuf to /webhooks/proto-device-event
+    OR use the dry-run endpoint with JSON: POST /api/pipelines/proto-device-event/dry-run
+
+    For quick testing, the source can also accept JSON directly when using
+    serializer_in: json — swap if you don't have a protobuf encoder handy.
+  enabled: true
+
+  schedule:
+    type: stream
+
+  source:
+    type: webhook
+    path: /proto-device-event
+
+  serializer_in:
+    type: protobuf
+    schema_file: /schemas/telecom/device_event.proto   # root proto
+    message_class: DeviceEvent                          # message in device_event.proto
+    framing: length_delimited                           # [4-byte BE len][proto bytes] per record
+
+  transforms:
+    - type: add_field
+      fields:
+        ingested_via: "'proto-device-event-pipeline'"
+
+    - type: flatten
+      separator: "_"
+
+  serializer_out:
+    type: json
+    indent: 2
+
+  sinks:
+    - type: local
+      path: /data/output
+      filename_template: "proto_{pipeline}_{timestamp}.json"
+
+  on_error: continue
