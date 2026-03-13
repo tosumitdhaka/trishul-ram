@@ -2,7 +2,7 @@
 
 > Lightweight, container-native Python daemon that moves and transforms telecom data (PM/FM/Logs) across protocols.
 
-**Version:** 1.0.4 | **Status:** Production-ready | **Python:** 3.11+
+**Version:** 1.0.5 | **Status:** Production-ready | **Python:** 3.11+
 
 ---
 
@@ -75,13 +75,13 @@ curl http://localhost:8765/api/schemas/cisco/GenericRecord.proto
 
 ---
 
-## Plugin Registry (v1.0.4)
+## Plugin Registry (v1.0.5)
 
 | Category | Keys |
 |----------|------|
 | **Sources** | `sftp`, `local`, `rest`, `kafka`, `ftp`, `s3`, `syslog`, `snmp_trap`, `snmp_poll`, `mqtt`, `amqp`, `nats`, `gnmi`, `sql`, `clickhouse`, `influxdb`, `redis`, `gcs`, `azure_blob`, `webhook`, `websocket`, `elasticsearch`, `prometheus_rw`, `corba` |
 | **Sinks** | `sftp`, `local`, `rest`, `kafka`, `opensearch`, `ftp`, `ves`, `s3`, `snmp_trap`, `mqtt`, `amqp`, `nats`, `sql`, `clickhouse`, `influxdb`, `redis`, `gcs`, `azure_blob`, `websocket`, `elasticsearch` |
-| **Serializers** | `json`, `csv`, `xml`, `avro`, `parquet`, `msgpack`, `protobuf` |
+| **Serializers** | `json`, `ndjson`, `csv`, `xml`, `avro`, `parquet`, `msgpack`, `protobuf`, `bytes`, `text` |
 | **Transforms** | `rename`, `cast`, `add_field`, `drop`, `value_map`, `filter`, `flatten`, `timestamp_normalize`, `aggregate`, `enrich`, `explode`, `deduplicate`, `regex_extract`, `template`, `mask`, `validate`, `sort`, `limit`, `jmespath`, `unnest` |
 
 Optional extras: `pip install tram[kafka]` · `pip install tram[snmp]` · `pip install tram[mib]` · `pip install tram[otel]` · `pip install tram[watch]` · `pip install tram[metrics]` · `pip install tram[corba]` · `pip install tram[clickhouse]` · `pip install tram[all]`
@@ -183,6 +183,14 @@ All `${VAR}` and `${VAR:-default}` placeholders are resolved from environment at
 
 ---
 
+## v1.0.5 Features
+
+| Feature | Description |
+|---------|-------------|
+| **`ndjson` serializer** | Newline-Delimited JSON (JSON Lines) — each line is one JSON object; handles Kafka/Filebeat/Vector output, jq streams; `strict` mode rejects non-object lines |
+| **Per-sink `serializer_out`** | Each sink can specify its own `serializer_out:` block; falls back to the global `serializer_out` (or `json` if omitted); enables Avro→Kafka + JSON→file + CSV→SFTP from one pipeline |
+| **`serializer_out` optional** | Top-level `serializer_out` is now optional — defaults to `json` at runtime; most pipelines no longer need to declare it |
+
 ## v1.0.4 Features
 
 | Feature | Description |
@@ -271,16 +279,16 @@ The default image includes most connector and serializer extras — Kafka, MQTT,
 ```bash
 # Standalone (default) — single PVC at /data holds SQLite DB, schemas, and MIBs
 helm install tram oci://ghcr.io/OWNER/charts/tram \
-  --set image.tag=1.0.4
+  --set image.tag=1.0.5
 
 # With API key authentication
 helm install tram oci://ghcr.io/OWNER/charts/tram \
-  --set image.tag=1.0.4 \
+  --set image.tag=1.0.5 \
   --set apiKey=mysecret
 
 # Cluster mode (3-replica StatefulSet + external PostgreSQL)
 helm install tram oci://ghcr.io/OWNER/charts/tram \
-  --set image.tag=1.0.4 \
+  --set image.tag=1.0.5 \
   --set clusterMode.enabled=true \
   --set replicaCount=3 \
   --set envSecret.TRAM_DB_URL.secretName=tram-db \

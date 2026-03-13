@@ -9,6 +9,56 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ---
 
+## [1.0.5] — 2026-03-13
+
+### Added
+
+**`ndjson` serializer**
+- `@register_serializer("ndjson")` — Newline-Delimited JSON (JSON Lines); each non-empty line is parsed as a JSON object
+- Arrays flattened into the record stream; scalars wrapped in `{"_value": ...}` unless `strict: true`
+- `strict: bool = False` — raises `SerializerError` on non-object lines when enabled
+- `ensure_ascii`, `newline` config keys match the `json` serializer for consistency
+- Covers Kafka consumer output, Filebeat/Fluentd/Vector JSON output, jq streams, and any source that produces one JSON object per line rather than a wrapped array
+- `NdjsonSerializerConfig` in `tram/models/pipeline.py`
+
+**Per-sink `serializer_out` override**
+- Each sink config (`SFTPSinkConfig`, `LocalSinkConfig`, `KafkaSinkConfig`, … all 20) gains an optional `serializer_out: Optional[SerializerConfig] = None` field
+- When set, that sink uses its own serializer instead of the global `serializer_out`
+- Enables multi-format fan-out from a single pipeline: Avro→Kafka + JSON→local + CSV→SFTP
+- Example:
+  ```yaml
+  serializer_out:          # global default
+    type: json
+
+  sinks:
+    - type: kafka
+      topic: pm-avro
+      serializer_out:      # per-sink override
+        type: avro
+        schema_file: /schemas/pm.avsc
+    - type: local
+      path: /data/output   # inherits global → json
+    - type: sftp
+      host: archive.example.com
+      serializer_out:
+        type: csv
+  ```
+- `_build_sinks()` now returns a 5-tuple `(sink_instance, condition, transforms, sink_cfg, per_sink_ser|None)`
+- `_write_one_sink()` resolves: per-sink serializer → global serializer
+- Forward-reference resolved with `model_rebuild()` for all sink config classes (Pydantic v2 pattern)
+
+**`serializer_out` optional at pipeline level**
+- `PipelineConfig.serializer_out` changed from required to `Optional[SerializerConfig] = None`
+- `None` → defaults to `JsonSerializer({})` at runtime in `_build_serializer_out()`
+- Pipelines that write JSON (the vast majority) no longer need to declare `serializer_out:`
+
+### Changed
+- `tram/models/pipeline.py`: serializer section now has `NdjsonSerializerConfig`; `SerializerConfig` union extended; `_SINK_CONFIG_CLASSES` + `model_rebuild()` block added after union definition
+- `tram/pipeline/executor.py`: `_build_sinks()` returns 5-tuple; `_write_one_sink()` handles 3/4/5-tuples; `_build_serializer_out()` handles `None` config
+- Helm `values.yaml` / `Chart.yaml` / `image.tag` → `1.0.5`
+
+---
+
 ## [1.0.4] — 2026-03-13
 
 ### Added

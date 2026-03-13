@@ -122,7 +122,7 @@ class PipelineExecutor:
         return src_cls(src_conf)
 
     def _build_sinks(self, config: "PipelineConfig") -> list[tuple]:
-        """Returns list of (sink_instance, condition_str | None, sink_transforms, sink_cfg)."""
+        """Returns list of (sink_instance, condition_str|None, sink_transforms, sink_cfg, per_sink_ser|None)."""
         result = []
         for sink_cfg in config.sinks:
             sink_cls = get_sink(sink_cfg.type)
@@ -131,7 +131,13 @@ class PipelineExecutor:
             for t_cfg in getattr(sink_cfg, "transforms", []):
                 t_cls = get_transform(t_cfg.type)
                 sink_transforms.append(t_cls(t_cfg.model_dump()))
-            result.append((sink_cls(sink_cfg.model_dump()), condition, sink_transforms, sink_cfg))
+            # Per-sink serializer_out override (None → use global serializer_out)
+            per_sink_ser = None
+            sink_ser_cfg = getattr(sink_cfg, "serializer_out", None)
+            if sink_ser_cfg is not None:
+                ser_cls = get_serializer(sink_ser_cfg.type)
+                per_sink_ser = ser_cls(sink_ser_cfg.model_dump())
+            result.append((sink_cls(sink_cfg.model_dump()), condition, sink_transforms, sink_cfg, per_sink_ser))
         return result
 
     def _build_dlq_sink(self, config: "PipelineConfig"):
@@ -146,6 +152,9 @@ class PipelineExecutor:
         return ser_cls(config.serializer_in.model_dump())
 
     def _build_serializer_out(self, config: "PipelineConfig"):
+        if config.serializer_out is None:
+            from tram.serializers.json_serializer import JsonSerializer
+            return JsonSerializer({})
         ser_cls = get_serializer(config.serializer_out.type)
         return ser_cls(config.serializer_out.model_dump())
 
@@ -222,12 +231,16 @@ class PipelineExecutor:
             def _write_one_sink(sink_tuple, records_in):
                 """Process one sink entry. Returns True if write succeeded."""
                 nonlocal wrote_any
-                # Accept 3-tuple (legacy / test) or 4-tuple (current)
-                if len(sink_tuple) == 4:
+                # Accept 3-tuple (legacy/test), 4-tuple, or 5-tuple (current with per-sink ser)
+                if len(sink_tuple) == 5:
+                    sink_instance, condition, sink_transforms, sink_cfg, per_sink_ser = sink_tuple
+                elif len(sink_tuple) == 4:
                     sink_instance, condition, sink_transforms, sink_cfg = sink_tuple
+                    per_sink_ser = None
                 else:
                     sink_instance, condition, sink_transforms = sink_tuple
                     sink_cfg = None
+                    per_sink_ser = None
 
                 if condition:
                     filtered = _filter_by_condition(records_in, condition)
@@ -259,7 +272,8 @@ class PipelineExecutor:
                 if sink_transform_failed or not sink_records:
                     return False
 
-                serialized = serializer_out.serialize(sink_records)
+                active_ser = per_sink_ser if per_sink_ser is not None else serializer_out
+                serialized = active_ser.serialize(sink_records)
 
                 if rate_limit_rps is not None:
                     self._rate_limit(rate_limit_rps)
