@@ -35,7 +35,15 @@ class ProtobufSerializer(BaseSerializer):
         self.schema_file: str = os.path.abspath(config["schema_file"])
         self.message_class: str = config["message_class"]
         self.framing: str = config.get("framing", "length_delimited")
-        self.registry_url: str | None = config.get("schema_registry_url")
+        self.registry_url: str | None = (
+            config.get("schema_registry_url") or os.environ.get("TRAM_SCHEMA_REGISTRY_URL")
+        )
+        self.registry_username: str | None = (
+            config.get("schema_registry_username") or os.environ.get("TRAM_SCHEMA_REGISTRY_USERNAME")
+        )
+        self.registry_password: str | None = (
+            config.get("schema_registry_password") or os.environ.get("TRAM_SCHEMA_REGISTRY_PASSWORD")
+        )
         self.registry_subject: str | None = config.get("schema_registry_subject")
         self.registry_id: int | None = config.get("schema_registry_id")
         self.use_magic_bytes: bool = config.get("use_magic_bytes", True)
@@ -119,7 +127,11 @@ class ProtobufSerializer(BaseSerializer):
             return self._registry_schema_id
 
         from tram.schema_registry.client import SchemaRegistryClient
-        client = SchemaRegistryClient(self.registry_url)
+        client = SchemaRegistryClient(
+            self.registry_url,
+            username=self.registry_username,
+            password=self.registry_password,
+        )
         try:
             if self.registry_id is not None:
                 # Just confirm it exists and cache it
