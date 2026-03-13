@@ -15,9 +15,9 @@ import pytest
 
 def pysnmp_available() -> bool:
     try:
-        import pysnmp  # noqa: F401
+        from pysnmp.smi import builder, view  # noqa: F401
         return True
-    except ImportError:
+    except Exception:
         return False
 
 

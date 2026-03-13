@@ -37,7 +37,7 @@ dependencies = [
 kafka = ["kafka-python>=2.0"]
 opensearch = ["opensearch-py>=2.4"]
 s3 = ["boto3>=1.35"]
-snmp = ["pysnmp-lextudio>=6.2"]
+snmp = ["pysnmp-lextudio>=6.2,<6.3", "pyasn1>=0.4.8,<0.6"]
 avro = ["fastavro>=1.9"]
 protobuf_ser = ["protobuf>=4.25", "grpcio-tools>=1.64"]
 parquet = ["pyarrow>=16"]
@@ -59,6 +59,7 @@ elasticsearch = ["elasticsearch>=8.0"]
 metrics = ["prometheus-client>=0.20"]
 prometheus_rw = ["protobuf>=4.25", "python-snappy>=0.7"]
 corba = ["omniORBpy>=4.3"]
+clickhouse = ["clickhouse-driver>=0.2"]
 mib = ["pysmi-lextudio>=1.1"]
 otel = ["opentelemetry-sdk>=1.20", "opentelemetry-exporter-otlp-proto-grpc>=1.20"]
 watch = ["watchdog>=3.0"]
@@ -92,6 +93,7 @@ all = [
     "tram[elasticsearch]",
     "tram[metrics]",
     "tram[prometheus_rw]",
+    "tram[clickhouse]",
     "tram[corba]",
     "tram[mib]",
     "tram[otel]",

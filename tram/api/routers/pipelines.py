@@ -81,6 +81,63 @@ async def get_pipeline(name: str, request: Request) -> dict:
     return state.to_dict()
 
 
+@router.put("/{name}")
+async def update_pipeline(name: str, request: Request) -> dict:
+    """Update an existing pipeline from YAML text in request body.
+
+    Stops the pipeline if running, replaces the configuration, saves a new
+    version to history, then restarts if enabled.
+    """
+    manager = request.app.state.manager
+    scheduler = request.app.state.scheduler
+
+    try:
+        state = manager.get(name)
+    except PipelineNotFoundError as exc:
+        raise HTTPException(status_code=404, detail=str(exc))
+
+    content_type = request.headers.get("content-type", "")
+    if "yaml" in content_type or "text" in content_type or "plain" in content_type:
+        yaml_text = (await request.body()).decode("utf-8")
+    else:
+        body = await request.json()
+        yaml_text = body.get("yaml_text", "")
+
+    if not yaml_text:
+        raise HTTPException(status_code=400, detail="Request body must contain YAML text")
+
+    try:
+        config = load_pipeline_from_yaml(yaml_text)
+    except ConfigError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+
+    if config.name != name:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Pipeline name in YAML '{config.name}' does not match URL '{name}'",
+        )
+
+    # Stop if running
+    if state.status == "running":
+        try:
+            scheduler.stop_pipeline(name)
+        except Exception as exc:
+            logger.warning("Error stopping pipeline before update: %s", exc)
+
+    # Deregister old config, register new one (preserves run history)
+    manager.deregister(name)
+    new_state = manager.register(config, yaml_text=yaml_text)
+
+    # Restart if enabled
+    if config.enabled and config.schedule.type != "manual":
+        try:
+            scheduler.start_pipeline(config.name)
+        except Exception as exc:
+            logger.warning("Could not restart pipeline after update: %s", exc)
+
+    return new_state.to_dict()
+
+
 @router.delete("/{name}", status_code=status.HTTP_204_NO_CONTENT)
 async def delete_pipeline(name: str, request: Request) -> Response:
     manager = request.app.state.manager

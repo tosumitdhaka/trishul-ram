@@ -1,7 +1,9 @@
 """Protobuf serializer — compiles .proto at runtime via grpcio-tools."""
 from __future__ import annotations
+import atexit
 import io
 import os
+import shutil
 import struct
 import sys
 import tempfile
@@ -69,6 +71,7 @@ class ProtobufSerializer(BaseSerializer):
 
         tmpdir = tempfile.mkdtemp(prefix="tram_proto_")
         self._tmpdir = tmpdir
+        atexit.register(shutil.rmtree, tmpdir, True)
 
         # Compile the entry-point schema AND all other .proto files in the same
         # directory so that import statements (e.g. import "Custom.proto") resolve
