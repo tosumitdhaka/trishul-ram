@@ -38,3 +38,6 @@ state/
 # Secrets
 .env
 !.env.example
+
+# Output
+output/

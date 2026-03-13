@@ -32,7 +32,7 @@ Readiness probe. Returns 200 once startup is complete, 503 if DB or scheduler is
 Build and version information.
 
 ```json
-{"version": "1.0.2", "python_version": "3.12.0"}
+{"version": "1.0.4", "python_version": "3.12.0"}
 ```
 
 ### GET /api/plugins
@@ -68,7 +68,7 @@ List all registered pipelines with live status.
 ```
 
 ### POST /api/pipelines
-Register a new pipeline. Body: raw YAML text (`Content-Type: text/plain`) or JSON with `yaml_text` field.
+Register a new pipeline. Body: raw YAML text (`Content-Type: text/plain` or `application/yaml`) or JSON with `yaml_text` field.
 
 ```bash
 curl -X POST http://localhost:8765/api/pipelines \
@@ -82,6 +82,15 @@ Auto-saves a pipeline version to SQLite and auto-starts if `enabled: true` and s
 
 ### GET /api/pipelines/{name}
 Get pipeline config and live status.
+
+### PUT /api/pipelines/{name}
+Update/replace a registered pipeline's YAML config in-place (v1.0.4). Stops the pipeline, re-registers with the new config, and restarts it if `enabled: true`. Body: raw YAML text (`Content-Type: application/yaml` or `text/plain`).
+
+```bash
+curl -X PUT http://localhost:8765/api/pipelines/pm-ingest \
+  -H "Content-Type: application/yaml" \
+  --data-binary @pm-ingest-updated.yaml
+```
 
 ### DELETE /api/pipelines/{name}
 Deregister pipeline (stops it first). Returns `204 No Content`.
@@ -363,6 +372,38 @@ curl -X DELETE http://localhost:8765/api/schemas/cisco/GenericRecord.proto
 ```
 
 Returns `404` if not found, `400` on path-traversal attempt.
+
+---
+
+## Schema Registry Proxy (v1.0.4)
+
+Transparent reverse proxy to an external Confluent-compatible schema registry (e.g. Confluent Schema Registry, Apicurio Registry). Enabled by setting `TRAM_SCHEMA_REGISTRY_URL`.
+
+All HTTP methods (`GET`, `POST`, `PUT`, `DELETE`, `PATCH`) are proxied. Request headers, query params, and body are forwarded as-is. This lets UI tools and serializer clients reach the external registry through a single origin (TRAM).
+
+```bash
+# List subjects
+curl http://localhost:8765/api/schemas/registry/subjects
+
+# Get latest schema for a subject
+curl http://localhost:8765/api/schemas/registry/subjects/device-event-value/versions/latest
+
+# Register a new schema version
+curl -X POST http://localhost:8765/api/schemas/registry/subjects/device-event-value/versions \
+  -H "Content-Type: application/vnd.schemaregistry.v1+json" \
+  -d '{"schema": "{\"type\":\"record\",\"name\":\"DeviceEvent\",\"fields\":[]}"}'
+```
+
+Returns `503 Service Unavailable` when `TRAM_SCHEMA_REGISTRY_URL` is not set.
+Returns `502 Bad Gateway` when the upstream registry is unreachable.
+
+**Configuration:**
+
+| Env Var | Description |
+|---------|-------------|
+| `TRAM_SCHEMA_REGISTRY_URL` | Base URL of the external registry (e.g. `http://schema-registry:8081`) |
+
+**Serializer auto-fallback** — when `TRAM_SCHEMA_REGISTRY_URL` is set, Avro and Protobuf serializers automatically use it as their registry URL without requiring `schema_registry_url:` in pipeline YAML. Pipeline-level `schema_registry_url:` overrides the env default per-pipeline.
 
 ---
 

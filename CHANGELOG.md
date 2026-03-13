@@ -9,6 +9,47 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ---
 
+## [1.0.4] — 2026-03-13
+
+### Added
+
+**Schema Registry consolidation**
+- `TRAM_SCHEMA_REGISTRY_URL` env var is now a server-level default for both the schema registry proxy (`/api/schemas/registry/*`) and the Avro/Protobuf serializer clients — no need to repeat the URL in every pipeline YAML
+- `TRAM_SCHEMA_REGISTRY_USERNAME` / `TRAM_SCHEMA_REGISTRY_PASSWORD` env vars — server-level auth defaults for registry serializers; pipeline YAML fields (`schema_registry_username`, `schema_registry_password`) act as per-pipeline overrides
+- `AppConfig`: three new fields — `schema_registry_url`, `schema_registry_username`, `schema_registry_password` (all from env)
+- `AvroSerializer` and `ProtobufSerializer`: `registry_url` now resolves from `config.get("schema_registry_url") or os.environ.get("TRAM_SCHEMA_REGISTRY_URL")`; same fallback for `registry_username` / `registry_password`; credentials forwarded to `SchemaRegistryClient`
+
+**Schema Registry proxy**
+- `GET/POST/PUT/DELETE /api/schemas/registry/{path}` — transparent reverse proxy to `TRAM_SCHEMA_REGISTRY_URL`; proxies all headers and query params; returns 503 when env var is not set
+- Route registered before the `/{filepath:path}` catch-all so it resolves correctly
+
+**Pipeline management**
+- `PUT /api/pipelines/{name}` — update/replace a registered pipeline's YAML config in-place (stops → re-registers → restarts if enabled)
+
+**ClickHouse connector**
+- `@register_source("clickhouse")` — query ClickHouse using `clickhouse-driver`; configurable `query`, `database`, chunked via `chunk_size`
+- `@register_sink("clickhouse")` — insert records into a ClickHouse table; `insert_block_size` batching
+- `ClickHouseSourceConfig` / `ClickHouseSinkConfig` in `tram/models/pipeline.py`
+- New optional extra: `pip install tram[clickhouse]` (`clickhouse-driver>=0.2`)
+- Registered in `tram/connectors/__init__.py`
+
+**REST connector fix (httpx 0.28)**
+- `tram/connectors/rest/source.py` + `sink.py`: `verify_ssl` moved from per-request `kwargs` to the `httpx.Client(verify=...)` constructor — resolves `TypeError: Client.request() got an unexpected keyword argument 'verify'` introduced by httpx 0.28
+
+**Example pipelines**
+- `pipelines/all-transforms-test.yaml` — exercises all 20 transform types in a single webhook pipeline; documents cross-record transform behaviour in stream mode
+- `pipelines/csv-ingest.yaml` — CSV serializer validation via webhook
+- `pipelines/xml-ingest.yaml` — XML serializer (defusedxml) validation via webhook
+- `pipelines/rest-pipeline.yaml` — REST source (poll) + REST sink (POST) end-to-end
+- `pipelines/rest-echo-receiver.yaml` — companion webhook receiver for REST sink loop
+- `pipelines/proto-device-event.yaml` — multi-file Protobuf schema: `device_event.proto` imports `severity.proto`, `location.proto`, `interface_stats.proto`, `identity.proto`; all compiled in one `protoc` invocation
+
+### Changed
+- `docker-compose.yml`: `TRAM_SCHEMA_REGISTRY_URL: ${TRAM_SCHEMA_REGISTRY_URL:-}` env var wired in; `1162:1162/udp` SNMP trap port exposed
+- Helm `values.yaml` / `Chart.yaml` / `image.tag` → `1.0.4`
+
+---
+
 ## [1.0.3] — 2026-03-09
 
 ### Added

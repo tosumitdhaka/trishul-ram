@@ -46,6 +46,9 @@ All configuration is via environment variables (12-factor).
 | `TRAM_WATCH_PIPELINES` | `false` | Watch `TRAM_PIPELINE_DIR` for YAML changes and auto-reload pipelines |
 | `TRAM_MIB_DIR` | `/mibs` | Directory containing compiled pysnmp MIB `.py` files; standard MIBs baked into Docker image at build time (v1.0.3) |
 | `TRAM_SCHEMA_DIR` | `/schemas` | Directory containing serialization schema files (`.proto`, `.avsc`, etc.); managed via `POST /api/schemas/upload` (v1.0.3) |
+| `TRAM_SCHEMA_REGISTRY_URL` | _(empty)_ | Base URL of an external Confluent-compatible schema registry; enables `/api/schemas/registry/*` proxy and serves as the default `schema_registry_url` for Avro/Protobuf serializers (v1.0.4) |
+| `TRAM_SCHEMA_REGISTRY_USERNAME` | _(empty)_ | Basic-auth username for the external schema registry; used as default when not set in pipeline YAML (v1.0.4) |
+| `TRAM_SCHEMA_REGISTRY_PASSWORD` | _(empty)_ | Basic-auth password for the external schema registry; used as default when not set in pipeline YAML (v1.0.4) |
 
 ### Database backends (v0.7.0)
 
@@ -180,7 +183,7 @@ tram mib compile /path/to/vendor-mibs/ --out /mibs
 **Air-gapped environments** — copy pre-compiled MIB `.py` files into the image:
 
 ```dockerfile
-FROM ghcr.io/OWNER/tram:1.0.3
+FROM ghcr.io/OWNER/tram:1.0.4
 COPY compiled-mibs/*.py /mibs/
 ```
 
@@ -225,7 +228,37 @@ curl -X DELETE http://localhost:8765/api/schemas/cisco/GenericRecord.proto
 **Mount host directory** for development (read-write):
 
 ```bash
-docker run -v ./schemas:/schemas tram:1.0.3
+docker run -v ./schemas:/schemas tram:1.0.4
+```
+
+## Schema Registry Integration (v1.0.4)
+
+Set `TRAM_SCHEMA_REGISTRY_URL` once to enable both the proxy endpoint and automatic serializer client fallback:
+
+```bash
+TRAM_SCHEMA_REGISTRY_URL=http://schema-registry:8081 tram daemon
+```
+
+With this set:
+- `ANY /api/schemas/registry/{path}` proxies to `http://schema-registry:8081/{path}` — UI tools can reach the registry through TRAM as a single origin
+- Avro and Protobuf serializers use `http://schema-registry:8081` as the default registry URL — no `schema_registry_url:` needed in pipeline YAML
+- Per-pipeline override still works: `schema_registry_url: http://other-registry:8081` in a pipeline's `serializer_in:` or `serializer_out:` block takes precedence
+
+**With authentication:**
+
+```bash
+TRAM_SCHEMA_REGISTRY_URL=https://schema-registry:8081
+TRAM_SCHEMA_REGISTRY_USERNAME=myuser
+TRAM_SCHEMA_REGISTRY_PASSWORD=mypassword
+```
+
+**In docker-compose:**
+
+```yaml
+environment:
+  TRAM_SCHEMA_REGISTRY_URL: http://schema-registry:8081
+  TRAM_SCHEMA_REGISTRY_USERNAME: ${SR_USER:-}
+  TRAM_SCHEMA_REGISTRY_PASSWORD: ${SR_PASS:-}
 ```
 
 ## Docker
@@ -248,7 +281,7 @@ Mount a volume at `/data` (or set `TRAM_DB_URL`) to persist run history and pipe
 
 ### Installed extras in the default image
 
-The default `tram:1.0.3` image installs:
+The default `tram:1.0.4` image installs (`clickhouse` added in v1.0.4):
 
 `kafka`, `opensearch`, `snmp`, `avro`, `protobuf_ser`, `msgpack_ser`, `mqtt`, `amqp`, `nats`,
 `gnmi`, `jmespath`, `sql`, `influxdb`, `redis`, `websocket`, `elasticsearch`, `metrics`,
@@ -268,7 +301,7 @@ The following extras are **excluded by default** to keep the image lean. Extend 
 | `otel` | only needed when `TRAM_OTEL_ENDPOINT` is set; no-op fallback when absent | ~15 MB |
 
 ```dockerfile
-FROM ghcr.io/OWNER/tram:1.0.3
+FROM ghcr.io/OWNER/tram:1.0.4
 RUN pip install "tram[parquet,s3,gcs,azure,otel]"
 ```
 
@@ -290,7 +323,7 @@ TRAM ships a production-ready Helm chart in `helm/`. Published to GHCR OCI on ev
 # Add chart from OCI registry
 helm install tram oci://ghcr.io/OWNER/charts/tram \
   --namespace tram --create-namespace \
-  --set image.tag=1.0.2
+  --set image.tag=1.0.4
 
 # Mount pipelines from local files
 helm upgrade tram oci://ghcr.io/OWNER/charts/tram \
@@ -307,7 +340,7 @@ helm upgrade tram oci://ghcr.io/OWNER/charts/tram \
 | Value | Default | Description |
 |-------|---------|-------------|
 | `image.repository` | `ghcr.io/OWNER/tram` | Docker image repository |
-| `image.tag` | `"1.0.3"` | Image tag |
+| `image.tag` | `"1.0.4"` | Image tag |
 | `replicaCount` | `1` | Replicas — `1` = standalone, `N` = cluster |
 | `clusterMode.enabled` | `false` | Activate cluster mode (sets `TRAM_CLUSTER_ENABLED`, requires external DB) |
 | `persistence.enabled` | `true` | Provision a PVC per pod via `volumeClaimTemplates` mounted at `/data`; auto-sets `TRAM_DB_PATH=/data/tram.db`, `TRAM_SCHEMA_DIR=/data/schemas`, `TRAM_MIB_DIR=/data/mibs` |
@@ -323,7 +356,7 @@ helm upgrade tram oci://ghcr.io/OWNER/charts/tram \
 ```bash
 helm install tram oci://ghcr.io/OWNER/charts/tram \
   --namespace tram --create-namespace \
-  --set image.tag=1.0.3
+  --set image.tag=1.0.4
 ```
 
 A single-replica `StatefulSet` with pod name `tram-0` runs the full daemon. A `PersistentVolumeClaim` (`data-tram-0`) is auto-provisioned via `volumeClaimTemplates` and mounted at `/data`. SQLite run history, API-uploaded schemas (`/data/schemas`), and runtime MIBs (`/data/mibs`) all share this single PVC and survive pod restarts. Standard MIBs baked into the image at `/mibs` remain available alongside any runtime-downloaded ones.
@@ -342,7 +375,7 @@ kubectl create secret generic tram-db \
 
 helm install tram oci://ghcr.io/OWNER/charts/tram \
   --namespace tram --create-namespace \
-  --set image.tag=1.0.2 \
+  --set image.tag=1.0.4 \
   --set clusterMode.enabled=true \
   --set replicaCount=3 \
   --set envSecret.TRAM_DB_URL.secretName=tram-db \
@@ -423,7 +456,7 @@ spec:
     spec:
       containers:
       - name: tram
-        image: ghcr.io/OWNER/tram:1.0.2
+        image: ghcr.io/OWNER/tram:1.0.4
         command: ["tram", "daemon"]
         ports:
         - containerPort: 8765

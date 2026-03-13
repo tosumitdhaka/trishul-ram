@@ -1,6 +1,7 @@
 """Avro serializer with optional Schema Registry support."""
 from __future__ import annotations
 import io
+import os
 from tram.core.exceptions import SerializerError
 from tram.interfaces.base_serializer import BaseSerializer
 from tram.registry.registry import register_serializer
@@ -19,7 +20,15 @@ class AvroSerializer(BaseSerializer):
         super().__init__(config)
         self.schema_str: str | None = config.get("avro_schema") or config.get("schema")
         self.schema_file: str | None = config.get("schema_file")
-        self.registry_url: str | None = config.get("schema_registry_url")
+        self.registry_url: str | None = (
+            config.get("schema_registry_url") or os.environ.get("TRAM_SCHEMA_REGISTRY_URL")
+        )
+        self.registry_username: str | None = (
+            config.get("schema_registry_username") or os.environ.get("TRAM_SCHEMA_REGISTRY_USERNAME")
+        )
+        self.registry_password: str | None = (
+            config.get("schema_registry_password") or os.environ.get("TRAM_SCHEMA_REGISTRY_PASSWORD")
+        )
         self.registry_subject: str | None = config.get("schema_registry_subject")
         self.registry_id: int | None = config.get("schema_registry_id")
         self.use_magic_bytes: bool = config.get("use_magic_bytes", True)
@@ -28,12 +37,17 @@ class AvroSerializer(BaseSerializer):
 
         if not self.schema_str and not self.schema_file and not self.registry_url:
             raise SerializerError(
-                "Avro serializer requires either 'schema'/'schema_file' or 'schema_registry_url'"
+                "Avro serializer requires either 'schema'/'schema_file', 'schema_registry_url', "
+                "or the TRAM_SCHEMA_REGISTRY_URL environment variable"
             )
 
     def _get_registry_client(self):
         from tram.schema_registry.client import SchemaRegistryClient
-        return SchemaRegistryClient(self.registry_url)
+        return SchemaRegistryClient(
+            self.registry_url,
+            username=self.registry_username,
+            password=self.registry_password,
+        )
 
     def _get_schema(self):
         try:

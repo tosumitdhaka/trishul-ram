@@ -2,7 +2,7 @@
 
 > Lightweight, container-native Python daemon that moves and transforms telecom data (PM/FM/Logs) across protocols.
 
-**Version:** 1.0.3 | **Status:** Production-ready | **Python:** 3.11+
+**Version:** 1.0.4 | **Status:** Production-ready | **Python:** 3.11+
 
 ---
 
@@ -75,16 +75,16 @@ curl http://localhost:8765/api/schemas/cisco/GenericRecord.proto
 
 ---
 
-## Plugin Registry (v1.0.3)
+## Plugin Registry (v1.0.4)
 
 | Category | Keys |
 |----------|------|
-| **Sources** | `sftp`, `local`, `rest`, `kafka`, `ftp`, `s3`, `syslog`, `snmp_trap`, `snmp_poll`, `mqtt`, `amqp`, `nats`, `gnmi`, `sql`, `influxdb`, `redis`, `gcs`, `azure_blob`, `webhook`, `websocket`, `elasticsearch`, `prometheus_rw`, `corba` |
-| **Sinks** | `sftp`, `local`, `rest`, `kafka`, `opensearch`, `ftp`, `ves`, `s3`, `snmp_trap`, `mqtt`, `amqp`, `nats`, `sql`, `influxdb`, `redis`, `gcs`, `azure_blob`, `websocket`, `elasticsearch` |
+| **Sources** | `sftp`, `local`, `rest`, `kafka`, `ftp`, `s3`, `syslog`, `snmp_trap`, `snmp_poll`, `mqtt`, `amqp`, `nats`, `gnmi`, `sql`, `clickhouse`, `influxdb`, `redis`, `gcs`, `azure_blob`, `webhook`, `websocket`, `elasticsearch`, `prometheus_rw`, `corba` |
+| **Sinks** | `sftp`, `local`, `rest`, `kafka`, `opensearch`, `ftp`, `ves`, `s3`, `snmp_trap`, `mqtt`, `amqp`, `nats`, `sql`, `clickhouse`, `influxdb`, `redis`, `gcs`, `azure_blob`, `websocket`, `elasticsearch` |
 | **Serializers** | `json`, `csv`, `xml`, `avro`, `parquet`, `msgpack`, `protobuf` |
 | **Transforms** | `rename`, `cast`, `add_field`, `drop`, `value_map`, `filter`, `flatten`, `timestamp_normalize`, `aggregate`, `enrich`, `explode`, `deduplicate`, `regex_extract`, `template`, `mask`, `validate`, `sort`, `limit`, `jmespath`, `unnest` |
 
-Optional extras: `pip install tram[kafka]` · `pip install tram[snmp]` · `pip install tram[mib]` · `pip install tram[otel]` · `pip install tram[watch]` · `pip install tram[metrics]` · `pip install tram[corba]` · `pip install tram[all]`
+Optional extras: `pip install tram[kafka]` · `pip install tram[snmp]` · `pip install tram[mib]` · `pip install tram[otel]` · `pip install tram[watch]` · `pip install tram[metrics]` · `pip install tram[corba]` · `pip install tram[clickhouse]` · `pip install tram[all]`
 
 ---
 
@@ -183,6 +183,18 @@ All `${VAR}` and `${VAR:-default}` placeholders are resolved from environment at
 
 ---
 
+## v1.0.4 Features
+
+| Feature | Description |
+|---------|-------------|
+| **Schema registry single config** | `TRAM_SCHEMA_REGISTRY_URL` is now the single source of truth for both the registry proxy (`/api/schemas/registry/*`) and Avro/Protobuf serializer clients — no more duplicating the URL in every pipeline YAML |
+| **Schema registry auth env vars** | `TRAM_SCHEMA_REGISTRY_USERNAME` / `TRAM_SCHEMA_REGISTRY_PASSWORD` — server-level auth defaults; pipeline YAML fields override per-pipeline |
+| **Schema registry proxy** | `ANY /api/schemas/registry/{path}` transparently proxies to `TRAM_SCHEMA_REGISTRY_URL`; useful for UI tools that need a single origin |
+| **`PUT /api/pipelines/{name}`** | Update a registered pipeline's YAML in-place — stops, re-registers, restarts; no delete+re-add cycle |
+| **ClickHouse connector** | `clickhouse` source (SQL query → records) + sink (batch insert); `pip install tram[clickhouse]` |
+| **REST connector fix** | `verify_ssl` moved to `httpx.Client()` constructor — resolves httpx 0.28 incompatibility |
+| **Example pipelines** | `all-transforms-test`, `csv-ingest`, `xml-ingest`, `rest-pipeline`, `rest-echo-receiver`, `proto-device-event` — six ready-to-use validation pipelines |
+
 ## v1.0.3 Features
 
 | Feature | Description |
@@ -259,16 +271,16 @@ The default image includes most connector and serializer extras — Kafka, MQTT,
 ```bash
 # Standalone (default) — single PVC at /data holds SQLite DB, schemas, and MIBs
 helm install tram oci://ghcr.io/OWNER/charts/tram \
-  --set image.tag=1.0.3
+  --set image.tag=1.0.4
 
 # With API key authentication
 helm install tram oci://ghcr.io/OWNER/charts/tram \
-  --set image.tag=1.0.3 \
+  --set image.tag=1.0.4 \
   --set apiKey=mysecret
 
 # Cluster mode (3-replica StatefulSet + external PostgreSQL)
 helm install tram oci://ghcr.io/OWNER/charts/tram \
-  --set image.tag=1.0.3 \
+  --set image.tag=1.0.4 \
   --set clusterMode.enabled=true \
   --set replicaCount=3 \
   --set envSecret.TRAM_DB_URL.secretName=tram-db \
@@ -310,6 +322,8 @@ helm install tram oci://ghcr.io/OWNER/charts/tram \
 | GET | `/api/schemas/{path}` | Read raw schema file content |
 | POST | `/api/schemas/upload` | Upload a schema file (optional `?subdir=`) |
 | DELETE | `/api/schemas/{path}` | Delete a schema file |
+| PUT | `/api/pipelines/{name}` | Update/replace a pipeline's YAML config in-place |
+| ANY | `/api/schemas/registry/{path}` | Reverse proxy to external schema registry (`TRAM_SCHEMA_REGISTRY_URL`) |
 
 All `/api/*` endpoints require `X-API-Key` header when `TRAM_API_KEY` is set. Health, ready, metrics, and webhooks are always exempt.
 
@@ -362,9 +376,9 @@ helm/                 Helm chart (StatefulSet, TLS, apiKey, cluster mode)
 
 ```bash
 pip install -e ".[dev]"
-pytest tests/unit/         # 633 unit tests (no network required)
+pytest tests/unit/         # 651 unit tests (no network required)
 pytest tests/integration/  # 44 tests (2 skipped when pysnmp not installed)
-pytest tests/              # all 677 tests
+pytest tests/              # all 695 tests
 ```
 
 ---

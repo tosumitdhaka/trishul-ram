@@ -57,8 +57,10 @@ class AppConfig:
     mib_dir: str
     # v1.0.0 schema directory
     schema_dir: str
-    # v1.0.3 external schema registry proxy
+    # v1.0.4 schema registry (proxy + serializer fallback)
     schema_registry_url: str
+    schema_registry_username: str
+    schema_registry_password: str
 
     @classmethod
     def from_env(cls) -> "AppConfig":
@@ -91,6 +93,8 @@ class AppConfig:
             mib_dir=os.environ.get("TRAM_MIB_DIR", "/mibs"),
             schema_dir=os.environ.get("TRAM_SCHEMA_DIR", "/schemas"),
             schema_registry_url=os.environ.get("TRAM_SCHEMA_REGISTRY_URL", ""),
+            schema_registry_username=os.environ.get("TRAM_SCHEMA_REGISTRY_USERNAME", ""),
+            schema_registry_password=os.environ.get("TRAM_SCHEMA_REGISTRY_PASSWORD", ""),
         )
 
 
