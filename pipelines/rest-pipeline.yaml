@@ -1,0 +1,56 @@
+version: "1"
+
+pipeline:
+  name: rest-pipeline
+  description: >
+    Validate REST source + REST sink:
+      - REST source polls TRAM's own /api/ready endpoint every 30 seconds
+      - Enriches the response with add_field transforms
+      - REST sink POSTs the result to the rest-echo-receiver webhook pipeline
+
+    This creates a complete REST source → transform → REST sink → webhook loop.
+  enabled: true
+
+  schedule:
+    type: interval
+    interval_seconds: 30
+
+  source:
+    type: rest
+    url: "http://localhost:8765/api/ready"
+    method: GET
+    timeout: 10
+    verify_ssl: false
+
+  serializer_in:
+    type: json
+
+  transforms:
+    - type: add_field
+      fields:
+        polled_from: "'tram-ready-api'"
+        collector: "'rest-pipeline'"
+
+    - type: rename
+      fields:
+        status: ready_status
+
+  serializer_out:
+    type: json
+    indent: 2
+
+  sinks:
+    # REST sink: POST the enriched JSON to the echo pipeline webhook
+    - type: rest
+      url: "http://localhost:8765/webhooks/rest-echo-receiver"
+      method: POST
+      content_type: "application/json"
+      timeout: 10
+      expected_status: [200]
+
+    # Also write locally so we can inspect without needing the echo pipeline
+    - type: local
+      path: /data/output
+      filename_template: "rest_poll_{pipeline}_{timestamp}.json"
+
+  on_error: continue

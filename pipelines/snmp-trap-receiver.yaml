@@ -1,0 +1,42 @@
+version: "1"
+
+pipeline:
+  name: snmp-trap-receiver
+  description: >
+    Receive SNMPv2c traps on UDP 1162 (exposed as host port 1162),
+    decode all varbinds, and write to local JSON files for inspection.
+    Send test traps from trishul-SNMP or: snmptrap -v 2c -c public localhost:1162 ...
+  enabled: true
+
+  schedule:
+    type: stream
+
+  source:
+    type: snmp_trap
+    host: "0.0.0.0"
+    port: 1162            # non-privileged; mapped to host 1162/udp in docker-compose
+    community: public
+    version: "2c"
+    resolve_oids: true
+    mib_modules:
+      - IF-MIB
+      - SNMPv2-MIB
+
+  serializer_in:
+    type: json
+
+  transforms:
+    - type: add_field
+      fields:
+        received_by: "'tram-snmp-trap-receiver'"
+
+  serializer_out:
+    type: json
+    indent: 2
+
+  sinks:
+    - type: local
+      path: /data/output
+      filename_template: "trap_{pipeline}_{timestamp}.json"
+
+  on_error: continue

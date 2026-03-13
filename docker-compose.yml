@@ -6,6 +6,7 @@ services:
     container_name: tram
     ports:
       - "8765:8765"
+      - "1162:1162/udp"    # SNMP trap receiver (non-privileged port)
 
     # Allows containers to reach host services (snmpd on 127.0.0.1:161,
     # snmptrapd on 127.0.0.1:162) via the hostname "host.docker.internal".
@@ -30,6 +31,8 @@ services:
       # The SNMP connectors auto-prepend BOTH /mibs and TRAM_MIB_DIR to the MIB search path.
       TRAM_MIB_DIR: /data/mibs
       TRAM_SCHEMA_DIR: /schemas
+      # Set to enable /api/schemas/registry/* proxy (e.g. http://schema-registry:8081)
+      TRAM_SCHEMA_REGISTRY_URL: ${TRAM_SCHEMA_REGISTRY_URL:-}
 
     healthcheck:
       test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8765/api/health')"]

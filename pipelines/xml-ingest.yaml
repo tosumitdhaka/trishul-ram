@@ -1,0 +1,71 @@
+version: "1"
+
+pipeline:
+  name: xml-ingest
+  description: >
+    Validate XML serializer: receive an XML payload via webhook,
+    deserialize with defusedxml (XXE-safe), transform, and output
+    as JSON to a local file.
+
+    Test with:
+      curl -s -X POST http://localhost:8765/webhooks/xml-ingest \
+        -H "Content-Type: application/xml" \
+        --data-binary '<?xml version="1.0"?>
+      <records>
+        <record>
+          <device_id>router-01</device_id>
+          <metric>cpu_usage</metric>
+          <value>87.5</value>
+          <severity>high</severity>
+          <ts>2026-03-13T06:00:00Z</ts>
+        </record>
+        <record>
+          <device_id>switch-02</device_id>
+          <metric>mem_usage</metric>
+          <value>45.0</value>
+          <severity>low</severity>
+          <ts>2026-03-13T06:00:01Z</ts>
+        </record>
+      </records>'
+  enabled: true
+
+  schedule:
+    type: stream
+
+  source:
+    type: webhook
+    path: /xml-ingest
+
+  serializer_in:
+    type: xml
+    root_element: records
+    record_element: record
+
+  transforms:
+    - type: cast
+      fields:
+        value: float
+
+    - type: add_field
+      fields:
+        ingested_via: "'xml-webhook'"
+        source_format: "'xml'"
+
+    - type: timestamp_normalize
+      fields: [ts]
+      output_format: iso
+
+    - type: rename
+      fields:
+        ts: event_time
+
+  serializer_out:
+    type: json
+    indent: 2
+
+  sinks:
+    - type: local
+      path: /data/output
+      filename_template: "xml_{pipeline}_{timestamp}.json"
+
+  on_error: continue
