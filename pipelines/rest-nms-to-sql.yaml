@@ -1,0 +1,123 @@
+version: "1"
+
+pipeline:
+  name: rest-nms-to-sql
+  description: >
+    Batch pipeline: poll a Network Management System REST API every 15 minutes,
+    paginate through all PM counter records, normalize and validate, then
+    upsert into a PostgreSQL table for reporting.
+
+    Uses response_path to extract the records array from the API envelope.
+    Uses paginate: true to automatically fetch all pages.
+    Uses upsert mode so re-runs are idempotent (no duplicate rows).
+
+    API response format expected:
+      {
+        "status": "ok",
+        "total": 1500,
+        "data": {
+          "counters": [
+            {"ne_id": "router-01", "counter": "ifInOctets", "value": 123456, "ts": "2026-03-13T06:00:00Z"},
+            ...
+          ]
+        }
+      }
+
+    Prerequisites:
+      pip install tram[postgresql]   (sqlalchemy is already a core dependency)
+
+    Environment variables:
+      NMS_URL            e.g. https://nms.example.com/api/v2
+      NMS_TOKEN          Bearer token
+      DB_URL             e.g. postgresql+psycopg2://user:pass@postgres:5432/oss
+      REGION
+
+  enabled: true
+
+  schedule:
+    type: interval
+    interval_seconds: 900    # every 15 minutes
+
+  source:
+    type: rest
+    url: ${NMS_URL}/pm/counters
+    method: GET
+    auth_type: bearer
+    token: ${NMS_TOKEN}
+    params:
+      format: json
+      region: ${REGION:-all}
+    response_path: data.counters    # extract the array from inside the envelope
+    paginate: true
+    page_param: offset
+    page_size: 500
+    total_path: total               # API tells us total count for correct pagination
+    timeout: 60
+    verify_ssl: true
+
+  serializer_in:
+    type: json
+
+  transforms:
+    # Normalize field names to match DB schema
+    - type: rename
+      fields:
+        ne_id: network_element_id
+        counter: counter_name
+        value: counter_value
+        ts: collected_at
+
+    # Type enforcement
+    - type: cast
+      fields:
+        counter_value: float
+        collected_at: datetime
+
+    # Add pipeline metadata
+    - type: add_field
+      fields:
+        region: "'${REGION:-unknown}'"
+        source_system: "'nms-rest-api'"
+        collected_by: "'tram'"
+
+    # Normalize timestamp to ISO 8601
+    - type: timestamp_normalize
+      fields: [collected_at]
+      output_format: iso
+
+    # Validate — drop records that can't be safely written to DB
+    - type: validate
+      rules:
+        network_element_id: required
+        counter_name: required
+        counter_value: {type: float, min: 0}
+        collected_at: required
+      on_invalid: drop
+
+    # Remove internal pipeline fields not needed in DB
+    - type: drop
+      fields: [_page, _offset]
+
+  sinks:
+    # PostgreSQL: upsert to avoid duplicates on re-runs
+    - type: sql
+      connection_url: ${DB_URL}
+      table: pm_counters
+      mode: upsert
+      upsert_keys: [network_element_id, counter_name, collected_at]
+      chunk_size: 1000
+      retry_count: 3
+      retry_delay_seconds: 5.0
+
+    # Local: keep a daily snapshot for audit / manual inspection
+    - type: local
+      path: /data/output/nms-poll
+      filename_template: "nms_pm_{pipeline}_{timestamp}.json"
+      serializer_out:
+        type: json
+        indent: 2
+
+  on_error: continue
+  dlq:
+    type: local
+    path: /data/dlq

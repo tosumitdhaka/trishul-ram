@@ -1,0 +1,132 @@
+version: "1"
+
+pipeline:
+  name: snmp-poll-ifmib-to-influxdb
+  description: >
+    Batch pipeline: poll SNMP IF-MIB interface counters from a network device
+    every 5 minutes, compute traffic rates, and write time-series data to
+    InfluxDB for visualization in Grafana.
+
+    Uses snmp_poll with yield_rows: true to get one record per interface.
+    Only physical interfaces with traffic are written (loopback filtered out).
+
+    SNMP MIBs used: IF-MIB (interface table)
+    Baked-in MIBs at /mibs already include IF-MIB — no extra installation needed.
+
+    Prerequisites:
+      pip install tram[snmp,influxdb]
+
+    Environment variables:
+      SNMP_HOST         network device IP, e.g. 192.168.1.1
+      SNMP_COMMUNITY    SNMP v2c community string, default: public
+      INFLUX_URL        e.g. http://influxdb:8086
+      INFLUX_TOKEN
+      INFLUX_ORG
+      INFLUX_BUCKET     default: network
+
+  enabled: true
+
+  schedule:
+    type: interval
+    interval_seconds: 300    # poll every 5 minutes
+
+  source:
+    type: snmp_poll
+    host: ${SNMP_HOST:-192.168.1.1}
+    port: 161
+    community: ${SNMP_COMMUNITY:-public}
+    version: "2c"
+    operation: walk
+    oids:
+      - IF-MIB::ifTable          # interface descriptor table
+      - IF-MIB::ifXTable         # extended counters (64-bit, high-speed)
+    mib_modules:
+      - IF-MIB
+    resolve_oids: true
+    yield_rows: true             # one record per interface row
+
+  serializer_in:
+    type: json
+
+  transforms:
+    # Rename MIB-resolved fields to clean column names
+    - type: rename
+      fields:
+        ifDescr: interface_name
+        ifOperStatus: oper_status
+        ifAdminStatus: admin_status
+        ifHighSpeed: speed_mbps
+        ifHCInOctets: in_bytes
+        ifHCOutOctets: out_bytes
+        ifInErrors: in_errors
+        ifOutErrors: out_errors
+        ifInDiscards: in_discards
+        ifOutDiscards: out_discards
+        _index: if_index
+        _polled_at: timestamp
+
+    # Type conversion — SNMP returns everything as strings
+    - type: cast
+      fields:
+        in_bytes: int
+        out_bytes: int
+        in_errors: int
+        out_errors: int
+        in_discards: int
+        out_discards: int
+        speed_mbps: int
+        timestamp: datetime
+
+    # Compute traffic utilization percentage
+    - type: add_field
+      fields:
+        # Avoid division by zero; speed_mbps * 1e6 bits/sec → bytes/sec = /8
+        in_mbps:  "round(in_bytes  / 300 / 125000, 4)"   # avg over 5-min window
+        out_mbps: "round(out_bytes / 300 / 125000, 4)"
+        util_pct: "round(max(in_mbps, out_mbps) / max(speed_mbps, 1) * 100, 2)"
+        ne_id: "'${SNMP_HOST:-192.168.1.1}'"
+
+    # Normalize oper_status: 1=up, 2=down → readable labels
+    - type: value_map
+      field: oper_status
+      mapping:
+        "1": up
+        "2": down
+        "3": testing
+        "4": unknown
+        "5": dormant
+        "6": notPresent
+        "7": lowerLayerDown
+      default: unknown
+
+    # Filter: skip loopback and down/admin-down interfaces with no traffic
+    - type: filter
+      condition: "interface_name != 'lo' and not (oper_status == 'down' and in_bytes == 0 and out_bytes == 0)"
+
+    # Remove raw counters — keep only rates for InfluxDB
+    - type: drop
+      fields: [in_bytes, out_bytes, _index_parts]
+
+  sinks:
+    # InfluxDB: time-series for Grafana dashboards
+    - type: influxdb
+      url: ${INFLUX_URL:-http://influxdb:8086}
+      token: ${INFLUX_TOKEN}
+      org: ${INFLUX_ORG:-my-org}
+      bucket: ${INFLUX_BUCKET:-network}
+      measurement: interface_stats
+      tag_fields: [ne_id, interface_name, oper_status]
+      timestamp_field: timestamp
+      precision: s
+      retry_count: 3
+
+    # Local: keep a rolling JSON snapshot for debugging
+    - type: local
+      path: /data/output/snmp-poll
+      filename_template: "ifmib_{ne_id}_{timestamp}.json"
+      condition: "util_pct > 80"    # only save high-utilization snapshots
+      serializer_out:
+        type: json
+        indent: 2
+
+  on_error: continue

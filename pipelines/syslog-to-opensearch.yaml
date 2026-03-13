@@ -1,0 +1,111 @@
+version: "1"
+
+pipeline:
+  name: syslog-to-opensearch
+  description: >
+    Stream pipeline: receive syslog messages over UDP, parse structured fields
+    from the message using regex, enrich with NE metadata, and index into
+    OpenSearch for log analytics.
+
+    Error and critical messages are also written to a local file for alerting.
+
+    Bind port: UDP 1514 (non-privileged).
+    Map to standard 514 in your firewall or docker-compose ports.
+
+    Prerequisites:
+      pip install tram[opensearch]
+
+    Environment variables:
+      OS_HOST / OS_USER / OS_PASS
+
+  enabled: true
+
+  schedule:
+    type: stream
+
+  source:
+    type: syslog
+    host: 0.0.0.0
+    port: 1514
+    protocol: udp
+
+  serializer_in:
+    type: json     # TRAM syslog source yields structured JSON records
+
+  transforms:
+    # Extract structured fields from the syslog message body
+    # Matches: "Jan 13 06:00:01 router-01 sshd[12345]: Failed password for root"
+    - type: regex_extract
+      field: message
+      pattern: >-
+        (?P<syslog_host>\S+)\s+(?P<process>\S+?)(?:\[(?P<pid>\d+)\])?\:\s+(?P<log_message>.+)
+      destination: null    # merge into record
+      on_no_match: keep    # keep record even if message doesn't match
+
+    # Normalize severity from numeric syslog facility.severity
+    - type: value_map
+      field: severity
+      mapping:
+        "0": EMERGENCY
+        "1": ALERT
+        "2": CRITICAL
+        "3": ERROR
+        "4": WARNING
+        "5": NOTICE
+        "6": INFO
+        "7": DEBUG
+      default: UNKNOWN
+
+    - type: cast
+      fields:
+        timestamp: datetime
+        pid: int
+
+    # Enrich with NE metadata based on source host
+    - type: enrich
+      lookup_file: /data/ne_metadata.csv
+      lookup_format: csv
+      join_key: syslog_host
+      lookup_key: hostname
+      add_fields: [ne_id, vendor, site, region]
+      on_miss: keep
+
+    - type: add_field
+      fields:
+        indexed_by: "'tram-syslog'"
+
+    # Mask sensitive patterns in log messages (passwords in debug output)
+    - type: mask
+      fields: [log_message]
+      mode: partial
+      visible_start: 20
+      visible_end: 0
+
+    # Drop DEBUG messages to reduce storage (keep WARNING and above)
+    - type: filter
+      condition: "severity not in ('DEBUG', 'INFO', 'NOTICE')"
+
+  sinks:
+    # Primary: all messages into daily syslog index
+    - type: opensearch
+      hosts: ["${OS_HOST:-http://opensearch:9200}"]
+      index: "syslogs-{YYYY}.{MM}.{DD}"
+      chunk_size: 1000
+      username: ${OS_USER:-admin}
+      password: ${OS_PASS:-admin}
+      retry_count: 3
+      circuit_breaker_threshold: 10
+
+    # Secondary: ERROR and CRITICAL to local file for alerting/monitoring
+    - type: local
+      path: /data/output/syslog-errors
+      filename_template: "syslog_errors_{pipeline}_{timestamp}.json"
+      condition: "severity in ('EMERGENCY', 'ALERT', 'CRITICAL', 'ERROR')"
+      serializer_out:
+        type: json
+        indent: 2
+
+  on_error: continue
+  dlq:
+    type: local
+    path: /data/dlq
