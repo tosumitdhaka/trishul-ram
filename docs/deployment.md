@@ -340,12 +340,18 @@ helm upgrade tram oci://ghcr.io/OWNER/charts/tram \
 | Value | Default | Description |
 |-------|---------|-------------|
 | `image.repository` | `ghcr.io/OWNER/tram` | Docker image repository |
-| `image.tag` | `"1.0.4"` | Image tag |
+| `image.tag` | `"1.0.5"` | Image tag |
 | `replicaCount` | `1` | Replicas — `1` = standalone, `N` = cluster |
 | `clusterMode.enabled` | `false` | Activate cluster mode (sets `TRAM_CLUSTER_ENABLED`, requires external DB) |
-| `persistence.enabled` | `true` | Provision a PVC per pod via `volumeClaimTemplates` mounted at `/data`; auto-sets `TRAM_DB_PATH=/data/tram.db`, `TRAM_SCHEMA_DIR=/data/schemas`, `TRAM_MIB_DIR=/data/mibs` |
+| `persistence.enabled` | `true` | Provision a PVC per pod via `volumeClaimTemplates` mounted at `/data`; auto-sets `TRAM_DB_URL=sqlite:////data/tram.db`, `TRAM_SCHEMA_DIR=/data/schemas`, `TRAM_MIB_DIR=/data/mibs` |
 | `persistence.size` | `1Gi` | PVC size per pod (holds SQLite DB + schemas + runtime MIBs) |
 | `persistence.accessMode` | `ReadWriteOnce` | PVC access mode |
+| `schemaRegistry.url` | `""` | External registry URL; injects `TRAM_SCHEMA_REGISTRY_URL` — enables proxy + serializer default (v1.0.4) |
+| `schemaRegistry.username` | `""` | Registry basic-auth username; prefer `envSecret` in production |
+| `schemaRegistry.password` | `""` | Registry basic-auth password; prefer `envSecret` in production |
+| `service.snmpTrapPort` | `null` | When set, exposes a UDP containerPort + Service port for the `snmp_trap` source (e.g. `1162`) |
+| `nameOverride` | `""` | Override the chart name portion of resource names |
+| `fullnameOverride` | `""` | Fully override the resource name prefix |
 | `env` | `{}` | Plain env vars |
 | `envSecret` | `{}` | Env vars from Secret (`secretName`/`secretKey`) |
 | `pipelines` | `{}` | Pipeline YAMLs mounted as ConfigMap at `/pipelines` |

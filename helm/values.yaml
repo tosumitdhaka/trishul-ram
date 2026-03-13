@@ -18,9 +18,16 @@ replicaCount: 1
 clusterMode:
   enabled: false
 
+nameOverride: ""
+fullnameOverride: ""
+
 service:
   type: ClusterIP
   port: 8765
+  ## Set to expose a UDP port for the snmp_trap source connector.
+  ## Must match the port: configured in your snmp_trap pipeline YAML.
+  ## Example: 1162 (non-privileged SNMP trap port)
+  snmpTrapPort: null
 
 ## SQLite persistence for run history, pipeline versions, alert state, schemas, and MIBs.
 ## When enabled, a PVC is auto-provisioned per pod via volumeClaimTemplates and mounted at /data.
@@ -69,6 +76,8 @@ env:
   # --- SNMP MIBs / Schemas (v1.0.3) ---
   # TRAM_MIB_DIR and TRAM_SCHEMA_DIR are auto-set to /data/mibs and /data/schemas when
   # persistence.enabled=true. Override here only if you need a custom location.
+  # --- Schema Registry (v1.0.4) ---
+  # Prefer using .Values.schemaRegistry below — it injects these vars automatically.
 
 ## Environment variables sourced from a Kubernetes Secret
 ## Use this for sensitive values (API keys, passwords) instead of plain env above.
@@ -84,6 +93,17 @@ env:
 ##       secretName: tram-smtp
 ##       secretKey: password
 envSecret: {}
+
+## External schema registry (v1.0.4)
+## When url is set, TRAM_SCHEMA_REGISTRY_URL is injected automatically, enabling:
+##   - /api/schemas/registry/* reverse proxy (for UI tools using a single origin)
+##   - Avro and Protobuf serializers use this URL as the default registry client
+##     (no need to repeat schema_registry_url: in every pipeline YAML)
+## For sensitive credentials prefer envSecret instead of setting username/password here.
+schemaRegistry:
+  url: ""          # e.g. http://schema-registry:8081
+  username: ""     # optional basic-auth username
+  password: ""     # optional basic-auth password (use envSecret for production)
 
 ## Pipeline YAML files to mount as a ConfigMap at /pipelines
 ## Example:

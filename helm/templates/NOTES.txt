@@ -13,18 +13,41 @@ TRAM {{ .Chart.AppVersion }} has been deployed!
   echo "Visit http://127.0.0.1:8765"
 {{- end }}
 
-2. Check daemon health:
+2. Check daemon health and readiness:
   curl http://127.0.0.1:8765/api/health
+  curl http://127.0.0.1:8765/api/ready
 
-3. View metrics (Prometheus format):
+3. View registered plugins and metrics:
+  curl http://127.0.0.1:8765/api/plugins
   curl http://127.0.0.1:8765/metrics
+{{- if .Values.apiKey }}
 
-4. Mount pipeline YAMLs via values.pipelines:
+4. API key authentication is enabled. Pass X-API-Key on all /api/* requests:
+  curl -H "X-API-Key: <your-key>" http://127.0.0.1:8765/api/pipelines
+{{- end }}
+
+5. Mount pipeline YAMLs via values.pipelines:
   helm upgrade {{ .Release.Name }} tram/tram \
     --set-file "pipelines.my-pipeline\.yaml=./pipelines/my-pipeline.yaml"
+
+6. Manage schemas at runtime (v1.0.3):
+  # Upload a proto schema
+  curl -F "file=@my.proto" "http://127.0.0.1:8765/api/schemas/upload?subdir=myvendor"
+  # List all schemas
+  curl http://127.0.0.1:8765/api/schemas
+{{- if .Values.schemaRegistry.url }}
+
+7. Schema registry proxy is enabled (→ {{ .Values.schemaRegistry.url }}):
+  curl http://127.0.0.1:8765/api/schemas/registry/subjects
+{{- end }}
+
+8. Download SNMP MIBs at runtime (v1.0.3):
+  curl -X POST http://127.0.0.1:8765/api/mibs/download \
+    -H "Content-Type: application/json" \
+    -d '{"names": ["CISCO-ENTITY-FRU-CONTROL-MIB"]}'
 {{- if .Values.clusterMode.enabled }}
 
-5. Check cluster node topology:
+9. Check cluster node topology:
   kubectl exec --namespace {{ .Release.Namespace }} {{ include "tram.fullname" . }}-0 -- \
     curl -s http://localhost:8765/api/cluster/nodes
 {{- end }}
