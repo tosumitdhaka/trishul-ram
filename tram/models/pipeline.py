@@ -991,6 +991,20 @@ class MsgpackSerializerConfig(BaseModel):
     type: Literal["msgpack"]
 
 
+class BytesSerializerConfig(BaseModel):
+    type: Literal["bytes"]
+    encoding: Literal["base64", "hex", "none"] = "base64"
+
+
+class TextSerializerConfig(BaseModel):
+    type: Literal["text"]
+    encoding: str = "utf-8"
+    skip_empty: bool = True
+    line_field: str = "_line"
+    include_line_num: bool = True
+    newline: str = "\n"
+
+
 SerializerConfig = Annotated[
     Union[
         JsonSerializerConfig,
@@ -1000,6 +1014,8 @@ SerializerConfig = Annotated[
         ProtobufSerializerConfig,
         ParquetSerializerConfig,
         MsgpackSerializerConfig,
+        BytesSerializerConfig,
+        TextSerializerConfig,
     ],
     Field(discriminator="type"),
 ]
