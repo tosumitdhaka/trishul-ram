@@ -64,14 +64,13 @@ class RestSink(BaseSink):
             content=data,
             headers=self._build_headers(),
             timeout=self.timeout,
-            verify=self.verify_ssl,
         )
         auth = self._build_auth()
         if auth:
             kwargs["auth"] = auth
 
         try:
-            with httpx.Client() as client:
+            with httpx.Client(verify=self.verify_ssl) as client:
                 resp = client.request(self.method, self.url, **kwargs)
         except Exception as exc:
             raise SinkError(f"REST sink request failed: {exc}") from exc

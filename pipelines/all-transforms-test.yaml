@@ -1,0 +1,167 @@
+version: "1"
+
+pipeline:
+  name: all-transforms-test
+  description: >
+    Exercises all 18 transform types in a single webhook-triggered pipeline.
+    POST a JSON array of device metric records to /webhooks/all-transforms-test.
+
+    Test payload (3 records):
+      [
+        {"device_id":"router-01","interface":"Gi0/0","metric":"cpu_usage",
+         "raw_value":"87.5","severity_code":"2","ts":"2026-03-13T06:00:00Z",
+         "password":"s3cr3t","tags":["prod","critical"],
+         "meta":{"region":"us-east","zone":"1a"},
+         "log_line":"ERROR: Device router-01 link down"},
+        {"device_id":"switch-02","interface":"Fa1/0","metric":"mem_usage",
+         "raw_value":"45.0","severity_code":"1","ts":"2026-03-13T06:00:01Z",
+         "password":"p@ssword","tags":["dev","staging"],
+         "meta":{"region":"eu-west","zone":"2b"},
+         "log_line":"INFO: Device switch-02 UP"},
+        {"device_id":"router-01","interface":"Gi0/1","metric":"cpu_usage",
+         "raw_value":"91.2","severity_code":"2","ts":"2026-03-13T06:00:02Z",
+         "password":"admin123","tags":["prod","critical"],
+         "meta":{"region":"us-east","zone":"1a"},
+         "log_line":"ERROR: High CPU on router-01"}
+      ]
+  enabled: true
+
+  schedule:
+    type: stream
+
+  source:
+    type: webhook
+    path: /all-transforms-test
+
+  serializer_in:
+    type: json
+
+  transforms:
+    # 1. unnest — lift meta{region,zone} to top-level fields
+    - type: unnest
+      field: meta
+      prefix: "meta_"
+      drop_source: true
+
+    # 2. cast — string → numeric types
+    - type: cast
+      fields:
+        raw_value: float
+        severity_code: int
+
+    # 3. timestamp_normalize — parse ISO ts → normalised ISO
+    - type: timestamp_normalize
+      fields: [ts]
+      output_format: iso
+
+    # 4. add_field — computed fields via simpleeval expressions
+    - type: add_field
+      fields:
+        alert_level: "severity_code * 10"
+        pipeline_tag: "'all-transforms-test'"
+
+    # 5. template — str.format_map substitution
+    - type: template
+      fields:
+        summary: "{device_id} [{metric}]: {raw_value}"
+
+    # 6. regex_extract — named capture group → log_level field
+    - type: regex_extract
+      field: log_line
+      pattern: "^(?P<log_level>ERROR|INFO|WARN)"
+      on_no_match: keep
+
+    # 7. value_map — map severity_code int (as str) to severity label
+    - type: value_map
+      field: severity_code
+      mapping:
+        "1": low
+        "2": high
+      default: unknown
+
+    # 8. mask — redact sensitive field
+    - type: mask
+      fields: [password]
+      mode: redact
+      placeholder: "***"
+
+    # 9. rename — rename fields
+    - type: rename
+      fields:
+        severity_code: severity
+        raw_value: value
+
+    # 10. validate — assert required fields and patterns
+    - type: validate
+      on_invalid: drop
+      rules:
+        device_id:
+          required: true
+        log_level:
+          regex: "^(ERROR|INFO|WARN)$"
+
+    # 11. sort — order records alphabetically by device_id
+    - type: sort
+      fields: [device_id]
+      reverse: false
+
+    # 12. deduplicate — keep first occurrence of each device_id+metric pair
+    #     router-01+cpu_usage appears twice → 2 unique records remain
+    - type: deduplicate
+      fields: [device_id, metric]
+      keep: first
+
+    # 13. filter — expression filter; keeps all records (validates simpleeval evaluator)
+    - type: filter
+      condition: "severity != 'unknown'"
+
+    # 14. explode — expand tags list: each tag becomes a separate record
+    #     2 records × 2 tags each → 4 records
+    - type: explode
+      field: tags
+      include_index: true
+      index_field: tag_idx
+      drop_source: false   # keep tags field with individual tag value
+
+    # 15. flatten — no-op on already-flat records; exercises the code path
+    - type: flatten
+      separator: "_"
+
+    # 16. drop — remove fields no longer needed downstream
+    - type: drop
+      fields: [log_line, meta_zone]
+
+    # 17. limit — cap records; validates code path (currently 4 records, well below 100)
+    - type: limit
+      count: 100
+
+    # 18. jmespath — final projection: reshape record to only the fields we want.
+    #     jmespath replaces each record with ONLY the projected fields, making it
+    #     ideal as a final reshape/select step. Each expression is evaluated
+    #     against the full input record and the result stored under the output key.
+    - type: jmespath
+      fields:
+        device_id:    "device_id"
+        interface:    "interface"
+        metric:       "metric"
+        value:        "value"
+        severity:     "severity"
+        alert_level:  "alert_level"
+        ts:           "ts"
+        region:       "meta_region"
+        tag:          "tags"
+        tag_idx:      "tag_idx"
+        summary:      "summary"
+        log_level:    "log_level"
+        pipeline_tag: "pipeline_tag"
+
+  serializer_out:
+    type: json
+    indent: 2
+
+  sinks:
+    - type: local
+      path: /data/output
+      filename_template: "transforms_{pipeline}_{timestamp}.json"
+
+  on_error: continue

@@ -1,0 +1,35 @@
+version: "1"
+
+pipeline:
+  name: rest-echo-receiver
+  description: >
+    Companion to rest-pipeline: receives the REST sink POST from
+    rest-pipeline via webhook, adds a received_by tag, and saves
+    to a local JSON file. Confirms the full REST source→sink→webhook loop.
+  enabled: true
+
+  schedule:
+    type: stream
+
+  source:
+    type: webhook
+    path: /rest-echo-receiver
+
+  serializer_in:
+    type: json
+
+  transforms:
+    - type: add_field
+      fields:
+        received_by: "'rest-echo-receiver'"
+
+  serializer_out:
+    type: json
+    indent: 2
+
+  sinks:
+    - type: local
+      path: /data/output
+      filename_template: "rest_echo_{pipeline}_{timestamp}.json"
+
+  on_error: continue

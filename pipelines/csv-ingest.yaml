@@ -1,0 +1,54 @@
+version: "1"
+
+pipeline:
+  name: csv-ingest
+  description: >
+    Validate CSV serializer: receive a CSV payload via webhook,
+    deserialize with the CSV serializer, apply transforms, and
+    output as JSON to a local file.
+
+    Test with:
+      curl -s -X POST http://localhost:8765/webhooks/csv-ingest \
+        -H "Content-Type: text/csv" \
+        --data-binary $'device_id,metric,value,unit,ts\nrouter-01,cpu_usage,87.5,percent,2026-03-13T06:00:00Z\nswitch-02,mem_usage,45.0,percent,2026-03-13T06:00:01Z\nfw-03,pkt_drop,12,count,2026-03-13T06:00:02Z'
+  enabled: true
+
+  schedule:
+    type: stream
+
+  source:
+    type: webhook
+    path: /csv-ingest
+
+  serializer_in:
+    type: csv
+    has_header: true
+    delimiter: ","
+
+  transforms:
+    - type: cast
+      fields:
+        value: float
+
+    - type: add_field
+      fields:
+        ingested_via: "'csv-webhook'"
+        source_format: "'csv'"
+
+    - type: timestamp_normalize
+      fields: [ts]
+      output_format: iso
+
+    - type: filter
+      condition: "value > 0"
+
+  serializer_out:
+    type: json
+    indent: 2
+
+  sinks:
+    - type: local
+      path: /data/output
+      filename_template: "csv_{pipeline}_{timestamp}.json"
+
+  on_error: continue

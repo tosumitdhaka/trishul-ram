@@ -87,7 +87,6 @@ class RestSource(BaseSource):
             headers=self._build_headers(),
             params=params,
             timeout=self.timeout,
-            verify=self.verify_ssl,
         )
         auth = self._build_auth()
         if auth:
@@ -129,7 +128,7 @@ class RestSource(BaseSource):
         except ImportError as exc:
             raise SourceError("REST source requires httpx (already a TRAM dependency)") from exc
 
-        with httpx.Client() as client:
+        with httpx.Client(verify=self.verify_ssl) as client:
             if not self.paginate:
                 raw = self._make_request(client, dict(self.params))
                 yield raw, {"source_url": self.url, "source_path": self.url}

@@ -1,14 +1,15 @@
 """Schema file management API — list, upload, retrieve, and delete schema files.
 
-Manages serialization schemas (Protobuf .proto, Avro .avsc, JSON Schema .json,
-XML Schema .xsd) stored in TRAM_SCHEMA_DIR.  No compilation is performed here;
-the pipeline executor handles that at run time (e.g. protoc via grpcio-tools).
+Also provides a transparent proxy to an external Confluent-compatible Schema Registry
+(Confluent, Apicurio, Karapace …) via ``/api/schemas/registry/{path}``.
 
 Endpoints:
-    GET    /api/schemas                  list all schema files (recursive)
-    GET    /api/schemas/{filepath}       read a schema file's content
-    POST   /api/schemas/upload           upload a schema file
-    DELETE /api/schemas/{filepath}       delete a schema file
+    GET    /api/schemas                        list all local schema files (recursive)
+    GET    /api/schemas/{filepath}             read a local schema file's content
+    POST   /api/schemas/upload                 upload a local schema file
+    DELETE /api/schemas/{filepath}             delete a local schema file
+
+    ANY    /api/schemas/registry/{path}        transparent proxy to TRAM_SCHEMA_REGISTRY_URL
 """
 
 from __future__ import annotations
@@ -16,8 +17,8 @@ from __future__ import annotations
 import logging
 import os
 
-from fastapi import APIRouter, HTTPException, UploadFile, File, Query
-from fastapi.responses import PlainTextResponse
+from fastapi import APIRouter, HTTPException, Request, UploadFile, File, Query
+from fastapi.responses import PlainTextResponse, Response
 
 logger = logging.getLogger(__name__)
 
@@ -63,6 +64,75 @@ def _safe_join(base: str, relative: str) -> str:
 def _schema_type(filename: str) -> str:
     ext = os.path.splitext(filename)[1].lower()
     return _EXT_TO_TYPE.get(ext, "other")
+
+
+# ── Schema Registry proxy ─────────────────────────────────────────────────────
+#
+# MUST be registered before the /{filepath:path} catch-all so that requests
+# to /registry/... are matched here first.
+
+
+@router.api_route(
+    "/registry/{path:path}",
+    methods=["GET", "POST", "PUT", "DELETE", "PATCH"],
+    summary="Schema Registry proxy",
+    description=(
+        "Transparent HTTP proxy to the external Schema Registry configured via "
+        "``TRAM_SCHEMA_REGISTRY_URL``.  All Confluent-compatible endpoints "
+        "(subjects, schemas/ids, config …) are forwarded as-is, preserving "
+        "method, query params, headers, and body.  "
+        "Useful for UI integrations that want a single origin for both TRAM "
+        "management and schema registry operations."
+    ),
+)
+async def schema_registry_proxy(path: str, request: Request) -> Response:
+    registry_url = os.environ.get("TRAM_SCHEMA_REGISTRY_URL", "").rstrip("/")
+    if not registry_url:
+        raise HTTPException(
+            status_code=503,
+            detail=(
+                "Schema registry proxy not configured — "
+                "set TRAM_SCHEMA_REGISTRY_URL (e.g. http://schema-registry:8081)"
+            ),
+        )
+
+    target = f"{registry_url}/{path}"
+    if request.query_params:
+        target += f"?{request.query_params}"
+
+    # Forward headers; skip hop-by-hop and host so httpx fills them correctly
+    _skip_req = {"host", "accept-encoding", "content-length", "transfer-encoding", "connection"}
+    forward_headers = {k: v for k, v in request.headers.items() if k.lower() not in _skip_req}
+
+    body = await request.body()
+
+    try:
+        import httpx
+        async with httpx.AsyncClient(timeout=30.0) as client:
+            resp = await client.request(
+                method=request.method,
+                url=target,
+                headers=forward_headers,
+                content=body or None,
+            )
+    except Exception as exc:
+        raise HTTPException(
+            status_code=502,
+            detail=f"Schema registry proxy error ({registry_url}): {exc}",
+        )
+
+    _skip_resp = {"transfer-encoding", "content-encoding", "connection"}
+    resp_headers = {k: v for k, v in resp.headers.items() if k.lower() not in _skip_resp}
+
+    logger.debug(
+        "Schema registry proxy",
+        extra={"method": request.method, "path": path, "status": resp.status_code},
+    )
+    return Response(
+        content=resp.content,
+        status_code=resp.status_code,
+        headers=resp_headers,
+    )
 
 
 # ── GET /api/schemas ─────────────────────────────────────────────────────────

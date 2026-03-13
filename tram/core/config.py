@@ -57,6 +57,8 @@ class AppConfig:
     mib_dir: str
     # v1.0.0 schema directory
     schema_dir: str
+    # v1.0.3 external schema registry proxy
+    schema_registry_url: str
 
     @classmethod
     def from_env(cls) -> "AppConfig":
@@ -88,6 +90,7 @@ class AppConfig:
             watch_pipelines=os.environ.get("TRAM_WATCH_PIPELINES", "false").lower() == "true",
             mib_dir=os.environ.get("TRAM_MIB_DIR", "/mibs"),
             schema_dir=os.environ.get("TRAM_SCHEMA_DIR", "/schemas"),
+            schema_registry_url=os.environ.get("TRAM_SCHEMA_REGISTRY_URL", ""),
         )
 
 

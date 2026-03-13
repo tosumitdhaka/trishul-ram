@@ -1,0 +1,43 @@
+version: "1"
+
+pipeline:
+  name: sftp-read
+  description: >
+    Read JSON files uploaded to the SFTP server (/upload/*.json),
+    apply a transform to tag the source, and write the result to
+    a local output file. Runs every 30 seconds; skips already-processed files.
+  enabled: true
+
+  schedule:
+    type: interval
+    interval_seconds: 30
+
+  source:
+    type: sftp
+    host: sftp
+    port: 22
+    username: tram
+    password: tram123
+    remote_path: /upload
+    file_pattern: "*.json"
+    delete_after_read: false   # keep originals; file_tracker prevents re-processing
+
+  serializer_in:
+    type: json
+
+  transforms:
+    - type: add_field
+      fields:
+        ingested_via: "'sftp-read'"
+        pipeline_name: "'sftp-read'"
+
+  serializer_out:
+    type: json
+    indent: 2
+
+  sinks:
+    - type: local
+      path: /data/output
+      filename_template: "sftp_ingested_{pipeline}_{timestamp}.json"
+
+  on_error: continue
