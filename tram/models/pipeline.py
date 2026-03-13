@@ -566,6 +566,7 @@ class SFTPSinkConfig(BaseModel):
     retry_count: int = 0
     retry_delay_seconds: float = 1.0
     circuit_breaker_threshold: int = 0
+    serializer_out: Optional[SerializerConfig] = None  # per-sink override; None = use global
 
     @model_validator(mode="after")
     def check_auth(self) -> "SFTPSinkConfig":
@@ -584,6 +585,7 @@ class LocalSinkConfig(BaseModel):
     retry_count: int = 0
     retry_delay_seconds: float = 1.0
     circuit_breaker_threshold: int = 0
+    serializer_out: Optional[SerializerConfig] = None  # per-sink override; None = use global
 
 
 class RestSinkConfig(BaseModel):
@@ -604,6 +606,7 @@ class RestSinkConfig(BaseModel):
     retry_count: int = 0
     retry_delay_seconds: float = 1.0
     circuit_breaker_threshold: int = 0
+    serializer_out: Optional[SerializerConfig] = None  # per-sink override; None = use global
 
 
 class KafkaSinkConfig(BaseModel):
@@ -623,6 +626,7 @@ class KafkaSinkConfig(BaseModel):
     retry_count: int = 0
     retry_delay_seconds: float = 1.0
     circuit_breaker_threshold: int = 0
+    serializer_out: Optional[SerializerConfig] = None  # per-sink override; None = use global
 
 
 class OpenSearchSinkConfig(BaseModel):
@@ -643,6 +647,7 @@ class OpenSearchSinkConfig(BaseModel):
     retry_count: int = 0
     retry_delay_seconds: float = 1.0
     circuit_breaker_threshold: int = 0
+    serializer_out: Optional[SerializerConfig] = None  # per-sink override; None = use global
 
 
 class FtpSinkConfig(BaseModel):
@@ -659,6 +664,7 @@ class FtpSinkConfig(BaseModel):
     retry_count: int = 0
     retry_delay_seconds: float = 1.0
     circuit_breaker_threshold: int = 0
+    serializer_out: Optional[SerializerConfig] = None  # per-sink override; None = use global
 
 
 class VesSinkConfig(BaseModel):
@@ -679,6 +685,7 @@ class VesSinkConfig(BaseModel):
     retry_count: int = 0
     retry_delay_seconds: float = 1.0
     circuit_breaker_threshold: int = 0
+    serializer_out: Optional[SerializerConfig] = None  # per-sink override; None = use global
 
 
 class S3SinkConfig(BaseModel):
@@ -695,6 +702,7 @@ class S3SinkConfig(BaseModel):
     retry_count: int = 0
     retry_delay_seconds: float = 1.0
     circuit_breaker_threshold: int = 0
+    serializer_out: Optional[SerializerConfig] = None  # per-sink override; None = use global
 
 
 class VarbindConfig(BaseModel):
@@ -727,6 +735,7 @@ class SnmpTrapSinkConfig(BaseModel):
     retry_count: int = 0
     retry_delay_seconds: float = 1.0
     circuit_breaker_threshold: int = 0
+    serializer_out: Optional[SerializerConfig] = None  # per-sink override; None = use global
 
 
 class MqttSinkConfig(BaseModel):
@@ -745,6 +754,7 @@ class MqttSinkConfig(BaseModel):
     retry_count: int = 0
     retry_delay_seconds: float = 1.0
     circuit_breaker_threshold: int = 0
+    serializer_out: Optional[SerializerConfig] = None  # per-sink override; None = use global
 
 
 class AmqpSinkConfig(BaseModel):
@@ -758,6 +768,7 @@ class AmqpSinkConfig(BaseModel):
     retry_count: int = 0
     retry_delay_seconds: float = 1.0
     circuit_breaker_threshold: int = 0
+    serializer_out: Optional[SerializerConfig] = None  # per-sink override; None = use global
 
 
 class NatsSinkConfig(BaseModel):
@@ -770,6 +781,7 @@ class NatsSinkConfig(BaseModel):
     retry_count: int = 0
     retry_delay_seconds: float = 1.0
     circuit_breaker_threshold: int = 0
+    serializer_out: Optional[SerializerConfig] = None  # per-sink override; None = use global
 
 
 class SqlSinkConfig(BaseModel):
@@ -783,6 +795,7 @@ class SqlSinkConfig(BaseModel):
     retry_count: int = 0
     retry_delay_seconds: float = 1.0
     circuit_breaker_threshold: int = 0
+    serializer_out: Optional[SerializerConfig] = None  # per-sink override; None = use global
 
 
 class InfluxDbSinkConfig(BaseModel):
@@ -800,6 +813,7 @@ class InfluxDbSinkConfig(BaseModel):
     retry_count: int = 0
     retry_delay_seconds: float = 1.0
     circuit_breaker_threshold: int = 0
+    serializer_out: Optional[SerializerConfig] = None  # per-sink override; None = use global
 
 
 class RedisSinkConfig(BaseModel):
@@ -816,6 +830,7 @@ class RedisSinkConfig(BaseModel):
     retry_count: int = 0
     retry_delay_seconds: float = 1.0
     circuit_breaker_threshold: int = 0
+    serializer_out: Optional[SerializerConfig] = None  # per-sink override; None = use global
 
 
 class GcsSinkConfig(BaseModel):
@@ -829,6 +844,7 @@ class GcsSinkConfig(BaseModel):
     retry_count: int = 0
     retry_delay_seconds: float = 1.0
     circuit_breaker_threshold: int = 0
+    serializer_out: Optional[SerializerConfig] = None  # per-sink override; None = use global
 
 
 class AzureBlobSinkConfig(BaseModel):
@@ -845,6 +861,7 @@ class AzureBlobSinkConfig(BaseModel):
     retry_count: int = 0
     retry_delay_seconds: float = 1.0
     circuit_breaker_threshold: int = 0
+    serializer_out: Optional[SerializerConfig] = None  # per-sink override; None = use global
 
 
 # v0.5.0 new sinks
@@ -859,6 +876,7 @@ class WebSocketSinkConfig(BaseModel):
     retry_count: int = 0
     retry_delay_seconds: float = 1.0
     circuit_breaker_threshold: int = 0
+    serializer_out: Optional[SerializerConfig] = None  # per-sink override; None = use global
 
 
 class ElasticsearchSinkConfig(BaseModel):
@@ -878,6 +896,7 @@ class ElasticsearchSinkConfig(BaseModel):
     retry_count: int = 0
     retry_delay_seconds: float = 1.0
     circuit_breaker_threshold: int = 0
+    serializer_out: Optional[SerializerConfig] = None  # per-sink override; None = use global
 
 
 class ClickHouseSinkConfig(BaseModel):
@@ -897,6 +916,7 @@ class ClickHouseSinkConfig(BaseModel):
     retry_count: int = 0
     retry_delay_seconds: float = 1.0
     circuit_breaker_threshold: int = 0
+    serializer_out: Optional[SerializerConfig] = None  # per-sink override; None = use global
 
 
 SinkConfig = Annotated[
@@ -991,6 +1011,13 @@ class MsgpackSerializerConfig(BaseModel):
     type: Literal["msgpack"]
 
 
+class NdjsonSerializerConfig(BaseModel):
+    type: Literal["ndjson"]
+    ensure_ascii: bool = True
+    strict: bool = False
+    newline: str = "\n"
+
+
 class BytesSerializerConfig(BaseModel):
     type: Literal["bytes"]
     encoding: Literal["base64", "hex", "none"] = "base64"
@@ -1014,11 +1041,27 @@ SerializerConfig = Annotated[
         ProtobufSerializerConfig,
         ParquetSerializerConfig,
         MsgpackSerializerConfig,
+        NdjsonSerializerConfig,
         BytesSerializerConfig,
         TextSerializerConfig,
     ],
     Field(discriminator="type"),
 ]
+
+
+# Rebuild all sink config models now that SerializerConfig is fully defined.
+# Sink configs reference SerializerConfig (for per-sink serializer_out) but are
+# defined before it in the file. Pydantic v2 requires model_rebuild() after all
+# forward-referenced types are available.
+_SINK_CONFIG_CLASSES = [
+    SFTPSinkConfig, LocalSinkConfig, RestSinkConfig, KafkaSinkConfig,
+    OpenSearchSinkConfig, FtpSinkConfig, VesSinkConfig, S3SinkConfig,
+    SnmpTrapSinkConfig, MqttSinkConfig, AmqpSinkConfig, NatsSinkConfig,
+    SqlSinkConfig, ClickHouseSinkConfig, InfluxDbSinkConfig, RedisSinkConfig,
+    GcsSinkConfig, AzureBlobSinkConfig, WebSocketSinkConfig, ElasticsearchSinkConfig,
+]
+for _cls in _SINK_CONFIG_CLASSES:
+    _cls.model_rebuild()
 
 
 # ── Alert Rules ────────────────────────────────────────────────────────────
@@ -1058,7 +1101,7 @@ class PipelineConfig(BaseModel):
     source: SourceConfig
     serializer_in: SerializerConfig
     transforms: list[TransformConfig] = Field(default_factory=list)
-    serializer_out: SerializerConfig
+    serializer_out: Optional[SerializerConfig] = None  # None → defaults to json at runtime
     sinks: list[SinkConfig] = Field(default_factory=list, min_length=0)
 
     # Backward compat: singular `sink` auto-wrapped into `sinks`
