@@ -1,0 +1,112 @@
+version: "1"
+
+pipeline:
+  name: sftp-pm-to-kafka
+  description: >
+    Batch pipeline: collect hourly PM CSV files from an SFTP server,
+    normalize and enrich the records, then fan-out to:
+      1. Kafka topic (Avro encoded) — for real-time consumers
+      2. Local JSON archive — for debugging and replay
+
+    Runs every hour. Already-processed files are skipped via DB tracking.
+    Files are moved to an archive directory on the SFTP server after reading.
+
+    Prerequisites:
+      pip install tram[kafka,avro]
+
+    Environment variables:
+      SFTP_HOST / SFTP_USER / SFTP_PASS
+      SFTP_IN              remote input directory, e.g. /pm/counters/hourly
+      SFTP_ARCHIVE         remote archive directory, e.g. /pm/counters/done
+      KAFKA_BROKERS
+      SCHEMA_REGISTRY_URL  e.g. http://schema-registry:8081
+      REGION               site/region label to enrich records
+
+  enabled: true
+
+  schedule:
+    type: cron
+    cron: "5 * * * *"     # 5 minutes past every hour
+
+  source:
+    type: sftp
+    host: ${SFTP_HOST}
+    username: ${SFTP_USER}
+    password: ${SFTP_PASS}
+    remote_path: ${SFTP_IN:-/pm/counters/hourly}
+    file_pattern: "A*.csv"    # 3GPP PM file naming convention
+    move_after_read: ${SFTP_ARCHIVE:-/pm/counters/done}
+    skip_processed: true      # idempotent: never re-process the same file
+
+  serializer_in:
+    type: csv
+    has_header: true
+    delimiter: ","
+
+  transforms:
+    # Standardize field names
+    - type: rename
+      fields:
+        NE_ID: ne_id
+        COUNTER: counter_name
+        VALUE: value
+        PERIOD_START: period_start
+        PERIOD_END: period_end
+
+    # Type conversions
+    - type: cast
+      fields:
+        value: float
+        period_start: datetime
+        period_end: datetime
+
+    # Enrich with static NE metadata (CSV lookup file)
+    - type: enrich
+      lookup_file: /data/ne_metadata.csv
+      lookup_format: csv
+      join_key: ne_id
+      add_fields: [vendor, site, region, ne_type]
+      on_miss: keep          # keep records even if no metadata match
+
+    # Override region from env if set
+    - type: add_field
+      fields:
+        region: "'${REGION:-unknown}'"
+        collected_by: "'tram-sftp-collector'"
+
+    # Drop zero-value counters to save space
+    - type: filter
+      condition: "value > 0"
+
+    # Remove raw CSV artifacts
+    - type: drop
+      fields: [_csv_row_num]
+
+  # Default: compact JSON
+  serializer_out:
+    type: json
+
+  sinks:
+    # Kafka: Avro-encoded for schema-enforced consumers
+    - type: kafka
+      brokers: ["${KAFKA_BROKERS:-kafka:9092}"]
+      topic: pm-normalized
+      key_field: ne_id
+      retry_count: 3
+      serializer_out:
+        type: avro
+        schema_registry_url: ${SCHEMA_REGISTRY_URL:-http://schema-registry:8081}
+        schema_registry_subject: pm-normalized-value
+
+    # Local archive: JSON for debugging and manual replay
+    - type: local
+      path: /data/output/pm
+      filename_template: "pm_{source_filename}_{timestamp}.json"
+      serializer_out:
+        type: json
+        indent: 2
+
+  on_error: continue
+  dlq:
+    type: local
+    path: /data/dlq

@@ -1,0 +1,106 @@
+version: "1"
+
+pipeline:
+  name: multi-format-fanout
+  description: >
+    Demonstrates per-sink serializer_out override for multi-format fan-out
+    from a single pipeline.
+
+    A single Kafka source feeds records to four sinks simultaneously,
+    each receiving data in a different format:
+      1. Kafka (Avro)     — schema-enforced for downstream consumers
+      2. S3 (Parquet)     — columnar format for analytics / long-term storage
+      3. OpenSearch (JSON)— default serializer, no override needed
+      4. Local (CSV)      — human-readable debug output
+
+    Prerequisites:
+      pip install tram[kafka,avro,parquet,opensearch,s3]
+
+    Environment variables:
+      KAFKA_BROKERS
+      SCHEMA_REGISTRY_URL   e.g. http://schema-registry:8081
+      OS_HOST / OS_USER / OS_PASS
+      S3_BUCKET
+      AWS_ACCESS_KEY_ID / AWS_SECRET_ACCESS_KEY
+
+  enabled: true
+
+  schedule:
+    type: stream
+
+  source:
+    type: kafka
+    brokers: ["${KAFKA_BROKERS:-kafka:9092}"]
+    topic: pm-raw
+    group_id: tram-fanout
+    auto_offset_reset: latest
+
+  serializer_in:
+    type: json
+
+  transforms:
+    - type: rename
+      fields:
+        ne_id: network_element_id
+        ts: event_time
+
+    - type: cast
+      fields:
+        value: float
+        event_time: datetime
+
+    - type: add_field
+      fields:
+        pipeline_name: "'multi-format-fanout'"
+
+  # Global default — used by sinks that don't declare their own serializer_out
+  serializer_out:
+    type: json
+
+  sinks:
+    # 1. Kafka → Avro (schema registry)
+    - type: kafka
+      brokers: ["${KAFKA_BROKERS:-kafka:9092}"]
+      topic: pm-avro
+      key_field: network_element_id
+      retry_count: 3
+      serializer_out:
+        type: avro
+        schema_registry_url: ${SCHEMA_REGISTRY_URL:-http://schema-registry:8081}
+        schema_registry_subject: pm-normalized-value
+
+    # 2. S3 → Parquet (columnar, snappy-compressed)
+    - type: s3
+      bucket: ${S3_BUCKET:-my-pm-bucket}
+      key_template: "pm/parquet/{pipeline}/{timestamp}.parquet"
+      aws_access_key_id: ${AWS_ACCESS_KEY_ID:-}
+      aws_secret_access_key: ${AWS_SECRET_ACCESS_KEY:-}
+      region_name: ${AWS_REGION:-eu-west-1}
+      content_type: application/octet-stream
+      retry_count: 3
+      serializer_out:
+        type: parquet
+        compression: snappy
+
+    # 3. OpenSearch → JSON (inherits global serializer_out)
+    - type: opensearch
+      hosts: ["${OS_HOST:-http://opensearch:9200}"]
+      index: "pm-events-{YYYY}.{MM}.{DD}"
+      id_field: network_element_id
+      username: ${OS_USER:-admin}
+      password: ${OS_PASS:-admin}
+      chunk_size: 500
+      # no serializer_out → uses global json
+
+    # 4. Local → CSV (for debugging)
+    - type: local
+      path: /data/output/debug
+      filename_template: "pm_{pipeline}_{timestamp}.csv"
+      serializer_out:
+        type: csv
+        has_header: true
+
+  on_error: continue
+  dlq:
+    type: local
+    path: /data/dlq

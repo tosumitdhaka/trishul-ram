@@ -1,0 +1,117 @@
+version: "1"
+
+pipeline:
+  name: kafka-to-opensearch
+  description: >
+    Stream pipeline: consume normalized PM events from Kafka, enrich with
+    metadata, validate required fields, and index into OpenSearch.
+
+    Critical alarms are also written to a dedicated high-priority index.
+    All records land in the daily rolling index pm-events-YYYY.MM.DD.
+
+    Prerequisites:
+      pip install tram[kafka,opensearch]
+
+    Environment variables:
+      KAFKA_BROKERS       e.g. kafka-1:9092,kafka-2:9092
+      KAFKA_USER / KAFKA_PASS  (SASL credentials)
+      OS_HOST             e.g. https://opensearch:9200
+      OS_USER / OS_PASS
+
+  enabled: true
+
+  schedule:
+    type: stream
+
+  source:
+    type: kafka
+    brokers: ["${KAFKA_BROKERS:-kafka:9092}"]
+    topic: pm-raw
+    group_id: tram-pm-indexer
+    auto_offset_reset: earliest
+    security_protocol: ${KAFKA_SECURITY_PROTOCOL:-PLAINTEXT}
+    sasl_mechanism: ${KAFKA_SASL_MECHANISM:-PLAIN}
+    sasl_username: ${KAFKA_USER:-}
+    sasl_password: ${KAFKA_PASS:-}
+    reconnect_delay_seconds: 5.0
+    max_reconnect_attempts: 0    # infinite retry
+
+  serializer_in:
+    type: json
+
+  transforms:
+    # Normalize field names from upstream producers
+    - type: rename
+      fields:
+        ne_id: network_element_id
+        ts: event_time
+        sev: severity
+
+    # Ensure numeric types before arithmetic
+    - type: cast
+      fields:
+        value: float
+        event_time: datetime
+
+    # Compute derived fields
+    - type: add_field
+      fields:
+        value_mbps: "round(value / 1_000_000, 4)"
+        severity_rank: "{'CRITICAL': 1, 'MAJOR': 2, 'MINOR': 3, 'WARNING': 4}.get(severity, 9)"
+        indexed_by: "'tram'"
+
+    # Normalize severity labels
+    - type: value_map
+      field: severity
+      mapping:
+        "1": CRITICAL
+        "2": MAJOR
+        "3": MINOR
+        "4": WARNING
+      default: UNKNOWN
+
+    # Validate required fields — drop malformed records
+    - type: validate
+      rules:
+        network_element_id: required
+        event_time: required
+        value: {type: float, min: 0}
+        severity: {allowed: [CRITICAL, MAJOR, MINOR, WARNING, UNKNOWN]}
+      on_invalid: drop
+
+    # Remove internal fields not needed in the index
+    - type: drop
+      fields: [debug_flag, _kafka_offset, _raw]
+
+    # Filter noise: skip zero-value non-critical records
+    - type: filter
+      condition: "value > 0 or severity in ('CRITICAL', 'MAJOR')"
+
+  # Default serializer for all sinks (overridden per-sink below where needed)
+  sinks:
+    # Primary: daily rolling index for all events
+    - type: opensearch
+      hosts: ["${OS_HOST:-http://opensearch:9200}"]
+      index: "pm-events-{YYYY}.{MM}.{DD}"
+      id_field: network_element_id
+      chunk_size: 500
+      username: ${OS_USER:-admin}
+      password: ${OS_PASS:-admin}
+      retry_count: 3
+      retry_delay_seconds: 2.0
+      circuit_breaker_threshold: 10
+
+    # Secondary: dedicated index for critical/major alarms only
+    - type: opensearch
+      hosts: ["${OS_HOST:-http://opensearch:9200}"]
+      index: "alarms-high-priority"
+      chunk_size: 100
+      username: ${OS_USER:-admin}
+      password: ${OS_PASS:-admin}
+      condition: "severity in ('CRITICAL', 'MAJOR')"
+      retry_count: 5
+
+  on_error: continue
+  dlq:
+    type: local
+    path: /data/dlq

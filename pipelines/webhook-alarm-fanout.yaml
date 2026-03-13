@@ -1,0 +1,137 @@
+version: "1"
+
+pipeline:
+  name: webhook-alarm-fanout
+  description: >
+    Stream pipeline: receive alarm events via HTTP POST, normalize and classify
+    them, then route to multiple sinks based on severity:
+
+      ALL alarms   → Kafka topic (alarm-events) for downstream processing
+      CRITICAL     → OpenSearch index (alarms-critical) for fast querying
+      CRITICAL     → REST webhook to incident management system (PagerDuty / ServiceNow)
+      ALL alarms   → Local JSON file for audit trail
+
+    Webhook endpoint: POST /webhooks/alarms
+    Expected payload: JSON object or JSON array of alarm objects
+
+    Test with:
+      curl -X POST http://localhost:8765/webhooks/alarms \
+        -H "Content-Type: application/json" \
+        -H "Authorization: Bearer ${WEBHOOK_SECRET}" \
+        -d '[
+          {"alarm_id": "ALM-001", "ne_id": "router-01", "sev": "1", "description": "Link down"},
+          {"alarm_id": "ALM-002", "ne_id": "switch-02", "sev": "3", "description": "High CPU"}
+        ]'
+
+    Prerequisites:
+      pip install tram[kafka,opensearch]
+
+    Environment variables:
+      WEBHOOK_SECRET
+      KAFKA_BROKERS
+      OS_HOST / OS_USER / OS_PASS
+      INCIDENT_WEBHOOK_URL   e.g. https://events.pagerduty.com/v2/enqueue
+      INCIDENT_API_KEY
+
+  enabled: true
+
+  schedule:
+    type: stream
+
+  source:
+    type: webhook
+    path: alarms
+    secret: ${WEBHOOK_SECRET}
+    max_queue_size: 5000
+
+  serializer_in:
+    type: json
+
+  transforms:
+    # Normalize severity: numeric codes → labels
+    - type: value_map
+      field: sev
+      mapping:
+        "1": CRITICAL
+        "2": MAJOR
+        "3": MINOR
+        "4": WARNING
+        "5": INDETERMINATE
+      default: UNKNOWN
+
+    - type: rename
+      fields:
+        sev: severity
+        ne_id: network_element_id
+        desc: description
+
+    - type: cast
+      fields:
+        event_time: datetime
+
+    # Add pipeline metadata
+    - type: add_field
+      fields:
+        received_at: "'tram-webhook'"
+        severity_rank: "{'CRITICAL': 1, 'MAJOR': 2, 'MINOR': 3, 'WARNING': 4, 'INDETERMINATE': 5}.get(severity, 9)"
+
+    # Validate — drop records without an alarm ID
+    - type: validate
+      rules:
+        alarm_id: required
+        network_element_id: required
+        severity: required
+      on_invalid: drop
+
+  sinks:
+    # 1. Kafka: all alarms, JSON encoded
+    - type: kafka
+      brokers: ["${KAFKA_BROKERS:-kafka:9092}"]
+      topic: alarm-events
+      key_field: alarm_id
+      retry_count: 3
+      circuit_breaker_threshold: 5
+
+    # 2. OpenSearch: CRITICAL and MAJOR only — fast queryable index
+    - type: opensearch
+      hosts: ["${OS_HOST:-http://opensearch:9200}"]
+      index: "alarms-{YYYY}.{MM}"
+      id_field: alarm_id
+      username: ${OS_USER:-admin}
+      password: ${OS_PASS:-admin}
+      condition: "severity in ('CRITICAL', 'MAJOR')"
+      chunk_size: 100
+      retry_count: 3
+
+    # 3. REST: forward CRITICAL alarms to incident management
+    - type: rest
+      url: ${INCIDENT_WEBHOOK_URL:-http://localhost:9999/incident}
+      method: POST
+      auth_type: apikey
+      api_key: ${INCIDENT_API_KEY:-}
+      api_key_header: X-API-Key
+      content_type: application/json
+      condition: "severity == 'CRITICAL'"
+      retry_count: 5
+      retry_delay_seconds: 2.0
+      circuit_breaker_threshold: 3
+      transforms:
+        # Reshape to incident management format before sending
+        - type: rename
+          fields:
+            alarm_id: dedup_key
+            description: summary
+            network_element_id: source
+
+    # 4. Local: full audit trail, all severities
+    - type: local
+      path: /data/output/alarms
+      filename_template: "alarms_{pipeline}_{timestamp}.json"
+      serializer_out:
+        type: json
+        indent: 2
+
+  on_error: continue
+  dlq:
+    type: local
+    path: /data/dlq
