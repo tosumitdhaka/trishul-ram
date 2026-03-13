@@ -11,5 +11,12 @@ spec:
       targetPort: http
       protocol: TCP
       name: http
+    {{- if .Values.service.snmpTrapPort }}
+    ## UDP port for the snmp_trap source connector (matches TRAM_SNMP_TRAP_PORT or pipeline port:)
+    - port: {{ .Values.service.snmpTrapPort }}
+      targetPort: {{ .Values.service.snmpTrapPort }}
+      protocol: UDP
+      name: snmp-trap
+    {{- end }}
   selector:
     {{- include "tram.selectorLabels" . | nindent 4 }}

@@ -34,6 +34,11 @@ spec:
             - name: http
               containerPort: 8765
               protocol: TCP
+            {{- if .Values.service.snmpTrapPort }}
+            - name: snmp-trap
+              containerPort: {{ .Values.service.snmpTrapPort }}
+              protocol: UDP
+            {{- end }}
           env:
             ## Always inject stable pod name as node identity (e.g. tram-0, tram-1)
             - name: TRAM_NODE_ID
@@ -53,14 +58,27 @@ spec:
               value: {{ $val | quote }}
             {{- end }}
             {{- if .Values.persistence.enabled }}
-            - name: TRAM_DB_PATH
-              value: /data/tram.db
+            ## SQLAlchemy URL for SQLite on the /data PVC (v1.0.3+; replaces TRAM_DB_PATH)
+            - name: TRAM_DB_URL
+              value: "sqlite:////data/tram.db"
             ## Store schemas and MIBs under the same /data PVC — no extra volumes needed.
             ## Standard MIBs baked into /mibs (image layer) are still searched by SNMP connectors.
             - name: TRAM_SCHEMA_DIR
               value: /data/schemas
             - name: TRAM_MIB_DIR
               value: /data/mibs
+            {{- end }}
+            {{- if .Values.schemaRegistry.url }}
+            - name: TRAM_SCHEMA_REGISTRY_URL
+              value: {{ .Values.schemaRegistry.url | quote }}
+            {{- end }}
+            {{- if .Values.schemaRegistry.username }}
+            - name: TRAM_SCHEMA_REGISTRY_USERNAME
+              value: {{ .Values.schemaRegistry.username | quote }}
+            {{- end }}
+            {{- if .Values.schemaRegistry.password }}
+            - name: TRAM_SCHEMA_REGISTRY_PASSWORD
+              value: {{ .Values.schemaRegistry.password | quote }}
             {{- end }}
             {{- range $key, $ref := .Values.envSecret }}
             - name: {{ $key }}
