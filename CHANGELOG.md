@@ -9,6 +9,19 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ---
 
+## [1.0.6] — 2026-03-13
+
+### Added
+- `LICENSE` file (Apache-2.0 full text) added to repository root
+- Helm `service.snmpTrapPorts` (list) replaces the former single `service.snmpTrapPort` scalar — iterate any number of UDP ports for multi-source SNMP trap deployments; each port creates one Service UDP port and one container port; adding/removing ports requires `helm upgrade`
+- docker-compose SNMP trap port driven by `TRAM_SNMP_PORT_1` env var (defaulting to `1162`); additional ports can be added as numbered vars and entries in the `ports:` section
+
+### Changed
+- `pyproject.toml`: classifier `"Development Status :: 3 - Alpha"` → `"Development Status :: 5 - Production/Stable"`; added `"License :: OSI Approved :: Apache Software License"` classifier; `license` field changed from inline `{text = "Apache-2.0"}` to `{file = "LICENSE"}`
+- Helm `Chart.yaml` / `values.yaml` image tag → `1.0.6`
+
+---
+
 ## [1.0.5] — 2026-03-13
 
 ### Added

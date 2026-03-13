@@ -34,9 +34,9 @@ spec:
             - name: http
               containerPort: 8765
               protocol: TCP
-            {{- if .Values.service.snmpTrapPort }}
-            - name: snmp-trap
-              containerPort: {{ .Values.service.snmpTrapPort }}
+            {{- range .Values.service.snmpTrapPorts }}
+            - name: snmp-trap-{{ . }}
+              containerPort: {{ . }}
               protocol: UDP
             {{- end }}
           env:
