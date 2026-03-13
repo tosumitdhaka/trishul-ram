@@ -6,7 +6,12 @@ services:
     container_name: tram
     ports:
       - "8765:8765"
-      - "1162:1162/udp"    # SNMP trap receiver (non-privileged port)
+      ## SNMP trap UDP ports — add one line per snmp_trap pipeline, matching the port: in that YAML.
+      ## Use non-privileged ports (>=1024). Each entry maps host:container.
+      ## To drive this from the environment, set individual vars and reference them:
+      ##   TRAM_SNMP_PORT_1=1162  → "- ${TRAM_SNMP_PORT_1:-1162}:${TRAM_SNMP_PORT_1:-1162}/udp"
+      ## Add/remove entries here and run `docker compose up -d` to apply.
+      - "${TRAM_SNMP_PORT_1:-1162}:${TRAM_SNMP_PORT_1:-1162}/udp"
 
     # Allows containers to reach host services (snmpd on 127.0.0.1:161,
     # snmptrapd on 127.0.0.1:162) via the hostname "host.docker.internal".

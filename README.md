@@ -2,7 +2,7 @@
 
 > Lightweight, container-native Python daemon that moves and transforms telecom data (PM/FM/Logs) across protocols.
 
-**Version:** 1.0.5 | **Status:** Production-ready | **Python:** 3.11+
+**Version:** 1.0.6 | **Status:** Production-ready | **Python:** 3.11+
 
 ---
 
@@ -75,7 +75,7 @@ curl http://localhost:8765/api/schemas/cisco/GenericRecord.proto
 
 ---
 
-## Plugin Registry (v1.0.5)
+## Plugin Registry (v1.0.6)
 
 | Category | Keys |
 |----------|------|
@@ -183,7 +183,7 @@ All `${VAR}` and `${VAR:-default}` placeholders are resolved from environment at
 
 ---
 
-## v1.0.5 Features
+## v1.0.6 Features
 
 | Feature | Description |
 |---------|-------------|
@@ -279,16 +279,16 @@ The default image includes most connector and serializer extras — Kafka, MQTT,
 ```bash
 # Standalone (default) — single PVC at /data holds SQLite DB, schemas, and MIBs
 helm install tram oci://ghcr.io/OWNER/charts/tram \
-  --set image.tag=1.0.5
+  --set image.tag=1.0.6
 
 # With API key authentication
 helm install tram oci://ghcr.io/OWNER/charts/tram \
-  --set image.tag=1.0.5 \
+  --set image.tag=1.0.6 \
   --set apiKey=mysecret
 
 # Cluster mode (3-replica StatefulSet + external PostgreSQL)
 helm install tram oci://ghcr.io/OWNER/charts/tram \
-  --set image.tag=1.0.5 \
+  --set image.tag=1.0.6 \
   --set clusterMode.enabled=true \
   --set replicaCount=3 \
   --set envSecret.TRAM_DB_URL.secretName=tram-db \
