@@ -65,15 +65,15 @@ def _l002_skip_no_dlq(config: "PipelineConfig") -> list[LintResult]:
 
 
 def _l003_stream_multi_worker(config: "PipelineConfig") -> list[LintResult]:
-    """L003 — thread_workers > 1 on a stream pipeline is unsafe."""
+    """L003 — thread_workers > 1 on a stream pipeline uses a bounded queue for backpressure."""
     if config.schedule.type == "stream" and config.thread_workers > 1:
         return [LintResult(
             rule_id="L003",
-            severity="error",
+            severity="warning",
             message=(
                 f"Pipeline '{config.name}': thread_workers={config.thread_workers} on a "
-                "stream pipeline is unsafe — stream sources are not thread-safe. "
-                "Set thread_workers=1 for stream pipelines."
+                "stream pipeline uses a bounded queue for backpressure — ensure your "
+                "source is thread-safe or use thread_workers=1."
             ),
         )]
     return []

@@ -119,7 +119,7 @@ class TestL003StreamMultiWorker:
                 path: /out
         """)
         findings = lint(config)
-        assert any(f.rule_id == "L003" and f.severity == "error" for f in findings)
+        assert any(f.rule_id == "L003" and f.severity == "warning" for f in findings)
 
     def test_l003_not_triggered_for_batch_multi_worker(self):
         config = _load("""

@@ -294,7 +294,7 @@ class PipelineExecutor:
                     except Exception as exc:
                         last_exc = exc
                         if attempt < retry_count:
-                            delay = retry_delay * (2 ** attempt) + random.uniform(0, 0.1)
+                            delay = retry_delay * (2 ** attempt) + random.uniform(0, 0.5)
                             logger.warning(
                                 "Sink write failed, retrying",
                                 extra={
@@ -525,6 +525,19 @@ class PipelineExecutor:
         dlq_sink = self._build_dlq_sink(config)
 
         ctx = PipelineRunContext(pipeline_name=config.name)
+
+        # Watcher: when the APScheduler stop_event fires, also call source.stop()
+        # so that blocking sources (e.g. WebhookSource.read()) unblock immediately.
+        def _stop_watcher() -> None:
+            stop_event.wait()
+            if hasattr(source, "stop"):
+                try:
+                    source.stop()
+                except Exception:
+                    pass
+
+        watcher = threading.Thread(target=_stop_watcher, daemon=True, name="tram-stop-watcher")
+        watcher.start()
 
         try:
             if config.thread_workers > 1:

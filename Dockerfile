@@ -98,7 +98,7 @@ RUN whl=$(ls *.whl) && \
 COPY --from=mib-builder /mibs /mibs
 
 # Create default pipeline, data, MIB, and schema directories; set ownership
-RUN mkdir -p /pipelines /data /mibs /schemas && \
+RUN mkdir -p /pipelines /data /data/mibs /mibs /schemas && \
     mkdir -p /home/tram/.tram && \
     chown -R tram:tram /pipelines /data /mibs /schemas /home/tram /app
 

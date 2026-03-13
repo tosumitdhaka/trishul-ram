@@ -259,8 +259,16 @@ class TramScheduler:
     def _start_stream(self, config: "PipelineConfig") -> None:
         """Start a stream pipeline in a dedicated thread."""
         if config.name in self._stream_threads:
-            logger.warning("Stream already running", extra={"pipeline": config.name})
-            return
+            old_thread = self._stream_threads[config.name]
+            if old_thread.is_alive():
+                # Previous stop hasn't propagated yet (blocking source); wait briefly.
+                old_thread.join(timeout=15)
+                if old_thread.is_alive():
+                    logger.warning("Stream already running", extra={"pipeline": config.name})
+                    return
+            # Thread finished — clean up stale entries before starting fresh.
+            self._stream_threads.pop(config.name, None)
+            self._stop_events.pop(config.name, None)
 
         stop_event = threading.Event()
         self._stop_events[config.name] = stop_event
@@ -309,7 +317,11 @@ class TramScheduler:
         """Start a registered pipeline (called by REST/CLI)."""
         state = self.manager.get(name)
         config = state.config
-        self.manager.set_status(name, "running")
+        # Stream pipelines become "running" immediately (continuous thread).
+        # Batch pipelines (interval/cron/manual) stay "stopped" until the job
+        # actually fires — _run_batch() transitions them to "running".
+        if config.schedule.type != "stream":
+            self.manager.set_status(name, "stopped")
         self._schedule_pipeline(config)
 
     def stop_pipeline(self, name: str) -> None:

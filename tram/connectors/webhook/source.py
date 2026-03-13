@@ -30,11 +30,17 @@ class WebhookSource(BaseSource):
         self.path: str = config["path"].lstrip("/")
         self.secret: str | None = config.get("secret")
         self.max_queue_size: int = config.get("max_queue_size", 1000)
+        self._stop_event: threading.Event = threading.Event()
+
+    def stop(self) -> None:
+        """Unblock the blocking queue.get() so read() can exit cleanly."""
+        self._stop_event.set()
 
     def read(self) -> Generator[tuple[bytes, dict], None, None]:
         from tram.connectors.webhook import _WEBHOOK_SECRETS
 
         q: queue.SimpleQueue = queue.SimpleQueue()
+        self._stop_event.clear()
 
         with _REGISTRY_LOCK:
             _WEBHOOK_REGISTRY[self.path] = q
@@ -44,7 +50,7 @@ class WebhookSource(BaseSource):
                 _WEBHOOK_SECRETS.pop(self.path, None)
 
         try:
-            while True:
+            while not self._stop_event.is_set():
                 try:
                     body, meta = q.get(timeout=1.0)
                     yield body, meta

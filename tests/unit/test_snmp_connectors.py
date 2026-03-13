@@ -17,10 +17,14 @@ from tram.core.exceptions import SinkError, SourceError
 
 
 class TestSNMPTrapSource:
-    def test_import_error_raises_source_error(self):
-        with patch.dict("sys.modules", {"pysnmp": None, "pysnmp.hlapi": None}):
+    def test_bind_permission_raises_source_error(self):
+        """SNMPTrapSource raises SourceError when UDP bind is denied."""
+        with patch("socket.socket") as mock_sock_cls:
+            mock_sock = MagicMock()
+            mock_sock_cls.return_value = mock_sock
+            mock_sock.bind.side_effect = PermissionError("Permission denied")
             source = SNMPTrapSource({"host": "0.0.0.0", "port": 162})
-            with pytest.raises(SourceError, match="pysnmp-lextudio"):
+            with pytest.raises(SourceError, match="UDP bind failed"):
                 list(source.read())
 
     def test_bind_failure_raises_source_error(self):

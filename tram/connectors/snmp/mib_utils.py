@@ -105,8 +105,8 @@ def build_mib_view(mib_dirs: list[str], mib_modules: list[str]):
     """
     try:
         from pysnmp.smi import builder, view
-    except ImportError:
-        logger.warning("pysnmp-lextudio not installed — MIB resolution unavailable")
+    except Exception:
+        logger.warning("pysnmp not available or incompatible — MIB resolution unavailable")
         return None
 
     mib_builder = builder.MibBuilder()
@@ -190,21 +190,19 @@ def symbolic_to_oid(mib_view, symbolic: str) -> Optional[tuple[int, ...]]:
         return None
 
     try:
-        from pysnmp.smi.rfc1902 import ObjectIdentity
-        from pyasn1.type.univ import ObjectIdentifier
-
-        # Handle "MODULE::name.index" format
+        # Handle "MODULE::name.index" format (e.g. "IF-MIB::ifDescr.1")
         if "::" in symbolic:
             module, rest = symbolic.split("::", 1)
             parts = rest.split(".")
             sym_name = parts[0]
             indices = [int(x) for x in parts[1:]] if len(parts) > 1 else []
-            oid_obj, _, _ = mib_view.getNodeName((module, sym_name))
+            # getNodeName((sym_name,), moduleName) in pysnmp-lextudio 6.x
+            oid_obj, _, _ = mib_view.getNodeName((sym_name,), module)
         else:
             parts = symbolic.split(".")
             sym_name = parts[0]
             indices = [int(x) for x in parts[1:]] if len(parts) > 1 else []
-            oid_obj, _, _ = mib_view.getNodeName(sym_name)
+            oid_obj, _, _ = mib_view.getNodeName((sym_name,))
 
         result = tuple(oid_obj) + tuple(indices)
         return result

@@ -1,68 +1,61 @@
 services:
+
+  # ── TRAM daemon ────────────────────────────────────────────────────────────
   tram:
     build: .
+    container_name: tram
     ports:
       - "8765:8765"
+
+    # Allows containers to reach host services (snmpd on 127.0.0.1:161,
+    # snmptrapd on 127.0.0.1:162) via the hostname "host.docker.internal".
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+
     volumes:
-      - ./pipelines:/pipelines:ro        # Pipeline YAMLs — mounted read-only
-      - tram_data:/data                  # Persistent SQLite DB + state
-      # Optional: persist custom MIBs added via the API across container restarts.
-      # NOTE: mounting a volume here shadows the MIBs baked into the image.
-      # Pre-populate the volume from the image first (see docs/deployment.md).
-      # - tram_mibs:/mibs
-      # Optional: persist schemas uploaded via the API across container restarts.
-      # NOTE: mounting a volume here shadows the /schemas directory created in the image.
-      # Use a bind mount for a host-managed schema repository:
-      #   - ./schemas:/schemas
-      # - tram_schemas:/schemas
+      - ./pipelines:/pipelines          # pipeline YAMLs (read-only at runtime; writable for dev)
+      - tram_data:/data                 # SQLite DB + run history
+      - ./output:/data/output           # bind-mount output dir for easy local inspection
+      - tram_mibs:/data/mibs            # persisted MIBs downloaded via /api/mibs/download
+
     environment:
       TRAM_PIPELINE_DIR: /pipelines
-      # SQLite (standalone). For cluster mode switch to an external DB:
-      #   TRAM_DB_URL: postgresql+psycopg2://user:pass@postgres/tram
       TRAM_DB_URL: sqlite:////data/tram.db
       TRAM_PORT: 8765
       TRAM_HOST: 0.0.0.0
       TRAM_LOG_LEVEL: ${TRAM_LOG_LEVEL:-INFO}
-      TRAM_LOG_FORMAT: ${TRAM_LOG_FORMAT:-json}
+      TRAM_LOG_FORMAT: ${TRAM_LOG_FORMAT:-text}
       TRAM_NODE_ID: ${TRAM_NODE_ID:-tram-0}
-      # --- Security (v1.0.0) ---
-      # Uncomment to enable X-API-Key authentication on /api/* endpoints.
-      # Health probes (/api/health, /api/ready) and /webhooks/ are always exempt.
-      # TRAM_API_KEY: ${TRAM_API_KEY:-}
-      # TRAM_RATE_LIMIT: "0"          # requests/minute per IP; 0 = disabled
-      # TRAM_RATE_LIMIT_WINDOW: "60"  # sliding window in seconds
-      # --- TLS (v1.0.0) ---
-      # Mount cert/key files into the container then point TRAM at them:
-      #   volumes:
-      #     - ./certs/tram.crt:/tls/tram.crt:ro
-      #     - ./certs/tram.key:/tls/tram.key:ro
-      # TRAM_TLS_CERTFILE: /tls/tram.crt
-      # TRAM_TLS_KEYFILE: /tls/tram.key
-      # --- Observability (v1.0.0) ---
-      # TRAM_OTEL_ENDPOINT: ""        # OTLP gRPC endpoint, e.g. http://jaeger:4317
-      # TRAM_OTEL_SERVICE: tram       # service.name attribute
-      # --- Operations (v1.0.0) ---
-      # TRAM_WATCH_PIPELINES: "false" # auto-reload pipelines on YAML change (requires tram[watch])
-      # --- SNMP MIBs (v1.0.0) ---
-      TRAM_MIB_DIR: /mibs               # compiled MIB .py files; bundled in image at build time
-      TRAM_SCHEMA_DIR: /schemas         # serialization schemas (.proto/.avsc/.json/.xsd); mount or upload via API
-      # Source SFTP credentials (from host .env file)
-      NE_SFTP_HOST: ${NE_SFTP_HOST:-localhost}
-      NE_SFTP_PORT: ${NE_SFTP_PORT:-22}
-      NE_SFTP_USER: ${NE_SFTP_USER:-pmuser}
-      NE_SFTP_PASS: ${NE_SFTP_PASS:-}
-      # Sink SFTP credentials
-      MED_SFTP_HOST: ${MED_SFTP_HOST:-localhost}
-      MED_SFTP_PORT: ${MED_SFTP_PORT:-22}
-      MED_SFTP_USER: ${MED_SFTP_USER:-meduser}
-      MED_SFTP_PASS: ${MED_SFTP_PASS:-}
+      # Built-in baked MIBs stay at /mibs; API-downloaded MIBs go to /data/mibs.
+      # The SNMP connectors auto-prepend BOTH /mibs and TRAM_MIB_DIR to the MIB search path.
+      TRAM_MIB_DIR: /data/mibs
+      TRAM_SCHEMA_DIR: /schemas
+
     healthcheck:
       test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8765/api/health')"]
       interval: 30s
       timeout: 10s
-      start_period: 15s
+      start_period: 20s
       retries: 3
     restart: unless-stopped
+    depends_on:
+      - sftp
+
+  # ── SFTP server ────────────────────────────────────────────────────────────
+  # atmoz/sftp is a lightweight OpenSSH server.
+  # Credentials: tram / tram123
+  # Upload directory inside container: /home/tram/upload
+  # Accessible from host: sftp://localhost:2222  (user=tram, pass=tram123)
+  sftp:
+    image: atmoz/sftp:latest
+    container_name: tram-sftp
+    ports:
+      - "2222:22"
+    volumes:
+      - ./output/sftp:/home/tram/upload   # SFTP uploads appear in ./output/sftp/ on host
+    # <username>:<password>[:<uid>[:<gid>[:<homedir>]]]
+    command: tram:tram123:1000
 
 volumes:
   tram_data:
+  tram_mibs:

@@ -311,6 +311,22 @@ class PrometheusRWSourceConfig(BaseModel):
     secret: Optional[str] = None
 
 
+class ClickHouseSourceConfig(BaseModel):
+    type: Literal["clickhouse"]
+    host: str = "localhost"
+    port: int = 9000
+    database: str = "default"
+    username: str = "default"
+    password: str = ""
+    query: str
+    params: dict[str, Any] = Field(default_factory=dict)
+    chunk_size: int = 0
+    secure: bool = False
+    verify: bool = True
+    connect_timeout: int = 10
+    send_receive_timeout: int = 300
+
+
 class CorbaSourceConfig(BaseModel):
     """CORBA source — calls a remote CORBA operation via DII (no compiled stubs needed).
 
@@ -357,6 +373,7 @@ SourceConfig = Annotated[
         NatsSourceConfig,
         GnmiSourceConfig,
         SqlSourceConfig,
+        ClickHouseSourceConfig,
         InfluxDbSourceConfig,
         RedisSourceConfig,
         GcsSourceConfig,
@@ -863,6 +880,25 @@ class ElasticsearchSinkConfig(BaseModel):
     circuit_breaker_threshold: int = 0
 
 
+class ClickHouseSinkConfig(BaseModel):
+    type: Literal["clickhouse"]
+    host: str = "localhost"
+    port: int = 9000
+    database: str = "default"
+    username: str = "default"
+    password: str = ""
+    table: str
+    secure: bool = False
+    verify: bool = True
+    connect_timeout: int = 10
+    send_receive_timeout: int = 300
+    condition: Optional[str] = None
+    transforms: list[TransformConfig] = Field(default_factory=list)
+    retry_count: int = 0
+    retry_delay_seconds: float = 1.0
+    circuit_breaker_threshold: int = 0
+
+
 SinkConfig = Annotated[
     Union[
         SFTPSinkConfig,
@@ -878,6 +914,7 @@ SinkConfig = Annotated[
         AmqpSinkConfig,
         NatsSinkConfig,
         SqlSinkConfig,
+        ClickHouseSinkConfig,
         InfluxDbSinkConfig,
         RedisSinkConfig,
         GcsSinkConfig,
