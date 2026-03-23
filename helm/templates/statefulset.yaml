@@ -27,7 +27,7 @@ spec:
       enableServiceLinks: false
       containers:
         - name: tram
-          image: "{{ .Values.image.repository }}:{{ .Values.image.tag }}"
+          image: "{{ if .Values.image.registry }}{{ .Values.image.registry }}/{{ end }}{{ .Values.image.repository }}:{{ .Values.image.tag }}"
           imagePullPolicy: {{ .Values.image.pullPolicy }}
           command: ["tram", "daemon"]
           ports:

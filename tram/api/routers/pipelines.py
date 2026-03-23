@@ -212,11 +212,11 @@ async def trigger_run(name: str, request: Request) -> dict:
         raise HTTPException(status_code=400, detail="Cannot trigger a stream pipeline manually")
 
     try:
-        scheduler.trigger_run(name)
+        run_id = scheduler.trigger_run(name)
     except Exception as exc:
         raise HTTPException(status_code=500, detail=str(exc))
 
-    return {"name": name, "status": "triggered"}
+    return {"name": name, "status": "triggered", "run_id": run_id}
 
 
 # ── Reload ─────────────────────────────────────────────────────────────────

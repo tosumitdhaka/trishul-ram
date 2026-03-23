@@ -11,6 +11,9 @@ spec:
       targetPort: http
       protocol: TCP
       name: http
+      {{- if .Values.service.nodePort }}
+      nodePort: {{ .Values.service.nodePort }}
+      {{- end }}
     {{- range .Values.service.snmpTrapPorts }}
     ## UDP port for snmp_trap source connector (matches pipeline port:)
     - port: {{ . }}

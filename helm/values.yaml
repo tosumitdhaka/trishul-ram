@@ -2,7 +2,8 @@
 ## Ref: https://github.com/trishul/tram
 
 image:
-  repository: ghcr.io/OWNER/tram
+  registry:   ""              # e.g. ghcr.io — empty = no registry prefix (local/kind images)
+  repository: OWNER/tram      # image name without registry
   tag: "1.0.6"
   pullPolicy: IfNotPresent
 
@@ -24,6 +25,7 @@ fullnameOverride: ""
 service:
   type: ClusterIP
   port: 8765
+  nodePort: null    # set to e.g. 30765 when type=NodePort
   ## List of UDP ports to expose for snmp_trap source connectors.
   ## Each entry creates one UDP Service port and one containerPort.
   ## Must match the port: values in your snmp_trap pipeline YAMLs.

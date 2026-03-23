@@ -39,6 +39,8 @@ class RestSink(BaseSink):
         self.username: str | None = config.get("username")
         self.password: str | None = config.get("password")
         self.token: str | None = config.get("token")
+        self.api_key: str | None = config.get("api_key")
+        self.api_key_header: str = config.get("api_key_header", "X-API-Key")
         self.timeout: int = int(config.get("timeout", 30))
         self.verify_ssl: bool = bool(config.get("verify_ssl", True))
         self.expected_status: list[int] = config.get("expected_status", [200, 201, 202, 204])
@@ -47,6 +49,8 @@ class RestSink(BaseSink):
         headers = {**self.headers, "Content-Type": self.content_type}
         if self.auth_type == "bearer" and self.token:
             headers["Authorization"] = f"Bearer {self.token}"
+        elif self.auth_type == "apikey" and self.api_key:
+            headers[self.api_key_header] = self.api_key
         return headers
 
     def _build_auth(self):

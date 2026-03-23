@@ -385,7 +385,7 @@ class PipelineExecutor:
 
     # ── Batch run ──────────────────────────────────────────────────────────
 
-    def batch_run(self, config: "PipelineConfig") -> RunResult:
+    def batch_run(self, config: "PipelineConfig", run_id: str | None = None) -> RunResult:
         """Execute one discrete batch run."""
         import contextlib
         try:
@@ -396,10 +396,11 @@ class PipelineExecutor:
             span_ctx = contextlib.nullcontext()
 
         with span_ctx:
-            return self._batch_run_inner(config)
+            return self._batch_run_inner(config, run_id=run_id)
 
-    def _batch_run_inner(self, config: "PipelineConfig") -> RunResult:
-        ctx = PipelineRunContext(pipeline_name=config.name)
+    def _batch_run_inner(self, config: "PipelineConfig", run_id: str | None = None) -> RunResult:
+        kw = {"run_id": run_id} if run_id else {}
+        ctx = PipelineRunContext(pipeline_name=config.name, **kw)
         logger.info(
             "Batch run started",
             extra={"pipeline": config.name, "run_id": ctx.run_id},
