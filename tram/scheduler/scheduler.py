@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import logging
 import threading
+import uuid
 from concurrent.futures import ThreadPoolExecutor
 from typing import TYPE_CHECKING, Optional
 
@@ -230,7 +231,7 @@ class TramScheduler:
             extra={"pipeline": config.name, "cron": config.schedule.cron},
         )
 
-    def _run_batch(self, pipeline_name: str) -> None:
+    def _run_batch(self, pipeline_name: str, run_id: Optional[str] = None) -> None:
         """APScheduler job callback — runs one batch execution."""
         if not self.manager.exists(pipeline_name):
             logger.warning("Batch job: pipeline not found", extra={"pipeline": pipeline_name})
@@ -246,7 +247,7 @@ class TramScheduler:
 
         self.manager.set_status(pipeline_name, "running")
         try:
-            result = self.executor.batch_run(state.config)
+            result = self.executor.batch_run(state.config, run_id=run_id)
             self.manager.record_run(pipeline_name, result)
             final_status = "stopped" if result.status == RunStatus.SUCCESS else "error"
             self.manager.set_status(pipeline_name, final_status)
@@ -337,12 +338,17 @@ class TramScheduler:
 
         self.manager.set_status(name, "stopped")
 
-    def trigger_run(self, name: str) -> None:
-        """Trigger an immediate run of a batch pipeline (manual trigger)."""
+    def trigger_run(self, name: str) -> str:
+        """Trigger an immediate run of a batch pipeline (manual trigger).
+
+        Returns the pre-generated run_id so callers can poll for results.
+        """
         state = self.manager.get(name)
         if state.config.schedule.type == "stream":
             raise ValueError(f"Pipeline '{name}' is a stream pipeline — cannot trigger manually")
-        self._thread_pool.submit(self._run_batch, name)
+        run_id = str(uuid.uuid4())[:8]
+        self._thread_pool.submit(self._run_batch, name, run_id)
+        return run_id
 
     def get_status(self) -> dict:
         """Return scheduler status summary."""

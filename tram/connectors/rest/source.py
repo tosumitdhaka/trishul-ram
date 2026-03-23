@@ -62,6 +62,8 @@ class RestSource(BaseSource):
         self.username: str | None = config.get("username")
         self.password: str | None = config.get("password")
         self.token: str | None = config.get("token")
+        self.api_key: str | None = config.get("api_key")
+        self.api_key_header: str = config.get("api_key_header", "X-API-Key")
         self.timeout: int = int(config.get("timeout", 30))
         self.response_path: str | None = config.get("response_path")
         self.paginate: bool = bool(config.get("paginate", False))
@@ -79,6 +81,8 @@ class RestSource(BaseSource):
         headers = dict(self.headers)
         if self.auth_type == "bearer" and self.token:
             headers["Authorization"] = f"Bearer {self.token}"
+        elif self.auth_type == "apikey" and self.api_key:
+            headers[self.api_key_header] = self.api_key
         return headers
 
     def _make_request(self, client, params: dict) -> bytes:

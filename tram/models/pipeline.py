@@ -65,10 +65,12 @@ class RestSourceConfig(BaseModel):
     headers: dict[str, str] = Field(default_factory=dict)
     params: dict[str, Any] = Field(default_factory=dict)
     body: Optional[Any] = None
-    auth_type: Literal["none", "basic", "bearer"] = "none"
+    auth_type: Literal["none", "basic", "bearer", "apikey"] = "none"
     username: Optional[str] = None
     password: Optional[str] = None
     token: Optional[str] = None
+    api_key: Optional[str] = None
+    api_key_header: str = "X-API-Key"
     timeout: int = 30
     response_path: Optional[str] = None
     paginate: bool = False
@@ -594,10 +596,12 @@ class RestSinkConfig(BaseModel):
     method: str = "POST"
     headers: dict[str, str] = Field(default_factory=dict)
     content_type: str = "application/json"
-    auth_type: Literal["none", "basic", "bearer"] = "none"
+    auth_type: Literal["none", "basic", "bearer", "apikey"] = "none"
     username: Optional[str] = None
     password: Optional[str] = None
     token: Optional[str] = None
+    api_key: Optional[str] = None
+    api_key_header: str = "X-API-Key"
     timeout: int = 30
     verify_ssl: bool = True
     expected_status: list[int] = Field(default_factory=lambda: [200, 201, 202, 204])
