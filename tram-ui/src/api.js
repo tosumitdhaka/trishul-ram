@@ -2,7 +2,7 @@
 
 export function getConfig() {
   return {
-    baseUrl: localStorage.getItem('tram_base_url') || 'http://localhost:8765',
+    baseUrl: localStorage.getItem('tram_base_url') || window.location.origin,
     apiKey:  localStorage.getItem('tram_api_key')  || '',
   }
 }
