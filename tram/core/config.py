@@ -61,6 +61,8 @@ class AppConfig:
     schema_registry_url: str
     schema_registry_username: str
     schema_registry_password: str
+    # v1.0.7 web UI static dir (empty = UI disabled)
+    ui_dir: str
 
     @classmethod
     def from_env(cls) -> "AppConfig":
@@ -95,6 +97,7 @@ class AppConfig:
             schema_registry_url=os.environ.get("TRAM_SCHEMA_REGISTRY_URL", ""),
             schema_registry_username=os.environ.get("TRAM_SCHEMA_REGISTRY_USERNAME", ""),
             schema_registry_password=os.environ.get("TRAM_SCHEMA_REGISTRY_PASSWORD", ""),
+            ui_dir=os.environ.get("TRAM_UI_DIR", "/ui"),
         )
 
 

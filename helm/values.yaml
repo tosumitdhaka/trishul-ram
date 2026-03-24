@@ -143,9 +143,25 @@ serviceAccount:
   ## If not set, a name is generated using the fullname template
   name: ""
 
+## Web UI (v1.0.7)
+## The tram-ui static assets are baked into the image at /ui and served by
+## the daemon at /ui on port 8765.  When enabled, a separate Kubernetes Service
+## (tram-ui) is created so you can attach a distinct Ingress rule or
+## NetworkPolicy without exposing the API port directly.
+## Set ui.enabled=false to suppress the UI Service (assets remain in the image
+## and are still accessible via the main service at /ui).
+ui:
+  enabled: true
+  ## External port for the tram-ui Service (targetPort is always 8765/http).
+  port: 80
+  serviceType: ClusterIP   # ClusterIP | NodePort | LoadBalancer
+  nodePort: null           # set when serviceType=NodePort, e.g. 30080
+  serviceAnnotations: {}
+
 ## API key authentication (v1.0.0)
 ## Set apiKey to enable X-API-Key authentication on /api/* endpoints.
-## Health probes (/api/health, /api/ready) and webhooks (/webhooks/) are always exempt.
+## Health probes (/api/health, /api/ready), webhooks (/webhooks/), and the
+## web UI (/ui) are always exempt from API key checks.
 apiKey: ""   # Also configurable via TRAM_API_KEY env var
 
 ## TLS configuration (v1.0.0)

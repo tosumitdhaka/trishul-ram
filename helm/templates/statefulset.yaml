@@ -91,6 +91,11 @@ spec:
             - name: TRAM_API_KEY
               value: {{ .Values.apiKey | quote }}
             {{- end }}
+            {{- if not .Values.ui.enabled }}
+            ## Disable UI static serving when ui.enabled=false
+            - name: TRAM_UI_DIR
+              value: ""
+            {{- end }}
             {{- if .Values.tls.enabled }}
             - name: TRAM_TLS_CERTFILE
               value: /tls/tls.crt

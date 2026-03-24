@@ -22,8 +22,8 @@ class APIKeyMiddleware(BaseHTTPMiddleware):
     orchestrators and external producers never need credentials.
     """
 
-    EXEMPT = {"/api/health", "/api/ready", "/metrics"}
-    EXEMPT_PREFIX = "/webhooks/"
+    EXEMPT = {"/api/health", "/api/ready", "/metrics", "/"}
+    EXEMPT_PREFIX = ("/webhooks/", "/ui")
 
     def __init__(self, app) -> None:
         super().__init__(app)
@@ -36,7 +36,7 @@ class APIKeyMiddleware(BaseHTTPMiddleware):
             return await call_next(request)
 
         path = request.url.path
-        if path in self.EXEMPT or path.startswith(self.EXEMPT_PREFIX):
+        if path in self.EXEMPT or any(path.startswith(p) for p in self.EXEMPT_PREFIX):
             return await call_next(request)
 
         key = request.headers.get("X-API-Key") or request.query_params.get("api_key")

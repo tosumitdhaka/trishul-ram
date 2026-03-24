@@ -1,12 +1,22 @@
 # Multi-stage Dockerfile for TRAM
 #
+# Stage 0  ui-builder  — builds tram-ui static assets (Node 20)
 # Stage 1  builder     — builds the Python wheel
 # Stage 2  mib-builder — downloads + compiles standard SNMP MIBs
-# Stage 3  runtime     — final image (wheel + compiled MIBs)
+# Stage 3  runtime     — final image (wheel + compiled MIBs + UI assets)
 #
 # NOTE: Stage 2 requires internet access during `docker build`.
 #       If your build environment is air-gapped, place pre-compiled MIB .py
 #       files in a local mibs/ directory and COPY them directly instead.
+
+# ── Stage 0: build web UI ────────────────────────────────────────────────────
+FROM node:20-alpine AS ui-builder
+
+WORKDIR /ui-src
+COPY tram-ui/package.json tram-ui/package-lock.json ./
+RUN npm ci --prefer-offline
+COPY tram-ui/ ./
+RUN npm run build
 
 # ── Stage 1: build wheel ─────────────────────────────────────────────────────
 FROM python:3.11-slim AS builder
@@ -97,10 +107,13 @@ RUN whl=$(ls *.whl) && \
 # Copy compiled MIBs from mib-builder stage
 COPY --from=mib-builder /mibs /mibs
 
+# Copy web UI static assets from ui-builder stage
+COPY --from=ui-builder /ui-src/dist /ui
+
 # Create default pipeline, data, MIB, and schema directories; set ownership
 RUN mkdir -p /pipelines /data /data/mibs /mibs /schemas && \
     mkdir -p /home/tram/.tram && \
-    chown -R tram:tram /pipelines /data /mibs /schemas /home/tram /app
+    chown -R tram:tram /pipelines /data /mibs /schemas /home/tram /app /ui
 
 USER tram
 
@@ -112,6 +125,7 @@ EXPOSE 8765
 
 ENV TRAM_MIB_DIR=/mibs
 ENV TRAM_SCHEMA_DIR=/schemas
+ENV TRAM_UI_DIR=/ui
 
 ENTRYPOINT ["tram"]
 CMD ["daemon"]

@@ -3,9 +3,12 @@
 from __future__ import annotations
 
 import logging
+import os
 from contextlib import asynccontextmanager
 
 from fastapi import FastAPI
+from fastapi.responses import RedirectResponse
+from fastapi.staticfiles import StaticFiles
 
 from tram.api.routers import health, pipelines, runs
 from tram.api.routers import metrics_router, webhooks, mibs, schemas
@@ -209,5 +212,15 @@ def create_app(config: AppConfig | None = None) -> FastAPI:
     app.include_router(metrics_router.router)
     app.include_router(mibs.router)
     app.include_router(schemas.router)
+
+    # Mount web UI static files (v1.0.7)
+    ui_dir = config.ui_dir
+    if ui_dir and os.path.isdir(ui_dir):
+        @app.get("/", include_in_schema=False)
+        async def _ui_root():
+            return RedirectResponse(url="/ui/")
+
+        app.mount("/ui", StaticFiles(directory=ui_dir, html=True), name="ui")
+        logger.info("Web UI mounted", extra={"path": "/ui", "dir": ui_dir})
 
     return app
