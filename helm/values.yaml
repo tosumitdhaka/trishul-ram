@@ -3,7 +3,7 @@
 
 image:
   registry:   ""              # e.g. ghcr.io — empty = no registry prefix (local/kind images)
-  repository: OWNER/tram      # image name without registry
+  repository: tram            # image name without registry
   tag: "1.0.7"
   pullPolicy: IfNotPresent
 
@@ -157,8 +157,8 @@ ui:
   enabled: true
   ## External port for the tram-ui Service (targetPort is always 8765/http).
   port: 80
-  serviceType: ClusterIP   # ClusterIP | NodePort | LoadBalancer
-  nodePort: null           # set when serviceType=NodePort, e.g. 30080
+  serviceType: NodePort    # ClusterIP | NodePort | LoadBalancer
+  nodePort: 30001          # kind cluster exposes 30001 → host :30001
   serviceAnnotations: {}
 
 ## API key authentication (v1.0.0)
