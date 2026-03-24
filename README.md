@@ -2,7 +2,7 @@
 
 > Lightweight, container-native Python daemon that moves and transforms telecom data (PM/FM/Logs) across protocols.
 
-**Version:** 1.0.6 | **Status:** Production-ready | **Python:** 3.11+
+**Version:** 1.0.7 | **Status:** Production-ready | **Python:** 3.11+
 
 ---
 
@@ -40,6 +40,9 @@ tram run pipelines/minimal.yaml --dry-run
 
 # Start the daemon
 tram daemon &
+
+# Open the web UI
+open http://localhost:8765/ui/
 
 # Manage pipelines via CLI
 tram pipeline list
@@ -183,6 +186,15 @@ All `${VAR}` and `${VAR:-default}` placeholders are resolved from environment at
 
 ---
 
+## v1.0.7 Features
+
+| Feature | Description |
+|---------|-------------|
+| **Web UI (`tram-ui`)** | Bootstrap 5 SPA: Dashboard, Pipelines, Run History, Detail, Pipeline Editor, Schemas, MIBs, Cluster, Plugins, Settings. Dark/light mode toggle persisted in localStorage. Full REST API client wired to all pages. |
+| **UI embedded in image** | `tram-ui/dist/` built during Docker image build (multi-stage, Node 20) and served by FastAPI at `/ui` via `StaticFiles`; `GET /` redirects to `/ui/` |
+| **Dedicated K8s UI Service** | Helm `service-ui.yaml` creates a separate `{release}-ui` Service (`ClusterIP:80` → pod `:8765`) enabling distinct Ingress rules and NetworkPolicies for UI vs API traffic. Toggle with `ui.enabled`. |
+| **`TRAM_UI_DIR`** | New env var (default `/ui`); set to empty string to disable UI serving without rebuilding the image |
+
 ## v1.0.6 Features
 
 | Feature | Description |
@@ -279,16 +291,16 @@ The default image includes most connector and serializer extras — Kafka, MQTT,
 ```bash
 # Standalone (default) — single PVC at /data holds SQLite DB, schemas, and MIBs
 helm install tram oci://ghcr.io/OWNER/charts/tram \
-  --set image.tag=1.0.6
+  --set image.tag=1.0.7
 
 # With API key authentication
 helm install tram oci://ghcr.io/OWNER/charts/tram \
-  --set image.tag=1.0.6 \
+  --set image.tag=1.0.7 \
   --set apiKey=mysecret
 
 # Cluster mode (3-replica StatefulSet + external PostgreSQL)
 helm install tram oci://ghcr.io/OWNER/charts/tram \
-  --set image.tag=1.0.6 \
+  --set image.tag=1.0.7 \
   --set clusterMode.enabled=true \
   --set replicaCount=3 \
   --set envSecret.TRAM_DB_URL.secretName=tram-db \
@@ -333,7 +345,7 @@ helm install tram oci://ghcr.io/OWNER/charts/tram \
 | PUT | `/api/pipelines/{name}` | Update/replace a pipeline's YAML config in-place |
 | ANY | `/api/schemas/registry/{path}` | Reverse proxy to external schema registry (`TRAM_SCHEMA_REGISTRY_URL`) |
 
-All `/api/*` endpoints require `X-API-Key` header when `TRAM_API_KEY` is set. Health, ready, metrics, and webhooks are always exempt.
+All `/api/*` endpoints require `X-API-Key` header when `TRAM_API_KEY` is set. Health, ready, metrics, webhooks, and the web UI (`/ui`) are always exempt.
 
 Full reference: [`docs/api.md`](docs/api.md)
 
@@ -359,10 +371,13 @@ tram/
 ├── alerts/           AlertEvaluator (webhook + email, cooldown)
 ├── pipeline/         loader, executor, manager, linter (v1.0.0)
 ├── scheduler/        APScheduler (batch) + threads (stream) + rebalance loop
-├── api/              FastAPI routers + middleware (auth, rate-limit)
+├── api/              FastAPI routers + middleware (auth, rate-limit, UI mount)
 ├── daemon/           uvicorn server entrypoint (TLS support)
 └── cli/              Typer CLI (pipeline init, mib compile, validate)
-helm/                 Helm chart (StatefulSet, TLS, apiKey, cluster mode)
+tram-ui/              Bootstrap 5 web UI (Vite + Vanilla JS; built to /ui in image)
+├── src/              api.js, router.js, health.js, utils.js, style.css
+└── src/pages/        10 page modules (dashboard, pipelines, detail, editor, …)
+helm/                 Helm chart (StatefulSet, TLS, apiKey, cluster mode, UI service)
 .github/workflows/    ci.yml (lint + unit + integration tests) + release.yml
 ```
 

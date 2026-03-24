@@ -33,8 +33,21 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - Full TRAM REST API client in `src/api.js` (pipelines, runs, schemas, MIBs, daemon, health, meta, plugins)
 - Build: `npm run build` → self-contained `dist/` (~82 KB gzipped total)
 
+**Image — UI embedded in daemon**
+- Multi-stage Dockerfile: new `ui-builder` stage (`node:20-alpine`) runs `npm ci && npm run build`; built `dist/` copied to `/ui` in runtime stage
+- FastAPI mounts `StaticFiles` at `/ui` when `TRAM_UI_DIR` points to a valid directory; `GET /` redirects to `/ui/`
+- `/ui/*` and `/` exempt from API key authentication — static assets are public
+- `TRAM_UI_DIR=/ui` default env var; set to empty string to disable UI serving
+
+**Helm — dedicated UI Service**
+- New `helm/templates/service-ui.yaml` — `Service` named `{release}-ui` targeting the same pod port 8765 via a dedicated `ClusterIP:80` (or `NodePort`/`LoadBalancer`) when `ui.enabled=true`
+- `values.yaml`: new `ui:` section — `enabled`, `port`, `serviceType`, `nodePort`, `serviceAnnotations`
+- `statefulset.yaml`: injects `TRAM_UI_DIR=""` when `ui.enabled=false` to suppress static serving
+- `NOTES.txt`: prints UI port-forward command when `ui.enabled=true`
+
 ### Changed
 - `pyproject.toml`, `helm/Chart.yaml`: version → `1.0.7`
+- `tram/api/middleware.py`: `EXEMPT_PREFIX` extended to cover `/ui` and `/` (root redirect)
 
 ---
 
