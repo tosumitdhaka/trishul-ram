@@ -1,0 +1,44 @@
+<div class="d-flex gap-2 mb-3 align-items-center">
+  <button class="btn btn-sm btn-primary" id="detail-run-btn" onclick="window._detailRun?.()">
+    <i class="bi bi-play-fill me-1"></i>Run Now
+  </button>
+  <button class="btn-flat" title="Edit pipeline" onclick="navigate('editor')"><i class="bi bi-pencil"></i></button>
+  <button class="btn-flat" title="Download YAML" onclick="window._detailDownload?.()"><i class="bi bi-download"></i></button>
+  <button class="btn-flat ms-auto" onclick="navigate('pipelines')"><i class="bi bi-arrow-left me-1"></i></button>
+</div>
+
+<div class="row g-2 mb-3" id="detail-cards">
+  <div class="col-4"><div class="detail-card"><div class="detail-label">Source</div><div class="detail-val" id="detail-source">—</div></div></div>
+  <div class="col-4"><div class="detail-card"><div class="detail-label">Sinks</div><div class="detail-val" id="detail-sinks">—</div></div></div>
+  <div class="col-4"><div class="detail-card"><div class="detail-label">Schedule</div><div class="detail-val" id="detail-schedule">—</div></div></div>
+  <div class="col-4"><div class="detail-card"><div class="detail-label">Serializers</div><div class="detail-val" id="detail-serializers">—</div></div></div>
+  <div class="col-4"><div class="detail-card"><div class="detail-label">Transforms</div><div class="detail-val" id="detail-transforms">—</div></div></div>
+  <div class="col-4"><div class="detail-card"><div class="detail-label">Error Policy</div><div class="detail-val" id="detail-error">—</div></div></div>
+</div>
+
+<ul class="nav nav-tabs mb-3">
+  <li class="nav-item"><a class="nav-link active" href="#">Runs</a></li>
+  <li class="nav-item"><a class="nav-link" href="#">Versions</a></li>
+  <li class="nav-item"><a class="nav-link" href="#">Config</a></li>
+</ul>
+
+<div class="d-flex gap-2 mb-3 align-items-center">
+  <select class="form-select form-select-sm" style="width:130px" id="detail-runs-status">
+    <option value="">All status</option>
+    <option>success</option><option>failed</option><option>partial</option>
+  </select>
+  <input type="date" class="form-control form-control-sm" style="width:150px" id="detail-runs-from"/>
+  <button class="btn-flat ms-auto" title="Export CSV"><i class="bi bi-download"></i></button>
+</div>
+
+<div class="table-wrap">
+  <table class="table mb-0">
+    <thead><tr>
+      <th>Run ID</th><th>Node</th><th>Started</th><th>Duration</th>
+      <th>In</th><th>Out</th><th>Skipped</th><th>DLQ</th><th>Status</th><th>Error</th>
+    </tr></thead>
+    <tbody id="detail-runs-body">
+      <tr><td colspan="10" class="text-secondary text-center py-4">Loading…</td></tr>
+    </tbody>
+  </table>
+</div>

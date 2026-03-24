@@ -1,0 +1,146 @@
+<div class="accordion accordion-flush" id="pluginsAcc"
+     style="border:1px solid #30363d;border-radius:8px;overflow:hidden;">
+
+  <div class="accordion-item" style="background:#161b22;border-color:#30363d">
+    <h2 class="accordion-header">
+      <button class="accordion-button collapsed" type="button" data-bs-toggle="collapse" data-bs-target="#pacc-sources" style="background:#161b22;color:#e6edf3;font-size:14px;">
+        <i class="bi bi-box-arrow-in-right me-2 text-secondary"></i> Sources <span class="count-pill ms-2">24</span>
+      </button>
+    </h2>
+    <div id="pacc-sources" class="accordion-collapse collapse">
+      <div class="accordion-body p-0">
+        <table class="table table-sm mb-0" style="font-size:12px">
+          <thead><tr><th style="width:150px">Plugin</th><th>Description</th><th>Key config</th></tr></thead>
+          <tbody>
+            <tr><td class="mono fw-semibold">sftp</td><td class="text-secondary">Read files from SFTP server</td><td class="mono text-secondary" style="font-size:11px">host · username · remote_path · file_pattern · move_after_read</td></tr>
+            <tr><td class="mono fw-semibold">kafka</td><td class="text-secondary">Kafka consumer (Confluent-compatible)</td><td class="mono text-secondary" style="font-size:11px">brokers · topic · group_id · auto_offset_reset</td></tr>
+            <tr><td class="mono fw-semibold">rest</td><td class="text-secondary">HTTP/HTTPS poll source</td><td class="mono text-secondary" style="font-size:11px">url · method · auth_type · headers · pagination</td></tr>
+            <tr><td class="mono fw-semibold">local</td><td class="text-secondary">Local filesystem files</td><td class="mono text-secondary" style="font-size:11px">path · file_pattern · recursive · move_after_read</td></tr>
+            <tr><td class="mono fw-semibold">s3</td><td class="text-secondary">AWS S3 bucket objects</td><td class="mono text-secondary" style="font-size:11px">bucket · prefix · region · access_key_id</td></tr>
+            <tr><td class="mono fw-semibold">syslog</td><td class="text-secondary">UDP/TCP syslog receiver (RFC3164/5424)</td><td class="mono text-secondary" style="font-size:11px">host · port · protocol · framing</td></tr>
+            <tr><td class="mono fw-semibold">snmp_trap</td><td class="text-secondary">SNMP trap listener (v1/v2c/v3)</td><td class="mono text-secondary" style="font-size:11px">port · community · v3_user · mib_dir</td></tr>
+            <tr><td class="mono fw-semibold">snmp_poll</td><td class="text-secondary">SNMP GET/WALK polling</td><td class="mono text-secondary" style="font-size:11px">host · oids · community · version · mib_dir</td></tr>
+            <tr><td class="mono fw-semibold">mqtt</td><td class="text-secondary">MQTT subscriber</td><td class="mono text-secondary" style="font-size:11px">broker · port · topic · qos · client_id</td></tr>
+            <tr><td class="mono fw-semibold">amqp</td><td class="text-secondary">RabbitMQ / AMQP 0.9.1 consumer</td><td class="mono text-secondary" style="font-size:11px">url · queue · exchange · routing_key</td></tr>
+            <tr><td class="mono fw-semibold">nats</td><td class="text-secondary">NATS Core / JetStream subscriber</td><td class="mono text-secondary" style="font-size:11px">servers · subject · queue_group · durable</td></tr>
+            <tr><td class="mono fw-semibold">gnmi</td><td class="text-secondary">gNMI telemetry streaming (dial-in)</td><td class="mono text-secondary" style="font-size:11px">target · paths · encoding · tls_cert</td></tr>
+            <tr><td class="mono fw-semibold">sql</td><td class="text-secondary">SQL SELECT query source</td><td class="mono text-secondary" style="font-size:11px">dsn · query · batch_size · watermark_column</td></tr>
+            <tr><td class="mono fw-semibold">webhook</td><td class="text-secondary">HTTP POST receiver (push ingest)</td><td class="mono text-secondary" style="font-size:11px">path · secret · queue_size</td></tr>
+            <tr><td class="mono fw-semibold">redis</td><td class="text-secondary">Redis list / stream consumer</td><td class="mono text-secondary" style="font-size:11px">url · key · mode (list|stream) · consumer_group</td></tr>
+            <tr><td class="mono fw-semibold">influxdb</td><td class="text-secondary">InfluxDB Flux query source</td><td class="mono text-secondary" style="font-size:11px">url · token · org · bucket · query</td></tr>
+            <tr><td class="mono fw-semibold">elasticsearch</td><td class="text-secondary">Elasticsearch / OpenSearch query</td><td class="mono text-secondary" style="font-size:11px">hosts · index · query · scroll_ttl</td></tr>
+            <tr><td class="mono fw-semibold">prometheus_rw</td><td class="text-secondary">Prometheus remote-write receiver</td><td class="mono text-secondary" style="font-size:11px">path · listen_port</td></tr>
+            <tr><td class="mono fw-semibold">gcs</td><td class="text-secondary">Google Cloud Storage objects</td><td class="mono text-secondary" style="font-size:11px">bucket · prefix · credentials_file</td></tr>
+            <tr><td class="mono fw-semibold">azure_blob</td><td class="text-secondary">Azure Blob Storage objects</td><td class="mono text-secondary" style="font-size:11px">connection_string · container · prefix</td></tr>
+            <tr><td class="mono fw-semibold">websocket</td><td class="text-secondary">WebSocket client subscriber</td><td class="mono text-secondary" style="font-size:11px">url · headers · reconnect_delay</td></tr>
+            <tr><td class="mono fw-semibold">clickhouse</td><td class="text-secondary">ClickHouse SELECT query source</td><td class="mono text-secondary" style="font-size:11px">host · port · database · query</td></tr>
+            <tr><td class="mono fw-semibold">ftp</td><td class="text-secondary">FTP server file reader</td><td class="mono text-secondary" style="font-size:11px">host · port · username · remote_path</td></tr>
+            <tr><td class="mono fw-semibold">corba</td><td class="text-secondary">CORBA/IDL telecom interface</td><td class="mono text-secondary" style="font-size:11px">ior · interface · operation</td></tr>
+          </tbody>
+        </table>
+      </div>
+    </div>
+  </div>
+
+  <div class="accordion-item" style="background:#161b22;border-color:#30363d">
+    <h2 class="accordion-header">
+      <button class="accordion-button collapsed" type="button" data-bs-toggle="collapse" data-bs-target="#pacc-sinks" style="background:#161b22;color:#e6edf3;font-size:14px;">
+        <i class="bi bi-box-arrow-right me-2 text-secondary"></i> Sinks <span class="count-pill ms-2">20</span>
+      </button>
+    </h2>
+    <div id="pacc-sinks" class="accordion-collapse collapse">
+      <div class="accordion-body p-0">
+        <table class="table table-sm mb-0" style="font-size:12px">
+          <thead><tr><th style="width:150px">Plugin</th><th>Description</th><th>Key config</th></tr></thead>
+          <tbody>
+            <tr><td class="mono fw-semibold">kafka</td><td class="text-secondary">Publish records to Kafka topic</td><td class="mono text-secondary" style="font-size:11px">brokers · topic · key_field · compression</td></tr>
+            <tr><td class="mono fw-semibold">opensearch</td><td class="text-secondary">Index to OpenSearch / Elasticsearch</td><td class="mono text-secondary" style="font-size:11px">hosts · index · id_field · bulk_size</td></tr>
+            <tr><td class="mono fw-semibold">rest</td><td class="text-secondary">HTTP POST to external API</td><td class="mono text-secondary" style="font-size:11px">url · method · auth_type · api_key · headers</td></tr>
+            <tr><td class="mono fw-semibold">local</td><td class="text-secondary">Write records to local files</td><td class="mono text-secondary" style="font-size:11px">path · filename_template · rotate_mb</td></tr>
+            <tr><td class="mono fw-semibold">sftp</td><td class="text-secondary">Upload files to SFTP server</td><td class="mono text-secondary" style="font-size:11px">host · username · remote_path · filename_template</td></tr>
+            <tr><td class="mono fw-semibold">s3</td><td class="text-secondary">Upload objects to AWS S3</td><td class="mono text-secondary" style="font-size:11px">bucket · prefix · region · filename_template</td></tr>
+            <tr><td class="mono fw-semibold">sql</td><td class="text-secondary">INSERT / upsert into SQL database</td><td class="mono text-secondary" style="font-size:11px">dsn · table · upsert_keys · batch_size</td></tr>
+            <tr><td class="mono fw-semibold">influxdb</td><td class="text-secondary">Write to InfluxDB line protocol</td><td class="mono text-secondary" style="font-size:11px">url · token · org · bucket · measurement_field</td></tr>
+            <tr><td class="mono fw-semibold">redis</td><td class="text-secondary">Push to Redis list / stream</td><td class="mono text-secondary" style="font-size:11px">url · key · mode (list|stream)</td></tr>
+            <tr><td class="mono fw-semibold">ves</td><td class="text-secondary">3GPP VES event streaming</td><td class="mono text-secondary" style="font-size:11px">url · domain · event_type · auth_type</td></tr>
+            <tr><td class="mono fw-semibold">mqtt</td><td class="text-secondary">Publish to MQTT broker</td><td class="mono text-secondary" style="font-size:11px">broker · port · topic · qos · retain</td></tr>
+            <tr><td class="mono fw-semibold">amqp</td><td class="text-secondary">Publish to RabbitMQ / AMQP</td><td class="mono text-secondary" style="font-size:11px">url · exchange · routing_key</td></tr>
+            <tr><td class="mono fw-semibold">nats</td><td class="text-secondary">Publish to NATS subject</td><td class="mono text-secondary" style="font-size:11px">servers · subject</td></tr>
+            <tr><td class="mono fw-semibold">clickhouse</td><td class="text-secondary">INSERT into ClickHouse</td><td class="mono text-secondary" style="font-size:11px">host · port · database · table · batch_size</td></tr>
+            <tr><td class="mono fw-semibold">gcs</td><td class="text-secondary">Upload to Google Cloud Storage</td><td class="mono text-secondary" style="font-size:11px">bucket · prefix · credentials_file</td></tr>
+            <tr><td class="mono fw-semibold">azure_blob</td><td class="text-secondary">Upload to Azure Blob Storage</td><td class="mono text-secondary" style="font-size:11px">connection_string · container · blob_name_template</td></tr>
+            <tr><td class="mono fw-semibold">elasticsearch</td><td class="text-secondary">Index to Elasticsearch</td><td class="mono text-secondary" style="font-size:11px">hosts · index · id_field</td></tr>
+            <tr><td class="mono fw-semibold">websocket</td><td class="text-secondary">Broadcast records via WebSocket</td><td class="mono text-secondary" style="font-size:11px">listen_port · path</td></tr>
+            <tr><td class="mono fw-semibold">snmp_trap</td><td class="text-secondary">Send SNMP traps to NMS</td><td class="mono text-secondary" style="font-size:11px">host · port · community · oid_map</td></tr>
+            <tr><td class="mono fw-semibold">ftp</td><td class="text-secondary">Upload files to FTP server</td><td class="mono text-secondary" style="font-size:11px">host · port · username · remote_path</td></tr>
+          </tbody>
+        </table>
+      </div>
+    </div>
+  </div>
+
+  <div class="accordion-item" style="background:#161b22;border-color:#30363d">
+    <h2 class="accordion-header">
+      <button class="accordion-button collapsed" type="button" data-bs-toggle="collapse" data-bs-target="#pacc-ser" style="background:#161b22;color:#e6edf3;font-size:14px;">
+        <i class="bi bi-braces me-2 text-secondary"></i> Serializers <span class="count-pill ms-2">10</span>
+      </button>
+    </h2>
+    <div id="pacc-ser" class="accordion-collapse collapse">
+      <div class="accordion-body p-0">
+        <table class="table table-sm mb-0" style="font-size:12px">
+          <thead><tr><th style="width:150px">Plugin</th><th>Description</th><th>Key config</th></tr></thead>
+          <tbody>
+            <tr><td class="mono fw-semibold">json</td><td class="text-secondary">JSON encode / decode</td><td class="mono text-secondary" style="font-size:11px">root_key · encoding</td></tr>
+            <tr><td class="mono fw-semibold">xml</td><td class="text-secondary">XML parse (lxml) with xpath support</td><td class="mono text-secondary" style="font-size:11px">record_xpath · ns_map · strip_namespaces</td></tr>
+            <tr><td class="mono fw-semibold">csv</td><td class="text-secondary">CSV read / write</td><td class="mono text-secondary" style="font-size:11px">delimiter · has_header · quotechar</td></tr>
+            <tr><td class="mono fw-semibold">avro</td><td class="text-secondary">Apache Avro with schema registry</td><td class="mono text-secondary" style="font-size:11px">schema_file · schema_registry_url · subject</td></tr>
+            <tr><td class="mono fw-semibold">protobuf</td><td class="text-secondary">Protocol Buffers with .proto schema</td><td class="mono text-secondary" style="font-size:11px">schema_file · message_type · schema_registry_url</td></tr>
+            <tr><td class="mono fw-semibold">parquet</td><td class="text-secondary">Apache Parquet (columnar)</td><td class="mono text-secondary" style="font-size:11px">schema_file · compression · row_group_size</td></tr>
+            <tr><td class="mono fw-semibold">msgpack</td><td class="text-secondary">MessagePack binary serialization</td><td class="mono text-secondary" style="font-size:11px">raw · strict_map_key</td></tr>
+            <tr><td class="mono fw-semibold">ndjson</td><td class="text-secondary">Newline-delimited JSON (one record per line)</td><td class="mono text-secondary" style="font-size:11px">encoding</td></tr>
+            <tr><td class="mono fw-semibold">bytes</td><td class="text-secondary">Raw bytes passthrough (no parsing)</td><td class="mono text-secondary" style="font-size:11px">field_name</td></tr>
+            <tr><td class="mono fw-semibold">text</td><td class="text-secondary">Plain text, one record per line</td><td class="mono text-secondary" style="font-size:11px">encoding · strip_newlines</td></tr>
+          </tbody>
+        </table>
+      </div>
+    </div>
+  </div>
+
+  <div class="accordion-item" style="background:#161b22;border-color:#30363d">
+    <h2 class="accordion-header">
+      <button class="accordion-button collapsed" type="button" data-bs-toggle="collapse" data-bs-target="#pacc-tx" style="background:#161b22;color:#e6edf3;font-size:14px;">
+        <i class="bi bi-shuffle me-2 text-secondary"></i> Transforms <span class="count-pill ms-2">20</span>
+      </button>
+    </h2>
+    <div id="pacc-tx" class="accordion-collapse collapse">
+      <div class="accordion-body p-0">
+        <table class="table table-sm mb-0" style="font-size:12px">
+          <thead><tr><th style="width:150px">Plugin</th><th>Description</th><th>Key config</th></tr></thead>
+          <tbody>
+            <tr><td class="mono fw-semibold">rename</td><td class="text-secondary">Rename field keys</td><td class="mono text-secondary" style="font-size:11px">fields: {old: new}</td></tr>
+            <tr><td class="mono fw-semibold">cast</td><td class="text-secondary">Type-cast field values</td><td class="mono text-secondary" style="font-size:11px">fields: {name: int|float|str|bool}</td></tr>
+            <tr><td class="mono fw-semibold">add_field</td><td class="text-secondary">Add computed or static fields</td><td class="mono text-secondary" style="font-size:11px">fields: {name: expression}</td></tr>
+            <tr><td class="mono fw-semibold">drop</td><td class="text-secondary">Remove fields from records</td><td class="mono text-secondary" style="font-size:11px">fields: [list]</td></tr>
+            <tr><td class="mono fw-semibold">filter</td><td class="text-secondary">Drop records not matching expression</td><td class="mono text-secondary" style="font-size:11px">condition: "field == value"</td></tr>
+            <tr><td class="mono fw-semibold">value_map</td><td class="text-secondary">Map field values via lookup table</td><td class="mono text-secondary" style="font-size:11px">field · mapping: {old: new} · default</td></tr>
+            <tr><td class="mono fw-semibold">flatten</td><td class="text-secondary">Flatten nested dicts one level</td><td class="mono text-secondary" style="font-size:11px">separator · max_depth</td></tr>
+            <tr><td class="mono fw-semibold">timestamp_normalize</td><td class="text-secondary">Normalize timestamps to ISO8601 UTC</td><td class="mono text-secondary" style="font-size:11px">fields: [list] · input_format · timezone</td></tr>
+            <tr><td class="mono fw-semibold">aggregate</td><td class="text-secondary">Group-by aggregation (sum/count/avg)</td><td class="mono text-secondary" style="font-size:11px">group_by · aggs: {field: sum|count|avg|min|max}</td></tr>
+            <tr><td class="mono fw-semibold">enrich</td><td class="text-secondary">Lookup enrichment from CSV/JSON/DB</td><td class="mono text-secondary" style="font-size:11px">source · key_field · add_fields</td></tr>
+            <tr><td class="mono fw-semibold">explode</td><td class="text-secondary">Expand array field into separate records</td><td class="mono text-secondary" style="font-size:11px">field · keep_parent_fields</td></tr>
+            <tr><td class="mono fw-semibold">deduplicate</td><td class="text-secondary">Drop duplicate records by key fields</td><td class="mono text-secondary" style="font-size:11px">fields · window_seconds</td></tr>
+            <tr><td class="mono fw-semibold">regex_extract</td><td class="text-secondary">Extract regex named groups to fields</td><td class="mono text-secondary" style="font-size:11px">field · pattern · on_no_match</td></tr>
+            <tr><td class="mono fw-semibold">template</td><td class="text-secondary">Jinja2 expression field rendering</td><td class="mono text-secondary" style="font-size:11px">fields: {name: "{{ expr }}"}</td></tr>
+            <tr><td class="mono fw-semibold">mask</td><td class="text-secondary">Mask / redact sensitive field values</td><td class="mono text-secondary" style="font-size:11px">fields · method (hash|redact|partial)</td></tr>
+            <tr><td class="mono fw-semibold">validate</td><td class="text-secondary">Schema validation, failures → DLQ</td><td class="mono text-secondary" style="font-size:11px">schema_file · on_fail (dlq|drop|warn)</td></tr>
+            <tr><td class="mono fw-semibold">sort</td><td class="text-secondary">Sort records by one or more fields</td><td class="mono text-secondary" style="font-size:11px">fields · ascending</td></tr>
+            <tr><td class="mono fw-semibold">limit</td><td class="text-secondary">Limit record count per batch</td><td class="mono text-secondary" style="font-size:11px">count · offset</td></tr>
+            <tr><td class="mono fw-semibold">jmespath</td><td class="text-secondary">JMESPath expression transforms</td><td class="mono text-secondary" style="font-size:11px">expression · output_field</td></tr>
+            <tr><td class="mono fw-semibold">unnest</td><td class="text-secondary">Flatten one level of nested dict to top</td><td class="mono text-secondary" style="font-size:11px">field · prefix</td></tr>
+          </tbody>
+        </table>
+      </div>
+    </div>
+  </div>
+
+</div>

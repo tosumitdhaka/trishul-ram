@@ -1,0 +1,36 @@
+<div class="row g-3">
+  <div class="col-9">
+    <div class="editor-wrap">
+      <div class="editor-bar">
+        <span class="editor-filename" id="editor-filename">new-pipeline.yaml</span>
+        <div class="ms-auto d-flex gap-2">
+          <button class="btn-flat d-flex align-items-center gap-1" style="font-size:13px;color:#8b949e"
+                  onclick="navigate('pipelines')">
+            <i class="bi bi-x" style="font-size:15px"></i> Cancel
+          </button>
+          <button class="btn-flat d-flex align-items-center gap-1" style="font-size:13px;color:#8b949e"
+                  onclick="window._editorDryRun?.()">
+            <i class="bi bi-lightning" style="font-size:15px"></i> Dry Run
+          </button>
+          <button class="btn btn-sm btn-primary" onclick="window._editorSave?.()">
+            <i class="bi bi-check-lg"></i> Save Pipeline
+          </button>
+        </div>
+      </div>
+      <textarea id="editor-textarea" class="editor-body w-100" style="resize:none;outline:none;border:none;min-height:520px"
+                spellcheck="false" placeholder="Paste or type YAML pipeline definition…"></textarea>
+    </div>
+  </div>
+  <div class="col-3">
+    <div class="ref-panel">
+      <div class="ref-cat">Sources</div>
+      <span class="ref-pill">sftp</span><span class="ref-pill">kafka</span><span class="ref-pill">rest</span><span class="ref-pill">local</span><span class="ref-pill">s3</span><span class="ref-pill">syslog</span><span class="ref-pill">snmp_trap</span><span class="ref-pill">snmp_poll</span><span class="ref-pill">mqtt</span><span class="ref-pill">amqp</span><span class="ref-pill">nats</span><span class="ref-pill">webhook</span><span class="ref-pill">gnmi</span><span class="ref-pill">redis</span><span class="ref-pill">sql</span><span class="ref-pill">ftp</span><span class="ref-pill">gcs</span><span class="ref-pill">azure_blob</span><span class="ref-pill">websocket</span><span class="ref-pill">influxdb</span><span class="ref-pill">elasticsearch</span><span class="ref-pill">prometheus_rw</span><span class="ref-pill">clickhouse</span><span class="ref-pill">corba</span>
+      <div class="ref-cat">Sinks</div>
+      <span class="ref-pill">kafka</span><span class="ref-pill">opensearch</span><span class="ref-pill">rest</span><span class="ref-pill">local</span><span class="ref-pill">sftp</span><span class="ref-pill">s3</span><span class="ref-pill">sql</span><span class="ref-pill">influxdb</span><span class="ref-pill">redis</span><span class="ref-pill">ves</span><span class="ref-pill">mqtt</span><span class="ref-pill">amqp</span><span class="ref-pill">nats</span><span class="ref-pill">gcs</span><span class="ref-pill">azure_blob</span><span class="ref-pill">elasticsearch</span><span class="ref-pill">websocket</span><span class="ref-pill">snmp_trap</span><span class="ref-pill">ftp</span><span class="ref-pill">clickhouse</span>
+      <div class="ref-cat">Serializers</div>
+      <span class="ref-pill">json</span><span class="ref-pill">xml</span><span class="ref-pill">csv</span><span class="ref-pill">avro</span><span class="ref-pill">protobuf</span><span class="ref-pill">parquet</span><span class="ref-pill">msgpack</span><span class="ref-pill">ndjson</span><span class="ref-pill">bytes</span><span class="ref-pill">text</span>
+      <div class="ref-cat">Transforms</div>
+      <span class="ref-pill">rename</span><span class="ref-pill">cast</span><span class="ref-pill">add_field</span><span class="ref-pill">drop</span><span class="ref-pill">filter</span><span class="ref-pill">value_map</span><span class="ref-pill">flatten</span><span class="ref-pill">timestamp_normalize</span><span class="ref-pill">aggregate</span><span class="ref-pill">enrich</span><span class="ref-pill">explode</span><span class="ref-pill">deduplicate</span><span class="ref-pill">regex_extract</span><span class="ref-pill">template</span><span class="ref-pill">mask</span><span class="ref-pill">validate</span><span class="ref-pill">sort</span><span class="ref-pill">limit</span><span class="ref-pill">jmespath</span><span class="ref-pill">unnest</span>
+    </div>
+  </div>
+</div>

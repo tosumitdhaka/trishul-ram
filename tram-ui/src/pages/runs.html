@@ -1,0 +1,29 @@
+<div class="d-flex gap-2 mb-3 align-items-center">
+  <select class="form-select form-select-sm" style="width:200px" id="runs-pipeline">
+    <option value="">All pipelines</option>
+  </select>
+  <select class="form-select form-select-sm" style="width:130px" id="runs-status">
+    <option value="">All status</option>
+    <option>success</option><option>failed</option><option>partial</option>
+  </select>
+  <input type="date" class="form-control form-control-sm" style="width:150px" id="runs-from"/>
+  <button class="btn-flat ms-auto" title="Export CSV" onclick="window._runsExport?.()">
+    <i class="bi bi-download"></i>
+  </button>
+</div>
+
+<div class="table-wrap">
+  <div class="table-head-row">
+    <span class="table-head-title">Run History</span>
+    <span class="count-pill" id="runs-count"></span>
+  </div>
+  <table class="table mb-0">
+    <thead><tr>
+      <th></th><th>Run ID</th><th>Pipeline</th><th>Node</th>
+      <th>Started</th><th>Dur</th><th>In</th><th>Out</th><th>Skipped</th><th>DLQ</th><th>Status</th>
+    </tr></thead>
+    <tbody id="runs-body">
+      <tr><td colspan="11" class="text-secondary text-center py-4">Loading…</td></tr>
+    </tbody>
+  </table>
+</div>
