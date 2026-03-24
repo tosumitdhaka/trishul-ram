@@ -19,6 +19,9 @@ replicaCount: 1
 clusterMode:
   enabled: false
 
+## App name prefix for all K8s resource names.
+## Defaults to the chart name (trishul-ram).
+## Override to shorten or rename — e.g. nameOverride: "tram" gives back short names like tram-0.
 nameOverride: ""
 fullnameOverride: ""
 
