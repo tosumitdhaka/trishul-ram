@@ -1,6 +1,6 @@
 TRAM {{ .Chart.AppVersion }} has been deployed!
 
-1. Get the application URL:
+1. Get the API URL:
 {{- if contains "NodePort" .Values.service.type }}
   export NODE_PORT=$(kubectl get --namespace {{ .Release.Namespace }} -o jsonpath="{.spec.ports[0].nodePort}" services {{ include "tram.fullname" . }})
   export NODE_IP=$(kubectl get nodes --namespace {{ .Release.Namespace }} -o jsonpath="{.items[0].status.addresses[0].address}")
@@ -10,10 +10,24 @@ TRAM {{ .Chart.AppVersion }} has been deployed!
   watch kubectl get --namespace {{ .Release.Namespace }} svc -w {{ include "tram.fullname" . }}
 {{- else if contains "ClusterIP" .Values.service.type }}
   kubectl --namespace {{ .Release.Namespace }} port-forward svc/{{ include "tram.fullname" . }} 8765:{{ .Values.service.port }}
-  echo "Visit http://127.0.0.1:8765"
+  echo "API: http://127.0.0.1:8765"
+{{- end }}
+{{- if .Values.ui.enabled }}
+
+2. Open the web UI:
+{{- if contains "NodePort" .Values.ui.serviceType }}
+  export UI_PORT=$(kubectl get --namespace {{ .Release.Namespace }} -o jsonpath="{.spec.ports[0].nodePort}" services {{ include "tram.fullname" . }}-ui)
+  export NODE_IP=$(kubectl get nodes --namespace {{ .Release.Namespace }} -o jsonpath="{.items[0].status.addresses[0].address}")
+  echo http://$NODE_IP:$UI_PORT/ui/
+{{- else if contains "LoadBalancer" .Values.ui.serviceType }}
+  watch kubectl get --namespace {{ .Release.Namespace }} svc -w {{ include "tram.fullname" . }}-ui
+{{- else }}
+  kubectl --namespace {{ .Release.Namespace }} port-forward svc/{{ include "tram.fullname" . }}-ui 8080:{{ .Values.ui.port }}
+  echo "UI:  http://127.0.0.1:8080/ui/"
+{{- end }}
 {{- end }}
 
-2. Check daemon health and readiness:
+3. Check daemon health and readiness:
   curl http://127.0.0.1:8765/api/health
   curl http://127.0.0.1:8765/api/ready
 
