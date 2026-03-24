@@ -9,6 +9,35 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ---
 
+## [1.0.7] — 2026-03-24
+
+### Added
+
+**`tram-ui` — Bootstrap 5 web UI**
+- New `tram-ui/` Vite + Vanilla JS project: fully self-contained frontend (no CDN), suitable for Docker embedding
+- Bootstrap 5.3 dark theme base; all custom styles in `src/style.css` via CSS custom properties for full dark/light mode support
+- Hash-based SPA router (`#dashboard`, `#pipelines`, `#runs`, etc.) with lazy page `init()` loading
+- **Dashboard**: stat cards (total/running/errors/records-out), Active Pipelines table with inline stop/play actions, Recent Runs table
+- **Pipelines**: live table with search + status/type filters, per-row start/stop/run/edit/delete, Reload from disk
+- **Run History**: filtered by pipeline/status/date, expandable error rows, CSV export
+- **Pipeline Detail**: summary cards (source/sinks/schedule/transforms/error policy), run history with filters, Runs/Versions/Config tab switching, version rollback
+- **Pipeline Editor**: YAML editor with Tab-key indent, `new-pipeline.yaml` template for new pipelines, loads existing YAML for edits, Dry Run with inline result panel, Save (create/update)
+- **Schemas**: schema file list, drag-and-drop upload zone with subdirectory support, per-row delete
+- **MIB Modules**: compiled MIB list, drag-and-drop `.mib` upload, bulk download from mibs.pysnmp.com, per-row delete
+- **Cluster**: accordion node list from `/api/daemon/status`, online/offline status dots, pipeline assignment per node
+- **Plugins**: accordion with Sources 24 / Sinks 20 / Serializers 10 / Transforms 20
+- **Settings**: connection form (base URL, API key, poll interval), Save/Test Connection, Daemon Status table, Reload Pipelines
+- **Health poller**: 10s interval, sidebar dot + topbar hover card show daemon online/offline state, version, scheduler, DB status
+- **Dark/light mode toggle** persisted in `localStorage`; all custom CSS uses CSS variables with full light-mode palette
+- Shared `utils.js`: `relTime`, `fmtDur`, `fmtNum`, `statusBadge`, `schedBadge`, `esc`, `toast`
+- Full TRAM REST API client in `src/api.js` (pipelines, runs, schemas, MIBs, daemon, health, meta, plugins)
+- Build: `npm run build` → self-contained `dist/` (~82 KB gzipped total)
+
+### Changed
+- `pyproject.toml`, `helm/Chart.yaml`: version → `1.0.7`
+
+---
+
 ## [1.0.6] — 2026-03-13
 
 ### Added

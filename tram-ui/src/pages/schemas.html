@@ -1,0 +1,34 @@
+<div class="row g-3">
+  <div class="col-8">
+    <div class="table-wrap">
+      <div class="table-head-row">
+        <span class="table-head-title">Schema Files</span>
+        <span class="count-pill" id="schemas-count"></span>
+      </div>
+      <table class="table mb-0">
+        <thead><tr><th>File</th><th>Type</th><th>Size</th><th class="text-end">Actions</th></tr></thead>
+        <tbody id="schemas-body">
+          <tr><td colspan="4" class="text-secondary text-center py-4">Loading…</td></tr>
+        </tbody>
+      </table>
+    </div>
+  </div>
+  <div class="col-4">
+    <div class="settings-card mb-3">
+      <div class="fw-semibold mb-3">Upload Schema</div>
+      <div class="upload-zone mb-3" id="schema-drop-zone">
+        <i class="bi bi-file-earmark-arrow-up fs-3 text-secondary"></i>
+        <div class="text-secondary mt-2">Drop file here or click to browse</div>
+        <div class="text-secondary" style="font-size:11px">.proto · .avsc · .json · .xsd · .yaml</div>
+        <input type="file" id="schema-file-input" style="display:none"
+               accept=".proto,.avsc,.json,.xsd,.yaml,.yml"/>
+      </div>
+      <div class="mb-2">
+        <label class="form-label">Subdirectory (optional)</label>
+        <input class="form-control form-control-sm" id="schema-subdir" placeholder="e.g. cisco"/>
+        <div class="form-text">Files in same subdir share import paths</div>
+      </div>
+      <button class="btn btn-primary btn-sm w-100" onclick="window._schemasUpload?.()">Upload</button>
+    </div>
+  </div>
+</div>

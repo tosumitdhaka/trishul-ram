@@ -1,0 +1,47 @@
+<div class="row g-3" style="max-width:900px">
+  <div class="col-6">
+    <div class="settings-card h-100">
+      <div class="fw-semibold mb-3">Connection</div>
+      <div class="mb-3">
+        <label class="form-label">Trishul-RAM Base URL</label>
+        <input class="form-control form-control-sm" id="cfg-url" placeholder="http://localhost:8765"/>
+        <div class="form-text">Base URL of the TRAM daemon</div>
+      </div>
+      <div class="mb-3">
+        <label class="form-label">API Key</label>
+        <input class="form-control form-control-sm" id="cfg-key" type="password" placeholder="leave blank if auth disabled"/>
+        <div class="form-text">Sent as X-API-Key header</div>
+      </div>
+      <div class="mb-3">
+        <label class="form-label">Poll Interval (seconds)</label>
+        <input class="form-control form-control-sm" id="cfg-poll" type="number" value="10"/>
+        <div class="form-text">How often the UI refreshes pipeline/run status</div>
+      </div>
+      <div class="d-flex gap-2 align-items-center">
+        <button class="btn btn-sm btn-primary" onclick="window._settingsSave?.()">Save</button>
+        <button class="btn btn-sm btn-secondary" onclick="window._settingsTest?.()">Test Connection</button>
+        <span id="cfg-status" style="font-size:12px" class="ms-2"></span>
+      </div>
+    </div>
+  </div>
+  <div class="col-6">
+    <div class="settings-card h-100">
+      <div class="fw-semibold mb-3">Daemon Status</div>
+      <table class="table table-sm mb-3" style="font-size:13px">
+        <tbody>
+          <tr><td class="text-secondary" style="width:140px">Scheduler</td><td id="ds-scheduler">—</td></tr>
+          <tr><td class="text-secondary">DB Engine</td><td id="ds-db-engine" class="mono">—</td></tr>
+          <tr><td class="text-secondary">DB Status</td><td id="ds-db-status">—</td></tr>
+          <tr><td class="text-secondary">DB Path</td><td id="ds-db-path" class="mono text-secondary" style="font-size:11px">—</td></tr>
+          <tr><td class="text-secondary">Cluster</td><td id="ds-cluster" class="text-secondary">—</td></tr>
+          <tr><td class="text-secondary">Pipelines loaded</td><td id="ds-pipelines">—</td></tr>
+          <tr><td class="text-secondary">Python</td><td id="ds-python" class="mono text-secondary">—</td></tr>
+          <tr><td class="text-secondary">Uptime</td><td id="ds-uptime" class="text-secondary">—</td></tr>
+        </tbody>
+      </table>
+      <button class="btn btn-sm btn-secondary" onclick="window._settingsReload?.()">
+        <i class="bi bi-arrow-repeat me-1"></i>Reload Pipelines
+      </button>
+    </div>
+  </div>
+</div>

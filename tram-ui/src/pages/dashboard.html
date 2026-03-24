@@ -1,0 +1,54 @@
+<div class="row g-3 mb-3" id="dash-stats">
+  <div class="col-3"><div class="stat-card">
+    <div class="stat-label">Total Pipelines</div>
+    <div class="stat-val" id="stat-total">—</div>
+    <div class="stat-sub" id="stat-total-sub">loading…</div>
+  </div></div>
+  <div class="col-3"><div class="stat-card">
+    <div class="stat-label">Running</div>
+    <div class="stat-val" id="stat-running" style="color:#3fb950">—</div>
+    <div class="stat-sub" id="stat-running-sub"></div>
+  </div></div>
+  <div class="col-3"><div class="stat-card">
+    <div class="stat-label">Errors (24h)</div>
+    <div class="stat-val" id="stat-errors" style="color:#f85149">—</div>
+    <div class="stat-sub" id="stat-errors-sub"></div>
+  </div></div>
+  <div class="col-3"><div class="stat-card">
+    <div class="stat-label">Records Out (24h)</div>
+    <div class="stat-val" id="stat-records">—</div>
+    <div class="stat-sub" id="stat-records-sub"></div>
+  </div></div>
+</div>
+
+<div class="row g-3">
+  <div class="col-7">
+    <div class="table-wrap">
+      <div class="table-head-row">
+        <span class="table-head-title">Active Pipelines</span>
+        <span class="count-pill" id="dash-pipeline-count"></span>
+      </div>
+      <table class="table mb-0">
+        <thead><tr><th>Name</th><th>Type</th><th>Status</th><th>Last Run</th><th></th></tr></thead>
+        <tbody id="dash-pipelines-body">
+          <tr><td colspan="5" class="text-secondary text-center py-4">Loading…</td></tr>
+        </tbody>
+      </table>
+    </div>
+  </div>
+  <div class="col-5">
+    <div class="table-wrap">
+      <div class="table-head-row">
+        <span class="table-head-title">Recent Runs</span>
+        <span class="count-pill">last 10</span>
+        <button class="btn btn-sm btn-link ms-auto text-secondary" onclick="navigate('runs')">View all →</button>
+      </div>
+      <table class="table mb-0">
+        <thead><tr><th>Pipeline</th><th>Status</th><th>In</th><th>Out</th><th>Dur</th></tr></thead>
+        <tbody id="dash-runs-body">
+          <tr><td colspan="5" class="text-secondary text-center py-4">Loading…</td></tr>
+        </tbody>
+      </table>
+    </div>
+  </div>
+</div>
