@@ -49,6 +49,7 @@ All configuration is via environment variables (12-factor).
 | `TRAM_SCHEMA_REGISTRY_URL` | _(empty)_ | Base URL of an external Confluent-compatible schema registry; enables `/api/schemas/registry/*` proxy and serves as the default `schema_registry_url` for Avro/Protobuf serializers (v1.0.4) |
 | `TRAM_SCHEMA_REGISTRY_USERNAME` | _(empty)_ | Basic-auth username for the external schema registry; used as default when not set in pipeline YAML (v1.0.4) |
 | `TRAM_SCHEMA_REGISTRY_PASSWORD` | _(empty)_ | Basic-auth password for the external schema registry; used as default when not set in pipeline YAML (v1.0.4) |
+| `TRAM_UI_DIR` | `/ui` | Directory containing built tram-ui static assets; set to empty string to disable the web UI without rebuilding the image (v1.0.7) |
 
 ### Database backends (v0.7.0)
 
@@ -81,7 +82,7 @@ curl -H "X-API-Key: $TRAM_API_KEY" http://localhost:8765/api/pipelines
 curl "http://localhost:8765/api/pipelines?api_key=$TRAM_API_KEY"
 ```
 
-Exempt paths (no key needed): `/api/health`, `/api/ready`, `/metrics`, `/webhooks/*`
+Exempt paths (no key needed): `/api/health`, `/api/ready`, `/metrics`, `/webhooks/*`, `/ui/*`, `/`
 
 When `TRAM_API_KEY` is empty (default), all requests pass through without authentication.
 
@@ -183,7 +184,7 @@ tram mib compile /path/to/vendor-mibs/ --out /mibs
 **Air-gapped environments** — copy pre-compiled MIB `.py` files into the image:
 
 ```dockerfile
-FROM ghcr.io/OWNER/tram:1.0.6
+FROM ghcr.io/OWNER/tram:1.0.7
 COPY compiled-mibs/*.py /mibs/
 ```
 
@@ -228,7 +229,7 @@ curl -X DELETE http://localhost:8765/api/schemas/cisco/GenericRecord.proto
 **Mount host directory** for development (read-write):
 
 ```bash
-docker run -v ./schemas:/schemas tram:1.0.6
+docker run -v ./schemas:/schemas tram:1.0.7
 ```
 
 ## Schema Registry Integration (v1.0.4)
@@ -261,6 +262,76 @@ environment:
   TRAM_SCHEMA_REGISTRY_PASSWORD: ${SR_PASS:-}
 ```
 
+## Web UI (v1.0.7)
+
+The `tram-ui` Bootstrap 5 SPA is built into the Docker image at `/ui` and served by the daemon at `http://<host>:8765/ui/`. Navigating to `/` redirects there automatically.
+
+```bash
+# Local development
+tram daemon &
+open http://localhost:8765/ui/
+
+# Disable UI serving without rebuilding the image
+TRAM_UI_DIR="" tram daemon
+```
+
+### UI pages
+
+| Page | Description |
+|------|-------------|
+| Dashboard | Stat cards, active pipelines, recent runs |
+| Pipelines | Full list with search/filter, start/stop/run/edit/delete |
+| Run History | Filterable table with expandable error rows, CSV export |
+| Pipeline Detail | Summary cards, run history, Versions tab, Config tab, rollback |
+| Pipeline Editor | YAML editor, dry-run, save (create/update) |
+| Schemas | Upload (drag-and-drop), list, delete |
+| MIB Modules | Upload, bulk download from mibs.pysnmp.com, delete |
+| Cluster | Node accordion with status and pipeline assignments |
+| Plugins | Registered sources/sinks/serializers/transforms |
+| Settings | Connection config, daemon status, Reload Pipelines |
+
+### Kubernetes — UI Service
+
+When `ui.enabled=true` (default), the Helm chart creates a dedicated `{release}-ui` Service:
+
+```
+tram        ClusterIP  :8765  ← API traffic (restrict via NetworkPolicy)
+tram-ui     ClusterIP  :80    ← UI traffic  (expose via Ingress)
+```
+
+Both target the same pod on port 8765. The split lets you:
+- Attach an Ingress rule only to `tram-ui`
+- Apply a NetworkPolicy that allows internal services to reach `tram` but routes browsers to `tram-ui`
+
+```bash
+# Access the UI locally
+kubectl port-forward svc/tram-ui -n tram 8080:80
+open http://localhost:8080/ui/
+
+# Expose via Ingress
+kubectl apply -f - <<EOF
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: tram-ui
+  namespace: tram
+spec:
+  rules:
+  - host: tram.example.com
+    http:
+      paths:
+      - path: /
+        pathType: Prefix
+        backend:
+          service:
+            name: tram-release-ui
+            port:
+              number: 80
+EOF
+```
+
+The UI reads `TRAM_BASE_URL` from `localStorage` (set on the Settings page) to know where the API is. Default is `http://localhost:8765`.
+
 ## Docker
 
 ### Build and run
@@ -281,7 +352,7 @@ Mount a volume at `/data` (or set `TRAM_DB_URL`) to persist run history and pipe
 
 ### Installed extras in the default image
 
-The default `tram:1.0.6` image installs (`clickhouse` added in v1.0.4):
+The default `tram:1.0.7` image installs (`clickhouse` added in v1.0.4):
 
 `kafka`, `opensearch`, `snmp`, `avro`, `protobuf_ser`, `msgpack_ser`, `mqtt`, `amqp`, `nats`,
 `gnmi`, `jmespath`, `sql`, `influxdb`, `redis`, `websocket`, `elasticsearch`, `metrics`,
@@ -301,7 +372,7 @@ The following extras are **excluded by default** to keep the image lean. Extend 
 | `otel` | only needed when `TRAM_OTEL_ENDPOINT` is set; no-op fallback when absent | ~15 MB |
 
 ```dockerfile
-FROM ghcr.io/OWNER/tram:1.0.6
+FROM ghcr.io/OWNER/tram:1.0.7
 RUN pip install "tram[parquet,s3,gcs,azure,otel]"
 ```
 
@@ -323,7 +394,7 @@ TRAM ships a production-ready Helm chart in `helm/`. Published to GHCR OCI on ev
 # Add chart from OCI registry
 helm install tram oci://ghcr.io/OWNER/charts/tram \
   --namespace tram --create-namespace \
-  --set image.tag=1.0.6
+  --set image.tag=1.0.7
 
 # Mount pipelines from local files
 helm upgrade tram oci://ghcr.io/OWNER/charts/tram \
@@ -340,7 +411,7 @@ helm upgrade tram oci://ghcr.io/OWNER/charts/tram \
 | Value | Default | Description |
 |-------|---------|-------------|
 | `image.repository` | `ghcr.io/OWNER/tram` | Docker image repository |
-| `image.tag` | `"1.0.6"` | Image tag |
+| `image.tag` | `"1.0.7"` | Image tag |
 | `replicaCount` | `1` | Replicas — `1` = standalone, `N` = cluster |
 | `clusterMode.enabled` | `false` | Activate cluster mode (sets `TRAM_CLUSTER_ENABLED`, requires external DB) |
 | `persistence.enabled` | `true` | Provision a PVC per pod via `volumeClaimTemplates` mounted at `/data`; auto-sets `TRAM_DB_URL=sqlite:////data/tram.db`, `TRAM_SCHEMA_DIR=/data/schemas`, `TRAM_MIB_DIR=/data/mibs` |
@@ -350,6 +421,11 @@ helm upgrade tram oci://ghcr.io/OWNER/charts/tram \
 | `schemaRegistry.username` | `""` | Registry basic-auth username; prefer `envSecret` in production |
 | `schemaRegistry.password` | `""` | Registry basic-auth password; prefer `envSecret` in production |
 | `service.snmpTrapPorts` | `[]` | List of UDP ports to expose for `snmp_trap` sources (e.g. `[1162, 1163]`); each entry creates one Service port + containerPort; requires `helm upgrade` to add/remove |
+| `ui.enabled` | `true` | Create a dedicated `{release}-ui` Service for the web UI; disable to suppress the Service (UI assets still in image, still reachable via main service) |
+| `ui.port` | `80` | External port on the UI Service (`targetPort` is always `8765`) |
+| `ui.serviceType` | `ClusterIP` | `ClusterIP` \| `NodePort` \| `LoadBalancer` |
+| `ui.nodePort` | `null` | NodePort number when `ui.serviceType=NodePort` |
+| `ui.serviceAnnotations` | `{}` | Annotations on the UI Service (e.g. AWS ALB controller, cloud LB annotations) |
 | `nameOverride` | `""` | Override the chart name portion of resource names |
 | `fullnameOverride` | `""` | Fully override the resource name prefix |
 | `env` | `{}` | Plain env vars |
@@ -362,7 +438,7 @@ helm upgrade tram oci://ghcr.io/OWNER/charts/tram \
 ```bash
 helm install tram oci://ghcr.io/OWNER/charts/tram \
   --namespace tram --create-namespace \
-  --set image.tag=1.0.6
+  --set image.tag=1.0.7
 ```
 
 A single-replica `StatefulSet` with pod name `tram-0` runs the full daemon. A `PersistentVolumeClaim` (`data-tram-0`) is auto-provisioned via `volumeClaimTemplates` and mounted at `/data`. SQLite run history, API-uploaded schemas (`/data/schemas`), and runtime MIBs (`/data/mibs`) all share this single PVC and survive pod restarts. Standard MIBs baked into the image at `/mibs` remain available alongside any runtime-downloaded ones.
@@ -381,7 +457,7 @@ kubectl create secret generic tram-db \
 
 helm install tram oci://ghcr.io/OWNER/charts/tram \
   --namespace tram --create-namespace \
-  --set image.tag=1.0.6 \
+  --set image.tag=1.0.7 \
   --set clusterMode.enabled=true \
   --set replicaCount=3 \
   --set envSecret.TRAM_DB_URL.secretName=tram-db \
@@ -462,7 +538,7 @@ spec:
     spec:
       containers:
       - name: tram
-        image: ghcr.io/OWNER/tram:1.0.6
+        image: ghcr.io/OWNER/tram:1.0.7
         command: ["tram", "daemon"]
         ports:
         - containerPort: 8765
