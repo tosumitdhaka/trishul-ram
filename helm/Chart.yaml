@@ -1,5 +1,5 @@
 apiVersion: v2
-name: tram
+name: trishul-ram
 description: TRAM — Trishul Real-time Aggregation & Mediation
 type: application
 version: 1.0.7
