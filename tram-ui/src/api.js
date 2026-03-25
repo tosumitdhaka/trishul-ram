@@ -93,4 +93,9 @@ export const api = {
   daemon: {
     status: () => req('/api/daemon/status'),
   },
+
+  // ── Cluster ────────────────────────────────────────────────────────────────
+  cluster: {
+    nodes: () => req('/api/cluster/nodes'),
+  },
 }

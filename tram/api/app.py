@@ -192,6 +192,8 @@ def create_app(config: AppConfig | None = None) -> FastAPI:
     app.state.alert_evaluator = alert_evaluator
     app.state.node_registry = node_registry
     app.state.coordinator = coordinator
+    from datetime import datetime, timezone
+    app.state.started_at = datetime.now(timezone.utc)
 
     # Add security + rate-limit middleware (outermost = last applied)
     from tram.api.middleware import APIKeyMiddleware, RateLimitMiddleware
