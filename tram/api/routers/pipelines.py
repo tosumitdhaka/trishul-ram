@@ -23,6 +23,32 @@ class RegisterRequest(BaseModel):
     yaml_text: str | None = None
 
 
+# ── Dry run ────────────────────────────────────────────────────────────────
+
+
+@router.post("/dry-run")
+async def dry_run_pipeline(request: Request) -> dict:
+    """Validate pipeline YAML wiring without performing any I/O."""
+    content_type = request.headers.get("content-type", "")
+    if "yaml" in content_type or "text" in content_type or "plain" in content_type:
+        yaml_text = (await request.body()).decode("utf-8")
+    else:
+        body = await request.json()
+        yaml_text = body.get("yaml_text", "")
+
+    if not yaml_text:
+        raise HTTPException(status_code=400, detail="Request body must contain YAML text")
+
+    try:
+        config = load_pipeline_from_yaml(yaml_text)
+    except ConfigError as exc:
+        return {"valid": False, "issues": [str(exc)]}
+
+    from tram.pipeline.executor import PipelineExecutor
+    result = PipelineExecutor().dry_run(config)
+    return result
+
+
 # ── List / Register ────────────────────────────────────────────────────────
 
 
