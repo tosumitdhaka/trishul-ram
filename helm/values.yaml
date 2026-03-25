@@ -106,7 +106,10 @@ env:
 ##     TRAM_SMTP_PASS:
 ##       secretName: tram-smtp
 ##       secretKey: password
-envSecret: {}
+envSecret:
+  TRAM_AUTH_SECRET:
+    secretName: tram-auth
+    secretKey: authSecret
 
 ## External schema registry (v1.0.4)
 ## When url is set, TRAM_SCHEMA_REGISTRY_URL is injected automatically, enabling:
