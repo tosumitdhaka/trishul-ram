@@ -36,7 +36,7 @@ def _substitute_env_vars(text: str) -> str:
     return _VAR_PATTERN.sub(replacer, text)
 
 
-def load_pipeline(path: str | Path) -> PipelineConfig:
+def load_pipeline(path: str | Path) -> tuple[PipelineConfig, str]:
     """Load and validate a pipeline YAML file.
 
     Performs environment variable substitution before parsing.
@@ -85,7 +85,7 @@ def load_pipeline(path: str | Path) -> PipelineConfig:
         raise ConfigError(f"Pipeline validation error in {path}:\n{exc}") from exc
 
     logger.info("Loaded pipeline", extra={"pipeline": config.name, "filepath": str(path)})
-    return config
+    return config, raw_text
 
 
 def load_pipeline_from_yaml(yaml_text: str) -> PipelineConfig:
@@ -109,23 +109,26 @@ def load_pipeline_from_yaml(yaml_text: str) -> PipelineConfig:
         raise ConfigError(f"Pipeline validation error:\n{exc}") from exc
 
 
-def scan_pipeline_dir(pipeline_dir: str | Path) -> list[PipelineConfig]:
-    """Scan a directory for pipeline YAML files and load them all."""
+def scan_pipeline_dir(pipeline_dir: str | Path) -> list[tuple[PipelineConfig, str]]:
+    """Scan a directory for pipeline YAML files and load them all.
+
+    Returns a list of (PipelineConfig, raw_yaml_text) tuples.
+    """
     pipeline_dir = Path(pipeline_dir)
     if not pipeline_dir.exists():
         logger.warning("Pipeline directory does not exist: %s", pipeline_dir)
         return []
 
-    configs = []
+    results = []
     for yaml_file in sorted(pipeline_dir.glob("*.yaml")) + sorted(pipeline_dir.glob("*.yml")):
         try:
-            config = load_pipeline(yaml_file)
-            configs.append(config)
+            config, yaml_text = load_pipeline(yaml_file)
+            results.append((config, yaml_text))
         except ConfigError as exc:
             logger.error("Failed to load pipeline %s: %s", yaml_file, exc)
 
     logger.info(
         "Scanned pipeline directory",
-        extra={"dir": str(pipeline_dir), "loaded": len(configs)},
+        extra={"dir": str(pipeline_dir), "loaded": len(results)},
     )
-    return configs
+    return results

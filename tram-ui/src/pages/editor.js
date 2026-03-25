@@ -66,6 +66,8 @@ export async function init() {
       const { baseUrl, apiKey } = (await import('../api.js')).getConfig()
       const headers = { 'Content-Type': 'application/yaml' }
       if (apiKey) headers['X-API-Key'] = apiKey
+      const token = localStorage.getItem('tram_auth_token')
+      if (token && !apiKey) headers['Authorization'] = `Bearer ${token}`
       const res = await fetch(`${baseUrl}/api/pipelines/dry-run`, {
         method: 'POST', headers, body: yaml,
       })
