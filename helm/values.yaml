@@ -26,9 +26,9 @@ nameOverride: ""
 fullnameOverride: ""
 
 service:
-  type: ClusterIP
+  type: NodePort
   port: 8765
-  nodePort: null    # set to e.g. 30765 when type=NodePort
+  nodePort: 30001   # kind cluster exposes 30001 → host :30001; set null for ClusterIP
   ## List of UDP ports to expose for snmp_trap source connectors.
   ## Each entry creates one UDP Service port and one containerPort.
   ## Must match the port: values in your snmp_trap pipeline YAMLs.
@@ -147,19 +147,11 @@ serviceAccount:
   name: ""
 
 ## Web UI (v1.0.7)
-## The tram-ui static assets are baked into the image at /ui and served by
-## the daemon at /ui on port 8765.  When enabled, a separate Kubernetes Service
-## (tram-ui) is created so you can attach a distinct Ingress rule or
-## NetworkPolicy without exposing the API port directly.
-## Set ui.enabled=false to suppress the UI Service (assets remain in the image
-## and are still accessible via the main service at /ui).
+## The tram-ui static assets are baked into the image at /ui and served at /ui
+## by the main service on port 8765.  Set ui.enabled=false to disable static
+## serving without rebuilding the image (sets TRAM_UI_DIR="" in the pod).
 ui:
   enabled: true
-  ## External port for the tram-ui Service (targetPort is always 8765/http).
-  port: 80
-  serviceType: NodePort    # ClusterIP | NodePort | LoadBalancer
-  nodePort: 30001          # kind cluster exposes 30001 → host :30001
-  serviceAnnotations: {}
 
 ## API key authentication (v1.0.0)
 ## Set apiKey to enable X-API-Key authentication on /api/* endpoints.

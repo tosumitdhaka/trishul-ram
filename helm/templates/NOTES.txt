@@ -1,33 +1,25 @@
 TRAM {{ .Chart.AppVersion }} has been deployed!
 
-1. Get the API URL:
+1. Access the daemon (API + Web UI served on the same port):
 {{- if contains "NodePort" .Values.service.type }}
   export NODE_PORT=$(kubectl get --namespace {{ .Release.Namespace }} -o jsonpath="{.spec.ports[0].nodePort}" services {{ include "tram.fullname" . }})
   export NODE_IP=$(kubectl get nodes --namespace {{ .Release.Namespace }} -o jsonpath="{.items[0].status.addresses[0].address}")
-  echo http://$NODE_IP:$NODE_PORT
+  echo "API: http://$NODE_IP:$NODE_PORT"
+{{- if .Values.ui.enabled }}
+  echo "UI:  http://$NODE_IP:$NODE_PORT/ui/"
+{{- end }}
 {{- else if contains "LoadBalancer" .Values.service.type }}
   NOTE: It may take a few minutes for the LoadBalancer IP to be available.
   watch kubectl get --namespace {{ .Release.Namespace }} svc -w {{ include "tram.fullname" . }}
-{{- else if contains "ClusterIP" .Values.service.type }}
+{{- else }}
   kubectl --namespace {{ .Release.Namespace }} port-forward svc/{{ include "tram.fullname" . }} 8765:{{ .Values.service.port }}
   echo "API: http://127.0.0.1:8765"
-{{- end }}
 {{- if .Values.ui.enabled }}
-
-2. Open the web UI:
-{{- if contains "NodePort" .Values.ui.serviceType }}
-  export UI_PORT=$(kubectl get --namespace {{ .Release.Namespace }} -o jsonpath="{.spec.ports[0].nodePort}" services {{ include "tram.fullname" . }}-ui)
-  export NODE_IP=$(kubectl get nodes --namespace {{ .Release.Namespace }} -o jsonpath="{.items[0].status.addresses[0].address}")
-  echo http://$NODE_IP:$UI_PORT/ui/
-{{- else if contains "LoadBalancer" .Values.ui.serviceType }}
-  watch kubectl get --namespace {{ .Release.Namespace }} svc -w {{ include "tram.fullname" . }}-ui
-{{- else }}
-  kubectl --namespace {{ .Release.Namespace }} port-forward svc/{{ include "tram.fullname" . }}-ui 8080:{{ .Values.ui.port }}
-  echo "UI:  http://127.0.0.1:8080/ui/"
+  echo "UI:  http://127.0.0.1:8765/ui/"
 {{- end }}
 {{- end }}
 
-3. Check daemon health and readiness:
+2. Check daemon health and readiness:
   curl http://127.0.0.1:8765/api/health
   curl http://127.0.0.1:8765/api/ready
 
