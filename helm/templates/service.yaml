@@ -21,5 +21,8 @@ spec:
       protocol: UDP
       name: snmp-trap-{{ . }}
     {{- end }}
+  ## Pin each client IP to the same pod so uploaded schemas/MIBs (stored on
+  ## per-pod PVCs) remain visible across page refreshes in cluster mode.
+  sessionAffinity: ClientIP
   selector:
     {{- include "tram.selectorLabels" . | nindent 4 }}
