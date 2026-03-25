@@ -23,8 +23,9 @@ _MAX_RUN_HISTORY = 500  # per-pipeline
 class PipelineState:
     """Tracks the live state of a registered pipeline."""
 
-    def __init__(self, config: PipelineConfig) -> None:
+    def __init__(self, config: PipelineConfig, yaml_text: Optional[str] = None) -> None:
         self.config = config
+        self.yaml_text: Optional[str] = yaml_text
         self.status: str = "stopped"  # stopped | running | error
         self.registered_at: datetime = datetime.now(timezone.utc)
         self.last_run: Optional[datetime] = None
@@ -46,6 +47,23 @@ class PipelineState:
             "registered_at": self.registered_at.isoformat(),
             "last_run": self.last_run.isoformat() if self.last_run else None,
             "last_run_status": self.last_run_status,
+        }
+
+    def to_detail_dict(self) -> dict:
+        """Extended detail view — includes full config fields for the UI detail page."""
+        c = self.config
+        return {
+            **self.to_dict(),
+            "source": {"type": c.source.type} if c.source else None,
+            "sinks": [{"type": s.type} for s in c.sinks],
+            "serializer_in": c.serializer_in.type if c.serializer_in else None,
+            "transforms": [{"type": t.type} for t in c.transforms],
+            "interval_seconds": c.schedule.interval_seconds,
+            "cron_expr": getattr(c.schedule, "cron_expr", None),
+            "on_error": c.on_error,
+            "dlq": {"type": c.dlq.type} if c.dlq else None,
+            "parallel_sinks": c.parallel_sinks,
+            "yaml": self.yaml_text,
         }
 
 
@@ -75,7 +93,7 @@ class PipelineManager:
                 f"Pipeline '{config.name}' is already registered. "
                 "Use replace=True or call reload()."
             )
-        state = PipelineState(config)
+        state = PipelineState(config, yaml_text=yaml_text)
         self._pipelines[config.name] = state
         logger.info("Registered pipeline", extra={"pipeline": config.name})
 

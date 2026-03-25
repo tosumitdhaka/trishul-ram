@@ -48,10 +48,9 @@ async def lifespan(app: FastAPI):
 
     # Load pipelines from directory
     if config.reload_on_start:
-        configs = scan_pipeline_dir(config.pipeline_dir)
-        for pipeline_config in configs:
+        for pipeline_config, yaml_text in scan_pipeline_dir(config.pipeline_dir):
             try:
-                manager.register(pipeline_config)
+                manager.register(pipeline_config, yaml_text=yaml_text)
                 logger.info("Loaded pipeline", extra={"pipeline": pipeline_config.name})
             except Exception as exc:
                 logger.error(

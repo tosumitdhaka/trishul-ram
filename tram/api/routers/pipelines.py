@@ -78,7 +78,7 @@ async def get_pipeline(name: str, request: Request) -> dict:
         state = manager.get(name)
     except PipelineNotFoundError as exc:
         raise HTTPException(status_code=404, detail=str(exc))
-    return state.to_dict()
+    return state.to_detail_dict()
 
 
 @router.put("/{name}")
@@ -238,18 +238,18 @@ async def reload_pipelines(request: Request) -> dict:
                 logger.warning("Error stopping %s during reload: %s", state.config.name, exc)
         manager.deregister(state.config.name)
 
-    configs = scan_pipeline_dir(pipeline_dir)
+    results = scan_pipeline_dir(pipeline_dir)
     loaded = 0
-    for config in configs:
+    for config, yaml_text in results:
         try:
-            manager.register(config)
+            manager.register(config, yaml_text=yaml_text)
             if config.enabled and config.schedule.type != "manual":
                 scheduler.start_pipeline(config.name)
             loaded += 1
         except Exception as exc:
             logger.error("Failed to register pipeline %s: %s", config.name, exc)
 
-    return {"reloaded": loaded, "total": len(configs)}
+    return {"reloaded": loaded, "total": len(results)}
 
 
 # ── Version history + rollback ─────────────────────────────────────────────
