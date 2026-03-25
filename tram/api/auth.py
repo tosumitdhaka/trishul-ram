@@ -12,8 +12,10 @@ import json
 import secrets
 import time
 
-# Per-process signing secret — tokens invalidated on restart
-_SECRET = secrets.token_hex(32)
+# Signing secret — shared across cluster nodes via TRAM_AUTH_SECRET env var.
+# Falls back to a per-process random (tokens invalidated on restart) when unset.
+import os as _os
+_SECRET = _os.environ.get("TRAM_AUTH_SECRET") or secrets.token_hex(32)
 
 
 def parse_users(raw: str) -> dict[str, str]:
