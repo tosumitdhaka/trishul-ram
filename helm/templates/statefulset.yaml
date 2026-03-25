@@ -65,8 +65,10 @@ spec:
             ## SQLAlchemy URL for SQLite on the /data PVC (v1.0.3+; replaces TRAM_DB_PATH)
             - name: TRAM_DB_URL
               value: "sqlite:////data/tram.db"
-            ## Store schemas and MIBs under the same /data PVC — no extra volumes needed.
-            ## Standard MIBs baked into /mibs (image layer) are still searched by SNMP connectors.
+            {{- end }}
+            {{- if or .Values.sharedStorage.enabled .Values.persistence.enabled }}
+            ## Schemas and MIBs live on /data — either the shared RWX PVC (cluster) or
+            ## the per-pod RWO PVC (standalone). Path is the same in both cases (v1.0.9).
             - name: TRAM_SCHEMA_DIR
               value: /data/schemas
             - name: TRAM_MIB_DIR
@@ -116,7 +118,8 @@ spec:
               mountPath: /pipelines
               readOnly: true
             {{- end }}
-            {{- if .Values.persistence.enabled }}
+            {{- if or .Values.persistence.enabled .Values.sharedStorage.enabled }}
+            ## /data is backed by the shared RWX PVC (cluster) or per-pod RWO PVC (standalone)
             - name: data
               mountPath: /data
             {{- end }}
@@ -147,6 +150,13 @@ spec:
           configMap:
             name: {{ include "tram.fullname" . }}-pipelines
         {{- end }}
+        {{- if .Values.sharedStorage.enabled }}
+        ## Shared RWX PVC — same volume name "data" as the per-pod RWO case so
+        ## TRAM_SCHEMA_DIR/TRAM_MIB_DIR (/data/*) work identically in both modes.
+        - name: data
+          persistentVolumeClaim:
+            claimName: data-{{ include "tram.fullname" . }}
+        {{- end }}
         {{- if .Values.tls.enabled }}
         - name: tls
           secret:
@@ -164,7 +174,9 @@ spec:
       tolerations:
         {{- toYaml . | nindent 8 }}
       {{- end }}
-  {{- if .Values.persistence.enabled }}
+  {{- if and .Values.persistence.enabled (not .Values.sharedStorage.enabled) }}
+  ## Per-pod RWO PVC (standalone mode). Skipped when sharedStorage.enabled=true — the
+  ## shared RWX PVC is injected as a regular volume above instead.
   volumeClaimTemplates:
     - metadata:
         name: data

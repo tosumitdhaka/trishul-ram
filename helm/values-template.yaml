@@ -5,7 +5,7 @@
 image:
   registry:   ""              # e.g. ghcr.io — empty = no registry prefix (local/kind images)
   repository: OWNER/tram      # image name; replace OWNER with your registry namespace
-  tag: "1.0.8"
+  tag: "1.0.9"
   pullPolicy: IfNotPresent
 
 ## TRAM always deploys as a StatefulSet (stable pod names: tram-0, tram-1, …).
@@ -37,19 +37,31 @@ service:
   ## Example: [1162, 1163, 1164]
   snmpTrapPorts: []
 
-## SQLite persistence for run history, pipeline versions, alert state, schemas, and MIBs.
-## When enabled, a PVC is auto-provisioned per pod via volumeClaimTemplates and mounted at /data.
-## TRAM_DB_PATH, TRAM_SCHEMA_DIR (/data/schemas), and TRAM_MIB_DIR (/data/mibs) are automatically
-## pointed into this single volume — no separate PVCs needed.
-## Standard MIBs (IF-MIB, ENTITY-MIB, HOST-RESOURCES-MIB, …) baked into the image at /mibs are
-## still searched by SNMP connectors even when TRAM_MIB_DIR points to /data/mibs.
-## NOTE: in cluster mode each pod gets its own /data PVC. Schemas/MIBs uploaded to tram-0 are not
-## visible on tram-1. Pre-bake shared schemas into the image for cluster deployments.
+## Per-pod SQLite persistence (standalone / single-replica mode only).
+## When enabled, a PVC is created per pod via volumeClaimTemplates and mounted at /data.
+## TRAM_DB_URL (sqlite:////data/tram.db) is auto-set when postgresql.enabled=false.
+## Disable this in cluster mode — PostgreSQL handles the DB and sharedStorage handles
+## schemas/MIBs; per-pod /data PVCs are unnecessary overhead.
 persistence:
   enabled: true
   size: 1Gi
   storageClass: ""
   accessMode: ReadWriteOnce
+
+## Shared ReadWriteMany storage for schemas and MIBs (v1.0.9).
+## A single PVC is created (not via volumeClaimTemplates) and mounted on every pod.
+## Schemas/MIBs uploaded via the UI are written once and instantly visible to all replicas.
+## Requires a StorageClass that supports ReadWriteMany:
+##   kind:       storageClass: "nfs-rwx"  (deploy helm/kind/nfs-provisioner.yaml first)
+##   AWS EKS:    storageClass: "efs-sc"
+##   Azure AKS:  storageClass: "azurefile"
+##   GKE:        storageClass: "filestore-rwx"
+##   Longhorn:   storageClass: "longhorn-rwx"
+## When disabled, schemas/MIBs fall back to the per-pod /data PVC (standalone mode only).
+sharedStorage:
+  enabled: false
+  size: 2Gi
+  storageClass: ""    # set to your RWX StorageClass name (e.g. nfs-rwx, efs-sc, azurefile)
 
 ## Environment variables (plain key/value)
 env:
@@ -107,7 +119,10 @@ env:
 ##     TRAM_SMTP_PASS:
 ##       secretName: tram-smtp
 ##       secretKey: password
-envSecret: {}
+envSecret:
+  TRAM_AUTH_SECRET:
+    secretName: tram-auth
+    secretKey: authSecret
 
 ## External schema registry (v1.0.4)
 ## When url is set, TRAM_SCHEMA_REGISTRY_URL is injected automatically, enabling:

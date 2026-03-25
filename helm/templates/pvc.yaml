@@ -1,0 +1,22 @@
+{{- if .Values.sharedStorage.enabled }}
+## Single ReadWriteMany PVC shared across all TRAM pods (v1.0.9).
+## Mounted at /data on every pod — same path as the per-pod RWO PVC in standalone mode.
+## Schemas/MIBs uploaded via the UI land at /data/schemas|mibs and are visible to all replicas.
+## Requires a StorageClass that supports ReadWriteMany (e.g. nfs-rwx, efs-sc, azurefile).
+## For kind clusters deploy ~/kind/nfs-provisioner.yaml first.
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: data-{{ include "tram.fullname" . }}
+  labels:
+    {{- include "tram.labels" . | nindent 4 }}
+spec:
+  accessModes:
+    - ReadWriteMany
+  resources:
+    requests:
+      storage: {{ .Values.sharedStorage.size }}
+  {{- if .Values.sharedStorage.storageClass }}
+  storageClassName: {{ .Values.sharedStorage.storageClass | quote }}
+  {{- end }}
+{{- end }}

@@ -186,7 +186,7 @@ tram mib compile /path/to/vendor-mibs/ --out /mibs
 **Air-gapped environments** — copy pre-compiled MIB `.py` files into the image:
 
 ```dockerfile
-FROM ghcr.io/OWNER/tram:1.0.8
+FROM ghcr.io/OWNER/tram:1.0.9
 COPY compiled-mibs/*.py /mibs/
 ```
 
@@ -231,7 +231,7 @@ curl -X DELETE http://localhost:8765/api/schemas/cisco/GenericRecord.proto
 **Mount host directory** for development (read-write):
 
 ```bash
-docker run -v ./schemas:/schemas tram:1.0.8
+docker run -v ./schemas:/schemas tram:1.0.9
 ```
 
 ## Schema Registry Integration (v1.0.4)
@@ -354,7 +354,7 @@ Mount a volume at `/data` (or set `TRAM_DB_URL`) to persist run history and pipe
 
 ### Installed extras in the default image
 
-The default `tram:1.0.8` image installs (`clickhouse` added in v1.0.4):
+The default `tram:1.0.9` image installs (`clickhouse` added in v1.0.4):
 
 `kafka`, `opensearch`, `snmp`, `avro`, `protobuf_ser`, `msgpack_ser`, `mqtt`, `amqp`, `nats`,
 `gnmi`, `jmespath`, `sql`, `influxdb`, `redis`, `websocket`, `elasticsearch`, `metrics`,
@@ -374,7 +374,7 @@ The following extras are **excluded by default** to keep the image lean. Extend 
 | `otel` | only needed when `TRAM_OTEL_ENDPOINT` is set; no-op fallback when absent | ~15 MB |
 
 ```dockerfile
-FROM ghcr.io/OWNER/tram:1.0.8
+FROM ghcr.io/OWNER/tram:1.0.9
 RUN pip install "tram[parquet,s3,gcs,azure,otel]"
 ```
 
@@ -396,7 +396,7 @@ TRAM ships a production-ready Helm chart in `helm/`. Published to GHCR OCI on ev
 # Add chart from OCI registry
 helm install tram oci://ghcr.io/OWNER/charts/tram \
   --namespace tram --create-namespace \
-  --set image.tag=1.0.8
+  --set image.tag=1.0.9
 
 # Mount pipelines from local files
 helm upgrade tram oci://ghcr.io/OWNER/charts/tram \
@@ -416,9 +416,12 @@ helm upgrade tram oci://ghcr.io/OWNER/charts/tram \
 | `image.tag` | `"1.0.8"` | Image tag |
 | `replicaCount` | `1` | Replicas — `1` = standalone, `N` = cluster |
 | `clusterMode.enabled` | `false` | Activate cluster mode (sets `TRAM_CLUSTER_ENABLED`, requires external DB) |
-| `persistence.enabled` | `true` | Provision a PVC per pod via `volumeClaimTemplates` mounted at `/data`; auto-sets `TRAM_DB_URL=sqlite:////data/tram.db`, `TRAM_SCHEMA_DIR=/data/schemas`, `TRAM_MIB_DIR=/data/mibs` |
-| `persistence.size` | `1Gi` | PVC size per pod (holds SQLite DB + schemas + runtime MIBs) |
-| `persistence.accessMode` | `ReadWriteOnce` | PVC access mode |
+| `persistence.enabled` | `true` | Provision a per-pod RWO PVC via `volumeClaimTemplates` mounted at `/data`; auto-sets `TRAM_DB_URL=sqlite:////data/tram.db`, `TRAM_SCHEMA_DIR=/data/schemas`, `TRAM_MIB_DIR=/data/mibs`; disable in cluster mode when using `sharedStorage` |
+| `persistence.size` | `1Gi` | PVC size per pod (standalone mode only) |
+| `persistence.accessMode` | `ReadWriteOnce` | PVC access mode (standalone mode only) |
+| `sharedStorage.enabled` | `false` | Provision a single shared `ReadWriteMany` PVC (`data-<release>`) mounted at `/data` on every pod (v1.0.9); schemas/MIBs uploaded via the UI are visible to all replicas immediately; requires a RWX StorageClass |
+| `sharedStorage.size` | `2Gi` | Shared PVC size |
+| `sharedStorage.storageClass` | `""` | RWX StorageClass: `nfs-rwx` (kind), `efs-sc` (AWS), `azurefile` (Azure), `filestore-rwx` (GKE), `longhorn-rwx` |
 | `schemaRegistry.url` | `""` | External registry URL; injects `TRAM_SCHEMA_REGISTRY_URL` — enables proxy + serializer default (v1.0.4) |
 | `schemaRegistry.username` | `""` | Registry basic-auth username; prefer `envSecret` in production |
 | `schemaRegistry.password` | `""` | Registry basic-auth password; prefer `envSecret` in production |
@@ -442,7 +445,7 @@ helm upgrade tram oci://ghcr.io/OWNER/charts/tram \
 ```bash
 helm install tram oci://ghcr.io/OWNER/charts/tram \
   --namespace tram --create-namespace \
-  --set image.tag=1.0.8
+  --set image.tag=1.0.9
 ```
 
 A single-replica `StatefulSet` with pod name `tram-0` runs the full daemon. A `PersistentVolumeClaim` (`data-tram-0`) is auto-provisioned via `volumeClaimTemplates` and mounted at `/data`. SQLite run history, API-uploaded schemas (`/data/schemas`), and runtime MIBs (`/data/mibs`) all share this single PVC and survive pod restarts. Standard MIBs baked into the image at `/mibs` remain available alongside any runtime-downloaded ones.
@@ -461,7 +464,7 @@ kubectl create secret generic tram-db \
 
 helm install tram oci://ghcr.io/OWNER/charts/tram \
   --namespace tram --create-namespace \
-  --set image.tag=1.0.8 \
+  --set image.tag=1.0.9 \
   --set clusterMode.enabled=true \
   --set replicaCount=3 \
   --set envSecret.TRAM_DB_URL.secretName=tram-db \
@@ -490,7 +493,7 @@ For a self-contained cluster deployment on Kubernetes (e.g. kind/minikube) witho
 ```bash
 helm install trishul-ram helm/ \
   --namespace trishul-ram --create-namespace \
-  --set image.tag=1.0.8 \
+  --set image.tag=1.0.9 \
   --set replicaCount=3 \
   --set clusterMode.enabled=true \
   --set postgresql.enabled=true
@@ -504,6 +507,49 @@ TRAM_CLUSTER_ENABLED=true
 ```
 
 > **Note:** For production, use an external managed PostgreSQL and set `TRAM_DB_URL` via `envSecret` instead.
+
+### Shared RWX storage for schemas and MIBs (v1.0.9)
+
+In cluster mode, schemas and MIBs uploaded via the UI are stored per-pod by default (each pod has its own `/data` volume). Enable `sharedStorage` to provision a single `ReadWriteMany` PVC (`data-<release>`) that every pod mounts at `/data`, making uploads visible cluster-wide immediately.
+
+**For kind clusters** — deploy the bundled NFS Ganesha provisioner first:
+
+```bash
+# Pull and load image into kind (substitute your cluster name)
+docker pull registry.k8s.io/sig-storage/nfs-provisioner:v4.0.8
+docker save registry.k8s.io/sig-storage/nfs-provisioner:v4.0.8 \
+  | docker exec -i <kind-node> ctr --namespace=k8s.io images import -
+
+kubectl apply -f ~/kind/nfs-provisioner.yaml
+kubectl rollout status deploy/nfs-provisioner -n nfs-provisioner
+```
+
+Then install/upgrade TRAM with shared storage enabled:
+
+```bash
+helm upgrade trishul-ram helm/ \
+  --namespace trishul-ram \
+  --set image.tag=1.0.9 \
+  --set replicaCount=3 \
+  --set clusterMode.enabled=true \
+  --set postgresql.enabled=true \
+  --set persistence.enabled=false \
+  --set sharedStorage.enabled=true \
+  --set sharedStorage.storageClass=nfs-rwx
+```
+
+This creates a single PVC `data-trishul-ram` (2 Gi, RWX) backed by NFS. All pods mount it at `/data`; `TRAM_SCHEMA_DIR=/data/schemas` and `TRAM_MIB_DIR=/data/mibs` are set automatically.
+
+**For production clouds** — use the platform RWX StorageClass directly:
+
+| Platform | StorageClass |
+|----------|-------------|
+| AWS EKS (EFS) | `efs-sc` |
+| Azure AKS | `azurefile` |
+| GKE (Filestore) | `filestore-rwx` |
+| Longhorn | `longhorn-rwx` |
+
+> **Note:** `persistence.enabled` should be `false` in cluster mode when `sharedStorage.enabled=true` — PostgreSQL handles the database and the shared PVC handles schemas/MIBs; per-pod RWO PVCs would be unused overhead.
 
 ### Scale up / scale down
 
@@ -564,7 +610,7 @@ spec:
     spec:
       containers:
       - name: tram
-        image: ghcr.io/OWNER/tram:1.0.8
+        image: ghcr.io/OWNER/tram:1.0.9
         command: ["tram", "daemon"]
         ports:
         - containerPort: 8765
