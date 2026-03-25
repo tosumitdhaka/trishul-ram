@@ -3,7 +3,7 @@ import { relTime, esc, toast } from '../utils.js'
 
 export async function init() {
   try {
-    const status = await api.daemon.status()
+    const status = await api.cluster.nodes()
     renderCluster(status)
   } catch (e) {
     const txt = document.getElementById('cluster-status-text')
@@ -15,9 +15,9 @@ export async function init() {
 function renderCluster(status) {
   const txt   = document.getElementById('cluster-status-text')
   const nodes = status?.nodes || []
-  const mode  = status?.cluster_mode || 'standalone'
+  const enabled = status?.cluster_enabled
 
-  if (txt) txt.textContent = mode === 'standalone'
+  if (txt) txt.textContent = !enabled
     ? 'Cluster disabled — running in standalone mode'
     : `Cluster active · ${nodes.length} node${nodes.length !== 1 ? 's' : ''}`
 
@@ -40,7 +40,7 @@ function renderCluster(status) {
                 style="background:#0d1117;color:#e6edf3;font-size:13px">
           ${dot}${esc(node.node_id || node.id || `Node ${i + 1}`)}
           <span class="ms-2 text-secondary" style="font-size:12px">${esc(node.address || '')}</span>
-          <span class="ms-auto me-2 text-secondary" style="font-size:12px">${node.last_seen ? relTime(node.last_seen) : ''}</span>
+          <span class="ms-auto me-2 text-secondary" style="font-size:12px">${node.last_heartbeat ? relTime(node.last_heartbeat) : ''}</span>
         </button>
       </h2>
       <div id="cn-${i}" class="accordion-collapse collapse">
@@ -48,7 +48,7 @@ function renderCluster(status) {
           <div class="row g-2 mb-2">
             <div class="col-4"><span class="text-secondary">Status</span><div>${esc(node.status || '—')}</div></div>
             <div class="col-4"><span class="text-secondary">Pipelines</span><div>${node.pipeline_count ?? '—'}</div></div>
-            <div class="col-4"><span class="text-secondary">Joined</span><div>${node.joined_at ? relTime(node.joined_at) : '—'}</div></div>
+            <div class="col-4"><span class="text-secondary">Joined</span><div>${node.registered_at ? relTime(node.registered_at) : '—'}</div></div>
           </div>
           ${pipelines ? `<div class="mt-2"><span class="text-secondary d-block mb-1">Assigned pipelines</span>${pipelines}</div>` : ''}
         </div>

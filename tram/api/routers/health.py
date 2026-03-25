@@ -28,6 +28,7 @@ async def readiness(request: Request) -> dict:
     scheduler = request.app.state.scheduler
     db = getattr(request.app.state, "db", None)
     coordinator = getattr(request.app.state, "coordinator", None)
+    started_at = getattr(request.app.state, "started_at", None)
 
     # DB check
     db_status = "ok"
@@ -45,12 +46,33 @@ async def readiness(request: Request) -> dict:
     if coordinator is not None:
         cluster_status = "enabled"
 
+    # DB engine info
+    db_engine = "sqlite"
+    db_path = None
+    if db is not None:
+        dialect = db._engine.dialect.name
+        db_engine = dialect
+        if dialect == "sqlite":
+            url_str = str(db._engine.url)
+            db_path = url_str.replace("sqlite:///", "").replace("sqlite://", "") or None
+
+    # Uptime
+    uptime = None
+    if started_at is not None:
+        delta = int((datetime.now(timezone.utc) - started_at).total_seconds())
+        h, rem = divmod(delta, 3600)
+        m, s = divmod(rem, 60)
+        uptime = f"{h}h {m}m {s}s" if h else f"{m}m {s}s"
+
     return {
         "status": "ready",
         "db": db_status,
+        "db_engine": db_engine,
+        "db_path": db_path,
         "scheduler": scheduler_status,
         "cluster": cluster_status,
         "pipelines_loaded": len(manager.list_all()),
+        "uptime": uptime,
     }
 
 
