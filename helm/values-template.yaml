@@ -1,23 +1,24 @@
-## TRAM Helm chart values
+## TRAM Helm chart values — clean defaults template
+## Copy this file to values.yaml (or pass with -f) and adjust for your environment.
 ## Ref: https://github.com/trishul/tram
 
 image:
   registry:   ""              # e.g. ghcr.io — empty = no registry prefix (local/kind images)
-  repository: tram            # image name without registry
+  repository: OWNER/tram      # image name; replace OWNER with your registry namespace
   tag: "1.0.8"
   pullPolicy: IfNotPresent
 
 ## TRAM always deploys as a StatefulSet (stable pod names: tram-0, tram-1, …).
 ## replicaCount=1 → standalone daemon.
 ## replicaCount>1 + clusterMode.enabled=true → self-organizing cluster.
-replicaCount: 3
+replicaCount: 1
 
 ## Cluster mode (v0.8.0)
 ## Activates consistent-hashing pipeline ownership across replicas.
 ## Requires an external DB (TRAM_DB_URL) — PostgreSQL recommended, MariaDB supported.
 ## SQLite is not supported for cluster mode (single-writer limitation).
 clusterMode:
-  enabled: true
+  enabled: false
 
 ## App name prefix for all K8s resource names.
 ## Defaults to the chart name (trishul-ram).
@@ -26,9 +27,9 @@ nameOverride: ""
 fullnameOverride: ""
 
 service:
-  type: NodePort
+  type: ClusterIP
   port: 8765
-  nodePort: 30001   # kind cluster exposes 30001 → host :30001; set null for ClusterIP
+  nodePort: null   # set to a port number (e.g. 30001) when type=NodePort
   ## List of UDP ports to expose for snmp_trap source connectors.
   ## Each entry creates one UDP Service port and one containerPort.
   ## Must match the port: values in your snmp_trap pipeline YAMLs.
@@ -198,7 +199,7 @@ tls:
 ## Requires clusterMode.enabled=true for multi-replica cluster use.
 ## For production, use an external PostgreSQL and set TRAM_DB_URL via envSecret.
 postgresql:
-  enabled: true
+  enabled: false
   auth:
     username: tram
     password: tram
