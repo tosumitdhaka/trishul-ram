@@ -38,6 +38,7 @@ All configuration is via environment variables (12-factor).
 | `TRAM_NODE_TTL_SECONDS` | `30` | Seconds before a silent node is marked dead |
 | `TRAM_API_KEY` | _(empty)_ | API key for request authentication; empty = auth disabled |
 | `TRAM_AUTH_USERS` | _(empty)_ | Comma-separated `user:password` pairs for browser UI login (v1.0.8); issues 8-hour HMAC session tokens; coexists with `TRAM_API_KEY` |
+| `TRAM_AUTH_SECRET` | _(random)_ | Shared HMAC signing secret for session tokens (v1.0.8); **required in cluster mode** — without a shared secret each pod signs tokens independently and cross-pod requests return 401 |
 | `TRAM_RATE_LIMIT` | `0` | Max requests per minute per IP for `/api/*`; 0 = disabled |
 | `TRAM_RATE_LIMIT_WINDOW` | `60` | Sliding window in seconds for rate limiting |
 | `TRAM_TLS_CERTFILE` | _(empty)_ | Path to TLS certificate file for HTTPS |

@@ -74,6 +74,13 @@ env:
   # Note: API key is preferably set via .Values.apiKey (injected as TRAM_API_KEY automatically)
   # or via envSecret to avoid storing secrets in values.yaml.
   # TRAM_RATE_LIMIT: "0"          # requests/minute per client IP; 0 = disabled
+  # --- Browser auth (v1.0.8) ---
+  # TRAM_AUTH_SECRET: ""          # Shared HMAC signing secret for session tokens.
+  #                               # REQUIRED in cluster mode — without it each pod
+  #                               # uses its own random secret and tokens from one
+  #                               # pod are rejected by others.
+  #                               # Generate: python3 -c "import secrets; print(secrets.token_hex(32))"
+  #                               # Prefer envSecret.TRAM_AUTH_SECRET for production.
   # TRAM_RATE_LIMIT_WINDOW: "60"  # sliding window in seconds
   # --- Observability (v1.0.0) ---
   # TRAM_OTEL_ENDPOINT: ""        # OTLP gRPC endpoint, e.g. http://otel-collector:4317
