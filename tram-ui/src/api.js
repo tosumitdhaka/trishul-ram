@@ -16,6 +16,8 @@ async function req(path, options = {}) {
   const { baseUrl, apiKey } = getConfig()
   const headers = { ...options.headers }
   if (apiKey) headers['X-API-Key'] = apiKey
+  const token = localStorage.getItem('tram_auth_token')
+  if (token && !apiKey) headers['Authorization'] = `Bearer ${token}`
   if (options.body && typeof options.body === 'object' && !(options.body instanceof FormData)) {
     headers['Content-Type'] = 'application/json'
     options = { ...options, body: JSON.stringify(options.body) }
@@ -34,6 +36,12 @@ export const api = {
   ready:   () => req('/api/ready'),
   meta:    () => req('/api/meta'),
   plugins: () => req('/api/plugins'),
+
+  // ── Auth ───────────────────────────────────────────────────────────────────
+  auth: {
+    me:    ()                    => req('/api/auth/me'),
+    login: (username, password)  => req('/api/auth/login', { method: 'POST', body: { username, password } }),
+  },
 
   // ── Pipelines ──────────────────────────────────────────────────────────────
   pipelines: {

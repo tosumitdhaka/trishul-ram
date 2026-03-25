@@ -6,15 +6,17 @@ export async function init() {
   wireDropZone()
 
   window._schemasUpload = async () => {
-    const file   = document.getElementById('schema-file-input')?.files?.[0]
+    const files  = Array.from(document.getElementById('schema-file-input')?.files || [])
     const subdir = document.getElementById('schema-subdir')?.value?.trim() || ''
-    if (!file) { toast('Select a file first', 'error'); return }
-    try {
-      await api.schemas.upload(file, subdir)
-      toast(`Uploaded ${file.name}`)
-      document.getElementById('schema-file-input').value = ''
-      await loadSchemas()
-    } catch (e) { toast(e.message, 'error') }
+    if (!files.length) { toast('Select a file first', 'error'); return }
+    let ok = 0, fail = 0
+    for (const file of files) {
+      try { await api.schemas.upload(file, subdir); ok++ }
+      catch (e) { fail++; toast(`${file.name}: ${e.message}`, 'error') }
+    }
+    if (ok) toast(`Uploaded ${ok} file${ok > 1 ? 's' : ''}`)
+    document.getElementById('schema-file-input').value = ''
+    await loadSchemas()
   }
 
   window._schemaDelete = async (filepath) => {
@@ -68,20 +70,19 @@ function wireDropZone() {
   zone.addEventListener('drop', e => {
     e.preventDefault()
     zone.classList.remove('dragover')
-    const file = e.dataTransfer.files?.[0]
-    if (file) {
-      const dt = new DataTransfer()
-      dt.items.add(file)
-      input.files = dt.files
-      zone.querySelector('.text-secondary')?.setAttribute('data-file', file.name)
-      const hint = zone.querySelectorAll('.text-secondary')[0]
-      if (hint) hint.textContent = file.name
+    const files = e.dataTransfer.files
+    if (files?.length) {
+      input.files = files
+      updateHint(zone, files)
     }
   })
-  input.addEventListener('change', () => {
-    const hint = zone.querySelectorAll('.text-secondary')[0]
-    if (hint && input.files[0]) hint.textContent = input.files[0].name
-  })
+  input.addEventListener('change', () => updateHint(zone, input.files))
+}
+
+function updateHint(zone, files) {
+  const hint = zone.querySelectorAll('.text-secondary')[0]
+  if (!hint) return
+  hint.textContent = files.length > 1 ? `${files.length} files selected` : files[0]?.name || ''
 }
 
 function fmtSize(bytes) {

@@ -28,13 +28,13 @@ async def _call_next(request):
     return JSONResponse({"ok": True}, status_code=200)
 
 
-def _make_middleware(api_key: str):
+def _make_middleware(api_key: str, auth_users: str = ""):
     """Create APIKeyMiddleware with a patched AppConfig that returns the given api_key."""
     from fastapi import FastAPI
     app = FastAPI()
     # Middleware reads config in __init__, so patch must be active during instantiation.
     with patch("tram.api.middleware.AppConfig.from_env") as mock_cfg:
-        mock_cfg.return_value = MagicMock(api_key=api_key)
+        mock_cfg.return_value = MagicMock(api_key=api_key, auth_users=auth_users)
         mw = APIKeyMiddleware(app)
     return mw
 

@@ -7,7 +7,12 @@
   <script type="module" src="/src/main.js"></script>
 </head>
 <body>
-<div class="d-flex" style="height:100vh;overflow:hidden;">
+<!-- Login overlay (hidden once authenticated) -->
+<div id="login-overlay" style="display:none;position:fixed;inset:0;z-index:9999;background:var(--bg-page)">
+  <div id="login-content"></div>
+</div>
+
+<div id="app-shell" class="d-flex" style="height:100vh;overflow:hidden;">
 
   <!-- ── Sidebar ───────────────────────────────────────────────── -->
   <div id="sidebar" class="sidebar">
@@ -93,6 +98,7 @@
         </div>
         <button class="topbar-icon" onclick="navigate('settings')" title="Settings"><i class="bi bi-gear"></i></button>
         <button class="topbar-icon" onclick="toggleTheme()" id="theme-btn" title="Toggle theme"><i class="bi bi-moon-stars-fill"></i></button>
+        <button class="topbar-icon" id="logout-btn" onclick="window._logout?.()" title="Sign out" style="display:none"><i class="bi bi-box-arrow-right"></i></button>
       </div>
     </div>
 
@@ -100,6 +106,6 @@
     <div id="content"></div>
 
   </div>
-</div>
+</div> <!-- /#app-shell -->
 </body>
 </html>

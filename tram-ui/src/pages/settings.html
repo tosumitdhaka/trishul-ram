@@ -4,7 +4,12 @@
       <div class="fw-semibold mb-3">Connection</div>
       <div class="mb-3">
         <label class="form-label">Trishul-RAM Base URL</label>
-        <input class="form-control form-control-sm" id="cfg-url" placeholder="http://localhost:8765"/>
+        <div class="input-group input-group-sm">
+          <input class="form-control form-control-sm" id="cfg-url" placeholder="http://localhost:8765"/>
+          <button class="btn btn-outline-secondary" type="button" onclick="window._settingsResetUrl?.()" title="Restore default (window.location.origin)">
+            <i class="bi bi-arrow-counterclockwise"></i>
+          </button>
+        </div>
         <div class="form-text">Base URL of the TRAM daemon</div>
       </div>
       <div class="mb-3">
@@ -39,9 +44,6 @@
           <tr><td class="text-secondary">Uptime</td><td id="ds-uptime" class="text-secondary">—</td></tr>
         </tbody>
       </table>
-      <button class="btn btn-sm btn-secondary" onclick="window._settingsReload?.()">
-        <i class="bi bi-arrow-repeat me-1"></i>Reload Pipelines
-      </button>
     </div>
   </div>
 </div>

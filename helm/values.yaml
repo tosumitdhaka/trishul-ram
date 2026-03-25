@@ -113,13 +113,30 @@ schemaRegistry:
   password: ""     # optional basic-auth password (use envSecret for production)
 
 ## Pipeline YAML files to mount as a ConfigMap at /pipelines
-## Example:
-##   pipelines:
-##     minimal.yaml: |
-##       pipeline:
-##         name: minimal
-##         ...
-pipelines: {}
+## Add your own pipeline YAMLs here or via --set-file during helm install/upgrade.
+## The sample pipeline below runs every 60 s and writes a health record to /tmp — safe to delete.
+pipelines:
+  sample-health.yaml: |
+    version: "1"
+    pipeline:
+      name: sample-health
+      schedule:
+        type: interval
+        interval_seconds: 60
+      source:
+        type: local
+        path: /dev/null
+        file_pattern: "*.noop"
+      serializer_in:
+        type: json
+      transforms:
+        - type: add_field
+          fields:
+            status: ok
+            source: tram-sample
+      sink:
+        type: local
+        path: /tmp/tram-sample
 
 resources: {}
   # limits:
@@ -159,6 +176,14 @@ ui:
 ## web UI (/ui) are always exempt from API key checks.
 apiKey: ""   # Also configurable via TRAM_API_KEY env var
 
+## Browser user authentication (v1.0.8)
+## Comma-separated list of username:password pairs for UI login.
+## When set, the UI shows a login screen and issues 8-hour session tokens.
+## Coexists with apiKey — machine clients use X-API-Key, browser users log in.
+## Use envSecret.TRAM_AUTH_USERS for production to avoid plaintext passwords.
+## Example: authUsers: "admin:secret,viewer:readonly"
+authUsers: ""
+
 ## TLS configuration (v1.0.0)
 ## Mount a Kubernetes TLS secret and enable TLS for the uvicorn server.
 ## Create the secret with: kubectl create secret tls tram-tls --cert=tls.crt --key=tls.key
@@ -166,6 +191,22 @@ tls:
   enabled: false
   secretName: ""           # Name of a Kubernetes TLS secret (tls.crt / tls.key)
   certManagerIssuer: ""    # Optional: cert-manager ClusterIssuer name for automatic issuance
+
+## PostgreSQL subchart (v1.0.8)
+## When enabled, deploys a Bitnami PostgreSQL instance and automatically
+## wires TRAM_DB_URL and TRAM_CLUSTER_ENABLED into the TRAM pod.
+## Requires clusterMode.enabled=true for multi-replica cluster use.
+## For production, use an external PostgreSQL and set TRAM_DB_URL via envSecret.
+postgresql:
+  enabled: false
+  auth:
+    username: tram
+    password: tram
+    database: tram
+  primary:
+    persistence:
+      enabled: true
+      size: 5Gi
 
 ## Extra labels to add to all resources
 extraLabels: {}

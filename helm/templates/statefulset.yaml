@@ -57,7 +57,11 @@ spec:
             - name: {{ $key }}
               value: {{ $val | quote }}
             {{- end }}
-            {{- if .Values.persistence.enabled }}
+            {{- if .Values.postgresql.enabled }}
+            ## Auto-wired from Bitnami PostgreSQL subchart (v1.0.8)
+            - name: TRAM_DB_URL
+              value: "postgresql+psycopg2://{{ .Values.postgresql.auth.username }}:{{ .Values.postgresql.auth.password }}@{{ include "tram.fullname" . }}-postgresql/{{ .Values.postgresql.auth.database }}"
+            {{- else if .Values.persistence.enabled }}
             ## SQLAlchemy URL for SQLite on the /data PVC (v1.0.3+; replaces TRAM_DB_PATH)
             - name: TRAM_DB_URL
               value: "sqlite:////data/tram.db"
@@ -90,6 +94,10 @@ spec:
             {{- if .Values.apiKey }}
             - name: TRAM_API_KEY
               value: {{ .Values.apiKey | quote }}
+            {{- end }}
+            {{- if .Values.authUsers }}
+            - name: TRAM_AUTH_USERS
+              value: {{ .Values.authUsers | quote }}
             {{- end }}
             {{- if not .Values.ui.enabled }}
             ## Disable UI static serving when ui.enabled=false
