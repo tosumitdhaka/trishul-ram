@@ -2,7 +2,7 @@
 
 > Lightweight, container-native Python daemon that moves and transforms telecom data (PM/FM/Logs) across protocols.
 
-**Version:** 1.0.7 | **Status:** Production-ready | **Python:** 3.11+
+**Version:** 1.0.8 | **Status:** Production-ready | **Python:** 3.11+
 
 ---
 

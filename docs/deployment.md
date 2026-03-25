@@ -37,6 +37,7 @@ All configuration is via environment variables (12-factor).
 | `TRAM_HEARTBEAT_SECONDS` | `10` | Seconds between node heartbeats in cluster mode |
 | `TRAM_NODE_TTL_SECONDS` | `30` | Seconds before a silent node is marked dead |
 | `TRAM_API_KEY` | _(empty)_ | API key for request authentication; empty = auth disabled |
+| `TRAM_AUTH_USERS` | _(empty)_ | Comma-separated `user:password` pairs for browser UI login (v1.0.8); issues 8-hour HMAC session tokens; coexists with `TRAM_API_KEY` |
 | `TRAM_RATE_LIMIT` | `0` | Max requests per minute per IP for `/api/*`; 0 = disabled |
 | `TRAM_RATE_LIMIT_WINDOW` | `60` | Sliding window in seconds for rate limiting |
 | `TRAM_TLS_CERTFILE` | _(empty)_ | Path to TLS certificate file for HTTPS |
@@ -49,7 +50,7 @@ All configuration is via environment variables (12-factor).
 | `TRAM_SCHEMA_REGISTRY_URL` | _(empty)_ | Base URL of an external Confluent-compatible schema registry; enables `/api/schemas/registry/*` proxy and serves as the default `schema_registry_url` for Avro/Protobuf serializers (v1.0.4) |
 | `TRAM_SCHEMA_REGISTRY_USERNAME` | _(empty)_ | Basic-auth username for the external schema registry; used as default when not set in pipeline YAML (v1.0.4) |
 | `TRAM_SCHEMA_REGISTRY_PASSWORD` | _(empty)_ | Basic-auth password for the external schema registry; used as default when not set in pipeline YAML (v1.0.4) |
-| `TRAM_UI_DIR` | `/ui` | Directory containing built tram-ui static assets; set to empty string to disable the web UI without rebuilding the image (v1.0.7) |
+| `TRAM_UI_DIR` | `/ui` | Directory containing built tram-ui static assets; set to empty string to disable the web UI without rebuilding the image (v1.0.8) |
 
 ### Database backends (v0.7.0)
 
@@ -184,7 +185,7 @@ tram mib compile /path/to/vendor-mibs/ --out /mibs
 **Air-gapped environments** — copy pre-compiled MIB `.py` files into the image:
 
 ```dockerfile
-FROM ghcr.io/OWNER/tram:1.0.7
+FROM ghcr.io/OWNER/tram:1.0.8
 COPY compiled-mibs/*.py /mibs/
 ```
 
@@ -229,7 +230,7 @@ curl -X DELETE http://localhost:8765/api/schemas/cisco/GenericRecord.proto
 **Mount host directory** for development (read-write):
 
 ```bash
-docker run -v ./schemas:/schemas tram:1.0.7
+docker run -v ./schemas:/schemas tram:1.0.8
 ```
 
 ## Schema Registry Integration (v1.0.4)
@@ -262,7 +263,7 @@ environment:
   TRAM_SCHEMA_REGISTRY_PASSWORD: ${SR_PASS:-}
 ```
 
-## Web UI (v1.0.7)
+## Web UI (v1.0.8)
 
 The `tram-ui` Bootstrap 5 SPA is built into the Docker image at `/ui` and served by the daemon at `http://<host>:8765/ui/`. Navigating to `/` redirects there automatically.
 
@@ -352,7 +353,7 @@ Mount a volume at `/data` (or set `TRAM_DB_URL`) to persist run history and pipe
 
 ### Installed extras in the default image
 
-The default `tram:1.0.7` image installs (`clickhouse` added in v1.0.4):
+The default `tram:1.0.8` image installs (`clickhouse` added in v1.0.4):
 
 `kafka`, `opensearch`, `snmp`, `avro`, `protobuf_ser`, `msgpack_ser`, `mqtt`, `amqp`, `nats`,
 `gnmi`, `jmespath`, `sql`, `influxdb`, `redis`, `websocket`, `elasticsearch`, `metrics`,
@@ -372,7 +373,7 @@ The following extras are **excluded by default** to keep the image lean. Extend 
 | `otel` | only needed when `TRAM_OTEL_ENDPOINT` is set; no-op fallback when absent | ~15 MB |
 
 ```dockerfile
-FROM ghcr.io/OWNER/tram:1.0.7
+FROM ghcr.io/OWNER/tram:1.0.8
 RUN pip install "tram[parquet,s3,gcs,azure,otel]"
 ```
 
@@ -394,7 +395,7 @@ TRAM ships a production-ready Helm chart in `helm/`. Published to GHCR OCI on ev
 # Add chart from OCI registry
 helm install tram oci://ghcr.io/OWNER/charts/tram \
   --namespace tram --create-namespace \
-  --set image.tag=1.0.7
+  --set image.tag=1.0.8
 
 # Mount pipelines from local files
 helm upgrade tram oci://ghcr.io/OWNER/charts/tram \
@@ -411,7 +412,7 @@ helm upgrade tram oci://ghcr.io/OWNER/charts/tram \
 | Value | Default | Description |
 |-------|---------|-------------|
 | `image.repository` | `ghcr.io/OWNER/tram` | Docker image repository |
-| `image.tag` | `"1.0.7"` | Image tag |
+| `image.tag` | `"1.0.8"` | Image tag |
 | `replicaCount` | `1` | Replicas — `1` = standalone, `N` = cluster |
 | `clusterMode.enabled` | `false` | Activate cluster mode (sets `TRAM_CLUSTER_ENABLED`, requires external DB) |
 | `persistence.enabled` | `true` | Provision a PVC per pod via `volumeClaimTemplates` mounted at `/data`; auto-sets `TRAM_DB_URL=sqlite:////data/tram.db`, `TRAM_SCHEMA_DIR=/data/schemas`, `TRAM_MIB_DIR=/data/mibs` |
@@ -421,11 +422,13 @@ helm upgrade tram oci://ghcr.io/OWNER/charts/tram \
 | `schemaRegistry.username` | `""` | Registry basic-auth username; prefer `envSecret` in production |
 | `schemaRegistry.password` | `""` | Registry basic-auth password; prefer `envSecret` in production |
 | `service.snmpTrapPorts` | `[]` | List of UDP ports to expose for `snmp_trap` sources (e.g. `[1162, 1163]`); each entry creates one Service port + containerPort; requires `helm upgrade` to add/remove |
-| `ui.enabled` | `true` | Create a dedicated `{release}-ui` Service for the web UI; disable to suppress the Service (UI assets still in image, still reachable via main service) |
-| `ui.port` | `80` | External port on the UI Service (`targetPort` is always `8765`) |
-| `ui.serviceType` | `ClusterIP` | `ClusterIP` \| `NodePort` \| `LoadBalancer` |
-| `ui.nodePort` | `null` | NodePort number when `ui.serviceType=NodePort` |
-| `ui.serviceAnnotations` | `{}` | Annotations on the UI Service (e.g. AWS ALB controller, cloud LB annotations) |
+| `ui.enabled` | `true` | Serve tram-ui static assets at `/ui`; set to `false` to disable without rebuilding the image (injects `TRAM_UI_DIR=""`) |
+| `apiKey` | `""` | API key (X-API-Key header / `api_key` query param) for machine clients; empty = disabled |
+| `authUsers` | `""` | Comma-separated `user:password` pairs for browser UI login (v1.0.8); use `envSecret.TRAM_AUTH_USERS` for production |
+| `postgresql.enabled` | `false` | Deploy Bitnami PostgreSQL subchart and auto-wire `TRAM_DB_URL` (v1.0.8) |
+| `postgresql.auth.username` | `tram` | PostgreSQL username |
+| `postgresql.auth.password` | `tram` | PostgreSQL password (use external secret for production) |
+| `postgresql.auth.database` | `tram` | PostgreSQL database name |
 | `nameOverride` | `""` | Override the chart name portion of resource names |
 | `fullnameOverride` | `""` | Fully override the resource name prefix |
 | `env` | `{}` | Plain env vars |
@@ -438,7 +441,7 @@ helm upgrade tram oci://ghcr.io/OWNER/charts/tram \
 ```bash
 helm install tram oci://ghcr.io/OWNER/charts/tram \
   --namespace tram --create-namespace \
-  --set image.tag=1.0.7
+  --set image.tag=1.0.8
 ```
 
 A single-replica `StatefulSet` with pod name `tram-0` runs the full daemon. A `PersistentVolumeClaim` (`data-tram-0`) is auto-provisioned via `volumeClaimTemplates` and mounted at `/data`. SQLite run history, API-uploaded schemas (`/data/schemas`), and runtime MIBs (`/data/mibs`) all share this single PVC and survive pod restarts. Standard MIBs baked into the image at `/mibs` remain available alongside any runtime-downloaded ones.
@@ -457,7 +460,7 @@ kubectl create secret generic tram-db \
 
 helm install tram oci://ghcr.io/OWNER/charts/tram \
   --namespace tram --create-namespace \
-  --set image.tag=1.0.7 \
+  --set image.tag=1.0.8 \
   --set clusterMode.enabled=true \
   --set replicaCount=3 \
   --set envSecret.TRAM_DB_URL.secretName=tram-db \
@@ -478,6 +481,28 @@ Check cluster state:
 ```bash
 kubectl exec -n tram tram-0 -- curl -s http://localhost:8765/api/cluster/nodes | jq .
 ```
+
+### PostgreSQL subchart (v1.0.8)
+
+For a self-contained cluster deployment on Kubernetes (e.g. kind/minikube) without a separate database server, use the bundled Bitnami PostgreSQL subchart:
+
+```bash
+helm install trishul-ram helm/ \
+  --namespace trishul-ram --create-namespace \
+  --set image.tag=1.0.8 \
+  --set replicaCount=3 \
+  --set clusterMode.enabled=true \
+  --set postgresql.enabled=true
+```
+
+This deploys a `trishul-ram-postgresql` StatefulSet alongside TRAM and automatically sets:
+
+```
+TRAM_DB_URL=postgresql+psycopg2://tram:tram@trishul-ram-postgresql/tram
+TRAM_CLUSTER_ENABLED=true
+```
+
+> **Note:** For production, use an external managed PostgreSQL and set `TRAM_DB_URL` via `envSecret` instead.
 
 ### Scale up / scale down
 
@@ -538,7 +563,7 @@ spec:
     spec:
       containers:
       - name: tram
-        image: ghcr.io/OWNER/tram:1.0.7
+        image: ghcr.io/OWNER/tram:1.0.8
         command: ["tram", "daemon"]
         ports:
         - containerPort: 8765

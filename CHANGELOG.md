@@ -9,6 +9,48 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ---
 
+## [1.0.8] — 2026-03-25
+
+### Added
+
+**Browser user authentication**
+- `TRAM_AUTH_USERS` env var: comma-separated `username:password` pairs for UI login
+- `tram/api/auth.py`: HMAC-SHA256 session tokens (8-hour TTL, invalidated on restart)
+- `POST /api/auth/login` — returns `{"token": "...", "username": "..."}` on valid credentials
+- `GET /api/auth/me` — returns current user from Bearer token (401 if unauthenticated)
+- `APIKeyMiddleware` extended: accepts both `X-API-Key` (machine clients) and `Bearer` token (browser users); `/api/auth/login` added to exempt set
+- Login overlay in tram-ui: full-screen login page shown when `TRAM_AUTH_USERS` is configured; 8-hour token stored in `localStorage`; logout button in topbar
+- `helm/values.yaml`: new `authUsers` key (injected as `TRAM_AUTH_USERS`); recommended to use `envSecret` for production
+
+**Multi-file upload (schemas & MIBs)**
+- Schema and MIB upload zones now accept `multiple` files; uploads proceed sequentially with per-file progress hints
+- Drop zone text updated to "Drop files here"
+
+**Dashboard shortcuts**
+- "Manage →" and "+ New" buttons on the Active Pipelines card navigate directly to the Pipelines and Editor pages
+
+**Settings — restore base URL**
+- Reset button (↺) next to the base URL input restores to `window.location.origin` (same-origin default)
+- Removed duplicate "Reload Pipelines" button from Settings (already available on the Pipelines page)
+
+**PostgreSQL subchart (Helm)**
+- Bitnami PostgreSQL added as optional dependency (`postgresql.enabled=true` in `values.yaml`)
+- When enabled, `TRAM_DB_URL` is auto-wired as `postgresql+psycopg2://<user>:<pass>@<release>-postgresql/<db>`; no manual `TRAM_DB_URL` needed
+- `values.yaml`: `postgresql.auth` (username/password/database) and `postgresql.primary.persistence.size`
+- Combined with `replicaCount>1` + `clusterMode.enabled=true` for a fully self-contained HA cluster
+
+**Sample pipeline on install**
+- `values.yaml` ships with a `sample-health` pipeline (interval 60 s, no-op source, writes status field to `/tmp/tram-sample`) so a fresh install has a visible running pipeline immediately
+
+### Changed
+- `pyproject.toml`, `helm/Chart.yaml`: version → `1.0.8`
+- `tram-ui/package.json`, `index.html`: version badge → `v1.0.8`
+- `helm/values.yaml`: `replicaCount: 3`, `clusterMode.enabled: true`, `postgresql.enabled: true` (kind dev-cluster deployment defaults)
+- `helm/values-template.yaml`: new clean-defaults reference file (ClusterIP, replicaCount:1, postgresql:false, `OWNER/tram` placeholder)
+- `tram/core/config.py`: added `auth_users` field
+
+---
+
 ## [1.0.7] — 2026-03-24
 
 ### Added

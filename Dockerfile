@@ -14,7 +14,7 @@ FROM node:20-alpine AS ui-builder
 
 WORKDIR /ui-src
 COPY tram-ui/package.json tram-ui/package-lock.json ./
-RUN npm ci --prefer-offline
+RUN npm ci
 COPY tram-ui/ ./
 RUN npm run build
 
