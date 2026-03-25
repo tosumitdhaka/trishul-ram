@@ -6,14 +6,16 @@ export async function init() {
   wireDropZone()
 
   window._mibsUpload = async () => {
-    const file = document.getElementById('mib-file-input')?.files?.[0]
-    if (!file) { toast('Select a .mib file first', 'error'); return }
-    try {
-      await api.mibs.upload(file)
-      toast(`Uploaded & compiled ${file.name}`)
-      document.getElementById('mib-file-input').value = ''
-      await loadMibs()
-    } catch (e) { toast(e.message, 'error') }
+    const files = Array.from(document.getElementById('mib-file-input')?.files || [])
+    if (!files.length) { toast('Select a .mib file first', 'error'); return }
+    let ok = 0, fail = 0
+    for (const file of files) {
+      try { await api.mibs.upload(file); ok++ }
+      catch (e) { fail++; toast(`${file.name}: ${e.message}`, 'error') }
+    }
+    if (ok) toast(`Uploaded & compiled ${ok} MIB${ok > 1 ? 's' : ''}`)
+    document.getElementById('mib-file-input').value = ''
+    await loadMibs()
   }
 
   window._mibsDownload = async () => {
@@ -78,19 +80,19 @@ function wireDropZone() {
   zone.addEventListener('drop', e => {
     e.preventDefault()
     zone.classList.remove('dragover')
-    const file = e.dataTransfer.files?.[0]
-    if (file) {
-      const dt = new DataTransfer()
-      dt.items.add(file)
-      input.files = dt.files
-      const hint = zone.querySelectorAll('.text-secondary')[0]
-      if (hint) hint.textContent = file.name
+    const files = e.dataTransfer.files
+    if (files?.length) {
+      input.files = files
+      updateHint(zone, files)
     }
   })
-  input.addEventListener('change', () => {
-    const hint = zone.querySelectorAll('.text-secondary')[0]
-    if (hint && input.files[0]) hint.textContent = input.files[0].name
-  })
+  input.addEventListener('change', () => updateHint(zone, input.files))
+}
+
+function updateHint(zone, files) {
+  const hint = zone.querySelectorAll('.text-secondary')[0]
+  if (!hint) return
+  hint.textContent = files.length > 1 ? `${files.length} files selected` : files[0]?.name || ''
 }
 
 function fmtSize(bytes) {

@@ -10,8 +10,15 @@ export async function init() {
   if (key) key.value = apiKey
   if (poll) poll.value = localStorage.getItem('tram_poll_interval') || '10'
 
+  window._settingsResetUrl = () => {
+    localStorage.removeItem('tram_base_url')
+    if (url) url.value = window.location.origin
+    const s = document.getElementById('cfg-status')
+    if (s) { s.textContent = '✓ Reset to default'; s.style.color = '#8b949e' }
+  }
+
   window._settingsSave = () => {
-    saveConfig(url?.value?.trim() || 'http://localhost:8765', key?.value?.trim() || '')
+    saveConfig(url?.value?.trim() || window.location.origin, key?.value?.trim() || '')
     localStorage.setItem('tram_poll_interval', poll?.value || '10')
     const s = document.getElementById('cfg-status')
     if (s) { s.textContent = '✓ Saved'; s.style.color = '#3fb950' }
@@ -25,15 +32,6 @@ export async function init() {
       if (s) { s.textContent = `✓ Connected · v${(await api.meta()).version}`; s.style.color = '#3fb950' }
     } catch (e) {
       if (s) { s.textContent = `✗ ${e.message}`; s.style.color = '#f85149' }
-    }
-  }
-
-  window._settingsReload = async () => {
-    try {
-      await api.pipelines.reload()
-      alert('Pipelines reloaded from disk.')
-    } catch (e) {
-      alert(`Error: ${e.message}`)
     }
   }
 

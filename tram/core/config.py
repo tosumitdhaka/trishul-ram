@@ -63,6 +63,8 @@ class AppConfig:
     schema_registry_password: str
     # v1.0.7 web UI static dir (empty = UI disabled)
     ui_dir: str
+    # v1.0.8 browser user auth — comma-separated user:password pairs
+    auth_users: str
 
     @classmethod
     def from_env(cls) -> "AppConfig":
@@ -98,6 +100,7 @@ class AppConfig:
             schema_registry_username=os.environ.get("TRAM_SCHEMA_REGISTRY_USERNAME", ""),
             schema_registry_password=os.environ.get("TRAM_SCHEMA_REGISTRY_PASSWORD", ""),
             ui_dir=os.environ.get("TRAM_UI_DIR", "/ui"),
+            auth_users=os.environ.get("TRAM_AUTH_USERS", ""),
         )
 
 

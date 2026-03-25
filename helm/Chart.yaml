@@ -14,3 +14,9 @@ sources:
   - https://github.com/trishul/tram
 maintainers:
   - name: TRAM Maintainers
+
+dependencies:
+  - name: postgresql
+    version: "16.x.x"
+    repository: "https://charts.bitnami.com/bitnami"
+    condition: postgresql.enabled

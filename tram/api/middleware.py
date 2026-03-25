@@ -22,7 +22,7 @@ class APIKeyMiddleware(BaseHTTPMiddleware):
     orchestrators and external producers never need credentials.
     """
 
-    EXEMPT = {"/api/health", "/api/ready", "/metrics", "/"}
+    EXEMPT = {"/api/health", "/api/ready", "/metrics", "/", "/api/auth/login"}
     EXEMPT_PREFIX = ("/webhooks/", "/ui")
 
     def __init__(self, app) -> None:
@@ -32,18 +32,28 @@ class APIKeyMiddleware(BaseHTTPMiddleware):
     async def dispatch(self, request: "Request", call_next):
         settings = self._settings
 
-        if not settings.api_key:
+        # No auth configured at all
+        if not settings.api_key and not settings.auth_users:
             return await call_next(request)
 
         path = request.url.path
         if path in self.EXEMPT or any(path.startswith(p) for p in self.EXEMPT_PREFIX):
             return await call_next(request)
 
-        key = request.headers.get("X-API-Key") or request.query_params.get("api_key")
-        if key != settings.api_key:
-            return JSONResponse({"detail": "Unauthorized"}, status_code=401)
+        # Machine-to-machine: X-API-Key
+        if settings.api_key:
+            key = request.headers.get("X-API-Key") or request.query_params.get("api_key")
+            if key == settings.api_key:
+                return await call_next(request)
 
-        return await call_next(request)
+        # Browser session: Bearer token
+        if settings.auth_users:
+            from tram.api.auth import extract_bearer, verify_token
+            token = extract_bearer(request)
+            if token and verify_token(token):
+                return await call_next(request)
+
+        return JSONResponse({"detail": "Unauthorized"}, status_code=401)
 
 
 class RateLimitMiddleware(BaseHTTPMiddleware):
