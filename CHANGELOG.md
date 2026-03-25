@@ -9,6 +9,23 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ---
 
+## [1.0.9] — 2026-03-25
+
+### Added
+
+**Shared RWX storage for schemas and MIBs (cluster mode)**
+- New `sharedStorage` Helm section: single `ReadWriteMany` PVC (`tram-shared`) mounted at `/shared` on every pod
+- `TRAM_SCHEMA_DIR` and `TRAM_MIB_DIR` auto-pointed to `/shared/schemas` and `/shared/mibs` when `sharedStorage.enabled=true`
+- Schemas/MIBs uploaded via the UI are now instantly visible to all replicas — no session pinning required
+- `helm/kind/nfs-provisioner.yaml`: deploys [kubernetes-sigs NFS Ganesha server + external provisioner](https://github.com/kubernetes-sigs/nfs-ganesha-server-and-external-provisioner) (`registry.k8s.io/sig-storage/nfs-provisioner:v4.0.8`) in kind clusters; creates StorageClass `nfs-rwx`
+- Supported RWX storage classes documented in `values.yaml`: `nfs-rwx` (kind), `efs-sc` (AWS), `azurefile` (Azure), `filestore-rwx` (GKE), `longhorn-rwx`
+
+### Changed
+- `persistence.enabled` defaults to `false` in cluster-mode `values.yaml` — per-pod `/data` PVCs are unnecessary when PostgreSQL + `sharedStorage` are both active
+- Removed `sessionAffinity: ClientIP` workaround from Service (was pinning browsers to a single pod to paper over per-pod schema visibility; no longer needed)
+
+---
+
 ## [1.0.8] — 2026-03-25
 
 ### Added
