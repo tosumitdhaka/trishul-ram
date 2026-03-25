@@ -28,6 +28,9 @@ async def login(body: LoginRequest, request: Request):
 
 @router.get("/me")
 async def me(request: Request):
+    config = request.app.state.config
+    if not config.auth_users:
+        raise HTTPException(403, "User auth not configured (TRAM_AUTH_USERS not set)")
     token = extract_bearer(request)
     username = verify_token(token) if token else None
     if not username:
