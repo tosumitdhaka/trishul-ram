@@ -98,4 +98,24 @@ export const api = {
   cluster: {
     nodes: () => req('/api/cluster/nodes'),
   },
+
+  // ── Templates ──────────────────────────────────────────────────────────────
+  templates: {
+    list: () => req('/api/templates'),
+  },
+
+  // ── Stats ──────────────────────────────────────────────────────────────────
+  stats: {
+    get: () => req('/api/stats'),
+  },
+
+  // ── AI assist ──────────────────────────────────────────────────────────────
+  ai: {
+    suggest: (payload) => req('/api/ai/suggest', { method: 'POST', body: payload }),
+  },
+
+  // ── Pipeline version YAML ──────────────────────────────────────────────────
+  versions: {
+    yaml: (name, ver) => req(`/api/pipelines/${name}/versions/${ver}`),
+  },
 }

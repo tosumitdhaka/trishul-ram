@@ -110,6 +110,9 @@ COPY --from=mib-builder /mibs /mibs
 # Copy web UI static assets from ui-builder stage
 COPY --from=ui-builder /ui-src/dist /ui
 
+# Bundle pipeline templates (read-only reference examples, always available)
+COPY pipelines/ /tram-templates/
+
 # Create default pipeline, data, MIB, and schema directories; set ownership
 RUN mkdir -p /pipelines /data /data/mibs /mibs /schemas && \
     mkdir -p /home/tram/.tram && \
@@ -126,6 +129,7 @@ EXPOSE 8765
 ENV TRAM_MIB_DIR=/mibs
 ENV TRAM_SCHEMA_DIR=/schemas
 ENV TRAM_UI_DIR=/ui
+ENV TRAM_TEMPLATES_DIR=/tram-templates
 
 ENTRYPOINT ["tram"]
 CMD ["daemon"]

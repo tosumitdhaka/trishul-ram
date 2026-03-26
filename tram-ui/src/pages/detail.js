@@ -2,12 +2,12 @@ import { api } from '../api.js'
 import { relTime, fmtDur, fmtNum, statusBadge, schedBadge, esc, toast } from '../utils.js'
 
 let _name = null
+let _activeYaml = null  // current active version YAML for diff comparison
 
 export async function init() {
   _name = window._detailPipeline
   if (!_name) { navigate('pipelines'); return }
 
-  // Update topbar subtitle
   const sub = document.getElementById('tb-sub')
   if (sub) sub.textContent = _name
 
@@ -16,6 +16,7 @@ export async function init() {
       api.pipelines.get(_name),
       api.runs.list({ pipeline: _name, limit: 50 }),
     ])
+    _activeYaml = pipeline.yaml || null
     renderCards(pipeline)
     renderRuns(runs)
     wireActions(pipeline)
@@ -23,14 +24,17 @@ export async function init() {
     toast(`Detail error: ${e.message}`, 'error')
   }
 
-  // Tab switching
-  document.querySelectorAll('.nav-tabs .nav-link').forEach((tab, i) => {
+  // Tab switching via data-tab attribute
+  document.querySelectorAll('#detail-tabs .nav-link').forEach(tab => {
     tab.addEventListener('click', e => {
       e.preventDefault()
-      document.querySelectorAll('.nav-tabs .nav-link').forEach(t => t.classList.remove('active'))
+      document.querySelectorAll('#detail-tabs .nav-link').forEach(t => t.classList.remove('active'))
       tab.classList.add('active')
-      if (i === 1) loadVersions()
-      if (i === 2) loadConfig()
+      const t = tab.dataset.tab
+      if (t === 'runs')     reloadRuns()
+      if (t === 'versions') loadVersions()
+      if (t === 'config')   loadConfig()
+      if (t === 'alerts')   loadAlerts()
     })
   })
 
@@ -138,8 +142,13 @@ async function loadVersions() {
     }
     tbody.innerHTML = versions.map(v => `<tr>
       <td class="mono">v${v.version}</td>
-      <td class="text-secondary" colspan="7">${v.created_at ? relTime(v.created_at) : '—'}</td>
-      <td>${v.active ? statusBadge('running') : ''}</td>
+      <td class="text-secondary" colspan="6">${v.created_at ? relTime(v.created_at) : '—'}</td>
+      <td>${v.is_active ? statusBadge('running') : ''}</td>
+      <td>
+        <button class="btn-flat" onclick="window._detailDiff(${v.version})">
+          <i class="bi bi-file-diff"></i> Diff
+        </button>
+      </td>
       <td><button class="btn-flat" onclick="window._detailRollback(${v.version})">Rollback</button></td>
     </tr>`).join('')
 
@@ -148,8 +157,83 @@ async function loadVersions() {
       try { await api.pipelines.rollback(_name, ver); toast('Rolled back'); init() }
       catch (e) { toast(e.message, 'error') }
     }
+
+    window._detailDiff = async (ver) => {
+      try {
+        const oldYaml = await api.versions.yaml(_name, ver)
+        const newYaml = _activeYaml || await api.pipelines.get(_name).then(p => p.yaml || '')
+        const versionEntry = versions.find(v => v.version === ver)
+        const leftLabel  = `v${ver}${versionEntry?.created_at ? ' · ' + relTime(versionEntry.created_at) : ''}`
+        const rightLabel = 'active'
+        document.getElementById('diff-left-label').textContent  = leftLabel
+        document.getElementById('diff-right-label').textContent = rightLabel
+        _renderDiffPanes(oldYaml, newYaml)
+        new bootstrap.Modal(document.getElementById('detail-diff-modal')).show()
+      } catch (e) { toast(`Diff error: ${e.message}`, 'error') }
+    }
   } catch (e) { toast(e.message, 'error') }
 }
+
+// ── Myers diff ──────────────────────────────────────────────────────────────
+
+function _myersDiff(a, b) {
+  const m = a.length, n = b.length
+  const max = m + n
+  const v = new Array(2 * max + 1).fill(0)
+  const trace = []
+
+  for (let d = 0; d <= max; d++) {
+    trace.push([...v])
+    for (let k = -d; k <= d; k += 2) {
+      let x = (k === -d || (k !== d && v[k - 1 + max] < v[k + 1 + max]))
+        ? v[k + 1 + max]
+        : v[k - 1 + max] + 1
+      let y = x - k
+      while (x < m && y < n && a[x] === b[y]) { x++; y++ }
+      v[k + max] = x
+      if (x >= m && y >= n) return _backtrack(trace, a, b, max)
+    }
+  }
+  return _backtrack(trace, a, b, max)
+}
+
+function _backtrack(trace, a, b, max) {
+  const result = []
+  let x = a.length, y = b.length
+  for (let d = trace.length - 1; d >= 0; d--) {
+    const v = trace[d]
+    const k = x - y
+    const prevK = (k === -d || (k !== d && v[k - 1 + max] < v[k + 1 + max])) ? k + 1 : k - 1
+    const prevX = v[prevK + max]
+    const prevY = prevX - prevK
+    while (x > prevX && y > prevY) { result.unshift({ type: 'equal', line: a[x - 1] }); x--; y-- }
+    if (d > 0) {
+      if (x > prevX) { result.unshift({ type: 'delete', line: a[x - 1] }); x-- }
+      else            { result.unshift({ type: 'insert', line: b[y - 1] }); y-- }
+    }
+  }
+  return result
+}
+
+function _renderDiffPanes(oldYaml, newYaml) {
+  const hunks = _myersDiff(oldYaml.split('\n'), newYaml.split('\n'))
+  let leftHtml = '', rightHtml = ''
+  for (const h of hunks) {
+    const line = esc(h.line)
+    if (h.type === 'equal') {
+      leftHtml  += `<span style="opacity:.5">${line}\n</span>`
+      rightHtml += `<span style="opacity:.5">${line}\n</span>`
+    } else if (h.type === 'delete') {
+      leftHtml  += `<span style="background:#3d1a1a;display:block">- ${line}\n</span>`
+    } else {
+      rightHtml += `<span style="background:#1a3328;display:block">+ ${line}\n</span>`
+    }
+  }
+  document.getElementById('diff-left-pane').innerHTML  = leftHtml  || '<span style="opacity:.4">— empty —</span>'
+  document.getElementById('diff-right-pane').innerHTML = rightHtml || '<span style="opacity:.4">— empty —</span>'
+}
+
+// ── Config tab ──────────────────────────────────────────────────────────────
 
 async function loadConfig() {
   const tbody = document.getElementById('detail-runs-body')
@@ -160,6 +244,16 @@ async function loadConfig() {
     tbody.parentElement.innerHTML = `<pre class="p-3 rounded" style="background:#161b22;font-size:12px;color:#e6edf3;overflow:auto;max-height:480px">${esc(yaml)}</pre>`
   } catch (e) { toast(e.message, 'error') }
 }
+
+// ── Alerts tab ──────────────────────────────────────────────────────────────
+
+async function loadAlerts() {
+  const tbody = document.getElementById('detail-runs-body')
+  if (!tbody) return
+  tbody.innerHTML = '<tr><td colspan="10" class="text-secondary text-center py-4">Alert rules — coming in v1.1.0</td></tr>'
+}
+
+// ── Helpers ──────────────────────────────────────────────────────────────────
 
 function fmtInterval(s) {
   if (!s) return '?'

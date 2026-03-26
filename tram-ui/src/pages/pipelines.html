@@ -13,9 +13,44 @@
             title="Reload pipelines from disk" onclick="window._plReload?.()">
       <i class="bi bi-arrow-repeat" style="font-size:15px"></i> Reload
     </button>
+    <button class="btn btn-sm btn-secondary" title="Import pipeline YAML" onclick="document.getElementById('pl-import-input').click()">
+      <i class="bi bi-upload me-1"></i>Import
+    </button>
+    <input type="file" id="pl-import-input" accept=".yaml,.yml" style="display:none" onchange="window._plImportFile?.(this)"/>
     <button class="btn btn-sm btn-primary" onclick="navigate('editor')">
       <i class="bi bi-plus-lg me-1"></i>New Pipeline
     </button>
+  </div>
+</div>
+
+<!-- Import conflict modal -->
+<div class="modal fade" id="pl-import-modal" tabindex="-1">
+  <div class="modal-dialog modal-dialog-centered">
+    <div class="modal-content" style="background:#0d1117;border:1px solid #30363d">
+      <div class="modal-header" style="border-color:#30363d">
+        <h6 class="modal-title text-light">Pipeline already exists</h6>
+        <button type="button" class="btn-close btn-close-white" data-bs-dismiss="modal"></button>
+      </div>
+      <div class="modal-body">
+        <p class="text-secondary" style="font-size:13px">
+          Pipeline <strong id="pl-import-name" class="text-light"></strong> already exists.
+          Choose how to proceed:
+        </p>
+        <div class="d-flex gap-2 mt-3">
+          <button class="btn btn-sm btn-primary flex-fill" id="pl-import-replace">
+            <i class="bi bi-arrow-repeat me-1"></i>Replace (saves new version)
+          </button>
+          <button class="btn btn-sm btn-secondary" data-bs-dismiss="modal">Cancel</button>
+        </div>
+        <div class="mt-2">
+          <label class="text-secondary" style="font-size:12px">Or import with a new name:</label>
+          <div class="d-flex gap-2 mt-1">
+            <input class="form-control form-control-sm" id="pl-import-newname" placeholder="new-pipeline-name"/>
+            <button class="btn btn-sm btn-secondary" id="pl-import-rename">Import</button>
+          </div>
+        </div>
+      </div>
+    </div>
   </div>
 </div>
 

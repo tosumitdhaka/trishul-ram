@@ -9,6 +9,7 @@ import mibsHtml      from './pages/mibs.html?raw'
 import clusterHtml   from './pages/cluster.html?raw'
 import pluginsHtml   from './pages/plugins.html?raw'
 import settingsHtml  from './pages/settings.html?raw'
+import templatesHtml from './pages/templates.html?raw'
 
 const pages = {
   dashboard: dashboardHtml,
@@ -21,19 +22,21 @@ const pages = {
   cluster:   clusterHtml,
   plugins:   pluginsHtml,
   settings:  settingsHtml,
+  templates: templatesHtml,
 }
 
 const meta = {
-  dashboard: { title: 'Dashboard',      sub: 'Overview' },
-  pipelines: { title: 'Pipelines',      sub: '8 registered · 3 running' },
-  detail:    { title: 'Pipeline Detail',  sub: '' },
-  editor:    { title: 'Pipeline Editor', sub: '' },
-  runs:      { title: 'Run History',     sub: '' },
-  schemas:   { title: 'Schemas',         sub: '' },
-  mibs:      { title: 'MIB Modules',     sub: '' },
-  cluster:   { title: 'Cluster',         sub: '' },
-  plugins:   { title: 'Plugins',         sub: '24 sources · 20 sinks · 10 serializers · 20 transforms' },
-  settings:  { title: 'Settings',        sub: 'Connection & daemon configuration' },
+  dashboard: { title: 'Dashboard',         sub: 'Overview' },
+  pipelines: { title: 'Pipelines',         sub: '' },
+  detail:    { title: 'Pipeline Detail',   sub: '' },
+  editor:    { title: 'Pipeline Editor',   sub: '' },
+  runs:      { title: 'Run History',       sub: '' },
+  schemas:   { title: 'Schemas',           sub: '' },
+  mibs:      { title: 'MIB Modules',       sub: '' },
+  cluster:   { title: 'Cluster',           sub: '' },
+  plugins:   { title: 'Plugins',           sub: '' },
+  settings:  { title: 'Settings',          sub: 'Connection & daemon configuration' },
+  templates: { title: 'Pipeline Templates', sub: 'Start from a pre-built example' },
 }
 
 // Page init hooks
@@ -47,6 +50,7 @@ const inits = {
   mibs:      () => import('./pages/mibs.js').then(m => m.init?.()),
   cluster:   () => import('./pages/cluster.js').then(m => m.init?.()),
   settings:  () => import('./pages/settings.js').then(m => m.init?.()),
+  templates: () => import('./pages/templates.js').then(m => m.init?.()),
 }
 
 export const router = {
@@ -66,8 +70,9 @@ export const router = {
     // Update sidebar active link
     document.querySelectorAll('#sidebar .nav-link').forEach(a => {
       a.classList.toggle('active', a.dataset.page === name ||
-        (name === 'detail' && a.dataset.page === 'pipelines') ||
-        (name === 'editor' && a.dataset.page === 'pipelines'))
+        (name === 'detail'    && a.dataset.page === 'pipelines') ||
+        (name === 'editor'    && a.dataset.page === 'pipelines') ||
+        (name === 'templates' && a.dataset.page === 'templates'))
     })
 
     // Update hash without triggering another hashchange

@@ -65,6 +65,8 @@ class AppConfig:
     ui_dir: str
     # v1.0.8 browser user auth — comma-separated user:password pairs
     auth_users: str
+    # v1.1.0 bundled pipeline templates directory
+    templates_dir: str
 
     @classmethod
     def from_env(cls) -> "AppConfig":
@@ -101,6 +103,7 @@ class AppConfig:
             schema_registry_password=os.environ.get("TRAM_SCHEMA_REGISTRY_PASSWORD", ""),
             ui_dir=os.environ.get("TRAM_UI_DIR", "/ui"),
             auth_users=os.environ.get("TRAM_AUTH_USERS", ""),
+            templates_dir=os.environ.get("TRAM_TEMPLATES_DIR", "/tram-templates"),
         )
 
 
