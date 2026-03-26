@@ -7,7 +7,7 @@
 
 | # | Feature | Doc | Complexity | New API endpoints |
 |---|---------|-----|------------|-------------------|
-| 1 | [Pipeline Setup Wizard](./01-wizard.md) | [01-wizard.md](./01-wizard.md) | High | — |
+| 1 | [Pipeline Setup Wizard](./01-wizard.md) | [01-wizard.md](./01-wizard.md) | High | `POST /api/ai/suggest` (optional) |
 | 2 | [Live Metrics on Dashboard](./02-live-metrics.md) | [02-live-metrics.md](./02-live-metrics.md) | Medium | `GET /api/stats` |
 | 3 | [Alert Rules UI](./03-alert-rules-ui.md) | [03-alert-rules-ui.md](./03-alert-rules-ui.md) | Medium | 4 alert sub-routes |
 | 4 | [YAML Diff Viewer](./04-yaml-diff-viewer.md) | [04-yaml-diff-viewer.md](./04-yaml-diff-viewer.md) | Low | — |
@@ -45,3 +45,7 @@ Phase 5 (sequential, builds on connectivity test)
 - No new DB columns
 - No new required env vars or Helm chart values
 - No new npm dependencies (charts via Canvas API; diff algorithm in plain JS)
+- AI assist (`POST /api/ai/suggest`) requires `TRAM_AI_API_KEY` env var; silently
+  disabled when absent — all other wizard functionality unaffected
+- AI uses `claude-haiku-4-5-20251001` (fast, low cost); requires `anthropic` Python package
+  (already an optional dep candidate)
