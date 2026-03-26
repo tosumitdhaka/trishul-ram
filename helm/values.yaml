@@ -23,7 +23,7 @@ clusterMode:
 ## Defaults to the chart name (trishul-ram).
 ## Override to shorten or rename — e.g. nameOverride: "tram" gives back short names like tram-0.
 nameOverride: ""
-fullnameOverride: "tram"  # shortens pod names to tram-0, tram-1, … and service to tram
+fullnameOverride: ""
 
 service:
   type: NodePort
