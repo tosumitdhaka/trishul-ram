@@ -47,7 +47,7 @@ function renderSchemas(schemas) {
   tbody.innerHTML = schemas.map(s => {
     const name = s.path || s.name || s
     const ext  = String(name).split('.').pop().toLowerCase()
-    const size = s.size ? fmtSize(s.size) : '—'
+    const size = s.size_bytes ? fmtSize(s.size_bytes) : '—'
     return `<tr>
       <td class="fw-semibold">${esc(name)}</td>
       <td><span class="type-pill">${esc(ext)}</span></td>

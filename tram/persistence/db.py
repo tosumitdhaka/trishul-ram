@@ -281,6 +281,7 @@ class TramDB:
             records_skipped=row["records_skipped"],
             error=row["error"],
             dlq_count=row.get("dlq_count", 0) or 0,
+            node_id=row.get("node_id", "") or "",
         )
 
     # ── Pipeline versions ──────────────────────────────────────────────────

@@ -249,7 +249,13 @@ class TramScheduler:
         try:
             result = self.executor.batch_run(state.config, run_id=run_id)
             self.manager.record_run(pipeline_name, result)
-            final_status = "stopped" if result.status == RunStatus.SUCCESS else "error"
+            if result.status == RunStatus.SUCCESS:
+                # If the job is still scheduled, go back to "scheduled" not "stopped"
+                job_id = f"batch-{pipeline_name}"
+                has_job = self._scheduler and self._scheduler.get_job(job_id)
+                final_status = "scheduled" if has_job else "stopped"
+            else:
+                final_status = "error"
             self.manager.set_status(pipeline_name, final_status)
         except Exception as exc:
             logger.error("Batch run exception", extra={"pipeline": pipeline_name, "error": str(exc)})
@@ -319,10 +325,11 @@ class TramScheduler:
         state = self.manager.get(name)
         config = state.config
         # Stream pipelines become "running" immediately (continuous thread).
-        # Batch pipelines (interval/cron/manual) stay "stopped" until the job
-        # actually fires — _run_batch() transitions them to "running".
-        if config.schedule.type != "stream":
-            self.manager.set_status(name, "stopped")
+        # Batch interval/cron pipelines show "scheduled" while waiting for next
+        # fire — _run_batch() transitions them to "running" then back to "scheduled".
+        # Manual pipelines stay "stopped" until explicitly triggered.
+        if config.schedule.type not in ("stream", "manual"):
+            self.manager.set_status(name, "scheduled")
         self._schedule_pipeline(config)
 
     def stop_pipeline(self, name: str) -> None:

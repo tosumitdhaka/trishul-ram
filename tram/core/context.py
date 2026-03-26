@@ -77,6 +77,7 @@ class RunResult:
     records_skipped: int
     error: Optional[str] = None
     dlq_count: int = 0
+    node_id: str = ""
 
     @classmethod
     def from_context(
@@ -110,4 +111,5 @@ class RunResult:
             "records_skipped": self.records_skipped,
             "dlq_count": self.dlq_count,
             "error": self.error,
+            "node": self.node_id or None,
         }
