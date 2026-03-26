@@ -88,12 +88,32 @@ class ClusterCoordinator:
             return True  # no peers yet — own everything as a safe fallback
         return _stable_hash(pipeline_name) % count == pos
 
-    def get_state(self) -> dict:
-        """Return cluster state dict for the API endpoint."""
+    def get_state(self, pipeline_names: list[str] | None = None) -> dict:
+        """Return cluster state dict for the API endpoint.
+
+        pipeline_names: list of all registered pipeline names — used to compute
+        per-node pipeline assignments via the same consistent-hash formula.
+        """
         with self._lock:
-            return {
-                "node_id": self._node_id,
-                "my_position": self._my_position,
-                "live_node_count": len(self._live_nodes),
-                "nodes": list(self._live_nodes),
-            }
+            nodes = list(self._live_nodes)
+            count = len(nodes)
+
+        # Annotate each node with its owned pipelines (computed, not stored in DB)
+        enriched = []
+        for i, node in enumerate(nodes):
+            if pipeline_names and count > 0:
+                owned = [p for p in pipeline_names if _stable_hash(p) % count == i]
+            else:
+                owned = []
+            enriched.append({
+                **node,
+                "pipelines": owned,
+                "pipeline_count": len(owned),
+            })
+
+        return {
+            "node_id": self._node_id,
+            "my_position": self._my_position,
+            "live_node_count": count,
+            "nodes": enriched,
+        }

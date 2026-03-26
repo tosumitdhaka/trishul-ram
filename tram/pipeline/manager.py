@@ -38,15 +38,18 @@ class PipelineState:
         self.run_history.appendleft(result)
 
     def to_dict(self) -> dict:
+        c = self.config
         return {
-            "name": self.config.name,
-            "description": self.config.description,
-            "enabled": self.config.enabled,
+            "name": c.name,
+            "description": c.description,
+            "enabled": c.enabled,
             "status": self.status,
-            "schedule_type": self.config.schedule.type,
+            "schedule_type": c.schedule.type,
             "registered_at": self.registered_at.isoformat(),
             "last_run": self.last_run.isoformat() if self.last_run else None,
             "last_run_status": self.last_run_status,
+            "source": {"type": c.source.type} if c.source else None,
+            "sinks": [{"type": s.type} for s in c.sinks],
         }
 
     def to_detail_dict(self) -> dict:
@@ -96,6 +99,14 @@ class PipelineManager:
         state = PipelineState(config, yaml_text=yaml_text)
         self._pipelines[config.name] = state
         logger.info("Registered pipeline", extra={"pipeline": config.name})
+
+        # Hydrate last_run / last_run_status from DB so all cluster nodes
+        # show correct last-run info regardless of which pod executed the run.
+        if self._db:
+            recent = self._db.get_runs(pipeline_name=config.name, limit=1)
+            if recent:
+                state.last_run = recent[0].finished_at
+                state.last_run_status = recent[0].status.value
 
         # Persist version if yaml_text provided
         if yaml_text and self._db:

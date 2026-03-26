@@ -101,6 +101,8 @@ async def cluster_nodes(request: Request) -> dict:
     coordinator = getattr(request.app.state, "coordinator", None)
     if coordinator is None:
         return {"cluster_enabled": False}
-    state = coordinator.get_state()
+    manager = request.app.state.manager
+    pipeline_names = [s.config.name for s in manager.list_all()]
+    state = coordinator.get_state(pipeline_names=pipeline_names)
     state["cluster_enabled"] = True
     return state
