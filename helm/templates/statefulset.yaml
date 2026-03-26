@@ -7,7 +7,9 @@ metadata:
 spec:
   replicas: {{ .Values.replicaCount }}
   serviceName: {{ include "tram.fullname" . }}-headless
-  podManagementPolicy: Parallel
+  ## OrderedReady ensures tram-0 completes DB schema migration before tram-1 starts,
+  ## preventing ALTER TABLE deadlocks when multiple pods race on first-run migrations.
+  podManagementPolicy: OrderedReady
   selector:
     matchLabels:
       {{- include "tram.selectorLabels" . | nindent 6 }}
