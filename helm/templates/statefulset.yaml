@@ -58,9 +58,11 @@ spec:
               value: {{ $val | quote }}
             {{- end }}
             {{- if .Values.postgresql.enabled }}
-            ## Auto-wired from Bitnami PostgreSQL subchart (v1.0.8)
+            ## Auto-wired from Bitnami PostgreSQL subchart.
+            ## Uses .Release.Name (not tram.fullname) so nameOverride/fullnameOverride
+            ## can shorten TRAM pod names without breaking the DB connection.
             - name: TRAM_DB_URL
-              value: "postgresql+psycopg2://{{ .Values.postgresql.auth.username }}:{{ .Values.postgresql.auth.password }}@{{ include "tram.fullname" . }}-postgresql/{{ .Values.postgresql.auth.database }}"
+              value: "postgresql+psycopg2://{{ .Values.postgresql.auth.username }}:{{ .Values.postgresql.auth.password }}@{{ .Release.Name }}-postgresql/{{ .Values.postgresql.auth.database }}"
             {{- else if .Values.persistence.enabled }}
             ## SQLAlchemy URL for SQLite on the /data PVC (v1.0.3+; replaces TRAM_DB_PATH)
             - name: TRAM_DB_URL
