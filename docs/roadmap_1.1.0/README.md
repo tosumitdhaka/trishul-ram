@@ -47,5 +47,8 @@ Phase 5 (sequential, builds on connectivity test)
 - No new npm dependencies (charts via Canvas API; diff algorithm in plain JS)
 - AI assist (`POST /api/ai/suggest`) requires `TRAM_AI_API_KEY` env var; silently
   disabled when absent — all other wizard functionality unaffected
-- AI uses `claude-haiku-4-5-20251001` (fast, low cost); requires `anthropic` Python package
-  (already an optional dep candidate)
+- AI provider selectable via `TRAM_AI_PROVIDER` (`anthropic` or `openai`) and
+  `TRAM_AI_MODEL`; custom `TRAM_AI_BASE_URL` enables any OpenAI-compatible gateway
+  (Rakuten AI, Ollama, Azure OpenAI, vLLM, etc.)
+- `anthropic` / `openai` packages are optional extras: `pip install tram[ai-anthropic]`
+  or `tram[ai-openai]`

@@ -151,12 +151,75 @@ Response:
 
 Returns HTTP 503 if `TRAM_AI_API_KEY` is not set.
 
+### Provider selection
+
+Three env vars control which AI backend is used:
+
+| Env var | Default | Purpose |
+|---------|---------|---------|
+| `TRAM_AI_PROVIDER` | `anthropic` | `anthropic` or `openai` |
+| `TRAM_AI_MODEL` | see table below | model name passed to the API |
+| `TRAM_AI_BASE_URL` | _(provider default)_ | override API base URL (OpenAI-compat endpoints) |
+| `TRAM_AI_API_KEY` | _(required)_ | bearer token / API key |
+
+Default models when `TRAM_AI_MODEL` is not set:
+
+| `TRAM_AI_PROVIDER` | Default model |
+|--------------------|---------------|
+| `anthropic` | `claude-haiku-4-5-20251001` |
+| `openai` | `gpt-4o-mini` |
+
+### Supported providers and example configs
+
+**Anthropic (default)**
+```bash
+TRAM_AI_PROVIDER=anthropic
+TRAM_AI_MODEL=claude-haiku-4-5-20251001   # or sonnet-4-6, opus-4-6
+TRAM_AI_API_KEY=sk-ant-...
+```
+
+**OpenAI**
+```bash
+TRAM_AI_PROVIDER=openai
+TRAM_AI_MODEL=gpt-4o-mini
+TRAM_AI_API_KEY=sk-...
+```
+
+**Rakuten AI Gateway**
+```bash
+TRAM_AI_PROVIDER=openai
+TRAM_AI_MODEL=gpt-4.1
+TRAM_AI_BASE_URL=https://api.ai.public.rakuten-it.com/openai/v1
+TRAM_AI_API_KEY=<RAKUTEN_AI_GATEWAY_KEY>
+```
+Rakuten AI exposes an OpenAI-compatible REST API — the `openai` provider path handles
+it with no special code, just a `base_url` override.
+
+**Ollama (local)**
+```bash
+TRAM_AI_PROVIDER=openai
+TRAM_AI_MODEL=llama3.2
+TRAM_AI_BASE_URL=http://localhost:11434/v1
+TRAM_AI_API_KEY=ollama   # placeholder, Ollama ignores auth
+```
+
+**Azure OpenAI**
+```bash
+TRAM_AI_PROVIDER=openai
+TRAM_AI_MODEL=gpt-4o
+TRAM_AI_BASE_URL=https://<resource>.openai.azure.com/openai/deployments/<deployment>/
+TRAM_AI_API_KEY=<azure-api-key>
+```
+
+Any other OpenAI-compatible gateway (vLLM, LM Studio, Google Gemini via compat layer,
+etc.) follows the same `openai` + `TRAM_AI_BASE_URL` pattern.
+
 ### Implementation
 
 New file: `tram/api/routers/ai.py`
 
 ```python
-import anthropic
+import os
 
 GENERATE_SYSTEM = """
 You are a TRAM pipeline configuration assistant.
@@ -175,44 +238,75 @@ Example pipeline:
 {example}
 """
 
+_OPENAI_DEFAULT_MODEL    = "gpt-4o-mini"
+_ANTHROPIC_DEFAULT_MODEL = "claude-haiku-4-5-20251001"
+
+
+def _call_ai(system: str, user: str, max_tokens: int) -> str:
+    provider = os.getenv("TRAM_AI_PROVIDER", "anthropic")
+    api_key  = os.getenv("TRAM_AI_API_KEY")
+    model    = os.getenv("TRAM_AI_MODEL")
+    base_url = os.getenv("TRAM_AI_BASE_URL")   # None = provider default
+
+    if provider == "anthropic":
+        import anthropic
+        model = model or _ANTHROPIC_DEFAULT_MODEL
+        client = anthropic.Anthropic(api_key=api_key)
+        msg = client.messages.create(
+            model=model, max_tokens=max_tokens,
+            system=system,
+            messages=[{"role": "user", "content": user}],
+        )
+        return msg.content[0].text.strip()
+
+    elif provider == "openai":
+        import openai
+        model = model or _OPENAI_DEFAULT_MODEL
+        kwargs = {"api_key": api_key or "none"}
+        if base_url:
+            kwargs["base_url"] = base_url
+        client = openai.OpenAI(**kwargs)
+        resp = client.chat.completions.create(
+            model=model, max_tokens=max_tokens,
+            messages=[
+                {"role": "system", "content": system},
+                {"role": "user",   "content": user},
+            ],
+        )
+        return resp.choices[0].message.content.strip()
+
+    raise ValueError(f"Unknown TRAM_AI_PROVIDER: {provider!r} (must be 'anthropic' or 'openai')")
+
+
 @router.post("/api/ai/suggest")
 async def ai_suggest(request: Request) -> dict:
-    api_key = os.getenv("TRAM_AI_API_KEY")
-    if not api_key:
+    if not os.getenv("TRAM_AI_API_KEY"):
         raise HTTPException(503, "AI assist not configured (TRAM_AI_API_KEY not set)")
 
     body = await request.json()
-    client = anthropic.Anthropic(api_key=api_key)
 
     if body["mode"] == "generate":
         plugins = body.get("plugins", {})
-        system = GENERATE_SYSTEM.format(
+        system  = GENERATE_SYSTEM.format(
             source_types=", ".join(plugins.get("sources", [])),
             sink_types=", ".join(plugins.get("sinks", [])),
             transform_types=", ".join(plugins.get("transforms", [])),
             serializer_types=", ".join(plugins.get("serializers", [])),
-            schema_excerpt=SCHEMA_EXCERPT,   # static string, key fields only
+            schema_excerpt=SCHEMA_EXCERPT,
             example=EXAMPLE_YAML,
         )
-        msg = client.messages.create(
-            model="claude-haiku-4-5-20251001",
-            max_tokens=1024,
-            system=system,
-            messages=[{"role": "user", "content": body["prompt"]}],
-        )
-        return {"yaml": msg.content[0].text.strip()}
+        yaml_text = _call_ai(system, body["prompt"], max_tokens=1024)
+        return {"yaml": yaml_text}
 
     elif body["mode"] == "explain":
-        prompt = f"YAML:\n{body['yaml']}\n\nError: {body['error']}\n\nExplain the error and how to fix it in 2-3 sentences."
-        msg = client.messages.create(
-            model="claude-haiku-4-5-20251001",
-            max_tokens=256,
-            messages=[{"role": "user", "content": prompt}],
-        )
-        return {"explanation": msg.content[0].text.strip()}
+        user = f"YAML:\n{body['yaml']}\n\nError: {body['error']}\n\nExplain and suggest a fix in 2-3 sentences."
+        explanation = _call_ai("You are a helpful TRAM configuration assistant.", user, max_tokens=256)
+        return {"explanation": explanation}
 ```
 
-Model: `claude-haiku-4-5-20251001` — fast, low cost, sufficient for structured YAML generation.
+`anthropic` and `openai` packages are optional deps — only the one matching
+`TRAM_AI_PROVIDER` needs to be installed. Both are added to `pyproject.toml`
+as optional extras: `pip install tram[ai-anthropic]` or `tram[ai-openai]`.
 
 ### System prompt strategy
 
@@ -222,7 +316,7 @@ The generate system prompt includes:
   `source`, `sinks`, `transforms`) — not the full Pydantic model
 - One complete example pipeline YAML as a few-shot reference
 
-This keeps the context window small and generation fast (~1–2 s).
+This keeps the context window small and generation fast (~1–2 s for Haiku / gpt-4o-mini).
 
 ---
 
