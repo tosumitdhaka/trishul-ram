@@ -25,6 +25,37 @@ export async function init() {
     try { await api.pipelines.delete(name); toast(`Deleted ${name}`); _all = _all.filter(p => p.name !== name); renderTable(filtered()) }
     catch (e) { toast(e.message, 'error') }
   }
+
+  window._plImportFile = async (input) => {
+    const file = input.files[0]
+    if (!file) return
+    input.value = ''
+    const yaml = await file.text()
+    const name = _extractName(yaml)
+    const exists = _all.some(p => p.name === name)
+    if (!exists) {
+      try { await api.pipelines.create(yaml); toast(`Imported ${name}`); await refresh() }
+      catch (e) { toast(e.message, 'error') }
+      return
+    }
+    // Conflict — show modal
+    document.getElementById('pl-import-name').textContent = name
+    const modal = new bootstrap.Modal(document.getElementById('pl-import-modal'))
+    document.getElementById('pl-import-replace').onclick = async () => {
+      modal.hide()
+      try { await api.pipelines.update(name, yaml); toast(`Replaced ${name} (new version saved)`); await refresh() }
+      catch (e) { toast(e.message, 'error') }
+    }
+    document.getElementById('pl-import-rename').onclick = async () => {
+      const newName = document.getElementById('pl-import-newname').value.trim()
+      if (!newName) { toast('Enter a new name', 'error'); return }
+      modal.hide()
+      const patched = _patchName(yaml, newName)
+      try { await api.pipelines.create(patched); toast(`Imported as ${newName}`); await refresh() }
+      catch (e) { toast(e.message, 'error') }
+    }
+    modal.show()
+  }
 }
 
 async function refresh() {
@@ -41,6 +72,15 @@ function filtered() {
     (!st || p.status === st) &&
     (!ty || p.schedule_type === ty)
   )
+}
+
+function _extractName(yaml) {
+  const m = yaml.match(/^\s*name:\s*(\S+)/m)
+  return m ? m[1] : 'unknown'
+}
+
+function _patchName(yaml, newName) {
+  return yaml.replace(/^(\s*name:\s*)\S+/m, `$1${newName}`)
 }
 
 function renderTable(pipelines) {

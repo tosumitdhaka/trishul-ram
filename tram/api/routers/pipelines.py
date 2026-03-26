@@ -294,6 +294,22 @@ async def list_versions(name: str, request: Request) -> list[dict]:
     return versions
 
 
+@router.get("/{name}/versions/{version}")
+async def get_version_yaml(name: str, version: int, request: Request):
+    """Return raw YAML for a specific pipeline version."""
+    from fastapi.responses import PlainTextResponse
+    manager = request.app.state.manager
+    try:
+        manager.get(name)
+    except PipelineNotFoundError as exc:
+        raise HTTPException(status_code=404, detail=str(exc))
+    try:
+        yaml_text = manager.get_version_yaml(name, version)
+    except (KeyError, RuntimeError) as exc:
+        raise HTTPException(status_code=404, detail=str(exc))
+    return PlainTextResponse(yaml_text, media_type="text/plain")
+
+
 @router.post("/{name}/rollback")
 async def rollback_pipeline(
     name: str,

@@ -1,0 +1,40 @@
+<div class="d-flex gap-2 mb-3 align-items-center flex-wrap">
+  <input class="form-control form-control-sm" style="width:220px" id="tpl-search"
+         placeholder="Search templates…" oninput="window._tplFilter?.()"/>
+  <select class="form-select form-select-sm" style="width:140px" id="tpl-source" onchange="window._tplFilter?.()">
+    <option value="">All sources</option>
+  </select>
+  <select class="form-select form-select-sm" style="width:140px" id="tpl-sink" onchange="window._tplFilter?.()">
+    <option value="">All sinks</option>
+  </select>
+  <select class="form-select form-select-sm" style="width:130px" id="tpl-schedule" onchange="window._tplFilter?.()">
+    <option value="">All schedules</option>
+    <option>stream</option><option>interval</option><option>cron</option><option>manual</option>
+  </select>
+  <span class="text-secondary ms-auto" style="font-size:13px" id="tpl-count"></span>
+</div>
+
+<div id="tpl-grid" class="row g-3">
+  <div class="col-12 text-secondary text-center py-4">Loading templates…</div>
+</div>
+
+<!-- Preview modal -->
+<div class="modal fade" id="tpl-preview-modal" tabindex="-1">
+  <div class="modal-dialog modal-lg modal-dialog-scrollable">
+    <div class="modal-content" style="background:#0d1117;border:1px solid #30363d">
+      <div class="modal-header" style="border-color:#30363d">
+        <h6 class="modal-title text-light" id="tpl-preview-title">Preview</h6>
+        <button type="button" class="btn-close btn-close-white" data-bs-dismiss="modal"></button>
+      </div>
+      <div class="modal-body p-0">
+        <pre id="tpl-preview-body" style="margin:0;padding:16px;background:#161b22;font-size:12px;color:#e6edf3;overflow:auto;max-height:60vh"></pre>
+      </div>
+      <div class="modal-footer" style="border-color:#30363d">
+        <button type="button" class="btn btn-sm btn-primary" id="tpl-preview-deploy">
+          <i class="bi bi-rocket-takeoff me-1"></i>Deploy this template
+        </button>
+        <button type="button" class="btn btn-sm btn-secondary" data-bs-dismiss="modal">Close</button>
+      </div>
+    </div>
+  </div>
+</div>
