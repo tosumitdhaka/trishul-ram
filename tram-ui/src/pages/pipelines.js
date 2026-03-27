@@ -4,14 +4,8 @@ import { relTime, fmtNum, statusBadge, schedBadge, esc, toast } from '../utils.j
 let _all = []
 
 export async function init() {
-  try {
-    _all = await api.pipelines.list()
-    renderTable(_all)
-  } catch (e) {
-    toast(`Pipelines error: ${e.message}`, 'error')
-  }
-
-  window._plFilter  = () => renderTable(filtered())
+  // Register toolbar/action handlers immediately so buttons work even during initial load
+  window._openTemplates = () => _openTemplates()
   window._plReload  = async () => {
     try { await api.pipelines.reload(); toast('Pipelines reloaded'); _all = await api.pipelines.list(); renderTable(filtered()) }
     catch (e) { toast(e.message, 'error') }
@@ -25,8 +19,25 @@ export async function init() {
     try { await api.pipelines.delete(name); toast(`Deleted ${name}`); _all = _all.filter(p => p.name !== name); renderTable(filtered()) }
     catch (e) { toast(e.message, 'error') }
   }
+  window._plDownload = async (name) => {
+    try {
+      const p = await api.pipelines.get(name)
+      const yaml = p.yaml || p.raw || JSON.stringify(p, null, 2)
+      const a = document.createElement('a')
+      a.href = 'data:text/yaml;charset=utf-8,' + encodeURIComponent(yaml)
+      a.download = `${name}.yaml`
+      a.click()
+    } catch (e) { toast(e.message, 'error') }
+  }
 
-  window._openTemplates = () => _openTemplates()
+  try {
+    _all = await api.pipelines.list()
+    renderTable(_all)
+  } catch (e) {
+    toast(`Pipelines error: ${e.message}`, 'error')
+  }
+
+  window._plFilter  = () => renderTable(filtered())
 
   window._plImportFile = async (input) => {
     const file = input.files[0]
@@ -201,7 +212,8 @@ function renderTable(pipelines) {
       <td>${p.last_run_status ? statusBadge(p.last_run_status) : '—'}</td>
       <td class="text-end" onclick="event.stopPropagation()">
         ${actionBtn}
-        <button class="btn-flat" title="Edit"   onclick="window._plEdit('${esc(p.name)}')"><i class="bi bi-pencil"></i></button>
+        <button class="btn-flat" title="Edit"     onclick="window._plEdit('${esc(p.name)}')"><i class="bi bi-pencil"></i></button>
+        <button class="btn-flat" title="Export YAML" onclick="window._plDownload('${esc(p.name)}')"><i class="bi bi-download"></i></button>
         <button class="btn-flat-danger" title="Delete" onclick="window._plDelete('${esc(p.name)}')"><i class="bi bi-trash"></i></button>
       </td>
     </tr>`

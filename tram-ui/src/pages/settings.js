@@ -38,8 +38,8 @@ export async function init() {
   // Show password change card if user is logged in
   const authUser = localStorage.getItem('tram_auth_user')
   if (authUser) {
-    const row = document.getElementById('pwd-row')
-    if (row) row.style.display = ''
+    const col = document.getElementById('pwd-col')
+    if (col) col.style.display = ''
   }
 
   window._settingsChangePwd = async () => {
