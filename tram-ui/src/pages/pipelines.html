@@ -17,7 +17,7 @@
       <i class="bi bi-upload me-1"></i>Import
     </button>
     <input type="file" id="pl-import-input" accept=".yaml,.yml" style="display:none" onchange="window._plImportFile?.(this)"/>
-    <button class="btn btn-sm btn-secondary" onclick="window._openTemplates?.()">
+    <button class="btn btn-sm btn-secondary" data-bs-toggle="modal" data-bs-target="#pl-templates-modal">
       <i class="bi bi-collection me-1"></i>Templates
     </button>
     <button class="btn btn-sm btn-primary" onclick="navigate('wizard')">
