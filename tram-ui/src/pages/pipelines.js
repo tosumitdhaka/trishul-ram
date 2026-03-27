@@ -4,9 +4,12 @@ import { relTime, fmtNum, statusBadge, schedBadge, esc, toast } from '../utils.j
 let _all = []
 
 export async function init() {
-  // Load templates when modal opens (data-bs-toggle triggers the modal natively)
-  document.getElementById('pl-templates-modal')
-    ?.addEventListener('show.bs.modal', () => _openTemplates())
+  // Load templates when modal opens; reset to list view on each open
+  document.getElementById('pl-templates-modal')?.addEventListener('show.bs.modal', () => {
+    document.getElementById('pl-tpl-list-view').style.display = ''
+    document.getElementById('pl-tpl-yaml-view').style.display = 'none'
+    _openTemplates()
+  })
   window._plReload  = async () => {
     try { await api.pipelines.reload(); toast('Pipelines reloaded'); _all = await api.pipelines.list(); renderTable(filtered()) }
     catch (e) { toast(e.message, 'error') }
@@ -138,14 +141,16 @@ function _renderTemplates(tpls) {
   window._tplViewYaml = (id) => {
     const t = _templates.find(x => x.id === id)
     if (!t) return
-    document.getElementById('pl-tpl-yaml-title').textContent = t.name
-    document.getElementById('pl-tpl-yaml-body').textContent  = t.yaml || ''
-    const btn = document.getElementById('pl-tpl-yaml-deploy')
-    btn.onclick = () => {
-      bootstrap.Modal.getInstance(document.getElementById('pl-tpl-yaml-modal'))?.hide()
-      _doTplDeploy(t)
-    }
-    new bootstrap.Modal(document.getElementById('pl-tpl-yaml-modal')).show()
+    document.getElementById('pl-tpl-yaml-name').textContent = t.name
+    document.getElementById('pl-tpl-yaml-body').textContent = t.yaml || ''
+    window._tplDeployFromView = () => _doTplDeploy(t)
+    document.getElementById('pl-tpl-list-view').style.display = 'none'
+    document.getElementById('pl-tpl-yaml-view').style.display = ''
+  }
+
+  window._tplBackToList = () => {
+    document.getElementById('pl-tpl-list-view').style.display = ''
+    document.getElementById('pl-tpl-yaml-view').style.display = 'none'
   }
 
   window._tplDeploy = (id) => {
@@ -155,7 +160,11 @@ function _renderTemplates(tpls) {
 }
 
 function _doTplDeploy(t) {
-  bootstrap.Modal.getInstance(document.getElementById('pl-templates-modal'))?.hide()
+  // Clean up Bootstrap modal state before navigating (backdrop stays on body otherwise)
+  document.querySelectorAll('.modal-backdrop').forEach(el => el.remove())
+  document.body.classList.remove('modal-open')
+  document.body.style.removeProperty('overflow')
+  document.body.style.removeProperty('padding-right')
   window._editorYaml      = t.yaml
   window._editorPipeline  = null
   navigate('editor')
