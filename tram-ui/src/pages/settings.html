@@ -47,3 +47,39 @@
     </div>
   </div>
 </div>
+
+<!-- Password change row (only shown when auth is active) -->
+<div class="row g-3 mt-0" style="max-width:900px;display:none" id="pwd-row">
+  <div class="col-6">
+    <div class="settings-card">
+      <div class="fw-semibold mb-3">Change Password</div>
+      <div class="mb-2">
+        <label class="form-label">Current Password</label>
+        <input class="form-control form-control-sm" id="pwd-current" type="password" placeholder="Current password"/>
+      </div>
+      <div class="mb-2">
+        <label class="form-label">New Password</label>
+        <input class="form-control form-control-sm" id="pwd-new" type="password" placeholder="New password (min 6 chars)"/>
+      </div>
+      <div class="mb-3">
+        <label class="form-label">Confirm New Password</label>
+        <input class="form-control form-control-sm" id="pwd-confirm" type="password" placeholder="Confirm new password"/>
+      </div>
+      <div class="d-flex gap-2 align-items-center">
+        <button class="btn btn-sm btn-primary" onclick="window._settingsChangePwd?.()">Change Password</button>
+        <span id="pwd-status" style="font-size:12px" class="ms-2"></span>
+      </div>
+    </div>
+  </div>
+  <div class="col-6">
+    <div class="settings-card" style="font-size:13px;color:var(--fg-2)">
+      <div class="fw-semibold mb-2" style="color:var(--fg)">Auth Notes</div>
+      <ul class="mb-0" style="padding-left:16px;line-height:1.9">
+        <li>Base credentials come from <code>TRAM_AUTH_USERS</code> env var</li>
+        <li>Password changes are stored in the DB and override the env var</li>
+        <li>Sessions expire after 8 hours</li>
+        <li>To reset to env-var password, remove the DB override and restart</li>
+      </ul>
+    </div>
+  </div>
+</div>

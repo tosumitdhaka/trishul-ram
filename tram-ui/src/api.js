@@ -39,8 +39,9 @@ export const api = {
 
   // ── Auth ───────────────────────────────────────────────────────────────────
   auth: {
-    me:    ()                    => req('/api/auth/me'),
-    login: (username, password)  => req('/api/auth/login', { method: 'POST', body: { username, password } }),
+    me:             ()                              => req('/api/auth/me'),
+    login:          (username, password)             => req('/api/auth/login', { method: 'POST', body: { username, password } }),
+    changePassword: (current_password, new_password) => req('/api/auth/change-password', { method: 'POST', body: { current_password, new_password } }),
   },
 
   // ── Pipelines ──────────────────────────────────────────────────────────────

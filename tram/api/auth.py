@@ -12,6 +12,25 @@ import json
 import secrets
 import time
 
+
+def hash_password(password: str) -> str:
+    """Return a salted SHA-256 hash string: ``sha256$<salt>$<hex>``."""
+    salt = secrets.token_hex(16)
+    digest = hashlib.sha256(f"{salt}:{password}".encode()).hexdigest()
+    return f"sha256${salt}${digest}"
+
+
+def verify_hashed_password(password: str, stored_hash: str) -> bool:
+    """Verify *password* against a hash produced by :func:`hash_password`."""
+    try:
+        scheme, salt, digest = stored_hash.split("$", 2)
+        if scheme != "sha256":
+            return False
+        expected = hashlib.sha256(f"{salt}:{password}".encode()).hexdigest()
+        return hmac.compare_digest(expected, digest)
+    except Exception:
+        return False
+
 # Signing secret — shared across cluster nodes via TRAM_AUTH_SECRET env var.
 # Falls back to a per-process random (tokens invalidated on restart) when unset.
 import os as _os
