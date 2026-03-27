@@ -125,6 +125,7 @@ export const api = {
 
   // ── AI assist ──────────────────────────────────────────────────────────────
   ai: {
+    status:  ()        => req('/api/ai/status'),
     suggest: (payload) => req('/api/ai/suggest', { method: 'POST', body: payload }),
   },
 

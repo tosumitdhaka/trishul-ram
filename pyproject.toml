@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "tram"
-version = "1.0.9"
+version = "1.1.0"
 description = "Trishul Real-time Aggregation & Mediation — telecom data pipeline daemon"
 readme = "README.md"
 requires-python = ">=3.11"
@@ -64,6 +64,8 @@ clickhouse = ["clickhouse-driver>=0.2"]
 mib = ["pysmi-lextudio>=1.1"]
 otel = ["opentelemetry-sdk>=1.20", "opentelemetry-exporter-otlp-proto-grpc>=1.20"]
 watch = ["watchdog>=3.0"]
+ai-anthropic = ["anthropic>=0.30"]
+ai-openai = ["openai>=1.40"]
 dev = [
     "pytest>=8.0",
     "pytest-asyncio>=0.23",
