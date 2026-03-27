@@ -4,8 +4,9 @@ import { relTime, fmtNum, statusBadge, schedBadge, esc, toast } from '../utils.j
 let _all = []
 
 export async function init() {
-  // Register toolbar/action handlers immediately so buttons work even during initial load
-  window._openTemplates = () => _openTemplates()
+  // Load templates when modal opens (data-bs-toggle triggers the modal natively)
+  document.getElementById('pl-templates-modal')
+    ?.addEventListener('show.bs.modal', () => _openTemplates())
   window._plReload  = async () => {
     try { await api.pipelines.reload(); toast('Pipelines reloaded'); _all = await api.pipelines.list(); renderTable(filtered()) }
     catch (e) { toast(e.message, 'error') }
@@ -76,16 +77,14 @@ export async function init() {
 let _templates = []
 
 async function _openTemplates() {
-  const modal = new bootstrap.Modal(document.getElementById('pl-templates-modal'))
   const tbody = document.getElementById('pl-tpl-body')
   if (tbody) tbody.innerHTML = '<tr><td colspan="5" class="text-secondary text-center py-4">Loading…</td></tr>'
-  modal.show()
   try {
     const raw = await api.templates.list()
-    // Validate: must have source_type and at least one sink_type; dedup by name
+    // Validate: must have source_type; dedup by name
     const seen = new Set()
     _templates = raw.filter(t => {
-      if (!t.source_type || !t.sink_types?.length) return false
+      if (!t.source_type) return false
       if (seen.has(t.name)) return false
       seen.add(t.name)
       return true
@@ -114,7 +113,9 @@ function _renderTemplates(tpls) {
   }
   const schedCls = { stream: 'badge-stream', interval: 'badge-interval', cron: 'badge-cron', manual: 'badge-manual' }
   tbody.innerHTML = tpls.map(t => {
-    const flow = `${esc(t.source_type)} → ${t.sink_types.map(esc).join(', ')}`
+    const flow = t.sink_types?.length
+      ? `${esc(t.source_type)} → ${t.sink_types.map(esc).join(', ')}`
+      : esc(t.source_type)
     const cls  = schedCls[t.schedule_type] || 'badge-interval'
     return `<tr>
       <td class="fw-semibold">${esc(t.name)}</td>

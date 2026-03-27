@@ -42,9 +42,10 @@ def _load_templates(pipeline_dir: str) -> list[dict]:
             description = _short_desc(p.get("description", ""))
             schedule_type = (p.get("schedule") or {}).get("type", "interval")
             source_type = (p.get("source") or {}).get("type", "")
-            sinks = p.get("sinks") or []
+            # Support both sinks: (list) and sink: (singular dict)
+            raw_sinks = p.get("sinks") or ([p["sink"]] if p.get("sink") else [])
             sink_types = list(dict.fromkeys(
-                (s.get("type", "") if isinstance(s, dict) else "") for s in sinks
+                (s.get("type", "") if isinstance(s, dict) else "") for s in raw_sinks if s
             ))
 
             # Tags: source + sinks + schedule
