@@ -99,6 +99,14 @@ export const api = {
     nodes: () => req('/api/cluster/nodes'),
   },
 
+  // ── Alert rules ────────────────────────────────────────────────────────────
+  alerts: {
+    list:   (name)            => req(`/api/pipelines/${name}/alerts`),
+    create: (name, rule)      => req(`/api/pipelines/${name}/alerts`, { method: 'POST', body: rule }),
+    update: (name, idx, rule) => req(`/api/pipelines/${name}/alerts/${idx}`, { method: 'PUT', body: rule }),
+    delete: (name, idx)       => req(`/api/pipelines/${name}/alerts/${idx}`, { method: 'DELETE' }),
+  },
+
   // ── Templates ──────────────────────────────────────────────────────────────
   templates: {
     list: () => req('/api/templates'),
