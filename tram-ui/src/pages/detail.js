@@ -106,6 +106,23 @@ function wireActions(pipeline) {
     catch (e) { toast(e.message, 'error') }
   }
 
+  window._detailTestConnectors = async () => {
+    const btn = document.getElementById('detail-test-btn')
+    const orig = btn?.innerHTML
+    if (btn) btn.innerHTML = '<i class="bi bi-hourglass"></i>'
+    try {
+      const p = await api.pipelines.get(_name)
+      const yaml = p.yaml || ''
+      if (!yaml) { toast('Pipeline YAML not available', 'error'); return }
+      const result = await api.connectors.testPipeline(yaml)
+      _showConnectorResults(result)
+    } catch (e) {
+      toast(`Test error: ${e.message}`, 'error')
+    } finally {
+      if (btn && orig) btn.innerHTML = orig
+    }
+  }
+
   window._detailDownload = async () => {
     try {
       const p = await api.pipelines.get(_name)
@@ -344,6 +361,23 @@ function _openAlertModal(idx, rule, rules) {
 function _toggleAlertAction(action) {
   document.getElementById('alert-webhook-row').classList.toggle('d-none', action !== 'webhook')
   document.getElementById('alert-email-row').classList.toggle('d-none',   action !== 'email')
+}
+
+// ── Connector test results toast ─────────────────────────────────────────────
+
+function _showConnectorResults(result) {
+  const lines = []
+  const fmt = (label, r) => {
+    const ok  = r?.ok
+    const msg = ok ? (r.detail || 'OK') : (r.error || 'failed')
+    const lat = r?.latency_ms != null ? ` (${r.latency_ms}ms)` : ''
+    return `${ok ? '✓' : '✗'} ${label}: ${msg}${lat}`
+  }
+  if (result.source) lines.push(fmt(`source (${result.source.type})`, result.source))
+  for (const s of (result.sinks || [])) lines.push(fmt(`sink (${s.type})`, s))
+  if (result.error) lines.push(`Error: ${result.error}`)
+  const allOk = (result.source?.ok !== false) && (result.sinks || []).every(s => s.ok !== false)
+  toast(lines.join('\n') || 'No connectors found', allOk ? 'success' : 'error')
 }
 
 // ── Helpers ──────────────────────────────────────────────────────────────────

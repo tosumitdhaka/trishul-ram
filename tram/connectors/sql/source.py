@@ -28,6 +28,19 @@ class SqlSource(BaseSource):
         self.params: dict = config.get("params", {})
         self.chunk_size: int = int(config.get("chunk_size", 0))
 
+    def test_connection(self) -> dict:
+        import time
+        t0 = time.monotonic()
+        try:
+            from sqlalchemy import create_engine, text
+        except ImportError:
+            raise RuntimeError("sqlalchemy not installed — pip install tram[sql]")
+        engine = create_engine(self.config["connection_url"])
+        with engine.connect() as conn:
+            conn.execute(text("SELECT 1"))
+        latency = int((time.monotonic() - t0) * 1000)
+        return {"ok": True, "latency_ms": latency, "detail": "SELECT 1 OK"}
+
     def read(self) -> Iterator[tuple[bytes, dict]]:
         try:
             from sqlalchemy import create_engine, text

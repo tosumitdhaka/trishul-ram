@@ -99,6 +99,12 @@ export const api = {
     nodes: () => req('/api/cluster/nodes'),
   },
 
+  // ── Connectors ─────────────────────────────────────────────────────────────
+  connectors: {
+    test:         (type, config) => req('/api/connectors/test', { method: 'POST', body: { type, config } }),
+    testPipeline: (yaml)         => req('/api/connectors/test-pipeline', { method: 'POST', headers: { 'Content-Type': 'text/plain' }, body: yaml }),
+  },
+
   // ── Alert rules ────────────────────────────────────────────────────────────
   alerts: {
     list:   (name)            => req(`/api/pipelines/${name}/alerts`),

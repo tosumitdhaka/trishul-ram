@@ -70,6 +70,28 @@ class OpenSearchSink(BaseSink):
 
         return OpenSearch(**kwargs)
 
+    def test_connection(self) -> dict:
+        import time
+        import urllib.request
+        t0 = time.monotonic()
+        hosts = self.config.get("hosts") or ["http://localhost:9200"]
+        host = (hosts[0] if isinstance(hosts, list) else hosts).rstrip("/")
+        req = urllib.request.Request(host + "/")
+        username = self.config.get("username", "")
+        password = self.config.get("password", "")
+        if username:
+            import base64
+            creds = base64.b64encode(f"{username}:{password}".encode()).decode()
+            req.add_header("Authorization", f"Basic {creds}")
+        with urllib.request.urlopen(req, timeout=8) as resp:
+            import json as _json
+            info = _json.loads(resp.read())
+            latency = int((time.monotonic() - t0) * 1000)
+            name = info.get("name", "?")
+            version = info.get("version", {}).get("number", "?")
+            return {"ok": True, "latency_ms": latency,
+                    "detail": f"OpenSearch node={name} version={version}"}
+
     def _current_index(self) -> str:
         return datetime.now(timezone.utc).strftime(self.index_template)
 

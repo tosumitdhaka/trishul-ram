@@ -42,6 +42,15 @@ class LocalSource(BaseSource):
         self._pipeline_name: str = config.get("_pipeline_name", "")
         self._file_tracker = config.get("_file_tracker")
 
+    def test_connection(self) -> dict:
+        import os
+        path = self.config.get("path", "")
+        if not path:
+            raise RuntimeError("No 'path' in config")
+        if os.path.exists(path):
+            return {"ok": True, "latency_ms": 0, "detail": f"Path exists: {path}"}
+        raise RuntimeError(f"Path not found: {path}")
+
     def read(self) -> Iterator[tuple[bytes, dict]]:
         if not self.path.exists():
             raise SourceError(f"Local source path does not exist: {self.path}")

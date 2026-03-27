@@ -79,6 +79,29 @@ class KafkaSource(BaseSource):
 
         return KafkaConsumer(*self.topics, **kwargs)
 
+    def test_connection(self) -> dict:
+        import time
+        t0 = time.monotonic()
+        try:
+            from kafka import KafkaAdminClient
+        except ImportError:
+            raise RuntimeError("kafka-python not installed — pip install tram[kafka]")
+        brokers = self.config.get("brokers", [])
+        if isinstance(brokers, str):
+            brokers = [brokers]
+        client = KafkaAdminClient(
+            bootstrap_servers=brokers,
+            request_timeout_ms=5000,
+            connections_max_idle_ms=5000,
+        )
+        try:
+            topics = client.list_topics()
+        finally:
+            client.close()
+        latency = int((time.monotonic() - t0) * 1000)
+        return {"ok": True, "latency_ms": latency,
+                "detail": f"Connected to {len(brokers)} broker(s), {len(topics)} topics"}
+
     def read(self) -> Iterator[tuple[bytes, dict]]:
         logger.info(
             "Kafka consumer starting",

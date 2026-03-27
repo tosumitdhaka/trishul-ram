@@ -28,6 +28,19 @@ class InfluxDbSource(BaseSource):
         self.query: str = config["query"]
         self.timeout: int = int(config.get("timeout", 30))
 
+    def test_connection(self) -> dict:
+        import time
+        import urllib.request
+        t0 = time.monotonic()
+        url = (self.config.get("url") or "http://localhost:8086").rstrip("/")
+        req = urllib.request.Request(url + "/ping")
+        token = self.config.get("token", "")
+        if token:
+            req.add_header("Authorization", f"Token {token}")
+        with urllib.request.urlopen(req, timeout=8) as resp:
+            latency = int((time.monotonic() - t0) * 1000)
+            return {"ok": True, "latency_ms": latency, "detail": f"InfluxDB /ping {resp.status}"}
+
     def read(self) -> Iterator[tuple[bytes, dict]]:
         try:
             from influxdb_client import InfluxDBClient
