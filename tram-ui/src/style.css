@@ -127,16 +127,18 @@ body {
 .tram-badge.has-dot::before {
   content:''; width:5px; height:5px; border-radius:50%; flex-shrink:0;
 }
-.tram-badge.running::before  { background:#3fb950; box-shadow:0 0 4px #3fb950; animation: pulse 2s infinite; }
-.tram-badge.stopped::before  { background:var(--fg-2); }
+.tram-badge.running::before    { background:#3fb950; box-shadow:0 0 4px #3fb950; animation: pulse 2s infinite; }
+.tram-badge.scheduled::before  { background:var(--badge-yellow-fg); }
+.tram-badge.stopped::before    { background:var(--fg-2); }
 .tram-badge.error::before    { background:#f85149; }
 .tram-badge.success::before  { background:#3fb950; }
 .tram-badge.failed::before   { background:#f85149; }
 .tram-badge.stream::before   { background:#39c5cf; }
 @keyframes pulse { 0%,100%{opacity:1}50%{opacity:.4} }
 
-.badge-running  { background: var(--badge-green-bg);  color: var(--badge-green-fg); }
-.badge-stopped  { background: var(--badge-muted-bg);  color: var(--badge-muted-fg); }
+.badge-running    { background: var(--badge-green-bg);  color: var(--badge-green-fg); }
+.badge-scheduled  { background: var(--badge-yellow-bg); color: var(--badge-yellow-fg); }
+.badge-stopped    { background: var(--badge-muted-bg);  color: var(--badge-muted-fg); }
 .badge-error    { background: var(--badge-red-bg);    color: var(--badge-red-fg); }
 .badge-success  { background: var(--badge-green-bg);  color: var(--badge-green-fg); }
 .badge-failed   { background: var(--badge-red-bg);    color: var(--badge-red-fg); }

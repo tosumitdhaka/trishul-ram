@@ -35,6 +35,33 @@ export async function init() {
     }
   }
 
+  // Show password change card if user is logged in
+  const authUser = localStorage.getItem('tram_auth_user')
+  if (authUser) {
+    const row = document.getElementById('pwd-row')
+    if (row) row.style.display = ''
+  }
+
+  window._settingsChangePwd = async () => {
+    const current = document.getElementById('pwd-current')?.value || ''
+    const newPwd  = document.getElementById('pwd-new')?.value     || ''
+    const confirm = document.getElementById('pwd-confirm')?.value  || ''
+    const s = document.getElementById('pwd-status')
+    if (!current) { if (s) { s.textContent = '✗ Enter current password'; s.style.color = '#f85149' }; return }
+    if (newPwd.length < 6) { if (s) { s.textContent = '✗ New password must be at least 6 characters'; s.style.color = '#f85149' }; return }
+    if (newPwd !== confirm) { if (s) { s.textContent = '✗ Passwords do not match'; s.style.color = '#f85149' }; return }
+    try {
+      if (s) { s.textContent = 'Saving…'; s.style.color = '#8b949e' }
+      await api.auth.changePassword(current, newPwd)
+      if (s) { s.textContent = '✓ Password changed'; s.style.color = '#3fb950' }
+      document.getElementById('pwd-current').value = ''
+      document.getElementById('pwd-new').value     = ''
+      document.getElementById('pwd-confirm').value  = ''
+    } catch (e) {
+      if (s) { s.textContent = `✗ ${e.message}`; s.style.color = '#f85149' }
+    }
+  }
+
   // Load daemon status
   try {
     const [ready, meta] = await Promise.all([api.ready(), api.meta()])

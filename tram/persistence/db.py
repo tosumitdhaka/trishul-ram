@@ -156,6 +156,15 @@ def _create_tables(engine: Engine) -> None:
             "ON processed_files(pipeline_name, source_key)"
         ))
 
+        # v1.1.0: user password overrides (DB takes precedence over TRAM_AUTH_USERS env var)
+        conn.execute(text("""
+            CREATE TABLE IF NOT EXISTS user_passwords (
+                username    TEXT PRIMARY KEY NOT NULL,
+                password_hash TEXT NOT NULL,
+                updated_at  TEXT NOT NULL
+            )
+        """))
+
         # v0.7.0 column migrations: add new columns to existing databases
         _add_column_if_missing(conn, dialect, "run_history", "node_id", "TEXT NOT NULL DEFAULT ''")
         _add_column_if_missing(conn, dialect, "run_history", "dlq_count", "INTEGER NOT NULL DEFAULT 0")
@@ -585,6 +594,41 @@ class TramDB:
                 "Failed to mark file as processed",
                 extra={"pipeline": pipeline_name, "filepath": filepath, "error": str(exc)},
             )
+
+    # ── User passwords ─────────────────────────────────────────────────────
+
+    def get_password_hash(self, username: str) -> Optional[str]:
+        """Return the stored password hash for *username*, or None if not overridden."""
+        with self._engine.connect() as conn:
+            row = conn.execute(
+                text("SELECT password_hash FROM user_passwords WHERE username = :u"),
+                {"u": username},
+            ).fetchone()
+        return row[0] if row else None
+
+    def set_password_hash(self, username: str, password_hash: str) -> None:
+        """Upsert a password hash for *username*."""
+        now = datetime.now(timezone.utc).isoformat()
+        dialect = self._engine.dialect.name
+        with self._engine.begin() as conn:
+            if dialect == "postgresql":
+                conn.execute(text("""
+                    INSERT INTO user_passwords (username, password_hash, updated_at)
+                    VALUES (:u, :h, :now)
+                    ON CONFLICT (username) DO UPDATE SET password_hash = :h, updated_at = :now
+                """), {"u": username, "h": password_hash, "now": now})
+            elif dialect == "mysql":
+                conn.execute(text("""
+                    INSERT INTO user_passwords (username, password_hash, updated_at)
+                    VALUES (:u, :h, :now)
+                    ON DUPLICATE KEY UPDATE password_hash = :h, updated_at = :now
+                """), {"u": username, "h": password_hash, "now": now})
+            else:  # sqlite
+                conn.execute(text("""
+                    INSERT INTO user_passwords (username, password_hash, updated_at)
+                    VALUES (:u, :h, :now)
+                    ON CONFLICT (username) DO UPDATE SET password_hash = :h, updated_at = :now
+                """), {"u": username, "h": password_hash, "now": now})
 
     # ── Lifecycle ──────────────────────────────────────────────────────────
 
