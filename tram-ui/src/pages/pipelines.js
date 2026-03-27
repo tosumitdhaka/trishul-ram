@@ -26,6 +26,8 @@ export async function init() {
     catch (e) { toast(e.message, 'error') }
   }
 
+  window._openTemplates = () => _openTemplates()
+
   window._plImportFile = async (input) => {
     const file = input.files[0]
     if (!file) return
@@ -56,6 +58,96 @@ export async function init() {
     }
     modal.show()
   }
+}
+
+// ── Template modal ───────────────────────────────────────────────────────────
+
+let _templates = []
+
+async function _openTemplates() {
+  const modal = new bootstrap.Modal(document.getElementById('pl-templates-modal'))
+  const tbody = document.getElementById('pl-tpl-body')
+  if (tbody) tbody.innerHTML = '<tr><td colspan="5" class="text-secondary text-center py-4">Loading…</td></tr>'
+  modal.show()
+  try {
+    const raw = await api.templates.list()
+    // Validate: must have source_type and at least one sink_type; dedup by name
+    const seen = new Set()
+    _templates = raw.filter(t => {
+      if (!t.source_type || !t.sink_types?.length) return false
+      if (seen.has(t.name)) return false
+      seen.add(t.name)
+      return true
+    })
+    _renderTemplates(_templates)
+  } catch (e) {
+    toast(e.message, 'error')
+  }
+
+  window._tplSearch = () => {
+    const q = (document.getElementById('pl-tpl-search')?.value || '').toLowerCase()
+    _renderTemplates(q
+      ? _templates.filter(t => t.name.toLowerCase().includes(q) || (t.description || '').toLowerCase().includes(q))
+      : _templates)
+  }
+}
+
+function _renderTemplates(tpls) {
+  const tbody = document.getElementById('pl-tpl-body')
+  const count = document.getElementById('pl-tpl-count')
+  if (!tbody) return
+  if (count) count.textContent = `${tpls.length} template${tpls.length !== 1 ? 's' : ''}`
+  if (!tpls.length) {
+    tbody.innerHTML = '<tr><td colspan="5" class="text-secondary text-center py-4">No templates match</td></tr>'
+    return
+  }
+  const schedCls = { stream: 'badge-stream', interval: 'badge-interval', cron: 'badge-cron', manual: 'badge-manual' }
+  tbody.innerHTML = tpls.map(t => {
+    const flow = `${esc(t.source_type)} → ${t.sink_types.map(esc).join(', ')}`
+    const cls  = schedCls[t.schedule_type] || 'badge-interval'
+    return `<tr>
+      <td class="fw-semibold">${esc(t.name)}</td>
+      <td class="mono" style="font-size:12px">${flow}</td>
+      <td><span class="tram-badge ${cls}">${esc(t.schedule_type)}</span></td>
+      <td class="text-secondary" style="font-size:12px;max-width:260px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap"
+          title="${esc(t.description || '')}">${esc(t.description || '—')}</td>
+      <td class="text-end" style="white-space:nowrap">
+        <button class="btn-flat" title="View YAML" onclick="window._tplViewYaml('${esc(t.id)}')">
+          <i class="bi bi-eye"></i>
+        </button>
+        <button class="btn btn-sm btn-primary" style="font-size:11px;padding:2px 10px"
+                onclick="window._tplDeploy('${esc(t.id)}')">
+          <i class="bi bi-rocket-takeoff me-1"></i>Deploy
+        </button>
+      </td>
+    </tr>`
+  }).join('')
+
+  window._tplViewYaml = (id) => {
+    const t = _templates.find(x => x.id === id)
+    if (!t) return
+    document.getElementById('pl-tpl-yaml-title').textContent = t.name
+    document.getElementById('pl-tpl-yaml-body').textContent  = t.yaml || ''
+    const btn = document.getElementById('pl-tpl-yaml-deploy')
+    btn.onclick = () => {
+      bootstrap.Modal.getInstance(document.getElementById('pl-tpl-yaml-modal'))?.hide()
+      _doTplDeploy(t)
+    }
+    new bootstrap.Modal(document.getElementById('pl-tpl-yaml-modal')).show()
+  }
+
+  window._tplDeploy = (id) => {
+    const t = _templates.find(x => x.id === id)
+    if (t) _doTplDeploy(t)
+  }
+}
+
+function _doTplDeploy(t) {
+  bootstrap.Modal.getInstance(document.getElementById('pl-templates-modal'))?.hide()
+  window._editorYaml      = t.yaml
+  window._editorPipeline  = null
+  navigate('editor')
+  toast(`Template "${t.name}" loaded — edit name and connection details, then save`)
 }
 
 async function refresh() {

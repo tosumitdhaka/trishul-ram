@@ -208,6 +208,7 @@ class TramScheduler:
             replace_existing=True,
             misfire_grace_time=60,
         )
+        self.manager.set_status(config.name, "scheduled")
         logger.info(
             "Scheduled interval pipeline",
             extra={"pipeline": config.name, "interval_seconds": config.schedule.interval_seconds},
@@ -226,6 +227,7 @@ class TramScheduler:
             replace_existing=True,
             misfire_grace_time=60,
         )
+        self.manager.set_status(config.name, "scheduled")
         logger.info(
             "Scheduled cron pipeline",
             extra={"pipeline": config.name, "cron": config.schedule.cron},
