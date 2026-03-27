@@ -126,6 +126,26 @@ class RestSource(BaseSource):
 
         return raw
 
+    def test_connection(self) -> dict:
+        import time
+        import urllib.request
+        t0 = time.monotonic()
+        url = self.config.get("url") or self.config.get("base_url", "")
+        if not url:
+            raise RuntimeError("No 'url' in config")
+        req = urllib.request.Request(url, method="HEAD")
+        for k, v in (self.config.get("headers") or {}).items():
+            req.add_header(k, str(v))
+        try:
+            with urllib.request.urlopen(req, timeout=8) as resp:
+                latency = int((time.monotonic() - t0) * 1000)
+                return {"ok": True, "latency_ms": latency, "detail": f"HTTP {resp.status} {url}"}
+        except urllib.error.HTTPError as e:
+            if e.code < 500:
+                latency = int((time.monotonic() - t0) * 1000)
+                return {"ok": True, "latency_ms": latency, "detail": f"HTTP {e.code} {url}"}
+            raise RuntimeError(f"HTTP {e.code}: {e.reason}")
+
     def read(self) -> Iterator[tuple[bytes, dict]]:
         try:
             import httpx

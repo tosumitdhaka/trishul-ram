@@ -81,6 +81,22 @@ export async function init() {
     }
   }
 
+  window._editorTestConnectors = async () => {
+    const yaml = ta?.value?.trim()
+    if (!yaml) { toast('Nothing to test', 'error'); return }
+    const btn = document.querySelector('[onclick="window._editorTestConnectors?.()"]')
+    const orig = btn?.innerHTML
+    if (btn) btn.innerHTML = '<i class="bi bi-hourglass" style="font-size:15px"></i>'
+    try {
+      const result = await api.connectors.testPipeline(yaml)
+      showConnectorTestResult(result)
+    } catch (e) {
+      toast(`Test error: ${e.message}`, 'error')
+    } finally {
+      if (btn && orig) btn.innerHTML = orig
+    }
+  }
+
   // Tab key inserts spaces instead of blurring
   ta?.addEventListener('keydown', e => {
     if (e.key === 'Tab') {
@@ -91,6 +107,30 @@ export async function init() {
       ta.selectionStart = ta.selectionEnd = start + 2
     }
   })
+}
+
+function showConnectorTestResult(result) {
+  const existing = document.getElementById('connector-test-result')
+  if (existing) existing.remove()
+  const div = document.createElement('div')
+  div.id = 'connector-test-result'
+  div.style.cssText = 'margin-top:12px;padding:12px;border-radius:6px;font-size:12px;font-family:monospace;background:#161b22;border:1px solid #30363d;color:#e6edf3'
+
+  const renderOne = (label, r) => {
+    const ok = r?.ok
+    const color = ok ? '#3fb950' : '#f85149'
+    const icon  = ok ? '✓' : '✗'
+    const msg   = ok ? (r.detail || 'OK') : (r.error || 'failed')
+    const lat   = r?.latency_ms != null ? ` (${r.latency_ms}ms)` : ''
+    return `<div><span style="color:${color}">${icon} ${esc(label)}</span> — ${esc(msg)}${lat}</div>`
+  }
+
+  let html = ''
+  if (result.source) html += renderOne(`source (${result.source.type})`, result.source)
+  for (const s of (result.sinks || [])) html += renderOne(`sink (${s.type})`, s)
+  if (result.error) html += `<div style="color:#f85149">${esc(result.error)}</div>`
+  div.innerHTML = html || '<div style="color:#6e7681">No connectors found in YAML</div>'
+  document.querySelector('.editor-wrap')?.appendChild(div)
 }
 
 function showDryRunResult(result) {
