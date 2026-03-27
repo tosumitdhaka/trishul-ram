@@ -10,6 +10,7 @@ import clusterHtml   from './pages/cluster.html?raw'
 import pluginsHtml   from './pages/plugins.html?raw'
 import settingsHtml  from './pages/settings.html?raw'
 import templatesHtml from './pages/templates.html?raw'
+import wizardHtml    from './pages/wizard.html?raw'
 
 const pages = {
   dashboard: dashboardHtml,
@@ -23,6 +24,7 @@ const pages = {
   plugins:   pluginsHtml,
   settings:  settingsHtml,
   templates: templatesHtml,
+  wizard:    wizardHtml,
 }
 
 const meta = {
@@ -37,6 +39,7 @@ const meta = {
   plugins:   { title: 'Plugins',           sub: '' },
   settings:  { title: 'Settings',          sub: 'Connection & daemon configuration' },
   templates: { title: 'Pipeline Templates', sub: 'Start from a pre-built example' },
+  wizard:    { title: 'New Pipeline',        sub: 'Setup wizard' },
 }
 
 // Page init hooks
@@ -51,6 +54,7 @@ const inits = {
   cluster:   () => import('./pages/cluster.js').then(m => m.init?.()),
   settings:  () => import('./pages/settings.js').then(m => m.init?.()),
   templates: () => import('./pages/templates.js').then(m => m.init?.()),
+  wizard:    () => import('./pages/wizard.js').then(m => m.init?.()),
 }
 
 export const router = {
@@ -72,6 +76,7 @@ export const router = {
       a.classList.toggle('active', a.dataset.page === name ||
         (name === 'detail'    && a.dataset.page === 'pipelines') ||
         (name === 'editor'    && a.dataset.page === 'pipelines') ||
+        (name === 'wizard'    && a.dataset.page === 'pipelines') ||
         (name === 'templates' && a.dataset.page === 'templates'))
     })
 
