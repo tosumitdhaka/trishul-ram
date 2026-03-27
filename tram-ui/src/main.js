@@ -55,12 +55,9 @@ async function checkAuth() {
   return true
 }
 
-// Boot
+// Boot — always init router and health poller so hashchange listener is registered
+// even when auth is required (login overlay covers the shell with z-index:9999)
 applyTheme(localStorage.getItem('tram_theme') || 'dark')
-
-checkAuth().then(ok => {
-  if (ok) {
-    router.init()
-    startHealthPoller()
-  }
-})
+router.init()
+startHealthPoller()
+checkAuth()
