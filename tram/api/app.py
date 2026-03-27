@@ -11,7 +11,7 @@ from fastapi.responses import RedirectResponse
 from fastapi.staticfiles import StaticFiles
 
 from tram.api.routers import health, pipelines, runs
-from tram.api.routers import metrics_router, webhooks, mibs, schemas, auth, templates
+from tram.api.routers import metrics_router, webhooks, mibs, schemas, auth, templates, stats
 from tram import __version__
 from tram.core.config import AppConfig
 from tram.pipeline.loader import scan_pipeline_dir
@@ -215,6 +215,7 @@ def create_app(config: AppConfig | None = None) -> FastAPI:
     app.include_router(schemas.router)
     app.include_router(auth.router)
     app.include_router(templates.router)
+    app.include_router(stats.router)
 
     # Mount web UI static files (v1.0.7)
     ui_dir = config.ui_dir
