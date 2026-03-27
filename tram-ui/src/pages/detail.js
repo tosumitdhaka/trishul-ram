@@ -248,9 +248,102 @@ async function loadConfig() {
 // ── Alerts tab ──────────────────────────────────────────────────────────────
 
 async function loadAlerts() {
-  const tbody = document.getElementById('detail-runs-body')
-  if (!tbody) return
-  tbody.innerHTML = '<tr><td colspan="10" class="text-secondary text-center py-4">Alert rules — coming in v1.1.0</td></tr>'
+  const wrap = document.querySelector('.table-wrap')
+  if (!wrap) return
+  try {
+    const rules = await api.alerts.list(_name)
+    _renderAlerts(wrap, rules)
+  } catch (e) { toast(e.message, 'error') }
+}
+
+function _renderAlerts(wrap, rules) {
+  wrap.innerHTML = `
+    <div class="table-head-row">
+      <span class="table-head-title">Alert Rules</span>
+      <span class="count-pill">${rules.length} rule${rules.length !== 1 ? 's' : ''}</span>
+      <button class="btn btn-sm btn-outline-primary ms-auto" style="font-size:11px;padding:2px 8px"
+              onclick="window._alertAdd()"><i class="bi bi-plus"></i> Add Rule</button>
+    </div>
+    <table class="table mb-0">
+      <thead><tr><th>Name</th><th>Condition</th><th>Action</th><th>Cooldown</th><th></th></tr></thead>
+      <tbody>${rules.length
+        ? rules.map(_alertRow).join('')
+        : '<tr><td colspan="5" class="text-secondary text-center py-4">No alert rules defined</td></tr>'
+      }</tbody>
+    </table>`
+
+  window._alertAdd  = ()    => _openAlertModal(null, null, rules)
+  window._alertEdit = (idx) => _openAlertModal(idx, rules[idx], rules)
+  window._alertDelete = async (idx) => {
+    const label = rules[idx]?.name || `rule #${idx}`
+    if (!confirm(`Delete alert rule '${label}'?`)) return
+    try {
+      await api.alerts.delete(_name, idx)
+      toast(`Deleted ${label}`)
+      loadAlerts()
+    } catch (e) { toast(e.message, 'error') }
+  }
+}
+
+function _alertRow(r, i) {
+  const actionStr = r.action === 'email'
+    ? `email → ${esc(r.email_to || '?')}`
+    : `webhook${r.webhook_url ? ' ✓' : ''}`
+  return `<tr>
+    <td class="fw-semibold">${esc(r.name || '—')}</td>
+    <td class="mono" style="font-size:12px">${esc(r.condition || '')}</td>
+    <td class="text-secondary">${actionStr}</td>
+    <td class="text-secondary">${r.cooldown_seconds ?? 300}s</td>
+    <td class="text-end">
+      <button class="btn-flat" title="Edit" onclick="window._alertEdit(${i})"><i class="bi bi-pencil"></i></button>
+      <button class="btn-flat-danger" title="Delete" onclick="window._alertDelete(${i})"><i class="bi bi-trash"></i></button>
+    </td>
+  </tr>`
+}
+
+function _openAlertModal(idx, rule, rules) {
+  const isEdit = idx !== null
+  document.getElementById('alert-modal-title').textContent = isEdit ? 'Edit Alert Rule' : 'Add Alert Rule'
+  document.getElementById('alert-name').value        = rule?.name || ''
+  document.getElementById('alert-condition').value   = rule?.condition || ''
+  document.getElementById('alert-webhook-url').value = rule?.webhook_url || ''
+  document.getElementById('alert-email-to').value    = rule?.email_to || ''
+  document.getElementById('alert-subject').value     = rule?.subject || ''
+  document.getElementById('alert-cooldown').value    = rule?.cooldown_seconds ?? 300
+
+  const action = rule?.action || 'webhook'
+  document.querySelector(`input[name="alert-action"][value="${action}"]`).checked = true
+  _toggleAlertAction(action)
+  document.querySelectorAll('input[name="alert-action"]').forEach(r => {
+    r.onchange = () => _toggleAlertAction(r.value)
+  })
+
+  const modal = new bootstrap.Modal(document.getElementById('detail-alert-modal'))
+  document.getElementById('alert-save-btn').onclick = async () => {
+    const payload = {
+      name:             document.getElementById('alert-name').value.trim() || null,
+      condition:        document.getElementById('alert-condition').value.trim(),
+      action:           document.querySelector('input[name="alert-action"]:checked').value,
+      webhook_url:      document.getElementById('alert-webhook-url').value.trim() || null,
+      email_to:         document.getElementById('alert-email-to').value.trim() || null,
+      subject:          document.getElementById('alert-subject').value.trim() || null,
+      cooldown_seconds: parseInt(document.getElementById('alert-cooldown').value) || 300,
+    }
+    if (!payload.condition) { toast('Condition is required', 'error'); return }
+    try {
+      if (isEdit) await api.alerts.update(_name, idx, payload)
+      else        await api.alerts.create(_name, payload)
+      modal.hide()
+      toast(isEdit ? 'Rule updated' : 'Rule added')
+      loadAlerts()
+    } catch (e) { toast(e.message, 'error') }
+  }
+  modal.show()
+}
+
+function _toggleAlertAction(action) {
+  document.getElementById('alert-webhook-row').classList.toggle('d-none', action !== 'webhook')
+  document.getElementById('alert-email-row').classList.toggle('d-none',   action !== 'email')
 }
 
 // ── Helpers ──────────────────────────────────────────────────────────────────

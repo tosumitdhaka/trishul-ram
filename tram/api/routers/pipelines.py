@@ -310,6 +310,100 @@ async def get_version_yaml(name: str, version: int, request: Request):
     return PlainTextResponse(yaml_text, media_type="text/plain")
 
 
+# ── Alert rules ────────────────────────────────────────────────────────────
+
+
+def _read_alerts_data(manager, name):
+    """Return (yaml_dict, state) or raise HTTPException."""
+    import yaml as _yaml
+    try:
+        state = manager.get(name)
+    except PipelineNotFoundError as exc:
+        raise HTTPException(status_code=404, detail=str(exc))
+    yaml_text = getattr(state, "yaml_text", None) or ""
+    if not yaml_text:
+        raise HTTPException(status_code=503, detail="Pipeline YAML not stored")
+    return _yaml.safe_load(yaml_text) or {}, state
+
+
+def _save_alerts_data(manager, scheduler, name, data, was_running: bool):
+    import yaml as _yaml
+    new_yaml = _yaml.dump(data, default_flow_style=False, allow_unicode=True, sort_keys=False)
+    try:
+        config = load_pipeline_from_yaml(new_yaml)
+    except Exception as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+    if was_running:
+        try:
+            scheduler.stop_pipeline(name)
+        except Exception:
+            pass
+    manager.deregister(name)
+    new_state = manager.register(config, yaml_text=new_yaml)
+    if was_running and config.enabled and config.schedule.type != "manual":
+        try:
+            scheduler.start_pipeline(name)
+        except Exception:
+            pass
+    return new_state
+
+
+@router.get("/{name}/alerts")
+async def list_alerts(name: str, request: Request) -> list[dict]:
+    """List alert rules for a pipeline."""
+    data, _ = _read_alerts_data(request.app.state.manager, name)
+    alerts = data.get("alerts") or []
+    return [{"index": i, **a} for i, a in enumerate(alerts)]
+
+
+@router.post("/{name}/alerts", status_code=status.HTTP_201_CREATED)
+async def create_alert(name: str, request: Request) -> dict:
+    """Append a new alert rule to a pipeline."""
+    body = await request.json()
+    if not body.get("condition") or not body.get("action"):
+        raise HTTPException(status_code=400, detail="condition and action are required")
+    data, state = _read_alerts_data(request.app.state.manager, name)
+    alerts = list(data.get("alerts") or [])
+    rule = {k: v for k, v in body.items() if v is not None}
+    alerts.append(rule)
+    data["alerts"] = alerts
+    _save_alerts_data(request.app.state.manager, request.app.state.scheduler,
+                      name, data, state.status == "running")
+    return {"index": len(alerts) - 1, **rule}
+
+
+@router.put("/{name}/alerts/{idx}")
+async def update_alert(name: str, idx: int, request: Request) -> dict:
+    """Replace an alert rule by index."""
+    body = await request.json()
+    if not body.get("condition") or not body.get("action"):
+        raise HTTPException(status_code=400, detail="condition and action are required")
+    data, state = _read_alerts_data(request.app.state.manager, name)
+    alerts = list(data.get("alerts") or [])
+    if idx < 0 or idx >= len(alerts):
+        raise HTTPException(status_code=404, detail=f"Alert index {idx} not found")
+    rule = {k: v for k, v in body.items() if v is not None}
+    alerts[idx] = rule
+    data["alerts"] = alerts
+    _save_alerts_data(request.app.state.manager, request.app.state.scheduler,
+                      name, data, state.status == "running")
+    return {"index": idx, **rule}
+
+
+@router.delete("/{name}/alerts/{idx}", status_code=status.HTTP_204_NO_CONTENT)
+async def delete_alert(name: str, idx: int, request: Request) -> Response:
+    """Remove an alert rule by index."""
+    data, state = _read_alerts_data(request.app.state.manager, name)
+    alerts = list(data.get("alerts") or [])
+    if idx < 0 or idx >= len(alerts):
+        raise HTTPException(status_code=404, detail=f"Alert index {idx} not found")
+    alerts.pop(idx)
+    data["alerts"] = alerts
+    _save_alerts_data(request.app.state.manager, request.app.state.scheduler,
+                      name, data, state.status == "running")
+    return Response(status_code=204)
+
+
 @router.post("/{name}/rollback")
 async def rollback_pipeline(
     name: str,
