@@ -14,7 +14,7 @@ let _state = {
 }
 
 // ── Field schema for common connectors ────────────────────────────────────────
-const ARRAY_FIELDS = new Set(['brokers', 'hosts', 'servers', 'topics', 'oids'])
+const ARRAY_FIELDS = new Set(['brokers', 'hosts', 'servers', 'topics', 'oids', 'group_by'])
 
 const FIELD_SCHEMA = {
   // Sources
@@ -37,12 +37,13 @@ const FIELD_SCHEMA = {
     {k:'recursive',    lbl:'Recursive',    type:'select', opts:['false','true'], hint:'Also scan subdirectories'},
   ],
   sftp:          [
-    {k:'host',         lbl:'Host',         req:true,                  hint:'SFTP server hostname or IP'},
-    {k:'port',         lbl:'Port',         ph:'22',                   hint:'SSH port, default 22'},
-    {k:'username',     lbl:'Username',     req:true,                  hint:'SSH login username'},
-    {k:'password',     lbl:'Password',     type:'password',           hint:'SSH password (or leave blank if using key auth)'},
-    {k:'remote_path',  lbl:'Remote Path',  ph:'/data', req:true,      hint:'Remote directory to list for files'},
-    {k:'file_pattern', lbl:'File Pattern', ph:'*.csv',                hint:'Glob filter applied to remote filenames'},
+    {k:'host',             lbl:'Host',             req:true,            hint:'SFTP server hostname or IP'},
+    {k:'port',             lbl:'Port',             ph:'22',             hint:'SSH port, default 22'},
+    {k:'username',         lbl:'Username',         req:true,            hint:'SSH login username'},
+    {k:'password',         lbl:'Password',         type:'password',     hint:'SSH password — provide this OR private_key_path, not both'},
+    {k:'private_key_path', lbl:'Private Key Path', ph:'~/.ssh/id_rsa',  hint:'Path to SSH private key file — alternative to password auth'},
+    {k:'remote_path',      lbl:'Remote Path',      ph:'/data', req:true, hint:'Remote directory to list for files'},
+    {k:'file_pattern',     lbl:'File Pattern',     ph:'*.csv',          hint:'Glob filter applied to remote filenames'},
   ],
   s3:            [
     {k:'bucket',               lbl:'Bucket',      req:true,                       hint:'S3 bucket name'},
@@ -169,54 +170,49 @@ const FIELD_SCHEMA = {
 
 // ── Transform field schema ────────────────────────────────────────────────────
 const TRANSFORM_FIELDS = {
-  rename:           [{k:'fields', lbl:'Fields (old: new)', type:'kv', req:true, hint:'Map of old_name: new_name pairs — renames matching fields in each record'}],
-  cast:             [{k:'fields', lbl:'Fields (col: type)', type:'kv', req:true, hint:'Map of field_name: target_type — types: int, float, str, bool'}],
-  add_field:        [
-    {k:'field', lbl:'Field Name', req:true, hint:'Name of the new field to inject into every record'},
-    {k:'value', lbl:'Value',      req:true, hint:'Static value or {existing_field} interpolation e.g. {host}-{env}'},
-  ],
-  drop:             [{k:'fields', lbl:'Fields to drop', ph:'col1, col2', req:true, hint:'Comma-separated field names to remove from each record'}],
+  rename:           [{k:'_kv_fields', lbl:'Fields (one per line: old: new)', type:'textarea', req:true, ph:'old_name: new_name\nsrc: source', hint:'Each line maps an old field name to a new name — only listed fields are renamed'}],
+  cast:             [{k:'_kv_fields', lbl:'Fields (one per line: name: type)', type:'textarea', req:true, ph:'count: int\nvalue: float\nactive: bool', hint:'Types: str, int, float, bool, datetime — values that cannot be cast are kept as-is'}],
+  add_field:        [{k:'_kv_fields', lbl:'Fields (one per line: name: value)', type:'textarea', req:true, ph:'env: prod\nregion: us-east-1', hint:'Injects static fields into every record — use {existing_field} in the value for interpolation'}],
+  drop:             [{k:'_list_fields', lbl:'Fields to drop', ph:'col1, col2', req:true, hint:'Comma-separated field names to remove from each record'}],
   filter:           [{k:'condition', lbl:'Condition', ph:"status == 'active'", req:true, hint:"Python expression — record fields are available as variables e.g. count > 0 or type == 'alarm'"}],
   value_map:        [
-    {k:'field',   lbl:'Field',              req:true, hint:'Field whose value will be looked up and replaced'},
-    {k:'mapping', lbl:'Mapping (from: to)', type:'kv', req:true, hint:'Map of source_value: replacement_value pairs'},
+    {k:'field',       lbl:'Field',                              req:true, hint:'Field whose value will be looked up and replaced'},
+    {k:'_kv_mapping', lbl:'Mapping (one per line: from: to)',   type:'textarea', req:true, ph:'active: 1\ninactive: 0\nunknown: -1', hint:'Each line is a source_value: replacement_value pair — unmatched values are left unchanged unless default is set'},
+    {k:'default',     lbl:'Default',                                      hint:'Value to use when no mapping matches — leave blank to keep original'},
   ],
   regex_extract:    [
     {k:'field',   lbl:'Source Field',  req:true, hint:'Field containing the string to match against'},
     {k:'pattern', lbl:'Regex Pattern', req:true, hint:'Python regex — use a named group (?P<name>...) or single capture group'},
     {k:'target',  lbl:'Target Field',  req:true, hint:'Field to write the captured value into'},
   ],
-  jmespath:         [
-    {k:'expression', lbl:'JMESPath',     req:true, hint:'JMESPath query applied to the record e.g. data.items[0].value'},
-    {k:'target',     lbl:'Target Field', req:true, hint:'Field to write the query result into'},
-  ],
+  jmespath:         [{k:'_kv_fields', lbl:'Fields (one per line: target: expression)', type:'textarea', req:true, ph:'result: data.items[0].value\nhost: metadata.host', hint:'Each line maps a target field name to a JMESPath expression evaluated against the record'}],
   timestamp_normalize: [
-    {k:'field',  lbl:'Timestamp Field', req:true, hint:'Field containing the timestamp string to normalise'},
-    {k:'format', lbl:'Input Format',    ph:'%Y-%m-%dT%H:%M:%S', hint:'strptime format string — omit for auto-detection'},
+    {k:'_list_fields',  lbl:'Fields to normalize', ph:'ts, created_at', req:true, hint:'Comma-separated field names containing timestamps to normalize'},
+    {k:'input_format',  lbl:'Input Format', ph:'%Y-%m-%dT%H:%M:%S',                hint:'strptime format string — omit for auto-detection of ISO 8601 / epoch'},
   ],
-  template:         [
-    {k:'field',    lbl:'Target Field', req:true, hint:'Field to write the rendered template value into'},
-    {k:'template', lbl:'Template',     ph:'{{name}}-{{env}}', req:true, hint:'Jinja2-style template — reference record fields with {{field_name}}'},
-  ],
-  mask:             [{k:'fields', lbl:'Fields to mask', ph:'password, token', req:true, hint:'Comma-separated field names — values replaced with ***'}],
+  template:         [{k:'_kv_fields', lbl:'Fields (one per line: target: template)', type:'textarea', req:true, ph:'label: {{name}}-{{env}}\npath: /data/{{date}}', hint:'Each line renders a Jinja2-style template into the named target field — reference record fields with {{field_name}}'}],
+  mask:             [{k:'_list_fields', lbl:'Fields to mask', ph:'password, token, api_key', req:true, hint:'Comma-separated field names — values are replaced with *** (or hashed/partially masked depending on mode)'}],
   limit:            [{k:'count', lbl:'Max Records', req:true, hint:'Maximum number of records to pass through — excess records are dropped'}],
-  deduplicate:      [{k:'fields', lbl:'Key Fields', ph:'id, timestamp', req:true, hint:'Comma-separated fields that together form the deduplication key'}],
+  deduplicate:      [{k:'_list_fields', lbl:'Key Fields', ph:'id, timestamp', req:true, hint:'Comma-separated fields that together form the deduplication key — duplicate combinations are dropped'}],
   sort:             [
-    {k:'field', lbl:'Sort Field', req:true, hint:'Field to sort records by'},
-    {k:'order', lbl:'Order', type:'select', opts:['asc','desc'], hint:'Sort direction'},
+    {k:'_list_fields', lbl:'Sort Fields', ph:'timestamp, id', req:true, hint:'Comma-separated fields to sort by — applied in order (first field primary, second secondary, etc.)'},
+    {k:'reverse',      lbl:'Reverse',     type:'select', opts:['false','true'], hint:'Sort descending when true'},
   ],
-  flatten:          [{k:'separator', lbl:'Separator', ph:'_', hint:'Character used to join nested key names e.g. parent_child'}],
-  explode:          [{k:'field', lbl:'Array Field', req:true, hint:'Field containing an array — each element becomes a separate record'}],
-  unnest:           [{k:'field', lbl:'Nested Field', req:true, hint:'Nested object field whose keys are merged into the parent record'}],
+  flatten:          [{k:'separator', lbl:'Separator', ph:'_', hint:'Character used to join nested key names e.g. parent.child → parent_child'}],
+  explode:          [{k:'field', lbl:'Array Field', req:true, hint:'Field containing an array — each element becomes a separate record; other fields are copied into each output record'}],
+  unnest:           [{k:'field', lbl:'Nested Field', req:true, hint:'Nested object field whose keys are merged (unnested) into the parent record — the original nested field is removed'}],
   aggregate:        [
-    {k:'group_by',       lbl:'Group By Fields', ph:'host, region', hint:'Comma-separated fields to group records by'},
-    {k:'window_seconds', lbl:'Window (s)',                         hint:'Aggregation time window in seconds — records outside window are flushed'},
+    {k:'group_by',        lbl:'Group By Fields',   ph:'host, region',             hint:'Comma-separated fields to group records by — leave blank to aggregate all records together'},
+    {k:'_kv_operations',  lbl:'Operations (one per line: output: op:source_field)', type:'textarea', req:true, ph:'total_rx: sum:rx_bytes\nsamples: count:rx_bytes\navg_val: avg:value', hint:'Shorthand: output_field: op:source_field — ops: sum, avg, min, max, count, first, last. count needs any field name e.g. count:id'},
+    {k:'window_seconds',  lbl:'Window (s)',                                        hint:'Flush aggregated records every N seconds — omit to aggregate across all records in the batch'},
   ],
   enrich:           [
-    {k:'source_field', lbl:'Source Field', req:true, hint:'Field whose value is used as the lookup key'},
-    {k:'lookup_file',  lbl:'Lookup File',  req:true, hint:'Path to a CSV or JSON file keyed by the source field value'},
+    {k:'lookup_file',  lbl:'Lookup File',  req:true,          hint:'Path to a CSV or JSON lookup file — each row keyed by the join field'},
+    {k:'join_key',     lbl:'Join Key',     req:true,          hint:'Field in the record whose value is used to look up the matching row in the file'},
+    {k:'lookup_key',   lbl:'Lookup Key',   ph:'id',           hint:'Column name in the lookup file to match against — defaults to the join_key name'},
+    {k:'lookup_format',lbl:'Format',       type:'select', opts:['csv','json'], hint:'Format of the lookup file'},
   ],
-  validate:         [{k:'schema_file', lbl:'Schema File', req:true, hint:'Path to a JSON Schema file — records failing validation are sent to DLQ'}],
+  validate:         [{k:'schema_file', lbl:'Schema File', req:true, hint:'Path to a JSON Schema file — records failing validation are sent to DLQ or dropped depending on on_invalid setting'}],
 }
 
 // ── Init ──────────────────────────────────────────────────────────────────────
@@ -570,7 +566,7 @@ function buildYaml(state) {
   if (state.scheduleType === 'interval' && state.intervalSeconds)
     lines.push(`  interval_seconds: ${state.intervalSeconds}`)
   if (state.scheduleType === 'cron' && state.cronExpr)
-    lines.push(`  cron_expr: "${state.cronExpr}"`)
+    lines.push(`  cron: "${state.cronExpr}"`)
   if (state.onError && state.onError !== 'continue')
     lines.push(`on_error: ${state.onError}`)
   lines.push(`source:`)
@@ -598,12 +594,47 @@ function buildYaml(state) {
     lines.push(`transforms:`)
     for (const t of state.transforms) {
       lines.push(`  - type: ${t.type}`)
-      for (const [k, v] of Object.entries(t.fields || {}))
-        if (v || v === 0) lines.push(..._yamlField(k, v, 4))
+      for (const [k, v] of Object.entries(t.fields || {})) {
+        if (!v && v !== 0) continue
+        if (k === '_kv_fields') {
+          lines.push(`    fields:`)
+          for (const line of String(v).split('\n')) {
+            const idx = line.indexOf(':')
+            if (idx < 0) continue
+            const fk = line.slice(0, idx).trim()
+            const fv = line.slice(idx + 1).trim()
+            if (fk) lines.push(`      ${fk}: ${_yamlVal(fv)}`)
+          }
+        } else if (k === '_kv_mapping') {
+          lines.push(`    mapping:`)
+          for (const line of String(v).split('\n')) {
+            const idx = line.indexOf(':')
+            if (idx < 0) continue
+            const fk = line.slice(0, idx).trim()
+            const fv = line.slice(idx + 1).trim()
+            if (fk) lines.push(`      ${fk}: ${_yamlVal(fv)}`)
+          }
+        } else if (k === '_kv_operations') {
+          lines.push(`    operations:`)
+          for (const line of String(v).split('\n')) {
+            if (line.trim()) lines.push(`      ${line}`)
+          }
+        } else if (k === '_list_fields') {
+          const items = String(v).split(',').map(s => s.trim()).filter(Boolean)
+          if (items.length) {
+            lines.push(`    fields:`)
+            for (const item of items) lines.push(`      - ${_yamlVal(item)}`)
+          }
+        } else {
+          lines.push(..._yamlField(k, v, 4))
+        }
+      }
     }
   }
-  if (state.serializerOut)
-    lines.push(`serializer_out: ${state.serializerOut}`)
+  if (state.serializerOut) {
+    lines.push(`serializer_out:`)
+    lines.push(`  type: ${state.serializerOut}`)
+  }
   if (state.sinks?.length) {
     lines.push(`sinks:`)
     for (const s of state.sinks) {
@@ -611,7 +642,10 @@ function buildYaml(state) {
       lines.push(`  - type: ${s.type}`)
       for (const [k, v] of Object.entries(s.fields || {}))
         if (v || v === 0) lines.push(..._yamlField(k, v, 4))
-      if (s.serializer_out) lines.push(`    serializer_out: ${s.serializer_out}`)
+      if (s.serializer_out) {
+        lines.push(`    serializer_out:`)
+        lines.push(`      type: ${s.serializer_out}`)
+      }
       if (s.condition) lines.push(`    condition: "${s.condition.replace(/"/g, '\\"')}"`)
     }
   }
