@@ -101,7 +101,7 @@ COPY --from=builder /build/dist/*.whl .
 # corba (omniORBpy) is excluded: not on PyPI; install python3-omniorb via apt in a custom layer
 RUN whl=$(ls *.whl) && \
     pip install --no-cache-dir \
-        "${whl}[kafka,opensearch,snmp,avro,protobuf_ser,msgpack_ser,mqtt,amqp,nats,gnmi,jmespath,sql,influxdb,redis,websocket,elasticsearch,metrics,prometheus_rw,mib,watch,postgresql,mysql]" && \
+        "${whl}[kafka,opensearch,snmp,avro,protobuf_ser,msgpack_ser,mqtt,amqp,nats,gnmi,jmespath,sql,influxdb,redis,websocket,elasticsearch,metrics,prometheus_rw,mib,watch,postgresql,mysql,asn1]" && \
     rm *.whl
 
 # Copy compiled MIBs from mib-builder stage

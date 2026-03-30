@@ -1036,6 +1036,13 @@ class TextSerializerConfig(BaseModel):
     newline: str = "\n"
 
 
+class Asn1SerializerConfig(BaseModel):
+    type: Literal["asn1"]
+    schema_file: str
+    message_class: str
+    encoding: Literal["ber", "der", "per", "uper", "xer", "jer"] = "ber"
+
+
 SerializerConfig = Annotated[
     Union[
         JsonSerializerConfig,
@@ -1048,6 +1055,7 @@ SerializerConfig = Annotated[
         NdjsonSerializerConfig,
         BytesSerializerConfig,
         TextSerializerConfig,
+        Asn1SerializerConfig,
     ],
     Field(discriminator="type"),
 ]

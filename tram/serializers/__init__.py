@@ -1,5 +1,6 @@
 """Import all serializers to trigger @register_serializer decorators."""
 
+from tram.serializers.asn1_serializer import Asn1Serializer  # noqa: F401
 from tram.serializers.avro_serializer import AvroSerializer  # noqa: F401
 from tram.serializers.bytes_serializer import BytesSerializer  # noqa: F401
 from tram.serializers.csv_serializer import CsvSerializer  # noqa: F401
