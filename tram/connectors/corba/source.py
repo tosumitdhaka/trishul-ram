@@ -134,6 +134,25 @@ class CorbaSource(BaseSource):
 
     # ── Public ─────────────────────────────────────────────────────────────
 
+    def test_connection(self) -> dict:
+        import socket
+        import time
+        naming_service = self.config.get("naming_service", "")
+        if naming_service and naming_service.startswith("corbaloc:iiop:"):
+            t0 = time.monotonic()
+            try:
+                remainder = naming_service.split("corbaloc:iiop:", 1)[1]
+                hostport = remainder.split("/")[0]
+                parts = hostport.rsplit(":", 1)
+                host = parts[0]
+                port = int(parts[1]) if len(parts) > 1 else 2809
+                with socket.create_connection((host, port), timeout=8):
+                    latency = int((time.monotonic() - t0) * 1000)
+                    return {"ok": True, "latency_ms": latency, "detail": f"CORBA TCP {host}:{port} OK"}
+            except Exception as exc:
+                raise RuntimeError(f"CORBA TCP probe failed: {exc}")
+        return {"ok": True, "latency_ms": None, "detail": "No remote test available for IOR-based CORBA"}
+
     def read(self) -> Iterator[tuple[bytes, dict]]:
         # Build a stable invocation key for skip_processed tracking
         invocation_key = f"{self.ior or self.naming_service}/{self.operation}"

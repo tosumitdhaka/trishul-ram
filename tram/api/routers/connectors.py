@@ -130,6 +130,15 @@ def _extract_host(conn_type: str, config: dict) -> str:
     if servers:
         s = (servers[0] if isinstance(servers, list) else servers)
         return s.replace("nats://", "").replace("tcp://", "").split(":")[0]
+    # URL-based connectors (amqp, websocket, ves, rest)
+    url = config.get("url") or config.get("base_url") or ""
+    if url:
+        try:
+            from urllib.parse import urlparse
+            parsed = urlparse(url)
+            return parsed.hostname or ""
+        except Exception:
+            pass
     return ""
 
 
@@ -157,10 +166,21 @@ def _extract_port(conn_type: str, config: dict) -> int:
                 return int(parts[-1])
             except ValueError:
                 pass
+    # URL-based connectors
+    url = config.get("url") or config.get("base_url") or ""
+    if url:
+        try:
+            from urllib.parse import urlparse
+            parsed = urlparse(url)
+            if parsed.port:
+                return parsed.port
+        except Exception:
+            pass
     defaults = {
         "kafka": 9092, "mqtt": 1883, "nats": 4222, "amqp": 5672,
         "redis": 6379, "influxdb": 8086, "opensearch": 9200,
         "elasticsearch": 9200, "clickhouse": 9000,
+        "websocket": 80, "ves": 443,
     }
     return defaults.get(conn_type, 0)
 

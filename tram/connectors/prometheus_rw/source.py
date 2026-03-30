@@ -141,6 +141,10 @@ message WriteRequest { repeated TimeSeries timeseries = 1; }
 
             return fds.file[0].SerializeToString()
 
+    def test_connection(self) -> dict:
+        path = self.config.get("path", "prom-rw").lstrip("/")
+        return {"ok": True, "latency_ms": None, "detail": f"Local HTTP listener at /webhooks/{path}"}
+
     def read(self) -> Generator[tuple[bytes, dict], None, None]:
         self._check_deps()
 

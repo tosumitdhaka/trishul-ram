@@ -24,6 +24,22 @@ class AmqpSink(BaseSink):
         self.routing_key: str = config.get("routing_key", "")
         self.content_type: str = config.get("content_type", "application/json")
 
+    def test_connection(self) -> dict:
+        import socket
+        import time
+        from urllib.parse import urlparse
+        t0 = time.monotonic()
+        url = self.config.get("url", "amqp://guest:guest@localhost:5672/")
+        parsed = urlparse(url)
+        host = parsed.hostname or "localhost"
+        port = parsed.port or 5672
+        try:
+            with socket.create_connection((host, port), timeout=8):
+                latency = int((time.monotonic() - t0) * 1000)
+                return {"ok": True, "latency_ms": latency, "detail": f"TCP {host}:{port} OK"}
+        except Exception as exc:
+            raise RuntimeError(f"AMQP TCP probe failed: {exc}")
+
     def write(self, data: bytes, meta: dict) -> None:
         try:
             import pika

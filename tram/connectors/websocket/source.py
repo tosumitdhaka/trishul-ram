@@ -35,6 +35,26 @@ class WebSocketSource(BaseSource):
         self.reconnect: bool = config.get("reconnect", True)
         self.reconnect_delay: int = config.get("reconnect_delay", 5)
 
+    def test_connection(self) -> dict:
+        import socket
+        import time
+        from urllib.parse import urlparse
+        t0 = time.monotonic()
+        url = self.config.get("url", "")
+        if not url:
+            raise RuntimeError("No 'url' in config")
+        parsed = urlparse(url)
+        host = parsed.hostname or ""
+        port = parsed.port or (443 if parsed.scheme == "wss" else 80)
+        if not host:
+            raise RuntimeError(f"Cannot parse host from URL: {url}")
+        try:
+            with socket.create_connection((host, port), timeout=8):
+                latency = int((time.monotonic() - t0) * 1000)
+                return {"ok": True, "latency_ms": latency, "detail": f"TCP {host}:{port} OK"}
+        except Exception as exc:
+            raise RuntimeError(f"WebSocket TCP probe failed: {exc}")
+
     def read(self) -> Generator[tuple[bytes, dict], None, None]:
         try:
             import websockets  # noqa: F401

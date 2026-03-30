@@ -72,6 +72,30 @@ class S3Source(BaseSource):
         except Exception as exc:
             raise SourceError(f"S3 client creation failed: {exc}") from exc
 
+    def test_connection(self) -> dict:
+        import time
+        t0 = time.monotonic()
+        try:
+            import boto3
+        except ImportError:
+            raise RuntimeError("boto3 not installed — pip install tram[s3]")
+        kwargs: dict = {"region_name": self.config.get("region_name", "us-east-1")}
+        if self.config.get("endpoint_url"):
+            kwargs["endpoint_url"] = self.config["endpoint_url"]
+        if self.config.get("aws_access_key_id"):
+            kwargs["aws_access_key_id"] = self.config["aws_access_key_id"]
+        if self.config.get("aws_secret_access_key"):
+            kwargs["aws_secret_access_key"] = self.config["aws_secret_access_key"]
+        client = boto3.client("s3", **kwargs)
+        bucket = self.config.get("bucket", "")
+        if bucket:
+            client.head_bucket(Bucket=bucket)
+            latency = int((time.monotonic() - t0) * 1000)
+            return {"ok": True, "latency_ms": latency, "detail": f"S3 bucket '{bucket}' accessible"}
+        client.list_buckets()
+        latency = int((time.monotonic() - t0) * 1000)
+        return {"ok": True, "latency_ms": latency, "detail": "S3 endpoint reachable"}
+
     def read(self) -> Iterator[tuple[bytes, dict]]:
         client = self._get_client()
 

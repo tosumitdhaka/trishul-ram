@@ -84,6 +84,33 @@ class VESSink(BaseSink):
             }
         }
 
+    def test_connection(self) -> dict:
+        import time
+        import urllib.request
+        t0 = time.monotonic()
+        url = self.config.get("url", "")
+        if not url:
+            raise RuntimeError("No 'url' in config")
+        req = urllib.request.Request(url, method="HEAD")
+        auth_type = self.config.get("auth_type", "none")
+        if auth_type == "bearer" and self.config.get("token"):
+            req.add_header("Authorization", f"Bearer {self.config['token']}")
+        elif auth_type == "basic" and self.config.get("username"):
+            import base64
+            creds = base64.b64encode(
+                f"{self.config['username']}:{self.config.get('password', '')}".encode()
+            ).decode()
+            req.add_header("Authorization", f"Basic {creds}")
+        try:
+            with urllib.request.urlopen(req, timeout=8) as resp:
+                latency = int((time.monotonic() - t0) * 1000)
+                return {"ok": True, "latency_ms": latency, "detail": f"HTTP {resp.status} {url}"}
+        except urllib.error.HTTPError as e:
+            if e.code < 500:
+                latency = int((time.monotonic() - t0) * 1000)
+                return {"ok": True, "latency_ms": latency, "detail": f"HTTP {e.code} {url}"}
+            raise RuntimeError(f"HTTP {e.code}: {e.reason}")
+
     def write(self, data: bytes, meta: dict) -> None:
         try:
             import httpx

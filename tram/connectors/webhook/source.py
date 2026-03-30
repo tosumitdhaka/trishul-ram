@@ -36,6 +36,10 @@ class WebhookSource(BaseSource):
         """Unblock the blocking queue.get() so read() can exit cleanly."""
         self._stop_event.set()
 
+    def test_connection(self) -> dict:
+        path = self.config.get("path", "").lstrip("/")
+        return {"ok": True, "latency_ms": None, "detail": f"Local HTTP listener at /webhooks/{path}"}
+
     def read(self) -> Generator[tuple[bytes, dict], None, None]:
         from tram.connectors.webhook import _WEBHOOK_SECRETS
 
