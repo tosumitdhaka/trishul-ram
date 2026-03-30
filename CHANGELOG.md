@@ -11,14 +11,55 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [1.1.1] — 2026-03-30
 
+### Added
+
+**Run History — expandable error rows**
+- Runs with errors or DLQ records show a chevron (▶) in the detail page Runs table
+- Clicking chevron inserts an inline sub-row with per-record error lines in monospace red; toggles closed on second click
+- DLQ-only runs show "N record(s) sent to DLQ" when no inline errors; clean runs show no chevron
+- Backend: `RunResult.errors: list[str]` field populated from `PipelineRunContext.errors`; persisted as `errors_json TEXT` column in `run_history` (auto-migrated on existing DBs)
+
+**Wizard — complete connector coverage**
+- `wizard.js` FIELD_SCHEMA now covers all connector types including `websocket`, `gnmi`, `snmp_poll`, `prometheus_rw`, and `corba`
+- `snmp_poll` OID list rendered as a YAML sequence (added `oids` to `ARRAY_FIELDS`)
+- All FIELD_SCHEMA and TRANSFORM_FIELDS entries have descriptive hint text
+
+**Wizard — step reorder to match YAML field order**
+- Steps: Info (name/schedule/on_error) → Source (type + serializer_in + Test) → Transforms → Sinks (global serializer_out + sink cards) → Review
+- `serializer_in` moved to Source step; `on_error` added to Info step with inline descriptions; global `serializer_out` added to top of Sinks step
+- `buildYaml` emits `serializer_in` as nested block, `on_error` only when non-default, `serializer_out` before sinks block
+
+**Wizard — UX improvements**
+- "New Pipeline" toolbar button replaced with split btn-group: **Wizard** | **YAML** (direct editor)
+- Template deploy correctly loads template YAML into editor (fixed `window._editorYaml` propagation)
+- YAML diff now uses `reqText()` helper in `api.js` — fixes JSON parse error on raw YAML version fetch
+- "Advanced: open blank YAML editor" link properly clears editor state
+
+**Connector Test — full coverage**
+- `test_connection()` added to all remaining connectors: `amqp` source+sink (TCP probe), `s3` source+sink (`head_bucket`/`list_buckets`), `gcs` source+sink (`get_bucket`), `azure_blob` source+sink (`get_account_information`), `ves` (HTTP HEAD), `websocket` source+sink (TCP probe), `prometheus_rw` (local listener check), `webhook` (local listener check), `corba` (TCP probe on corbaloc)
+- `_extract_host`/`_extract_port` TCP fallback in `connectors.py` now parses `url`/`base_url` fields for URL-based connectors
+
+**Helm: pre-mounted connector key files**
+- New `keys` section in `values.yaml`: `secretName` / `mountPath` — pre-mounts a single Kubernetes Secret at `/secrets/` on every pod
+- Quickstart commands documented inline (create, rotate, reference in pipeline YAML)
+- `docs/roadmap_1.2.0.md`: key upload API added to roadmap
+
 ### Fixed
-- **YAML diff modal**: `bootstrap is not defined` error in `detail.js` — added `import * as bootstrap from 'bootstrap'` (Vite ESM modules don't expose `window.bootstrap` reliably)
-- **Enrich transform missing file**: `_load_lookup()` now warns and returns empty dict instead of raising `TransformError` when lookup file not found — allows dry-run to succeed for pipelines with runtime-resolved paths
-- **All 20 bundled pipeline templates pass dry-run**: fixed validate rules format (`field: required` string → `{required: true}` dict) in `kafka-to-opensearch.yaml`, `rest-nms-to-sql.yaml`, `webhook-alarm-fanout.yaml`; fixed empty default `${VAR:-}` → named placeholder in `multi-format-fanout.yaml`; fixed `seconds: 60` → `interval_seconds: 60` and `add_field` format in `cisco_pm_proto_to_json.yaml`; added `:-placeholder` defaults to bare `${VAR}` env vars in 6 templates
-- **Syslog / snmp_trap `test_connection`**: `ConnectorTestMixin` TCP fallback now uses configurable port defaults (syslog: 514, snmp_trap: 1162) instead of failing with unresolved config
-- **Connector port defaults**: REST connector test uses port 443 for HTTPS targets, 80 for HTTP
-- **Version history table**: Diff and Rollback buttons now show text labels (`Diff`, `Rollback`) alongside icons
-- **Helm fsGroup + key file permissions**: `securityContext.fsGroup: 1000` added to pod spec; connector key files in `/secrets` are `0440 root:tram` — readable by tram process, not world-readable
+- **Pipeline status on startup (cluster mode)**: non-owning nodes now set `status="scheduled"` for interval/cron pipelines instead of leaving them stuck at `"stopped"`; `_rebalance` release also sets `"scheduled"` instead of `"stopped"`
+- **SPA routing**: `router.init()` called unconditionally before `checkAuth()` — hashchange listener always registered
+- **Templates modal**: button uses `data-bs-toggle/data-bs-target` (not `new bootstrap.Modal().show()`) — fixes silent failure in Vite ESM context; server accepts both `sink:` (singular) and `sinks:` (list) in dry-run
+- **Templates view button**: inline YAML preview panel (view-switcher) inside modal — no nested Bootstrap modal
+- **Scheduled badge**: `.badge-scheduled` CSS (yellow) + dot color added to `style.css`
+- **Password change**: Settings page shows Change Password card when logged in
+- **Settings layout**: 3-column grid (col-4 each), no max-width cap
+- **Pipeline export**: download YAML button (↓) added to Actions column
+- **Detail page tabs**: isolated tab panel rendering — fixes DOM corruption when switching Runs/Versions/Config tabs
+- **YAML diff modal**: `bootstrap is not defined` in `detail.js` — added `import * as bootstrap from 'bootstrap'` (Vite ESM modules don't share `window.bootstrap` reliably)
+- **Version history table**: Diff and Rollback buttons now show text labels alongside icons
+- **Enrich transform missing file**: `_load_lookup()` warns and returns empty dict instead of raising `TransformError` — allows dry-run to succeed for pipelines with runtime-resolved lookup paths
+- **All 20 bundled pipeline templates pass dry-run**: validate rules format (`field: required` → `{required: true}`), empty defaults (`${VAR:-}` → named placeholder), `seconds:` → `interval_seconds:`, `add_field` format fixes, `:-placeholder` defaults for bare `${VAR}` env vars
+- **`test_connection` port defaults**: syslog=514, snmp_trap=1162; REST connector uses 443/80 based on scheme; sftp/ftp/snmp_poll/gnmi use connector-specific defaults
+- **Helm fsGroup + key file permissions**: `securityContext.fsGroup: 1000` on pod spec; `defaultMode: 0440` on keys Secret volume → `root:tram` ownership, readable by tram user without world-read
 
 ---
 
