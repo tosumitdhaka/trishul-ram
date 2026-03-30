@@ -14,7 +14,7 @@ let _state = {
 }
 
 // ── Field schema for common connectors ────────────────────────────────────────
-const ARRAY_FIELDS = new Set(['brokers', 'hosts', 'servers', 'topics'])
+const ARRAY_FIELDS = new Set(['brokers', 'hosts', 'servers', 'topics', 'oids'])
 
 const FIELD_SCHEMA = {
   // Sources
@@ -130,6 +130,40 @@ const FIELD_SCHEMA = {
     {k:'url',         lbl:'AMQP URL',    req:true, ph:'amqp://user:pass@rabbit:5672/', hint:'Full AMQP connection URL including credentials and vhost'},
     {k:'exchange',    lbl:'Exchange',                                                   hint:'Exchange name — leave blank for the default exchange'},
     {k:'routing_key', lbl:'Routing Key',                                                hint:'Message routing key for the exchange'},
+  ],
+  websocket:     [
+    {k:'url',              lbl:'WebSocket URL', req:true, ph:'ws://host:8080/stream', hint:'WebSocket endpoint URL — use ws:// for plain or wss:// for TLS'},
+    {k:'ping_interval',    lbl:'Ping Interval', ph:'20',                              hint:'Seconds between keep-alive pings — 0 to disable'},
+    {k:'reconnect',        lbl:'Auto-reconnect', type:'select', opts:['true','false'], hint:'Automatically reconnect on disconnect'},
+    {k:'reconnect_delay',  lbl:'Reconnect Delay', ph:'5',                             hint:'Seconds to wait before attempting reconnection'},
+  ],
+  gnmi:          [
+    {k:'host',          lbl:'Host',          req:true,                              hint:'gNMI target hostname or IP (router, switch, or NOS)'},
+    {k:'port',          lbl:'Port',          ph:'57400',                            hint:'gNMI port — default 57400 (Cisco IOS-XR, Junos, OpenConfig)'},
+    {k:'username',      lbl:'Username',                                             hint:'gNMI auth username'},
+    {k:'password',      lbl:'Password',      type:'password',                       hint:'gNMI auth password'},
+    {k:'tls',           lbl:'TLS',           type:'select', opts:['true','false'],  hint:'Enable TLS — most devices require TLS; set false only for lab/insecure targets'},
+    {k:'tls_ca',        lbl:'CA Cert',       ph:'/certs/ca.pem',                   hint:'Path to CA certificate file for TLS verification — omit to skip verification'},
+    {k:'_subscriptions',lbl:'Subscriptions (one XPath per line)', type:'textarea', ph:'/interfaces/interface[name=*]/state\n/system/cpu', hint:'One gNMI XPath subscription path per line — TRAM wraps each in a SAMPLE subscription with a 10s interval'},
+  ],
+  snmp_poll:     [
+    {k:'host',      lbl:'Host',        req:true,                              hint:'SNMP agent hostname or IP'},
+    {k:'port',      lbl:'Port',        ph:'161',                              hint:'SNMP agent port — default 161'},
+    {k:'community', lbl:'Community',   ph:'public',                           hint:'SNMP v1/v2c community string'},
+    {k:'version',   lbl:'Version',     type:'select', opts:['2c','1','3'],    hint:'SNMP version — use 2c for most devices; 3 for USM auth/priv'},
+    {k:'oids',      lbl:'OIDs',        req:true, ph:'1.3.6.1.2.1.1.1.0',     hint:'Comma-separated OIDs to GET or WALK e.g. 1.3.6.1.2.1.1.1.0, sysDescr.0'},
+    {k:'operation', lbl:'Operation',   type:'select', opts:['get','walk'],    hint:'GET fetches exact OIDs; WALK traverses the subtree'},
+  ],
+  prometheus_rw: [
+    {k:'path',   lbl:'Path',   ph:'prom-rw', hint:'URL path segment — Prometheus scrapes POST to /webhooks/{path}; configure remote_write in prometheus.yml'},
+    {k:'secret', lbl:'Secret',              hint:'Optional bearer token that Prometheus must send in the Authorization header'},
+  ],
+  corba:         [
+    {k:'naming_service', lbl:'Naming Service', ph:'corbaloc:iiop:192.168.1.1:2809/NameService', hint:'CORBA Naming Service corbaloc URI — mutually exclusive with IOR string'},
+    {k:'ior',            lbl:'IOR String',     ph:'IOR:0000...',                                 hint:'Direct IOR string for the target object — use when Naming Service is unavailable'},
+    {k:'object_name',    lbl:'Object Name',    ph:'PM/PMCollect',                                hint:'Slash-separated path in the Naming Service e.g. PM/PMCollect (used with naming_service)'},
+    {k:'operation',      lbl:'Operation',      req:true,                                         hint:'CORBA operation name to invoke via DII e.g. getPMData'},
+    {k:'timeout_seconds',lbl:'Timeout (s)',    ph:'30',                                          hint:'ORB-level request timeout in seconds'},
   ],
 }
 
@@ -541,8 +575,21 @@ function buildYaml(state) {
     lines.push(`on_error: ${state.onError}`)
   lines.push(`source:`)
   lines.push(`  type: ${state.source.type}`)
-  for (const [k, v] of Object.entries(state.source.fields || {}))
-    if (v || v === 0) lines.push(..._yamlField(k, v, 2))
+  for (const [k, v] of Object.entries(state.source.fields || {})) {
+    if (k === '_subscriptions' && v) {
+      const paths = String(v).split('\n').map(s => s.trim()).filter(Boolean)
+      if (paths.length) {
+        lines.push('  subscriptions:')
+        for (const p of paths) {
+          lines.push(`    - path: ${p}`)
+          lines.push(`      mode: SAMPLE`)
+          lines.push(`      sample_interval: 10000000000`)
+        }
+      }
+    } else if (v || v === 0) {
+      lines.push(..._yamlField(k, v, 2))
+    }
+  }
   if (state.serializer && state.serializer !== 'bytes') {
     lines.push(`serializer_in:`)
     lines.push(`  type: ${state.serializer}`)
