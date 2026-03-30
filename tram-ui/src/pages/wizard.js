@@ -6,7 +6,8 @@ let _step = 1
 let _plugins = {}
 let _state = {
   name: '', description: '', scheduleType: 'interval',
-  intervalSeconds: 300, cronExpr: '', serializer: 'json',
+  intervalSeconds: 300, cronExpr: '', onError: 'continue',
+  serializer: 'json', serializerOut: '',
   source: { type: '', fields: {} },
   transforms: [],
   sinks: [],
@@ -189,7 +190,8 @@ export async function init() {
   _step = 1
   _state = {
     name: '', description: '', scheduleType: 'interval',
-    intervalSeconds: 300, cronExpr: '', serializer: 'json',
+    intervalSeconds: 300, cronExpr: '', onError: 'continue',
+    serializer: 'json', serializerOut: '',
     source: { type: '', fields: {} }, transforms: [], sinks: [],
   }
 
@@ -218,6 +220,9 @@ async function _loadPlugins() {
   sel.innerHTML = '<option value="">— select —</option>' +
     sources.map(t => `<option value="${esc(t)}"${_state.source.type === t ? ' selected' : ''}>${esc(t)}</option>`).join('')
   if (_state.source.type) window._wizRenderSrcFields?.()
+  // Restore serializer selection if pre-filled
+  const serSel = document.getElementById('wiz-serializer')
+  if (serSel && _state.serializer) serSel.value = _state.serializer
 }
 
 async function _checkAI() {
@@ -287,10 +292,10 @@ function _collectStep(n) {
     const name = document.getElementById('wiz-name')?.value.trim()
     if (!name) { toast('Pipeline name is required', 'error'); return false }
     if (!/^[a-zA-Z0-9_-]+$/.test(name)) { toast('Name must be alphanumeric with hyphens/underscores', 'error'); return false }
-    _state.name        = name
-    _state.description = document.getElementById('wiz-desc')?.value.trim() || ''
-    _state.scheduleType = document.getElementById('wiz-sched-type')?.value || 'interval'
-    _state.serializer   = document.getElementById('wiz-serializer')?.value || 'json'
+    _state.name          = name
+    _state.description   = document.getElementById('wiz-desc')?.value.trim() || ''
+    _state.scheduleType  = document.getElementById('wiz-sched-type')?.value || 'interval'
+    _state.onError       = document.getElementById('wiz-on-error')?.value || 'continue'
     const val  = parseInt(document.getElementById('wiz-interval-val')?.value) || 5
     const unit = parseInt(document.getElementById('wiz-interval-unit')?.value) || 60
     _state.intervalSeconds = val * unit
@@ -298,11 +303,13 @@ function _collectStep(n) {
   } else if (n === 2) {
     const type = document.getElementById('wiz-src-type')?.value
     if (!type) { toast('Select a source type', 'error'); return false }
-    _state.source.type = type
+    _state.source.type  = type
     _state.source.fields = _collectConnectorFields('wiz-src-fields')
+    _state.serializer   = document.getElementById('wiz-serializer')?.value || 'json'
   } else if (n === 3) {
     _collectTransforms()
   } else if (n === 4) {
+    _state.serializerOut = document.getElementById('wiz-serializer-out')?.value || ''
     if (!_collectSinks()) return false
   }
   return true
@@ -530,12 +537,16 @@ function buildYaml(state) {
     lines.push(`  interval_seconds: ${state.intervalSeconds}`)
   if (state.scheduleType === 'cron' && state.cronExpr)
     lines.push(`  cron_expr: "${state.cronExpr}"`)
+  if (state.onError && state.onError !== 'continue')
+    lines.push(`on_error: ${state.onError}`)
   lines.push(`source:`)
   lines.push(`  type: ${state.source.type}`)
   for (const [k, v] of Object.entries(state.source.fields || {}))
     if (v || v === 0) lines.push(..._yamlField(k, v, 2))
-  if (state.serializer && state.serializer !== 'bytes')
-    lines.push(`serializer: ${state.serializer}`)
+  if (state.serializer && state.serializer !== 'bytes') {
+    lines.push(`serializer_in:`)
+    lines.push(`  type: ${state.serializer}`)
+  }
   if (state.transforms?.length) {
     lines.push(`transforms:`)
     for (const t of state.transforms) {
@@ -544,6 +555,8 @@ function buildYaml(state) {
         if (v || v === 0) lines.push(..._yamlField(k, v, 4))
     }
   }
+  if (state.serializerOut)
+    lines.push(`serializer_out: ${state.serializerOut}`)
   if (state.sinks?.length) {
     lines.push(`sinks:`)
     for (const s of state.sinks) {
