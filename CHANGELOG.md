@@ -11,6 +11,19 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [1.1.2] — 2026-03-30
 
+### Added
+
+**ASN.1 serializer (`type: asn1`)**
+- Decodes BER/DER/PER/XER/JER binary files using a user-provided `.asn` schema file — same pattern as the `protobuf` serializer (`schema_file` + `message_class`)
+- Encoding selectable via `encoding: ber | der | per | uper | xer | jer` (default: `ber`)
+- `schema_file` can point to a single `.asn` file or a directory of `.asn` files (compiled together for cross-file imports)
+- `_to_json_safe()` converts `datetime` → ISO 8601 string, ASN.1 CHOICE 2-tuples → `{"type": x, "value": y}`, `bytes` → hex
+- Schema compiled once per serializer instance and cached for its lifetime (same pattern as `protobuf`)
+- Deserialize only (`serializer_in`) — encode path raises `SerializerError` with a clear message pointing to `serializer_out: type: json`
+- `.asn` added to `POST /api/schemas/upload` accepted extensions (displayed as type `asn1` in the schemas list)
+- New optional extra: `tram[asn1]` = `asn1tools>=0.167`; included in the standard Docker image
+- Reference schema `docs/schemas/3gpp_32401.asn` for Ericsson 3GPP TS 32.401 PM statsfiles (BER, IMPLICIT TAGS); uploadable via UI, works with C\* (core) and G\* (HLR/vHLR) variants
+
 ### Fixed
 
 **Pipeline visibility across cluster nodes (API-registered pipelines)**

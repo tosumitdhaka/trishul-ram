@@ -40,7 +40,7 @@ pipeline:
     # ... source params
 
   serializer_in:               # how to parse raw bytes from the source
-    type: json                 # json | csv | xml | avro | protobuf | parquet | msgpack | ndjson | bytes | text
+    type: json                 # json | csv | xml | avro | protobuf | asn1 | parquet | msgpack | ndjson | bytes | text
 
   transforms:                  # optional ordered list
     - type: rename
@@ -1417,6 +1417,53 @@ serializer_out:
 
 ---
 
+### asn1
+
+ASN.1 binary decoding (BER/DER/PER/XER/JER). Compiles a standard `.asn` schema file at first use. Requires `pip install tram[asn1]`.
+
+Deserialize only (`serializer_in`) — use `serializer_out: type: json` (or another serializer) to write the decoded records.
+
+| Parameter | Default | Description |
+|---|---|---|
+| `schema_file` | required | Path to `.asn` file **or** directory of `.asn` files (compiled together) |
+| `message_class` | required | Top-level ASN.1 type name to decode |
+| `encoding` | `ber` | `ber` \| `der` \| `per` \| `uper` \| `xer` \| `jer` |
+
+**Type mapping:**
+
+| ASN.1 type | Python / JSON result |
+|---|---|
+| SEQUENCE, SET | `dict` |
+| SEQUENCE OF, SET OF | `list` |
+| CHOICE | `{"type": "<name>", "value": <value>}` |
+| GeneralizedTime, UTCTime | ISO 8601 string |
+| OCTET STRING | hex string |
+| INTEGER, REAL, BOOLEAN, NULL | native JSON scalar |
+
+**Multi-file schemas:** point `schema_file` at a directory and all `.asn` files in it are compiled together (imports resolved across files).
+
+```yaml
+serializer_in:
+  type: asn1
+  schema_file: /data/schemas/ericsson/3gpp_32401.asn
+  message_class: FileContent
+  encoding: ber
+
+serializer_out:
+  type: json
+  indent: 2
+```
+
+Upload the schema via the UI or API:
+```bash
+curl -F "file=@3gpp_32401.asn" \
+  "http://localhost:8765/api/schemas/upload?subdir=ericsson"
+```
+
+A reference schema for Ericsson 3GPP TS 32.401 PM statsfiles is shipped at `docs/schemas/3gpp_32401.asn`.
+
+---
+
 ### parquet
 
 Apache Parquet columnar format. Best for S3/GCS batch archival. Requires `pip install tram[parquet]`.
@@ -1619,6 +1666,7 @@ The pipeline YAML immediately supports `source.type: myproto`.
 | `snmp` | `pip install tram[snmp]` | snmp_trap/snmp_poll source/sink |
 | `avro` | `pip install tram[avro]` | avro serializer |
 | `protobuf_ser` | `pip install tram[protobuf_ser]` | protobuf serializer |
+| `asn1` | `pip install tram[asn1]` | asn1 serializer (BER/DER/PER/XER/JER) |
 | `parquet` | `pip install tram[parquet]` | parquet serializer |
 | `msgpack_ser` | `pip install tram[msgpack_ser]` | msgpack serializer |
 | `mqtt` | `pip install tram[mqtt]` | mqtt source/sink |

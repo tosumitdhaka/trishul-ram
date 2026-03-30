@@ -36,6 +36,7 @@ All configuration is via environment variables (12-factor).
 | `TRAM_CLUSTER_ENABLED` | `false` | Enable cluster mode (requires external DB) |
 | `TRAM_HEARTBEAT_SECONDS` | `10` | Seconds between node heartbeats in cluster mode |
 | `TRAM_NODE_TTL_SECONDS` | `30` | Seconds before a silent node is marked dead |
+| `TRAM_PIPELINE_SYNC_INTERVAL` | `30` | Seconds between DB polls for API-registered pipelines (v1.1.2); all cluster pods converge within this interval when a pipeline is added or deleted via the API |
 | `TRAM_API_KEY` | _(empty)_ | API key for request authentication; empty = auth disabled |
 | `TRAM_AUTH_USERS` | _(empty)_ | Comma-separated `user:password` pairs for browser UI login (v1.0.8); issues 8-hour HMAC session tokens; coexists with `TRAM_API_KEY` |
 | `TRAM_AUTH_SECRET` | _(random)_ | Shared HMAC signing secret for session tokens (v1.0.8); **required in cluster mode** — without a shared secret each pod signs tokens independently and cross-pod requests return 401 |
@@ -47,7 +48,7 @@ All configuration is via environment variables (12-factor).
 | `TRAM_OTEL_SERVICE` | `tram` | Service name reported to OTel collector |
 | `TRAM_WATCH_PIPELINES` | `false` | Watch `TRAM_PIPELINE_DIR` for YAML changes and auto-reload pipelines |
 | `TRAM_MIB_DIR` | `/mibs` | Directory containing compiled pysnmp MIB `.py` files; standard MIBs baked into Docker image at build time (v1.0.3) |
-| `TRAM_SCHEMA_DIR` | `/schemas` | Directory containing serialization schema files (`.proto`, `.avsc`, etc.); managed via `POST /api/schemas/upload` (v1.0.3) |
+| `TRAM_SCHEMA_DIR` | `/schemas` | Directory containing serialization schema files (`.proto`, `.avsc`, `.asn`, etc.); managed via `POST /api/schemas/upload` (v1.0.3) |
 | `TRAM_SCHEMA_REGISTRY_URL` | _(empty)_ | Base URL of an external Confluent-compatible schema registry; enables `/api/schemas/registry/*` proxy and serves as the default `schema_registry_url` for Avro/Protobuf serializers (v1.0.4) |
 | `TRAM_SCHEMA_REGISTRY_USERNAME` | _(empty)_ | Basic-auth username for the external schema registry; used as default when not set in pipeline YAML (v1.0.4) |
 | `TRAM_SCHEMA_REGISTRY_PASSWORD` | _(empty)_ | Basic-auth password for the external schema registry; used as default when not set in pipeline YAML (v1.0.4) |
