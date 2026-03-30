@@ -180,7 +180,8 @@ def _extract_port(conn_type: str, config: dict) -> int:
         "kafka": 9092, "mqtt": 1883, "nats": 4222, "amqp": 5672,
         "redis": 6379, "influxdb": 8086, "opensearch": 9200,
         "elasticsearch": 9200, "clickhouse": 9000,
-        "websocket": 80, "ves": 443,
+        "websocket": 80, "ves": 443, "sftp": 22, "ftp": 21,
+        "snmp_poll": 161, "gnmi": 57400,
     }
     return defaults.get(conn_type, 0)
 
