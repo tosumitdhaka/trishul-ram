@@ -33,9 +33,17 @@ export async function init() {
       if (ta) ta.value = TEMPLATE
     }
   } else {
-    // New mode
-    if (filename) filename.textContent = 'new-pipeline.yaml'
-    if (ta) ta.value = TEMPLATE
+    // New mode — check if a template YAML was pre-loaded (e.g. from template deploy)
+    const preloaded = window._editorYaml
+    window._editorYaml = null
+    if (preloaded) {
+      if (ta) ta.value = preloaded
+      const nameMatch = preloaded.match(/^\s*name:\s*(\S+)/m)
+      if (filename) filename.textContent = nameMatch ? `${nameMatch[1]}.yaml` : 'new-pipeline.yaml'
+    } else {
+      if (filename) filename.textContent = 'new-pipeline.yaml'
+      if (ta) ta.value = TEMPLATE
+    }
   }
 
   window._editorSave = async () => {
