@@ -206,6 +206,14 @@ apiKey: ""   # Also configurable via TRAM_API_KEY env var
 ## Example: authUsers: "admin:secret,viewer:readonly"
 authUsers: "admin:tram@2026"
 
+## Pod security context
+## fsGroup ensures Secret-mounted volumes (keys) are group-owned by the tram gid
+## so key files are readable by the tram process without being world-readable.
+securityContext:
+  fsGroup: 1000    # matches tram user gid (uid=gid=1000, set in Dockerfile)
+  # runAsUser: 1000
+  # runAsGroup: 1000
+
 ## Private key files for connectors (SFTP, gNMI client certs, etc.)
 ##
 ## Pre-mounts a single Kubernetes Secret at /secrets/ on every pod.
@@ -232,7 +240,7 @@ authUsers: "admin:tram@2026"
 ## Placeholder Secret (mount enabled but initially empty):
 ##   kubectl create secret generic tram-keys --from-literal=.keep=""
 keys:
-  secretName: ""           # e.g. "tram-keys" — empty ("") disables the mount entirely
+  secretName: "tram-keys"  # e.g. "tram-keys" — empty ("") disables the mount entirely
   mountPath: /secrets      # path inside the container where key files appear
 
 ## TLS configuration (v1.0.0)
