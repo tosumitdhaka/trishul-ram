@@ -111,7 +111,7 @@ pipeline:
     # InfluxDB: time-series for Grafana dashboards
     - type: influxdb
       url: ${INFLUX_URL:-http://influxdb:8086}
-      token: ${INFLUX_TOKEN}
+      token: ${INFLUX_TOKEN:-changeme}
       org: ${INFLUX_ORG:-my-org}
       bucket: ${INFLUX_BUCKET:-network}
       measurement: interface_stats

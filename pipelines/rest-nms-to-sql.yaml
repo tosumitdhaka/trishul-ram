@@ -40,10 +40,10 @@ pipeline:
 
   source:
     type: rest
-    url: ${NMS_URL}/pm/counters
+    url: ${NMS_URL:-http://nms.example.com/api/v2}/pm/counters
     method: GET
     auth_type: bearer
-    token: ${NMS_TOKEN}
+    token: ${NMS_TOKEN:-changeme}
     params:
       format: json
       region: ${REGION:-all}
@@ -88,10 +88,10 @@ pipeline:
     # Validate — drop records that can't be safely written to DB
     - type: validate
       rules:
-        network_element_id: required
-        counter_name: required
+        network_element_id: {required: true}
+        counter_name: {required: true}
         counter_value: {type: float, min: 0}
-        collected_at: required
+        collected_at: {required: true}
       on_invalid: drop
 
     # Remove internal pipeline fields not needed in DB
@@ -101,7 +101,7 @@ pipeline:
   sinks:
     # PostgreSQL: upsert to avoid duplicates on re-runs
     - type: sql
-      connection_url: ${DB_URL}
+      connection_url: ${DB_URL:-postgresql+psycopg2://user:pass@localhost/oss}
       table: pm_counters
       mode: upsert
       upsert_keys: [network_element_id, counter_name, collected_at]

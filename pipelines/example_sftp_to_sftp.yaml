@@ -12,10 +12,10 @@ pipeline:
 
   source:
     type: sftp
-    host: ${NE_SFTP_HOST}
+    host: ${NE_SFTP_HOST:-sftp.example.com}
     port: ${NE_SFTP_PORT:-22}
-    username: ${NE_SFTP_USER}
-    password: ${NE_SFTP_PASS}
+    username: ${NE_SFTP_USER:-pmuser}
+    password: ${NE_SFTP_PASS:-changeme}
     remote_path: /export/pm/
     file_pattern: "*.csv"
     move_after_read: /export/pm/processed/
@@ -64,10 +64,10 @@ pipeline:
 
   sink:
     type: sftp
-    host: ${MED_SFTP_HOST}
+    host: ${MED_SFTP_HOST:-sftp.example.com}
     port: ${MED_SFTP_PORT:-22}
-    username: ${MED_SFTP_USER}
-    password: ${MED_SFTP_PASS}
+    username: ${MED_SFTP_USER:-meduser}
+    password: ${MED_SFTP_PASS:-changeme}
     remote_path: /ingest/pm/
     filename_template: "pm_{pipeline}_{timestamp}.json"
 

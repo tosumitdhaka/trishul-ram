@@ -17,7 +17,7 @@ pipeline:
     Test with:
       curl -X POST http://localhost:8765/webhooks/alarms \
         -H "Content-Type: application/json" \
-        -H "Authorization: Bearer ${WEBHOOK_SECRET}" \
+        -H "Authorization: Bearer ${WEBHOOK_SECRET:-changeme}" \
         -d '[
           {"alarm_id": "ALM-001", "ne_id": "router-01", "sev": "1", "description": "Link down"},
           {"alarm_id": "ALM-002", "ne_id": "switch-02", "sev": "3", "description": "High CPU"}
@@ -41,7 +41,7 @@ pipeline:
   source:
     type: webhook
     path: alarms
-    secret: ${WEBHOOK_SECRET}
+    secret: ${WEBHOOK_SECRET:-changeme}
     max_queue_size: 5000
 
   serializer_in:
@@ -78,9 +78,9 @@ pipeline:
     # Validate — drop records without an alarm ID
     - type: validate
       rules:
-        alarm_id: required
-        network_element_id: required
-        severity: required
+        alarm_id: {required: true}
+        network_element_id: {required: true}
+        severity: {required: true}
       on_invalid: drop
 
   sinks:

@@ -73,8 +73,8 @@ pipeline:
     # Validate required fields — drop malformed records
     - type: validate
       rules:
-        network_element_id: required
-        event_time: required
+        network_element_id: {required: true}
+        event_time: {required: true}
         value: {type: float, min: 0}
         severity: {allowed: [CRITICAL, MAJOR, MINOR, WARNING, UNKNOWN]}
       on_invalid: drop
