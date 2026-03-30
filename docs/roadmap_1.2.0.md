@@ -35,3 +35,7 @@ Items discussed after completing v1.1.1. Priority TBD.
 
 - **Role-based access** — read-only vs admin token scopes
 - **Per-pipeline API key scoping** — restrict a key to specific pipelines
+- **Key upload API** — `POST /api/keys/upload`, `GET /api/keys`, `DELETE /api/keys/<name>`;
+  stores files on the shared RWX PVC under `/data/keys/`; UI shows a dropdown of uploaded keys
+  alongside the free-text `private_key_path` field in connector forms.
+  Complements the Helm `keys.secretName` pattern for self-service / non-k8s environments.

@@ -127,6 +127,12 @@ spec:
             - name: data
               mountPath: /data
             {{- end }}
+            {{- if .Values.keys.secretName }}
+            ## Pre-mounted connector key files — see values.yaml keys section
+            - name: keys
+              mountPath: {{ .Values.keys.mountPath | default "/secrets" }}
+              readOnly: true
+            {{- end }}
             {{- if .Values.tls.enabled }}
             - name: tls
               mountPath: /tls
@@ -160,6 +166,13 @@ spec:
         - name: data
           persistentVolumeClaim:
             claimName: data-{{ include "tram.fullname" . }}
+        {{- end }}
+        {{- if .Values.keys.secretName }}
+        ## Connector key files — rotated zero-restart via kubectl apply on the Secret
+        - name: keys
+          secret:
+            secretName: {{ .Values.keys.secretName }}
+            defaultMode: 0400
         {{- end }}
         {{- if .Values.tls.enabled }}
         - name: tls

@@ -206,6 +206,35 @@ apiKey: ""   # Also configurable via TRAM_API_KEY env var
 ## Example: authUsers: "admin:secret,viewer:readonly"
 authUsers: "admin:tram@2026"
 
+## Private key files for connectors (SFTP, gNMI client certs, etc.)
+##
+## Pre-mounts a single Kubernetes Secret at /secrets/ on every pod.
+## Files in the Secret appear as /secrets/<filename> inside the container.
+## Updating Secret contents propagates automatically via kubelet (~60s) — no pod restart needed.
+## Adding an entirely new Secret mount (changing secretName) does require a rolling restart.
+##
+## Quickstart:
+##   # Create (or update) the Secret — zero-restart rotation once the mount exists:
+##   kubectl create secret generic tram-keys \
+##     --from-file=sftp-prod.pem=./id_rsa_prod \
+##     --from-file=sftp-dr.pem=./id_rsa_dr \
+##     --dry-run=client -o yaml | kubectl apply -f -
+##
+##   # Enable the mount in values.yaml:
+##   keys:
+##     secretName: tram-keys
+##
+##   # Reference path in pipeline YAML:
+##   source:
+##     type: sftp
+##     private_key_path: /secrets/sftp-prod.pem
+##
+## Placeholder Secret (mount enabled but initially empty):
+##   kubectl create secret generic tram-keys --from-literal=.keep=""
+keys:
+  secretName: ""           # e.g. "tram-keys" — empty ("") disables the mount entirely
+  mountPath: /secrets      # path inside the container where key files appear
+
 ## TLS configuration (v1.0.0)
 ## Mount a Kubernetes TLS secret and enable TLS for the uvicorn server.
 ## Create the secret with: kubectl create secret tls tram-tls --cert=tls.crt --key=tls.key
