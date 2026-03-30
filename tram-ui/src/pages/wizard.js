@@ -17,52 +17,171 @@ const ARRAY_FIELDS = new Set(['brokers', 'hosts', 'servers', 'topics'])
 
 const FIELD_SCHEMA = {
   // Sources
-  kafka:         [{k:'brokers',lbl:'Brokers',ph:'kafka:9092',req:true,hint:'Comma-separated'},{k:'topic',lbl:'Topic',ph:'my-topic',req:true},{k:'group_id',lbl:'Group ID',ph:'tram-consumer'},{k:'auto_offset_reset',lbl:'Offset Reset',type:'select',opts:['latest','earliest']}],
-  rest:          [{k:'url',lbl:'URL',ph:'https://api.example.com/data',req:true},{k:'method',lbl:'Method',type:'select',opts:['GET','POST','PUT']},{k:'auth_type',lbl:'Auth',type:'select',opts:['none','basic','bearer']},{k:'username',lbl:'Username'},{k:'password',lbl:'Password',type:'password'}],
-  local:         [{k:'path',lbl:'Directory',ph:'/data/input',req:true},{k:'file_pattern',lbl:'File Pattern',ph:'*.json'},{k:'recursive',lbl:'Recursive',type:'select',opts:['false','true']}],
-  sftp:          [{k:'host',lbl:'Host',req:true},{k:'port',lbl:'Port',ph:'22'},{k:'username',lbl:'Username',req:true},{k:'password',lbl:'Password',type:'password'},{k:'remote_path',lbl:'Remote Path',ph:'/data',req:true},{k:'file_pattern',lbl:'File Pattern',ph:'*.csv'}],
-  s3:            [{k:'bucket',lbl:'Bucket',req:true},{k:'prefix',lbl:'Prefix',ph:''},{k:'endpoint_url',lbl:'Endpoint URL',ph:'http://minio:9000'},{k:'aws_access_key_id',lbl:'Access Key'},{k:'aws_secret_access_key',lbl:'Secret Key',type:'password'}],
-  sql:           [{k:'connection_url',lbl:'Connection URL',ph:'postgresql+psycopg2://user:pass@host/db',req:true},{k:'query',lbl:'SQL Query',type:'textarea',ph:'SELECT * FROM table',req:true}],
-  mqtt:          [{k:'host',lbl:'Host',req:true},{k:'port',lbl:'Port',ph:'1883'},{k:'topic',lbl:'Topic',req:true},{k:'username',lbl:'Username'},{k:'password',lbl:'Password',type:'password'}],
-  nats:          [{k:'servers',lbl:'Servers',ph:'nats://localhost:4222',req:true,hint:'Comma-separated'},{k:'subject',lbl:'Subject',req:true}],
-  influxdb:      [{k:'url',lbl:'URL',ph:'http://localhost:8086',req:true},{k:'token',lbl:'Token',req:true,type:'password'},{k:'org',lbl:'Org',req:true},{k:'query',lbl:'Flux Query',type:'textarea',req:true,ph:'from(bucket:"my-bucket") |> range(start: -1h)'}],
-  redis:         [{k:'host',lbl:'Host',req:true,ph:'redis'},{k:'port',lbl:'Port',ph:'6379'},{k:'key',lbl:'Key/Channel',req:true}],
-  syslog:        [{k:'host',lbl:'Listen Host',ph:'0.0.0.0'},{k:'port',lbl:'Port',ph:'514'}],
-  webhook:       [{k:'path',lbl:'Path',req:true,ph:'/webhook/my-hook'}],
-  ftp:           [{k:'host',lbl:'Host',req:true},{k:'port',lbl:'Port',ph:'21'},{k:'username',lbl:'Username'},{k:'password',lbl:'Password',type:'password'},{k:'remote_path',lbl:'Remote Path',ph:'/',req:true}],
-  gcs:           [{k:'bucket',lbl:'Bucket',req:true},{k:'prefix',lbl:'Prefix',ph:''},{k:'credentials_file',lbl:'Credentials JSON',ph:'/secrets/sa.json'}],
-  azure_blob:    [{k:'connection_string',lbl:'Connection String',req:true},{k:'container',lbl:'Container',req:true}],
-  elasticsearch: [{k:'hosts',lbl:'Hosts',ph:'http://es:9200',req:true,hint:'Comma-separated'},{k:'index_template',lbl:'Index Template',ph:'pm-{timestamp}',req:true}],
-  clickhouse:    [{k:'host',lbl:'Host',req:true},{k:'port',lbl:'Port',ph:'9000'},{k:'database',lbl:'Database',req:true},{k:'user',lbl:'User'},{k:'password',lbl:'Password',type:'password'}],
+  kafka:         [
+    {k:'brokers',      lbl:'Brokers',       ph:'kafka:9092',          req:true, hint:'Comma-separated list of broker host:port'},
+    {k:'topic',        lbl:'Topic',         ph:'my-topic',            req:true, hint:'Kafka topic to consume'},
+    {k:'group_id',     lbl:'Group ID',      ph:'tram-consumer',                 hint:'Consumer group — omit for auto-generated'},
+    {k:'auto_offset_reset', lbl:'Offset Reset', type:'select', opts:['latest','earliest'], hint:'Where to start if no committed offset exists'},
+  ],
+  rest:          [
+    {k:'url',       lbl:'URL',      ph:'https://api.example.com/data', req:true, hint:'Full URL to poll each interval'},
+    {k:'method',    lbl:'Method',   type:'select', opts:['GET','POST','PUT'],    hint:'HTTP method for the request'},
+    {k:'auth_type', lbl:'Auth',     type:'select', opts:['none','basic','bearer'], hint:'Authentication scheme'},
+    {k:'username',  lbl:'Username',                                              hint:'Used for basic auth'},
+    {k:'password',  lbl:'Password', type:'password',                             hint:'Used for basic auth or bearer token value'},
+  ],
+  local:         [
+    {k:'path',         lbl:'Directory',    ph:'/data/input', req:true, hint:'Directory to scan for input files'},
+    {k:'file_pattern', lbl:'File Pattern', ph:'*.json',                hint:'Glob filter e.g. *.json, *.csv — blank matches all'},
+    {k:'recursive',    lbl:'Recursive',    type:'select', opts:['false','true'], hint:'Also scan subdirectories'},
+  ],
+  sftp:          [
+    {k:'host',         lbl:'Host',         req:true,                  hint:'SFTP server hostname or IP'},
+    {k:'port',         lbl:'Port',         ph:'22',                   hint:'SSH port, default 22'},
+    {k:'username',     lbl:'Username',     req:true,                  hint:'SSH login username'},
+    {k:'password',     lbl:'Password',     type:'password',           hint:'SSH password (or leave blank if using key auth)'},
+    {k:'remote_path',  lbl:'Remote Path',  ph:'/data', req:true,      hint:'Remote directory to list for files'},
+    {k:'file_pattern', lbl:'File Pattern', ph:'*.csv',                hint:'Glob filter applied to remote filenames'},
+  ],
+  s3:            [
+    {k:'bucket',               lbl:'Bucket',      req:true,                       hint:'S3 bucket name'},
+    {k:'prefix',               lbl:'Prefix',      ph:'',                          hint:'Key prefix / folder — leave blank for bucket root'},
+    {k:'endpoint_url',         lbl:'Endpoint URL',ph:'http://minio:9000',         hint:'Override for MinIO or other S3-compatible stores'},
+    {k:'aws_access_key_id',    lbl:'Access Key',                                  hint:'Leave blank to use IAM role / environment credentials'},
+    {k:'aws_secret_access_key',lbl:'Secret Key',  type:'password',                hint:'AWS secret access key'},
+  ],
+  sql:           [
+    {k:'connection_url', lbl:'Connection URL', ph:'postgresql+psycopg2://user:pass@host/db', req:true, hint:'SQLAlchemy connection URL — supports PostgreSQL, MySQL, SQLite'},
+    {k:'query',          lbl:'SQL Query',      type:'textarea', ph:'SELECT * FROM table',    req:true, hint:'Full SELECT query executed each interval — use WHERE to filter new rows'},
+  ],
+  mqtt:          [
+    {k:'host',     lbl:'Host',     req:true,             hint:'MQTT broker hostname or IP'},
+    {k:'port',     lbl:'Port',     ph:'1883',             hint:'Broker port — use 8883 for TLS'},
+    {k:'topic',    lbl:'Topic',    req:true,             hint:'Topic or wildcard e.g. sensors/# or home/+/temp'},
+    {k:'username', lbl:'Username',                       hint:'Leave blank if broker has no auth'},
+    {k:'password', lbl:'Password', type:'password',      hint:'MQTT broker password'},
+  ],
+  nats:          [
+    {k:'servers', lbl:'Servers', ph:'nats://localhost:4222', req:true, hint:'Comma-separated NATS server URLs'},
+    {k:'subject', lbl:'Subject', req:true,                            hint:'NATS subject — supports wildcards e.g. telemetry.>'},
+  ],
+  influxdb:      [
+    {k:'url',   lbl:'URL',        ph:'http://localhost:8086', req:true, hint:'InfluxDB base URL'},
+    {k:'token', lbl:'Token',      req:true, type:'password',           hint:'Auth token from InfluxDB UI → Data → Tokens'},
+    {k:'org',   lbl:'Org',        req:true,                            hint:'Organisation name as shown in InfluxDB UI'},
+    {k:'query', lbl:'Flux Query', type:'textarea', req:true, ph:'from(bucket:"my-bucket") |> range(start: -1h)', hint:'Flux query — always include range() to bound the time window'},
+  ],
+  redis:         [
+    {k:'host', lbl:'Host',        req:true, ph:'redis',  hint:'Redis server hostname or IP'},
+    {k:'port', lbl:'Port',        ph:'6379',             hint:'Redis port, default 6379'},
+    {k:'key',  lbl:'Key/Channel', req:true,              hint:'Key name for GET/LRANGE or channel name for SUBSCRIBE'},
+  ],
+  syslog:        [
+    {k:'host', lbl:'Listen Host', ph:'0.0.0.0', hint:'Address to bind — use 0.0.0.0 to accept from any interface'},
+    {k:'port', lbl:'Port',        ph:'514',      hint:'UDP/TCP port — default 514; use 5514 to avoid needing root'},
+  ],
+  webhook:       [
+    {k:'path', lbl:'Path', req:true, ph:'/webhook/my-hook', hint:'URL path suffix — must start with /webhook/; TRAM registers this as a POST endpoint'},
+  ],
+  ftp:           [
+    {k:'host',        lbl:'Host',        req:true,          hint:'FTP server hostname or IP'},
+    {k:'port',        lbl:'Port',        ph:'21',           hint:'FTP control port, default 21'},
+    {k:'username',    lbl:'Username',                       hint:'FTP login username (blank = anonymous)'},
+    {k:'password',    lbl:'Password',    type:'password',   hint:'FTP password'},
+    {k:'remote_path', lbl:'Remote Path', ph:'/', req:true,  hint:'Remote directory to list for files'},
+  ],
+  gcs:           [
+    {k:'bucket',           lbl:'Bucket',          req:true,                    hint:'GCS bucket name'},
+    {k:'prefix',           lbl:'Prefix',          ph:'',                       hint:'Object prefix / folder — leave blank for bucket root'},
+    {k:'credentials_file', lbl:'Credentials JSON',ph:'/secrets/sa.json',       hint:'Path to service-account JSON — omit to use Application Default Credentials'},
+  ],
+  azure_blob:    [
+    {k:'connection_string', lbl:'Connection String', req:true, hint:'From Azure Portal → Storage Account → Access keys → Connection string'},
+    {k:'container',         lbl:'Container',         req:true, hint:'Blob container name'},
+  ],
+  elasticsearch: [
+    {k:'hosts',          lbl:'Hosts',          ph:'http://es:9200',     req:true, hint:'Comma-separated Elasticsearch node URLs'},
+    {k:'index_template', lbl:'Index Template', ph:'pm-{timestamp}',    req:true, hint:'Index name — supports {timestamp} date substitution'},
+  ],
+  clickhouse:    [
+    {k:'host',     lbl:'Host',     req:true,          hint:'ClickHouse server hostname or IP'},
+    {k:'port',     lbl:'Port',     ph:'9000',         hint:'Native TCP port, default 9000 (use 8123 for HTTP interface)'},
+    {k:'database', lbl:'Database', req:true,          hint:'Target database name'},
+    {k:'user',     lbl:'User',                        hint:'ClickHouse username (default: default)'},
+    {k:'password', lbl:'Password', type:'password',   hint:'ClickHouse password'},
+  ],
   // Sinks (overlap with sources + sink-specific)
-  opensearch:    [{k:'hosts',lbl:'Hosts',ph:'http://opensearch:9200',req:true,hint:'Comma-separated'},{k:'index',lbl:'Index Template',ph:'pm-%Y.%m.%d',req:true},{k:'username',lbl:'Username'},{k:'password',lbl:'Password',type:'password'}],
-  ves:           [{k:'url',lbl:'VES URL',req:true},{k:'domain',lbl:'Domain',ph:'fault'}],
-  snmp_trap:     [{k:'host',lbl:'Target Host',req:true},{k:'port',lbl:'Port',ph:'162'}],
-  amqp:          [{k:'url',lbl:'AMQP URL',req:true,ph:'amqp://user:pass@rabbit:5672/'},{k:'exchange',lbl:'Exchange'},{k:'routing_key',lbl:'Routing Key'}],
+  opensearch:    [
+    {k:'hosts',    lbl:'Hosts',           ph:'http://opensearch:9200', req:true, hint:'Comma-separated OpenSearch node URLs'},
+    {k:'index',    lbl:'Index Template',  ph:'pm-%Y.%m.%d',           req:true, hint:'Index pattern — supports strftime e.g. logs-%Y.%m.%d'},
+    {k:'username', lbl:'Username',                                               hint:'Basic auth username (if security plugin enabled)'},
+    {k:'password', lbl:'Password',        type:'password',                       hint:'Basic auth password'},
+  ],
+  ves:           [
+    {k:'url',    lbl:'VES URL', req:true, hint:'VES collector endpoint URL'},
+    {k:'domain', lbl:'Domain', ph:'fault', hint:'VES domain: fault, measurement, heartbeat, log, etc.'},
+  ],
+  snmp_trap:     [
+    {k:'host', lbl:'Target Host', req:true,   hint:'Host to send SNMP traps to'},
+    {k:'port', lbl:'Port',        ph:'162',   hint:'SNMP trap port, default 162'},
+  ],
+  amqp:          [
+    {k:'url',         lbl:'AMQP URL',    req:true, ph:'amqp://user:pass@rabbit:5672/', hint:'Full AMQP connection URL including credentials and vhost'},
+    {k:'exchange',    lbl:'Exchange',                                                   hint:'Exchange name — leave blank for the default exchange'},
+    {k:'routing_key', lbl:'Routing Key',                                                hint:'Message routing key for the exchange'},
+  ],
 }
 
 // ── Transform field schema ────────────────────────────────────────────────────
 const TRANSFORM_FIELDS = {
-  rename:           [{k:'fields',lbl:'Fields (old: new)',type:'kv',req:true}],
-  cast:             [{k:'fields',lbl:'Fields (col: type)',type:'kv',req:true}],
-  add_field:        [{k:'field',lbl:'Field Name',req:true},{k:'value',lbl:'Value',req:true}],
-  drop:             [{k:'fields',lbl:'Fields to drop',ph:'col1, col2',req:true}],
-  filter:           [{k:'condition',lbl:'Condition',ph:"status == 'active'",req:true}],
-  value_map:        [{k:'field',lbl:'Field',req:true},{k:'mapping',lbl:'Mapping (from: to)',type:'kv',req:true}],
-  regex_extract:    [{k:'field',lbl:'Source Field',req:true},{k:'pattern',lbl:'Regex Pattern',req:true},{k:'target',lbl:'Target Field',req:true}],
-  jmespath:         [{k:'expression',lbl:'JMESPath',req:true},{k:'target',lbl:'Target Field',req:true}],
-  timestamp_normalize: [{k:'field',lbl:'Timestamp Field',req:true},{k:'format',lbl:'Input Format',ph:'%Y-%m-%dT%H:%M:%S'}],
-  template:         [{k:'field',lbl:'Target Field',req:true},{k:'template',lbl:'Template',ph:'{{name}}-{{env}}',req:true}],
-  mask:             [{k:'fields',lbl:'Fields to mask',ph:'password, token',req:true}],
-  limit:            [{k:'count',lbl:'Max Records',req:true}],
-  deduplicate:      [{k:'fields',lbl:'Key Fields',ph:'id, timestamp',req:true}],
-  sort:             [{k:'field',lbl:'Sort Field',req:true},{k:'order',lbl:'Order',type:'select',opts:['asc','desc']}],
-  flatten:          [{k:'separator',lbl:'Separator',ph:'_'}],
-  explode:          [{k:'field',lbl:'Array Field',req:true}],
-  unnest:           [{k:'field',lbl:'Nested Field',req:true}],
-  aggregate:        [{k:'group_by',lbl:'Group By Fields',ph:'host, region'},{k:'window_seconds',lbl:'Window (s)'}],
-  enrich:           [{k:'source_field',lbl:'Source Field',req:true},{k:'lookup_file',lbl:'Lookup File',req:true}],
-  validate:         [{k:'schema_file',lbl:'Schema File',req:true}],
+  rename:           [{k:'fields', lbl:'Fields (old: new)', type:'kv', req:true, hint:'Map of old_name: new_name pairs — renames matching fields in each record'}],
+  cast:             [{k:'fields', lbl:'Fields (col: type)', type:'kv', req:true, hint:'Map of field_name: target_type — types: int, float, str, bool'}],
+  add_field:        [
+    {k:'field', lbl:'Field Name', req:true, hint:'Name of the new field to inject into every record'},
+    {k:'value', lbl:'Value',      req:true, hint:'Static value or {existing_field} interpolation e.g. {host}-{env}'},
+  ],
+  drop:             [{k:'fields', lbl:'Fields to drop', ph:'col1, col2', req:true, hint:'Comma-separated field names to remove from each record'}],
+  filter:           [{k:'condition', lbl:'Condition', ph:"status == 'active'", req:true, hint:"Python expression — record fields are available as variables e.g. count > 0 or type == 'alarm'"}],
+  value_map:        [
+    {k:'field',   lbl:'Field',              req:true, hint:'Field whose value will be looked up and replaced'},
+    {k:'mapping', lbl:'Mapping (from: to)', type:'kv', req:true, hint:'Map of source_value: replacement_value pairs'},
+  ],
+  regex_extract:    [
+    {k:'field',   lbl:'Source Field',  req:true, hint:'Field containing the string to match against'},
+    {k:'pattern', lbl:'Regex Pattern', req:true, hint:'Python regex — use a named group (?P<name>...) or single capture group'},
+    {k:'target',  lbl:'Target Field',  req:true, hint:'Field to write the captured value into'},
+  ],
+  jmespath:         [
+    {k:'expression', lbl:'JMESPath',     req:true, hint:'JMESPath query applied to the record e.g. data.items[0].value'},
+    {k:'target',     lbl:'Target Field', req:true, hint:'Field to write the query result into'},
+  ],
+  timestamp_normalize: [
+    {k:'field',  lbl:'Timestamp Field', req:true, hint:'Field containing the timestamp string to normalise'},
+    {k:'format', lbl:'Input Format',    ph:'%Y-%m-%dT%H:%M:%S', hint:'strptime format string — omit for auto-detection'},
+  ],
+  template:         [
+    {k:'field',    lbl:'Target Field', req:true, hint:'Field to write the rendered template value into'},
+    {k:'template', lbl:'Template',     ph:'{{name}}-{{env}}', req:true, hint:'Jinja2-style template — reference record fields with {{field_name}}'},
+  ],
+  mask:             [{k:'fields', lbl:'Fields to mask', ph:'password, token', req:true, hint:'Comma-separated field names — values replaced with ***'}],
+  limit:            [{k:'count', lbl:'Max Records', req:true, hint:'Maximum number of records to pass through — excess records are dropped'}],
+  deduplicate:      [{k:'fields', lbl:'Key Fields', ph:'id, timestamp', req:true, hint:'Comma-separated fields that together form the deduplication key'}],
+  sort:             [
+    {k:'field', lbl:'Sort Field', req:true, hint:'Field to sort records by'},
+    {k:'order', lbl:'Order', type:'select', opts:['asc','desc'], hint:'Sort direction'},
+  ],
+  flatten:          [{k:'separator', lbl:'Separator', ph:'_', hint:'Character used to join nested key names e.g. parent_child'}],
+  explode:          [{k:'field', lbl:'Array Field', req:true, hint:'Field containing an array — each element becomes a separate record'}],
+  unnest:           [{k:'field', lbl:'Nested Field', req:true, hint:'Nested object field whose keys are merged into the parent record'}],
+  aggregate:        [
+    {k:'group_by',       lbl:'Group By Fields', ph:'host, region', hint:'Comma-separated fields to group records by'},
+    {k:'window_seconds', lbl:'Window (s)',                         hint:'Aggregation time window in seconds — records outside window are flushed'},
+  ],
+  enrich:           [
+    {k:'source_field', lbl:'Source Field', req:true, hint:'Field whose value is used as the lookup key'},
+    {k:'lookup_file',  lbl:'Lookup File',  req:true, hint:'Path to a CSV or JSON file keyed by the source field value'},
+  ],
+  validate:         [{k:'schema_file', lbl:'Schema File', req:true, hint:'Path to a JSON Schema file — records failing validation are sent to DLQ'}],
 }
 
 // ── Init ──────────────────────────────────────────────────────────────────────

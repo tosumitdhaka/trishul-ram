@@ -12,6 +12,22 @@ export function saveConfig(baseUrl, apiKey) {
   localStorage.setItem('tram_api_key',  apiKey)
 }
 
+async function reqText(path) {
+  const { baseUrl, apiKey } = getConfig()
+  const headers = {}
+  if (apiKey) headers['X-API-Key'] = apiKey
+  const token = localStorage.getItem('tram_auth_token')
+  if (token && !apiKey) headers['Authorization'] = `Bearer ${token}`
+  const res = await fetch(`${baseUrl}${path}`, { headers })
+  if (!res.ok) {
+    const text = await res.text()
+    let detail
+    try { detail = JSON.parse(text)?.detail } catch (_) { detail = null }
+    throw Object.assign(new Error(detail || res.statusText), { status: res.status })
+  }
+  return res.text()
+}
+
 async function req(path, options = {}) {
   const { baseUrl, apiKey } = getConfig()
   const headers = { ...options.headers }
@@ -132,6 +148,6 @@ export const api = {
 
   // ── Pipeline version YAML ──────────────────────────────────────────────────
   versions: {
-    yaml: (name, ver) => req(`/api/pipelines/${name}/versions/${ver}`),
+    yaml: (name, ver) => reqText(`/api/pipelines/${name}/versions/${ver}`),
   },
 }

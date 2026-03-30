@@ -20,9 +20,14 @@
     <button class="btn btn-sm btn-secondary" data-bs-toggle="modal" data-bs-target="#pl-templates-modal">
       <i class="bi bi-collection me-1"></i>Templates
     </button>
-    <button class="btn btn-sm btn-primary" onclick="navigate('wizard')">
-      <i class="bi bi-magic me-1"></i>New Pipeline
-    </button>
+    <div class="btn-group">
+      <button class="btn btn-sm btn-primary" onclick="navigate('wizard')">
+        <i class="bi bi-magic me-1"></i>Wizard
+      </button>
+      <button class="btn btn-sm btn-outline-primary" onclick="window._editorPipeline=null;window._editorYaml=null;navigate('editor')">
+        <i class="bi bi-pencil me-1"></i>YAML
+      </button>
+    </div>
   </div>
 </div>
 
