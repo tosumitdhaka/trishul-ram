@@ -2,7 +2,7 @@
   <button class="btn btn-sm btn-primary" id="detail-run-btn" onclick="window._detailRun?.()">
     <i class="bi bi-play-fill me-1"></i>Run Now
   </button>
-  <button class="btn-flat" title="Edit pipeline" onclick="navigate('editor')"><i class="bi bi-pencil"></i></button>
+  <button class="btn-flat" title="Edit pipeline" onclick="window._detailEdit?.()"><i class="bi bi-pencil"></i></button>
   <button class="btn-flat" title="Download YAML" onclick="window._detailDownload?.()"><i class="bi bi-download"></i></button>
   <button class="btn-flat" title="Test Connectors" id="detail-test-btn" onclick="window._detailTestConnectors?.()"><i class="bi bi-plug"></i></button>
   <button class="btn-flat ms-auto" onclick="navigate('pipelines')"><i class="bi bi-arrow-left me-1"></i></button>
@@ -23,6 +23,56 @@
   <li class="nav-item"><a class="nav-link" href="#" data-tab="config">Config</a></li>
   <li class="nav-item"><a class="nav-link" href="#" data-tab="alerts">Alerts</a></li>
 </ul>
+
+<!-- ── Tab panels ─────────────────────────────────────────────────────────── -->
+
+<!-- Runs panel -->
+<div id="tab-panel-runs" class="tab-panel">
+  <div class="d-flex gap-2 mb-3 align-items-center">
+    <select class="form-select form-select-sm" style="width:130px" id="detail-runs-status">
+      <option value="">All status</option>
+      <option>success</option><option>failed</option><option>partial</option>
+    </select>
+    <input type="date" class="form-control form-control-sm" style="width:150px" id="detail-runs-from"/>
+    <button class="btn-flat ms-auto" title="Export CSV" onclick="window._detailExportCsv?.()"><i class="bi bi-download"></i></button>
+  </div>
+  <div class="table-wrap">
+    <table class="table mb-0">
+      <thead><tr>
+        <th style="width:28px"></th>
+        <th>Run ID</th><th>Node</th><th>Started</th><th>Duration</th>
+        <th>In</th><th>Out</th><th>Skipped</th><th>DLQ</th><th>Status</th><th>Error</th>
+      </tr></thead>
+      <tbody id="detail-runs-body">
+        <tr><td colspan="11" class="text-secondary text-center py-4">Loading…</td></tr>
+      </tbody>
+    </table>
+  </div>
+</div>
+
+<!-- Versions panel -->
+<div id="tab-panel-versions" class="tab-panel d-none">
+  <div class="table-wrap">
+    <table class="table mb-0">
+      <thead><tr>
+        <th>Version</th><th>Saved</th><th>Active</th><th class="text-end">Actions</th>
+      </tr></thead>
+      <tbody id="detail-versions-body">
+        <tr><td colspan="4" class="text-secondary text-center py-4">Loading…</td></tr>
+      </tbody>
+    </table>
+  </div>
+</div>
+
+<!-- Config panel -->
+<div id="tab-panel-config" class="tab-panel d-none">
+  <pre id="detail-config-pre" class="p-3 rounded" style="background:#161b22;font-size:12px;color:#e6edf3;overflow:auto;max-height:520px">Loading…</pre>
+</div>
+
+<!-- Alerts panel -->
+<div id="tab-panel-alerts" class="tab-panel d-none">
+  <div id="detail-alerts-wrap"></div>
+</div>
 
 <!-- Alert Rule modal -->
 <div class="modal fade" id="detail-alert-modal" tabindex="-1">
@@ -96,25 +146,4 @@
       </div>
     </div>
   </div>
-</div>
-
-<div class="d-flex gap-2 mb-3 align-items-center">
-  <select class="form-select form-select-sm" style="width:130px" id="detail-runs-status">
-    <option value="">All status</option>
-    <option>success</option><option>failed</option><option>partial</option>
-  </select>
-  <input type="date" class="form-control form-control-sm" style="width:150px" id="detail-runs-from"/>
-  <button class="btn-flat ms-auto" title="Export CSV"><i class="bi bi-download"></i></button>
-</div>
-
-<div class="table-wrap">
-  <table class="table mb-0">
-    <thead><tr>
-      <th>Run ID</th><th>Node</th><th>Started</th><th>Duration</th>
-      <th>In</th><th>Out</th><th>Skipped</th><th>DLQ</th><th>Status</th><th>Error</th>
-    </tr></thead>
-    <tbody id="detail-runs-body">
-      <tr><td colspan="10" class="text-secondary text-center py-4">Loading…</td></tr>
-    </tbody>
-  </table>
 </div>
