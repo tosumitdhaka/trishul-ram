@@ -2,14 +2,14 @@
 
   <!-- Step indicator -->
   <div class="wiz-steps mb-4" id="wiz-steps">
-    <div class="wiz-step active" data-step="1"><span class="wiz-num">1</span><span class="wiz-lbl">Basic Info</span></div>
+    <div class="wiz-step active" data-step="1"><span class="wiz-num">1</span><span class="wiz-lbl">Info</span></div>
     <div class="wiz-step" data-step="2"><span class="wiz-num">2</span><span class="wiz-lbl">Source</span></div>
     <div class="wiz-step" data-step="3"><span class="wiz-num">3</span><span class="wiz-lbl">Transforms</span></div>
     <div class="wiz-step" data-step="4"><span class="wiz-num">4</span><span class="wiz-lbl">Sinks</span></div>
     <div class="wiz-step" data-step="5"><span class="wiz-num">5</span><span class="wiz-lbl">Review</span></div>
   </div>
 
-  <!-- Step 1 -->
+  <!-- Step 1 — Pipeline Info -->
   <div id="wiz-step-1" class="wiz-page">
     <!-- AI describe (shown when AI enabled) -->
     <div id="wiz-ai-section" class="d-none mb-4 p-3 rounded" style="background:#161b22;border:1px solid #30363d">
@@ -30,7 +30,7 @@
       <div class="col-6">
         <label class="form-label text-secondary" style="font-size:12px">Pipeline Name <span style="color:#f85149">*</span></label>
         <input type="text" class="form-control form-control-sm" id="wiz-name" placeholder="e.g. sftp-to-kafka" autocomplete="off">
-        <div class="form-text" style="font-size:10px;color:#6e7681">Lowercase, hyphens allowed</div>
+        <div class="form-text" style="font-size:10px;color:#6e7681">Lowercase letters, numbers and hyphens only</div>
       </div>
       <div class="col-6">
         <label class="form-label text-secondary" style="font-size:12px">Description <span style="opacity:.5">(optional)</span></label>
@@ -39,10 +39,10 @@
       <div class="col-4">
         <label class="form-label text-secondary" style="font-size:12px">Schedule Type <span style="color:#f85149">*</span></label>
         <select class="form-select form-select-sm" id="wiz-sched-type" onchange="window._wizSchedChange?.()">
-          <option value="interval">Interval</option>
-          <option value="cron">Cron</option>
-          <option value="stream">Stream (continuous)</option>
-          <option value="manual">Manual (trigger only)</option>
+          <option value="interval">Interval — runs every N seconds/minutes/hours</option>
+          <option value="cron">Cron — standard cron expression</option>
+          <option value="stream">Stream — continuous, runs until stopped</option>
+          <option value="manual">Manual — only triggered via API / Run Now</option>
         </select>
       </div>
       <div class="col-4" id="wiz-interval-row">
@@ -59,31 +59,25 @@
       <div class="col-4 d-none" id="wiz-cron-row">
         <label class="form-label text-secondary" style="font-size:12px">Cron expression</label>
         <input type="text" class="form-control form-control-sm font-monospace" id="wiz-cron-expr" placeholder="*/5 * * * *">
+        <div class="form-text" style="font-size:10px;color:#6e7681">min hour day month weekday (UTC)</div>
       </div>
       <div class="col-4">
-        <label class="form-label text-secondary" style="font-size:12px">Serializer (input)</label>
-        <select class="form-select form-select-sm" id="wiz-serializer">
-          <option value="json">json</option>
-          <option value="csv">csv</option>
-          <option value="xml">xml</option>
-          <option value="ndjson">ndjson</option>
-          <option value="bytes">bytes (raw)</option>
-          <option value="text">text</option>
-          <option value="avro">avro</option>
-          <option value="protobuf">protobuf</option>
-          <option value="msgpack">msgpack</option>
-          <option value="parquet">parquet</option>
+        <label class="form-label text-secondary" style="font-size:12px">On Error</label>
+        <select class="form-select form-select-sm" id="wiz-on-error">
+          <option value="continue">continue — skip failed records, keep running</option>
+          <option value="stop">stop — halt pipeline on first error</option>
+          <option value="dlq">dlq — send failed records to dead-letter sink</option>
         </select>
       </div>
     </div>
     <div class="mt-3">
-      <a href="#" class="text-secondary" style="font-size:12px" onclick="navigate('editor');return false">
-        <i class="bi bi-pencil me-1"></i>Advanced: open blank editor instead
+      <a href="#" class="text-secondary" style="font-size:12px" onclick="window._editorPipeline=null;window._editorYaml=null;navigate('editor');return false">
+        <i class="bi bi-pencil me-1"></i>Advanced: open blank YAML editor instead
       </a>
     </div>
   </div>
 
-  <!-- Step 2 -->
+  <!-- Step 2 — Source & Ingestion -->
   <div id="wiz-step-2" class="wiz-page d-none">
     <div class="row g-3">
       <div class="col-4">
@@ -91,19 +85,41 @@
         <select class="form-select form-select-sm" id="wiz-src-type" onchange="window._wizRenderSrcFields?.()">
           <option value="">— select —</option>
         </select>
+        <div class="form-text" style="font-size:10px;color:#6e7681">Where records are read from</div>
       </div>
       <div class="col-8"></div>
       <div class="col-12" id="wiz-src-fields"></div>
-      <div class="col-12">
+      <div class="col-12 d-flex align-items-center gap-2">
         <button class="btn btn-sm btn-outline-secondary" onclick="window._wizTestSrc?.()">
           <i class="bi bi-plug me-1"></i>Test Connection
         </button>
-        <span id="wiz-src-test-result" class="ms-2" style="font-size:12px"></span>
+        <span id="wiz-src-test-result" style="font-size:12px"></span>
+      </div>
+      <!-- Serializer In -->
+      <div class="col-12 pt-2" style="border-top:1px solid #30363d">
+        <div class="row g-3">
+          <div class="col-4">
+            <label class="form-label text-secondary" style="font-size:12px">Serializer In</label>
+            <select class="form-select form-select-sm" id="wiz-serializer">
+              <option value="json">json — JSON objects or arrays</option>
+              <option value="ndjson">ndjson — newline-delimited JSON</option>
+              <option value="csv">csv — comma-separated values</option>
+              <option value="xml">xml — XML documents</option>
+              <option value="text">text — one record per line</option>
+              <option value="bytes">bytes — raw bytes, no parsing</option>
+              <option value="avro">avro — Apache Avro</option>
+              <option value="protobuf">protobuf — Protocol Buffers</option>
+              <option value="msgpack">msgpack — MessagePack binary</option>
+              <option value="parquet">parquet — Apache Parquet</option>
+            </select>
+            <div class="form-text" style="font-size:10px;color:#6e7681">How to deserialize bytes from the source into records</div>
+          </div>
+        </div>
       </div>
     </div>
   </div>
 
-  <!-- Step 3 -->
+  <!-- Step 3 — Transforms -->
   <div id="wiz-step-3" class="wiz-page d-none">
     <div class="d-flex align-items-center mb-3">
       <span class="text-secondary" style="font-size:13px">Transforms are optional — click Next to skip.</span>
@@ -114,8 +130,28 @@
     <div id="wiz-transforms-list"></div>
   </div>
 
-  <!-- Step 4 -->
+  <!-- Step 4 — Sinks & Output -->
   <div id="wiz-step-4" class="wiz-page d-none">
+    <!-- Global serializer out -->
+    <div class="row g-3 mb-3 pb-3" style="border-bottom:1px solid #30363d">
+      <div class="col-4">
+        <label class="form-label text-secondary" style="font-size:12px">Serializer Out <span style="opacity:.5">(default for all sinks)</span></label>
+        <select class="form-select form-select-sm" id="wiz-serializer-out">
+          <option value="">— same as serializer in —</option>
+          <option value="json">json</option>
+          <option value="ndjson">ndjson</option>
+          <option value="csv">csv</option>
+          <option value="xml">xml</option>
+          <option value="text">text</option>
+          <option value="bytes">bytes</option>
+          <option value="avro">avro</option>
+          <option value="protobuf">protobuf</option>
+          <option value="msgpack">msgpack</option>
+          <option value="parquet">parquet</option>
+        </select>
+        <div class="form-text" style="font-size:10px;color:#6e7681">How to serialize records before writing — individual sinks can override this</div>
+      </div>
+    </div>
     <div class="d-flex align-items-center mb-3">
       <span class="text-secondary" style="font-size:13px">Add at least one sink.</span>
       <button class="btn btn-sm btn-outline-primary ms-auto" onclick="window._wizAddSink?.()">
@@ -125,7 +161,7 @@
     <div id="wiz-sinks-list"></div>
   </div>
 
-  <!-- Step 5 -->
+  <!-- Step 5 — Review -->
   <div id="wiz-step-5" class="wiz-page d-none">
     <div class="d-flex align-items-center gap-2 mb-2">
       <span class="fw-semibold text-light" style="font-size:13px">Pipeline YAML</span>
@@ -140,7 +176,7 @@
 
   <!-- Navigation -->
   <div class="d-flex gap-2 mt-4 pt-3" style="border-top:1px solid #30363d">
-    <button class="btn btn-sm btn-secondary" id="wiz-back-btn" onclick="window._wizBack?.()">← Back</button>
+    <button class="btn btn-sm btn-secondary d-none" id="wiz-back-btn" onclick="window._wizBack?.()">← Back</button>
     <button class="btn btn-sm btn-primary ms-auto" id="wiz-next-btn" onclick="window._wizNext?.()">Next →</button>
     <button class="btn btn-sm btn-primary d-none" id="wiz-save-btn" onclick="window._wizSave?.()">
       <i class="bi bi-check-lg me-1"></i>Save Pipeline
