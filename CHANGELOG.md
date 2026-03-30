@@ -9,6 +9,76 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ---
 
+## [1.1.1] — 2026-03-30
+
+### Fixed
+- **YAML diff modal**: `bootstrap is not defined` error in `detail.js` — added `import * as bootstrap from 'bootstrap'` (Vite ESM modules don't expose `window.bootstrap` reliably)
+- **Enrich transform missing file**: `_load_lookup()` now warns and returns empty dict instead of raising `TransformError` when lookup file not found — allows dry-run to succeed for pipelines with runtime-resolved paths
+- **All 20 bundled pipeline templates pass dry-run**: fixed validate rules format (`field: required` string → `{required: true}` dict) in `kafka-to-opensearch.yaml`, `rest-nms-to-sql.yaml`, `webhook-alarm-fanout.yaml`; fixed empty default `${VAR:-}` → named placeholder in `multi-format-fanout.yaml`; fixed `seconds: 60` → `interval_seconds: 60` and `add_field` format in `cisco_pm_proto_to_json.yaml`; added `:-placeholder` defaults to bare `${VAR}` env vars in 6 templates
+- **Syslog / snmp_trap `test_connection`**: `ConnectorTestMixin` TCP fallback now uses configurable port defaults (syslog: 514, snmp_trap: 1162) instead of failing with unresolved config
+- **Connector port defaults**: REST connector test uses port 443 for HTTPS targets, 80 for HTTP
+- **Version history table**: Diff and Rollback buttons now show text labels (`Diff`, `Rollback`) alongside icons
+- **Helm fsGroup + key file permissions**: `securityContext.fsGroup: 1000` added to pod spec; connector key files in `/secrets` are `0440 root:tram` — readable by tram process, not world-readable
+
+---
+
+## [1.1.0] — 2026-03-29
+
+### Added
+
+**Pipeline Wizard**
+- 5-step UI wizard (Name → Source → Transforms → Sinks → Review) for creating pipelines without writing YAML
+- Client-side YAML assembly from wizard state; final step shows live preview and sends to Editor or saves directly
+- Accessible from Pipelines page toolbar via "+ New Pipeline" button (Bootstrap modal)
+- Server validates both `sink:` (singular) and `sinks:` (list) in template dry-run
+
+**Live Metrics Dashboard**
+- `GET /api/stats` — per-pipeline aggregated stats (records in/out, error rate, avg duration) for the last hour
+- Dashboard page extended with 10-second polling metrics table and Canvas sparkline graphs per pipeline
+- Dialect-aware SQL aggregation: `EXTRACT(EPOCH ...)` PostgreSQL, `TIMESTAMPDIFF` MySQL, `julianday` SQLite
+
+**Alert Rules UI**
+- Alert rules CRUD in Pipeline Detail page: `GET/POST/PUT/DELETE /api/pipelines/{name}/alerts`
+- YAML mutation approach: rules written back into pipeline YAML config and persisted
+- Alert modal uses `import * as bootstrap from 'bootstrap'` (not `window.bootstrap`) for Vite ESM compatibility
+
+**Connector Test**
+- `POST /api/connectors/test` — test connectivity for a connector config; TCP fallback for unknown connector types
+- `POST /api/connectors/test-pipeline` — test all source and sink connectors in a pipeline YAML
+- `ConnectorTestMixin` base class in `tram/core/base.py`; all connectors with network access implement `test_connection()`
+
+**Pipeline Templates**
+- `GET /api/templates` — returns list of bundled pipeline YAML templates from `pipelines/` directory
+- Templates tab in Pipelines page: browse, preview, and load any template into the Editor
+- View YAML inline in modal (no nested Bootstrap modal)
+- 20 bundled templates covering SFTP, Kafka, REST, SNMP, Syslog, S3, OpenSearch, InfluxDB, ClickHouse, Protobuf, multi-format fanout, webhook alarm, and more
+
+**AI Assist**
+- `POST /api/ai/suggest` — `mode=generate` (create pipeline from description) or `mode=explain` (explain existing YAML)
+- `GET /api/ai/status` — returns configured provider/model and whether AI is available
+- Configurable via env: `TRAM_AI_API_KEY`, `TRAM_AI_PROVIDER` (openai/anthropic), `TRAM_AI_MODEL`, `TRAM_AI_BASE_URL`
+- Editor page "AI Assist" button with textarea for prompt; result inserted into editor
+
+**Password Change**
+- `POST /api/auth/change-password` — changes password for authenticated user; stored in `user_passwords` DB table (sha256+salt hash)
+- `user_passwords` table: `(username, password_hash, updated_at)`; upsert dialect-aware (SQLite/PostgreSQL vs MySQL)
+- Settings page shows "Change Password" card when logged in
+
+**Helm: pre-mounted connector keys**
+- `keys.secretName` / `keys.mountPath` in `values.yaml` — pre-mounts a single Kubernetes Secret at `/secrets/` on every pod
+- `securityContext.fsGroup: 1000` + `defaultMode: 0440` — key files are `root:tram` owned, readable by tram user without world-read
+- Zero-restart key rotation: updating Secret contents propagates via kubelet (~60s); adding a new Secret mount requires rolling restart
+- Quickstart docs in `values.yaml` `keys:` section
+
+### Changed
+- `helm/Chart.yaml`: version → `1.1.0`; `pyproject.toml`: version → `1.1.0`
+- Settings page layout: 3-column grid (col-4 each) with no max-width cap
+- Pipeline export: download YAML button (↓) added to Actions column in pipelines list
+- Scheduled badge: `.badge-scheduled` (yellow) CSS added to `style.css`
+- `tram-ui/src/pages/detail.js`: SPA router always registers hashchange listener unconditionally; Templates button moved to Pipelines page toolbar
+
+---
+
 ## [1.0.9] — 2026-03-25
 
 ### Added

@@ -2,7 +2,7 @@
 
 > Lightweight, container-native Python daemon that moves and transforms telecom data (PM/FM/Logs) across protocols.
 
-**Version:** 1.0.9 | **Status:** Production-ready | **Python:** 3.11+
+**Version:** 1.1.1 | **Status:** Production-ready | **Python:** 3.11+
 
 ---
 
@@ -186,6 +186,44 @@ All `${VAR}` and `${VAR:-default}` placeholders are resolved from environment at
 
 ---
 
+## v1.1.1 Fixes
+
+| Fix | Description |
+|-----|-------------|
+| **YAML diff modal** | `bootstrap is not defined` error resolved — `detail.js` now imports Bootstrap as ESM module; alert modal fixed too |
+| **Enrich missing file** | `EnrichTransform` no longer raises on a missing lookup file — logs a warning and uses an empty table; enables dry-run of pipelines without runtime lookup files |
+| **All 20 pipeline templates** | Every bundled template now passes `POST /api/pipelines/dry-run`: validate transform rules format (`{required: true}`), placeholder defaults for all bare `${VAR}` env vars, correct `interval_seconds` field, `add_field` uses `fields:` dict format |
+| **Syslog/SNMP trap `test_connection`** | `SyslogSource` and `SNMPTrapSource` now return a "local listener" response instead of attempting a TCP probe to their own bind address |
+| **Connector port defaults** | `_extract_port` now includes `sftp:22`, `ftp:21`, `snmp_poll:161`, `gnmi:57400` for fallback TCP probing |
+| **Diff/Rollback labels** | Version history action buttons show "Diff" and "Rollback" text alongside icons |
+| **Helm `fsGroup`** | `securityContext.fsGroup: 1000` + `defaultMode: 0440` ensures connector key files mounted from `keys.secretName` Secret are readable by the `tram` user (uid/gid 1000) |
+
+## v1.1.0 Features
+
+| Feature | Description |
+|---------|-------------|
+| **Pipeline Wizard** | 5-step guided creation (Info → Source → Transforms → Sinks → Review); YAML assembled client-side; dry-run before save; AI-assisted generation; field schemas for all 24 source types including `websocket`, `gnmi`, `snmp_poll`, `prometheus_rw`, `corba` |
+| **Live Metrics Dashboard** | `GET /api/stats` — 10 s polling, Canvas sparklines, per-pipeline records/errors/latency table |
+| **Alert Rules UI** | Full CRUD for `GET/POST/PUT/DELETE /api/pipelines/{name}/alerts` — webhook and email actions; condition builder; cooldown config |
+| **Connector Test** | `POST /api/connectors/test` and `POST /api/connectors/test-pipeline` — all 27 connector types return structured `{ok, latency_ms, detail/error}`; TCP fallback for generic types; local-listener response for syslog/SNMP-trap/webhook/prometheus_rw |
+| **Pipeline Templates** | `GET /api/templates` — 20 bundled example pipelines served from `/tram-templates`; UI template browser with tag filter and YAML preview |
+| **AI Assist** | `POST /api/ai/suggest` (`mode=generate|explain`); `GET /api/ai/status`; supports Anthropic, OpenAI-compatible, and local endpoints via `TRAM_AI_PROVIDER/MODEL/API_KEY/BASE_URL` |
+| **Password change** | `POST /api/auth/change-password` — updates hashed credential in `user_passwords` DB table; Settings page shows Change Password card when logged in |
+| **Pipeline YAML export** | Download icon (↓) on Pipelines list table directly downloads the pipeline YAML |
+| **Run history expandable errors** | Chevron on failed run rows expands an inline log panel showing error messages and DLQ counts |
+| **`run_id` on trigger** | `POST /api/pipelines/{name}/run` returns `{run_id, triggered_at}` for polling run outcome |
+| **API key auth on REST connectors** | `rest` source/sink support `auth_type: apikey` with `api_key_header` and `api_key_value` fields |
+| **Helm `keys` mount** | `keys.secretName` pre-mounts a k8s Secret at `/secrets/` — zero-restart key rotation via `kubectl apply`; `defaultMode: 0440` + `fsGroup: 1000` makes files readable by the tram process |
+
+## v1.0.8 / v1.0.9 Features
+
+| Feature | Description |
+|---------|-------------|
+| **Browser auth** | `TRAM_AUTH_USERS`, `TRAM_AUTH_SECRET` — HMAC-SHA256 8-hour session tokens; login overlay in UI |
+| **PostgreSQL subchart** | Bitnami PostgreSQL optional dependency; auto-wires `TRAM_DB_URL` |
+| **Shared RWX storage** | `sharedStorage.enabled` — single RWX PVC for schemas/MIBs on all cluster pods |
+| **Cluster status fix** | Non-owning nodes set `status=scheduled` on startup; no more pipelines stuck at "stopped" |
+
 ## v1.0.7 Features
 
 | Feature | Description |
@@ -291,16 +329,16 @@ The default image includes most connector and serializer extras — Kafka, MQTT,
 ```bash
 # Standalone (default) — single PVC at /data holds SQLite DB, schemas, and MIBs
 helm install tram oci://ghcr.io/OWNER/charts/tram \
-  --set image.tag=1.0.7
+  --set image.tag=1.1.1
 
 # With API key authentication
 helm install tram oci://ghcr.io/OWNER/charts/tram \
-  --set image.tag=1.0.7 \
+  --set image.tag=1.1.1 \
   --set apiKey=mysecret
 
 # Cluster mode (3-replica StatefulSet + external PostgreSQL)
 helm install tram oci://ghcr.io/OWNER/charts/tram \
-  --set image.tag=1.0.7 \
+  --set image.tag=1.1.1 \
   --set clusterMode.enabled=true \
   --set replicaCount=3 \
   --set envSecret.TRAM_DB_URL.secretName=tram-db \
@@ -344,6 +382,16 @@ helm install tram oci://ghcr.io/OWNER/charts/tram \
 | DELETE | `/api/schemas/{path}` | Delete a schema file |
 | PUT | `/api/pipelines/{name}` | Update/replace a pipeline's YAML config in-place |
 | ANY | `/api/schemas/registry/{path}` | Reverse proxy to external schema registry (`TRAM_SCHEMA_REGISTRY_URL`) |
+| POST | `/api/pipelines/dry-run` | Validate pipeline YAML — returns `{valid, issues}` without registering |
+| GET/POST/PUT/DELETE | `/api/pipelines/{name}/alerts` | Alert rules CRUD |
+| GET | `/api/stats` | Per-pipeline live metrics (records, errors, latency, sparkline data) |
+| GET | `/api/templates` | List bundled example pipeline templates |
+| POST | `/api/connectors/test` | Test a single connector `{type, config}` — returns `{ok, latency_ms, detail}` |
+| POST | `/api/connectors/test-pipeline` | Test all connectors in a pipeline YAML in parallel |
+| GET | `/api/ai/status` | AI assist availability and configured model |
+| POST | `/api/ai/suggest` | AI-assisted pipeline generation or explanation (`{mode, prompt/yaml}`) |
+| POST | `/api/auth/login` | Exchange credentials for a session token |
+| POST | `/api/auth/change-password` | Change password for the authenticated user |
 
 All `/api/*` endpoints require `X-API-Key` header when `TRAM_API_KEY` is set. Health, ready, metrics, webhooks, and the web UI (`/ui`) are always exempt.
 
