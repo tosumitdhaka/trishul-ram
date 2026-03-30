@@ -24,13 +24,15 @@ export async function init() {
     toast(`Detail error: ${e.message}`, 'error')
   }
 
-  // Tab switching via data-tab attribute
+  // Tab switching — show/hide isolated panels
   document.querySelectorAll('#detail-tabs .nav-link').forEach(tab => {
     tab.addEventListener('click', e => {
       e.preventDefault()
       document.querySelectorAll('#detail-tabs .nav-link').forEach(t => t.classList.remove('active'))
       tab.classList.add('active')
+      document.querySelectorAll('.tab-panel').forEach(p => p.classList.add('d-none'))
       const t = tab.dataset.tab
+      document.getElementById(`tab-panel-${t}`)?.classList.remove('d-none')
       if (t === 'runs')     reloadRuns()
       if (t === 'versions') loadVersions()
       if (t === 'config')   loadConfig()
@@ -61,10 +63,11 @@ function renderRuns(runs) {
   const tbody = document.getElementById('detail-runs-body')
   if (!tbody) return
   if (!runs.length) {
-    tbody.innerHTML = '<tr><td colspan="10" class="text-secondary text-center py-4">No runs yet</td></tr>'
+    tbody.innerHTML = '<tr><td colspan="11" class="text-secondary text-center py-4">No runs yet</td></tr>'
     return
   }
   tbody.innerHTML = runs.map(r => `<tr>
+    <td style="width:28px"></td>
     <td class="mono" style="font-size:11px">${esc(String(r.run_id || r.id || '').slice(0,8))}</td>
     <td class="text-secondary">${esc(r.node || '—')}</td>
     <td class="text-secondary">${r.started_at ? relTime(r.started_at) : '—'}</td>
@@ -79,6 +82,7 @@ function renderRuns(runs) {
 }
 
 function wireActions(pipeline) {
+  window._detailEdit = () => { window._editorPipeline = _name; navigate('editor') }
   const btn = document.getElementById('detail-run-btn')
   if (!btn) return
   const isRunning = pipeline.status === 'running'
@@ -148,25 +152,27 @@ async function reloadRuns() {
 }
 
 async function loadVersions() {
-  const tbody = document.getElementById('detail-runs-body')
+  const tbody = document.getElementById('detail-versions-body')
   if (!tbody) return
-  tbody.innerHTML = '<tr><td colspan="10" class="text-secondary text-center py-4">Loading versions…</td></tr>'
+  tbody.innerHTML = '<tr><td colspan="4" class="text-secondary text-center py-4">Loading versions…</td></tr>'
   try {
     const versions = await api.pipelines.versions(_name)
     if (!versions?.length) {
-      tbody.innerHTML = '<tr><td colspan="10" class="text-secondary text-center py-4">No versions saved</td></tr>'
+      tbody.innerHTML = '<tr><td colspan="4" class="text-secondary text-center py-4">No versions saved</td></tr>'
       return
     }
     tbody.innerHTML = versions.map(v => `<tr>
-      <td class="mono">v${v.version}</td>
-      <td class="text-secondary" colspan="6">${v.created_at ? relTime(v.created_at) : '—'}</td>
+      <td class="mono fw-semibold">v${v.version}</td>
+      <td class="text-secondary">${v.created_at ? relTime(v.created_at) : '—'}</td>
       <td>${v.is_active ? statusBadge('running') : ''}</td>
-      <td>
-        <button class="btn-flat" onclick="window._detailDiff(${v.version})">
-          <i class="bi bi-file-diff"></i> Diff
+      <td class="text-end">
+        <button class="btn-flat" onclick="window._detailDiff(${v.version})" title="View diff">
+          <i class="bi bi-file-diff"></i>
+        </button>
+        <button class="btn-flat" onclick="window._detailRollback(${v.version})" title="Rollback to this version">
+          <i class="bi bi-arrow-counterclockwise"></i>
         </button>
       </td>
-      <td><button class="btn-flat" onclick="window._detailRollback(${v.version})">Rollback</button></td>
     </tr>`).join('')
 
     window._detailRollback = async (ver) => {
@@ -253,19 +259,19 @@ function _renderDiffPanes(oldYaml, newYaml) {
 // ── Config tab ──────────────────────────────────────────────────────────────
 
 async function loadConfig() {
-  const tbody = document.getElementById('detail-runs-body')
-  if (!tbody) return
+  const pre = document.getElementById('detail-config-pre')
+  if (!pre) return
+  pre.textContent = 'Loading…'
   try {
     const p = await api.pipelines.get(_name)
-    const yaml = p.yaml || p.raw || JSON.stringify(p, null, 2)
-    tbody.parentElement.innerHTML = `<pre class="p-3 rounded" style="background:#161b22;font-size:12px;color:#e6edf3;overflow:auto;max-height:480px">${esc(yaml)}</pre>`
+    pre.textContent = p.yaml || p.raw || JSON.stringify(p, null, 2)
   } catch (e) { toast(e.message, 'error') }
 }
 
 // ── Alerts tab ──────────────────────────────────────────────────────────────
 
 async function loadAlerts() {
-  const wrap = document.querySelector('.table-wrap')
+  const wrap = document.getElementById('detail-alerts-wrap')
   if (!wrap) return
   try {
     const rules = await api.alerts.list(_name)
