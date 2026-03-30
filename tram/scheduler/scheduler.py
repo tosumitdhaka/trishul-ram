@@ -133,7 +133,8 @@ class TramScheduler:
                         extra={"pipeline": config.name},
                     )
                     self._scheduler.remove_job(job_id)
-                    self.manager.set_status(config.name, "stopped")
+                    # Pipeline moves to another node — still running, show "scheduled"
+                    self.manager.set_status(config.name, "scheduled")
 
     def stop(self, timeout: int = 30) -> None:
         """Stop scheduler and all running stream/batch pipelines.
@@ -182,6 +183,10 @@ class TramScheduler:
                 "Pipeline not owned by this node — skipping",
                 extra={"pipeline": config.name},
             )
+            # Still reflect correct status: enabled interval/cron pipelines are
+            # running on another node, so show "scheduled" rather than "stopped".
+            if config.schedule.type in ("interval", "cron"):
+                self.manager.set_status(config.name, "scheduled")
             return
 
         sched_type = config.schedule.type
