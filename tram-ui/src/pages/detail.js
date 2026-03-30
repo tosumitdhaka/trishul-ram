@@ -1,5 +1,6 @@
 import { api } from '../api.js'
 import { relTime, fmtDur, fmtNum, statusBadge, schedBadge, esc, toast } from '../utils.js'
+import * as bootstrap from 'bootstrap'
 
 let _name = null
 let _activeYaml = null  // current active version YAML for diff comparison
@@ -203,10 +204,10 @@ async function loadVersions() {
       <td>${v.is_active ? statusBadge('running') : ''}</td>
       <td class="text-end">
         <button class="btn-flat" onclick="window._detailDiff(${v.version})" title="View diff">
-          <i class="bi bi-file-diff"></i>
+          <i class="bi bi-file-diff me-1"></i>Diff
         </button>
         <button class="btn-flat" onclick="window._detailRollback(${v.version})" title="Rollback to this version">
-          <i class="bi bi-arrow-counterclockwise"></i>
+          <i class="bi bi-arrow-counterclockwise me-1"></i>Rollback
         </button>
       </td>
     </tr>`).join('')
