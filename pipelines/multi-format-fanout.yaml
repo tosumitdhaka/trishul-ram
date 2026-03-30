@@ -73,8 +73,8 @@ pipeline:
     - type: s3
       bucket: ${S3_BUCKET:-my-pm-bucket}
       key_template: "pm/parquet/{pipeline}/{timestamp}.parquet"
-      aws_access_key_id: ${AWS_ACCESS_KEY_ID:-}
-      aws_secret_access_key: ${AWS_SECRET_ACCESS_KEY:-}
+      aws_access_key_id: ${AWS_ACCESS_KEY_ID:-PLACEHOLDER_KEY_ID}
+      aws_secret_access_key: ${AWS_SECRET_ACCESS_KEY:-PLACEHOLDER_SECRET_KEY}
       region_name: ${AWS_REGION:-eu-west-1}
       content_type: application/octet-stream
       retry_count: 3

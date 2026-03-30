@@ -30,9 +30,9 @@ pipeline:
 
   source:
     type: sftp
-    host: ${SFTP_HOST}
-    username: ${SFTP_USER}
-    password: ${SFTP_PASS}
+    host: ${SFTP_HOST:-sftp.example.com}
+    username: ${SFTP_USER:-pmuser}
+    password: ${SFTP_PASS:-changeme}
     remote_path: ${SFTP_IN:-/pm/counters/hourly}
     file_pattern: "A*.csv"    # 3GPP PM file naming convention
     move_after_read: ${SFTP_ARCHIVE:-/pm/counters/done}

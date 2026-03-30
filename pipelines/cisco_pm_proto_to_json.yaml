@@ -24,7 +24,7 @@ pipeline:
   enabled: true
   schedule:
     type: interval
-    seconds: 60               # poll source SFTP every 60 s
+    interval_seconds: 60     # poll source SFTP every 60 s
 
   # ── Source ──────────────────────────────────────────────────────────────────
   source:
@@ -32,7 +32,7 @@ pipeline:
     host: ${NE_SFTP_HOST:-localhost}
     port: ${NE_SFTP_PORT:-22}
     username: ${NE_SFTP_USER:-pmuser}
-    password: ${NE_SFTP_PASS}
+    password: ${NE_SFTP_PASS:-changeme}
     remote_path: /data/pm/incoming/
     file_pattern: "pm_message_*.bin"
     move_after_read: /data/pm/processed/   # archive originals after reading
@@ -53,25 +53,25 @@ pipeline:
     # envtemp, memory, opticalsfp, opticslane, otucontrollersinfo, cepmpower,
     # srpolicy, cepmqos, cepmptp, cepmsynce, cepmgnss, srv6locator, custom
     - type: add_field
-      field: _pm_type
-      expr: >
-        'cepmcrc' if 'cepmcrc' in record else
-        'cepminterface' if 'cepminterface' in record else
-        'dvavailability' if 'dvavailability' in record else
-        'cpu' if 'cpu' in record else
-        'envtemp' if 'envtemp' in record else
-        'memory' if 'memory' in record else
-        'opticalsfp' if 'opticalsfp' in record else
-        'opticslane' if 'opticslane' in record else
-        'otucontrollersinfo' if 'otucontrollersinfo' in record else
-        'cepmpower' if 'cepmpower' in record else
-        'srpolicy' if 'srpolicy' in record else
-        'cepmqos' if 'cepmqos' in record else
-        'cepmptp' if 'cepmptp' in record else
-        'cepmsynce' if 'cepmsynce' in record else
-        'cepmgnss' if 'cepmgnss' in record else
-        'srv6locator' if 'srv6locator' in record else
-        'custom'
+      fields:
+        _pm_type: >-
+          'cepmcrc' if 'cepmcrc' in record else
+          'cepminterface' if 'cepminterface' in record else
+          'dvavailability' if 'dvavailability' in record else
+          'cpu' if 'cpu' in record else
+          'envtemp' if 'envtemp' in record else
+          'memory' if 'memory' in record else
+          'opticalsfp' if 'opticalsfp' in record else
+          'opticslane' if 'opticslane' in record else
+          'otucontrollersinfo' if 'otucontrollersinfo' in record else
+          'cepmpower' if 'cepmpower' in record else
+          'srpolicy' if 'srpolicy' in record else
+          'cepmqos' if 'cepmqos' in record else
+          'cepmptp' if 'cepmptp' in record else
+          'cepmsynce' if 'cepmsynce' in record else
+          'cepmgnss' if 'cepmgnss' in record else
+          'srv6locator' if 'srv6locator' in record else
+          'custom'
 
   # ── Serialize output ────────────────────────────────────────────────────────
   serializer_out:
@@ -83,7 +83,7 @@ pipeline:
     host: ${MED_SFTP_HOST:-localhost}
     port: ${MED_SFTP_PORT:-22}
     username: ${MED_SFTP_USER:-meduser}
-    password: ${MED_SFTP_PASS}
+    password: ${MED_SFTP_PASS:-changeme}
     remote_path: /data/pm/json/
     filename_template: "{source_filename}.json"   # pm_message_007.bin → pm_message_007.bin.json
 

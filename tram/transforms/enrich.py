@@ -20,7 +20,8 @@ def _load_lookup(path: str, fmt: str, lookup_key: str) -> dict[str, dict]:
     """Load lookup file into a dict keyed by lookup_key value."""
     p = Path(path)
     if not p.exists():
-        raise TransformError(f"enrich: lookup file not found: {path}")
+        logger.warning("enrich: lookup file not found: %s — enrichment skipped (empty table)", path)
+        return {}
 
     raw = p.read_text(encoding="utf-8")
 
