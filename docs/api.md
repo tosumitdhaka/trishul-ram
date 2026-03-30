@@ -117,6 +117,88 @@ Re-scan `TRAM_PIPELINE_DIR`, reload all YAML files.
 
 ---
 
+## Pipeline Dry-Run (v1.0.7)
+
+### POST /api/pipelines/dry-run
+Validate and parse a pipeline YAML without registering it. Instantiates all transforms and connectors to catch config errors early.
+
+Body: raw YAML text (`Content-Type: text/plain` or `application/yaml`).
+
+```bash
+curl -X POST http://localhost:8765/api/pipelines/dry-run \
+  -H "Content-Type: text/plain" \
+  --data-binary @my-pipeline.yaml
+```
+
+Response `200`:
+```json
+{"status": "ok", "pipeline": "pm-ingest", "message": "Pipeline parsed successfully"}
+```
+
+Response `422` (validation error):
+```json
+{"status": "error", "detail": "serializer_in: unknown type 'xtf'"}
+```
+
+---
+
+## Pipeline Templates (v1.1.0)
+
+### GET /api/templates
+List all bundled pipeline YAML templates from the `pipelines/` directory.
+
+```json
+[
+  {"name": "kafka-to-opensearch", "description": "...", "yaml": "pipeline:\n  name: ..."},
+  {"name": "snmp-poll-ifmib-to-influxdb", "description": "...", "yaml": "..."}
+]
+```
+
+---
+
+## Pipeline Alerts (v1.0.0 / UI v1.1.0)
+
+Alert rules evaluate simpleeval expressions after every batch run and fire webhook or email actions.
+
+### GET /api/pipelines/{name}/alerts
+List alert rules for a pipeline.
+
+```json
+[
+  {
+    "name": "high-error-rate",
+    "condition": "error_rate > 0.05",
+    "action": "webhook",
+    "webhook_url": "https://hooks.example.com/alert",
+    "cooldown_seconds": 300
+  }
+]
+```
+
+### POST /api/pipelines/{name}/alerts
+Add a new alert rule.
+
+```json
+{
+  "name": "low-output",
+  "condition": "records_out < 10",
+  "action": "email",
+  "email_to": "ops@example.com",
+  "subject": "Low output on pm-ingest",
+  "cooldown_seconds": 600
+}
+```
+
+### PUT /api/pipelines/{name}/alerts/{rule_name}
+Update an existing alert rule. Body: same structure as POST.
+
+### DELETE /api/pipelines/{name}/alerts/{rule_name}
+Delete an alert rule. Returns `204 No Content`.
+
+Alert condition variables: `records_in`, `records_out`, `records_skipped`, `error_rate`, `status`, `failed`, `duration_seconds`.
+
+---
+
 ## Pipeline Versioning (v0.5.0)
 
 ### GET /api/pipelines/{name}/versions
@@ -181,6 +263,26 @@ Get a single run result.
 
 ---
 
+## Live Stats (v1.1.0)
+
+### GET /api/stats
+Per-pipeline aggregated stats for the last hour (records in/out, error rate, avg duration). Used by the Live Metrics Dashboard.
+
+```json
+[
+  {
+    "pipeline": "pm-ingest",
+    "records_in": 45000,
+    "records_out": 44823,
+    "error_rate": 0.004,
+    "avg_duration_seconds": 1.23,
+    "run_count": 60
+  }
+]
+```
+
+---
+
 ## Authentication (v1.0.0)
 
 When `TRAM_API_KEY` is set (or `apiKey` in Helm values), all `/api/*` requests must include the key:
@@ -193,9 +295,137 @@ curl -H "X-API-Key: mysecret" http://localhost:8765/api/pipelines
 curl "http://localhost:8765/api/pipelines?api_key=mysecret"
 ```
 
-Exempt paths (always unauthenticated): `/api/health`, `/api/ready`, `/metrics`, `/webhooks/*`
+Exempt paths (always unauthenticated): `/api/health`, `/api/ready`, `/metrics`, `/webhooks/*`, `/api/auth/login`
 
 Returns `401 Unauthorized` when the key is missing or wrong.
+
+## Browser Authentication (v1.0.8)
+
+Set `TRAM_AUTH_USERS` (comma-separated `username:password` pairs) to enable UI login. Machine clients continue to use `X-API-Key`; browser users get 8-hour session tokens.
+
+### POST /api/auth/login
+Authenticate with username and password.
+
+```bash
+curl -X POST http://localhost:8765/api/auth/login \
+  -H "Content-Type: application/json" \
+  -d '{"username": "admin", "password": "secret"}'
+```
+
+Response:
+```json
+{"token": "eyJ...", "username": "admin"}
+```
+
+Use the token as `Authorization: Bearer <token>` on subsequent requests.
+
+### GET /api/auth/me
+Returns the currently authenticated user from the Bearer token. Returns `401` if unauthenticated.
+
+```json
+{"username": "admin"}
+```
+
+### POST /api/auth/change-password (v1.1.0)
+Change the password for the currently authenticated user. Stored as sha256+salt hash in the `user_passwords` DB table; persists across restarts (overrides `TRAM_AUTH_USERS` for that user).
+
+```bash
+curl -X POST http://localhost:8765/api/auth/change-password \
+  -H "Authorization: Bearer <token>" \
+  -H "Content-Type: application/json" \
+  -d '{"current_password": "old", "new_password": "new-secure-pass"}'
+```
+
+Response `200`:
+```json
+{"status": "ok", "message": "Password updated"}
+```
+
+---
+
+## Connector Test (v1.1.0)
+
+### POST /api/connectors/test
+Test connectivity for a single connector config. Returns whether the connection succeeded and any error message.
+
+```bash
+curl -X POST http://localhost:8765/api/connectors/test \
+  -H "Content-Type: application/json" \
+  -d '{"type": "kafka", "bootstrap_servers": "kafka:9092", "topic": "test"}'
+```
+
+Response:
+```json
+{"success": true, "connector_type": "kafka", "message": "Connected to kafka:9092"}
+```
+
+### POST /api/connectors/test-pipeline
+Test all source and sink connectors declared in a pipeline YAML. Returns per-connector results.
+
+```bash
+curl -X POST http://localhost:8765/api/connectors/test-pipeline \
+  -H "Content-Type: text/plain" \
+  --data-binary @my-pipeline.yaml
+```
+
+Response:
+```json
+{
+  "pipeline": "pm-ingest",
+  "results": [
+    {"role": "source", "type": "sftp", "host": "sftp.example.com", "success": true},
+    {"role": "sink",   "type": "kafka", "bootstrap_servers": "kafka:9092", "success": false, "error": "Connection refused"}
+  ]
+}
+```
+
+---
+
+## AI Assist (v1.1.0)
+
+### GET /api/ai/status
+Returns AI configuration and availability.
+
+```json
+{"available": true, "provider": "anthropic", "model": "claude-sonnet-4-6"}
+```
+
+Returns `{"available": false}` when `TRAM_AI_API_KEY` is not set.
+
+### POST /api/ai/suggest
+Generate or explain a pipeline YAML using AI.
+
+| Field | Description |
+|-------|-------------|
+| `mode` | `"generate"` — create a new pipeline from a description; `"explain"` — explain existing YAML |
+| `prompt` | Natural language description (for `generate`) or question (for `explain`) |
+| `yaml` | Existing pipeline YAML (required for `explain` mode) |
+
+```bash
+# Generate
+curl -X POST http://localhost:8765/api/ai/suggest \
+  -H "Content-Type: application/json" \
+  -d '{"mode": "generate", "prompt": "Poll SNMP IF-MIB every 60s and write to InfluxDB"}'
+
+# Explain
+curl -X POST http://localhost:8765/api/ai/suggest \
+  -H "Content-Type: application/json" \
+  -d '{"mode": "explain", "prompt": "What does this do?", "yaml": "pipeline:\n  name: ..."}'
+```
+
+Response:
+```json
+{"result": "pipeline:\n  name: snmp-to-influxdb\n  ..."}
+```
+
+Configure via env vars:
+
+| Env Var | Description |
+|---------|-------------|
+| `TRAM_AI_API_KEY` | API key for the AI provider |
+| `TRAM_AI_PROVIDER` | `openai` or `anthropic` (default: `openai`) |
+| `TRAM_AI_MODEL` | Model name (default: `gpt-4o` for OpenAI, `claude-sonnet-4-6` for Anthropic) |
+| `TRAM_AI_BASE_URL` | Custom base URL (e.g. for Ollama or Azure OpenAI) |
 
 ---
 
