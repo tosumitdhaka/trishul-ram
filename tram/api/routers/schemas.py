@@ -25,7 +25,7 @@ logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/api/schemas", tags=["schemas"])
 
 # Extensions accepted for upload
-_ALLOWED_EXT = {".proto", ".avsc", ".json", ".xsd", ".yaml", ".yml"}
+_ALLOWED_EXT = {".proto", ".avsc", ".json", ".xsd", ".yaml", ".yml", ".asn"}
 
 # Human-readable schema type by extension
 _EXT_TO_TYPE = {
@@ -35,6 +35,7 @@ _EXT_TO_TYPE = {
     ".xsd":   "xml",
     ".yaml":  "yaml",
     ".yml":   "yaml",
+    ".asn":   "asn1",
 }
 
 
