@@ -54,7 +54,7 @@ class AddFieldTransform(BaseTransform):
             for field_name, expression in self.fields.items():
                 try:
                     evaluator = _EvalCls(
-                        names=new_record,
+                        names={**new_record, "record": new_record},
                         functions=_EVAL_FUNCS,
                     )
                     new_record[field_name] = evaluator.eval(expression)

@@ -1,0 +1,71 @@
+################################################################################
+# Test: Cisco EMS PM protobuf binary → JSON  (SFTP source → SFTP sink)
+#
+# Source SFTP:  172.19.0.5:22  user=tram  pass=tram123
+#   incoming:   /upload/incoming/   (pm_message_*.bin)
+#   processed:  /upload/processed/  (moved after read)
+#
+# Sink SFTP:    same server, /upload/json_output/
+#   output:     pm_message_XXX.bin.json
+################################################################################
+
+version: "1"
+pipeline:
+  name: test-cisco-pm-sftp-to-json
+  enabled: true
+  schedule:
+    type: interval
+    interval_seconds: 30
+
+  source:
+    type: sftp
+    host: "172.19.0.5"
+    port: 22
+    username: tram
+    password: tram123
+    remote_path: /upload/incoming/
+    file_pattern: "pm_message_*.bin"
+    move_after_read: /upload/processed/
+    skip_processed: true
+
+  serializer_in:
+    type: protobuf
+    schema_file: /data/schemas/cisco/GenericRecord.proto
+    message_class: PerformanceMonitoringMessage
+    framing: none
+
+  transforms:
+    - type: add_field
+      fields:
+        _pm_type: >-
+          'cepmcrc' if 'cepmcrc' in record else
+          'cepminterface' if 'cepminterface' in record else
+          'dvavailability' if 'dvavailability' in record else
+          'cpu' if 'cpu' in record else
+          'envtemp' if 'envtemp' in record else
+          'memory' if 'memory' in record else
+          'opticalsfp' if 'opticalsfp' in record else
+          'opticslane' if 'opticslane' in record else
+          'otucontrollersinfo' if 'otucontrollersinfo' in record else
+          'cepmpower' if 'cepmpower' in record else
+          'srpolicy' if 'srpolicy' in record else
+          'cepmqos' if 'cepmqos' in record else
+          'cepmptp' if 'cepmptp' in record else
+          'cepmsynce' if 'cepmsynce' in record else
+          'cepmgnss' if 'cepmgnss' in record else
+          'srv6locator' if 'srv6locator' in record else
+          'custom'
+
+  serializer_out:
+    type: json
+
+  sink:
+    type: sftp
+    host: "172.19.0.5"
+    port: 22
+    username: tram
+    password: tram123
+    remote_path: /upload/json_output/
+    filename_template: "{source_filename}.json"
+
+  on_error: continue
