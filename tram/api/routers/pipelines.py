@@ -85,6 +85,14 @@ async def register_pipeline(request: Request) -> dict:
     except PipelineAlreadyExistsError as exc:
         raise HTTPException(status_code=409, detail=str(exc))
 
+    # Persist to shared DB so all cluster nodes can discover it
+    db = getattr(request.app.state, "db", None)
+    if db is not None:
+        try:
+            db.save_pipeline(config.name, yaml_text)
+        except Exception as exc:
+            logger.warning("Failed to persist pipeline to DB: %s", exc)
+
     if config.enabled and config.schedule.type != "manual":
         try:
             scheduler.start_pipeline(config.name)
@@ -154,6 +162,14 @@ async def update_pipeline(name: str, request: Request) -> dict:
     manager.deregister(name)
     new_state = manager.register(config, yaml_text=yaml_text)
 
+    # Persist updated YAML to shared DB
+    db = getattr(request.app.state, "db", None)
+    if db is not None:
+        try:
+            db.save_pipeline(config.name, yaml_text)
+        except Exception as exc:
+            logger.warning("Failed to persist pipeline update to DB: %s", exc)
+
     # Restart if enabled
     if config.enabled and config.schedule.type != "manual":
         try:
@@ -182,6 +198,15 @@ async def delete_pipeline(name: str, request: Request) -> Response:
             logger.warning("Error stopping pipeline before delete: %s", exc)
 
     manager.deregister(name)
+
+    # Soft-delete from shared DB so other nodes stop serving it
+    db = getattr(request.app.state, "db", None)
+    if db is not None:
+        try:
+            db.delete_pipeline(name)
+        except Exception as exc:
+            logger.warning("Failed to soft-delete pipeline from DB: %s", exc)
+
     return Response(status_code=204)
 
 

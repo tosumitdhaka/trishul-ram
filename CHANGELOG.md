@@ -9,6 +9,21 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ---
 
+## [1.1.2] — 2026-03-30
+
+### Fixed
+
+**Pipeline visibility across cluster nodes (API-registered pipelines)**
+- `POST /api/pipelines` on any pod now writes the pipeline YAML to a shared `registered_pipelines` table in PostgreSQL; `PUT` updates it; `DELETE` soft-deletes (sets `deleted=1`)
+- On startup, after loading pipelines from `TRAM_PIPELINE_DIR` (ConfigMap), the scheduler calls `_load_from_db()` — registers any DB pipeline not already loaded from the filesystem; filesystem wins on name collision
+- Background thread `_sync_from_db()` polls the DB every `TRAM_PIPELINE_SYNC_INTERVAL` seconds (default 30): registers newly added pipelines, deregisters soft-deleted ones; all pods converge without restart
+- Pipeline registered via API on pod-0 becomes visible on pod-1 and pod-2 within one poll interval; status is consistent (hash-based ownership decides which pod executes it)
+- New DB table `registered_pipelines(name, yaml_text, created_at, updated_at, deleted)` — auto-created on startup via existing `_create_tables()` pattern; safe on existing databases
+- New config: `TRAM_PIPELINE_SYNC_INTERVAL` (integer seconds, default 30)
+- SQLite (standalone, single pod): DB persistence still works, sync loop is effectively a no-op
+
+---
+
 ## [1.1.1] — 2026-03-30
 
 ### Added

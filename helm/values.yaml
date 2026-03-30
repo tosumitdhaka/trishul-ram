@@ -4,7 +4,7 @@
 image:
   registry:   ""              # e.g. ghcr.io — empty = no registry prefix (local/kind images)
   repository: tram            # image name without registry
-  tag: "1.1.1"
+  tag: "1.1.2"
   pullPolicy: IfNotPresent
 
 ## TRAM always deploys as a StatefulSet (stable pod names: tram-0, tram-1, …).
@@ -102,6 +102,8 @@ env:
   # --- SNMP MIBs / Schemas (v1.0.3) ---
   # TRAM_MIB_DIR and TRAM_SCHEMA_DIR are auto-set to /data/mibs and /data/schemas when
   # persistence.enabled=true. Override here only if you need a custom location.
+  # --- Pipeline DB sync (v1.1.2) ---
+  # TRAM_PIPELINE_SYNC_INTERVAL: "30"  # seconds between DB polls for new/deleted pipelines
   # --- Schema Registry (v1.0.4) ---
   # Prefer using .Values.schemaRegistry below — it injects these vars automatically.
 

@@ -15,6 +15,7 @@ if TYPE_CHECKING:
     from tram.cluster.coordinator import ClusterCoordinator
     from tram.models.pipeline import PipelineConfig
     from tram.pipeline.manager import PipelineManager
+    from tram.persistence.db import TramDB
     from tram.persistence.file_tracker import ProcessedFileTracker
 
 logger = logging.getLogger(__name__)
@@ -29,11 +30,15 @@ class TramScheduler:
         coordinator: Optional["ClusterCoordinator"] = None,
         rebalance_interval: int = 10,
         file_tracker: Optional["ProcessedFileTracker"] = None,
+        db: Optional["TramDB"] = None,
+        pipeline_sync_interval: int = 30,
     ) -> None:
         self.manager = manager
         self._coordinator = coordinator
         self._rebalance_interval = rebalance_interval
         self.executor = PipelineExecutor(file_tracker=file_tracker)
+        self._db = db
+        self._pipeline_sync_interval = pipeline_sync_interval
         self._stream_threads: dict[str, threading.Thread] = {}
         self._stop_events: dict[str, threading.Event] = {}
         self._thread_pool = ThreadPoolExecutor(max_workers=10, thread_name_prefix="tram-batch")
@@ -41,6 +46,8 @@ class TramScheduler:
         self._running = False
         self._rebalance_stop = threading.Event()
         self._rebalance_thread: threading.Thread | None = None
+        self._sync_stop = threading.Event()
+        self._sync_thread: threading.Thread | None = None
 
     # ── Lifecycle ──────────────────────────────────────────────────────────
 
@@ -59,6 +66,11 @@ class TramScheduler:
             if state.config.enabled:
                 self._schedule_pipeline(state.config)
 
+        # Load pipelines registered via API (from shared DB) after filesystem load
+        # Filesystem (ConfigMap) wins on name collision — DB pipelines only add new ones
+        if self._db is not None:
+            self._load_from_db()
+
         self._scheduler.start()
 
         # Start rebalance loop only in cluster mode
@@ -76,6 +88,20 @@ class TramScheduler:
             )
         else:
             logger.info("TramScheduler started (standalone mode)")
+
+        # Start DB sync thread (picks up pipelines registered on other pods)
+        if self._db is not None:
+            self._sync_stop.clear()
+            self._sync_thread = threading.Thread(
+                target=self._sync_loop,
+                name="tram-pipeline-sync",
+                daemon=True,
+            )
+            self._sync_thread.start()
+            logger.info(
+                "Pipeline DB sync started",
+                extra={"interval_seconds": self._pipeline_sync_interval},
+            )
 
     # ── Cluster rebalancing ────────────────────────────────────────────────
 
@@ -136,6 +162,70 @@ class TramScheduler:
                     # Pipeline moves to another node — still running, show "scheduled"
                     self.manager.set_status(config.name, "scheduled")
 
+    # ── DB pipeline sync ───────────────────────────────────────────────────
+
+    def _load_from_db(self) -> None:
+        """Load API-registered pipelines from DB at startup (skips names already loaded from filesystem)."""
+        if self._db is None:
+            return
+        try:
+            from tram.pipeline.loader import load_pipeline_from_yaml
+            rows = self._db.get_all_pipelines()
+            for name, yaml_text in rows:
+                if self.manager.exists(name):
+                    logger.debug("DB pipeline already loaded from filesystem — skipping", extra={"pipeline": name})
+                    continue
+                try:
+                    config = load_pipeline_from_yaml(yaml_text)
+                    self.manager.register(config, yaml_text=yaml_text)
+                    if config.enabled:
+                        self._schedule_pipeline(config)
+                    logger.info("Loaded pipeline from DB", extra={"pipeline": name})
+                except Exception as exc:
+                    logger.warning("Failed to load DB pipeline", extra={"pipeline": name, "error": str(exc)})
+        except Exception as exc:
+            logger.error("_load_from_db failed", extra={"error": str(exc)})
+
+    def _sync_loop(self) -> None:
+        """Background thread: poll DB for new/deleted pipelines and sync in-memory state."""
+        while not self._sync_stop.wait(self._pipeline_sync_interval):
+            try:
+                self._sync_from_db()
+            except Exception as exc:
+                logger.error("Pipeline DB sync error", extra={"error": str(exc)})
+
+    def _sync_from_db(self) -> None:
+        """Register new DB pipelines not yet known; deregister soft-deleted ones."""
+        if self._db is None:
+            return
+        from tram.pipeline.loader import load_pipeline_from_yaml
+
+        # Register newly added pipelines
+        for name, yaml_text in self._db.get_all_pipelines():
+            if self.manager.exists(name):
+                continue
+            try:
+                config = load_pipeline_from_yaml(yaml_text)
+                self.manager.register(config, yaml_text=yaml_text)
+                if config.enabled:
+                    self._schedule_pipeline(config)
+                logger.info("Sync: registered pipeline from DB", extra={"pipeline": name})
+            except Exception as exc:
+                logger.warning("Sync: failed to register pipeline", extra={"pipeline": name, "error": str(exc)})
+
+        # Deregister soft-deleted pipelines
+        for name in self._db.get_deleted_pipeline_names():
+            if not self.manager.exists(name):
+                continue
+            try:
+                state = self.manager.get(name)
+                if state.status == "running":
+                    self.stop_pipeline(name)
+                self.manager.deregister(name)
+                logger.info("Sync: deregistered deleted pipeline", extra={"pipeline": name})
+            except Exception as exc:
+                logger.warning("Sync: failed to deregister pipeline", extra={"pipeline": name, "error": str(exc)})
+
     def stop(self, timeout: int = 30) -> None:
         """Stop scheduler and all running stream/batch pipelines.
 
@@ -145,10 +235,14 @@ class TramScheduler:
         self._running = False
         logger.info("TramScheduler stopping", extra={"drain_timeout_seconds": timeout})
 
-        # Stop rebalance loop first
+        # Stop rebalance and sync loops first
         if self._rebalance_thread and self._rebalance_thread.is_alive():
             self._rebalance_stop.set()
             self._rebalance_thread.join(timeout=self._rebalance_interval + 2)
+
+        if self._sync_thread and self._sync_thread.is_alive():
+            self._sync_stop.set()
+            self._sync_thread.join(timeout=self._pipeline_sync_interval + 2)
 
         # Signal all stream pipelines to stop
         for name in list(self._stop_events.keys()):

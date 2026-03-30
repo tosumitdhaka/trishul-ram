@@ -175,6 +175,8 @@ def create_app(config: AppConfig | None = None) -> FastAPI:
         coordinator=coordinator,
         rebalance_interval=config.heartbeat_seconds,
         file_tracker=file_tracker,
+        db=db,
+        pipeline_sync_interval=config.pipeline_sync_interval,
     )
 
     app = FastAPI(
