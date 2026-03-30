@@ -168,6 +168,8 @@ def _create_tables(engine: Engine) -> None:
         # v0.7.0 column migrations: add new columns to existing databases
         _add_column_if_missing(conn, dialect, "run_history", "node_id", "TEXT NOT NULL DEFAULT ''")
         _add_column_if_missing(conn, dialect, "run_history", "dlq_count", "INTEGER NOT NULL DEFAULT 0")
+        # v1.1.1: per-record error strings
+        _add_column_if_missing(conn, dialect, "run_history", "errors_json", "TEXT")
 
 
 # ── TramDB ────────────────────────────────────────────────────────────────────
@@ -207,6 +209,7 @@ class TramDB:
 
     def save_run(self, result: RunResult) -> None:
         """Persist a RunResult. Silently ignores duplicate run_ids."""
+        import json as _json
         try:
             with self._engine.begin() as conn:
                 conn.execute(
@@ -214,11 +217,11 @@ class TramDB:
                         INSERT INTO run_history
                           (run_id, pipeline_name, status, started_at, finished_at,
                            records_in, records_out, records_skipped, error,
-                           node_id, dlq_count)
+                           node_id, dlq_count, errors_json)
                         VALUES
                           (:run_id, :pipeline_name, :status, :started_at, :finished_at,
                            :records_in, :records_out, :records_skipped, :error,
-                           :node_id, :dlq_count)
+                           :node_id, :dlq_count, :errors_json)
                     """),
                     {
                         "run_id": result.run_id,
@@ -232,6 +235,7 @@ class TramDB:
                         "error": result.error,
                         "node_id": self._node_id,
                         "dlq_count": result.dlq_count,
+                        "errors_json": _json.dumps(result.errors) if result.errors else None,
                     },
                 )
         except IntegrityError:
@@ -279,6 +283,12 @@ class TramDB:
         return self._row_to_run_result(row)
 
     def _row_to_run_result(self, row) -> RunResult:
+        import json as _json
+        raw_errors = row.get("errors_json")
+        try:
+            errors = _json.loads(raw_errors) if raw_errors else []
+        except Exception:
+            errors = []
         return RunResult(
             run_id=row["run_id"],
             pipeline_name=row["pipeline_name"],
@@ -291,6 +301,7 @@ class TramDB:
             error=row["error"],
             dlq_count=row.get("dlq_count", 0) or 0,
             node_id=row.get("node_id", "") or "",
+            errors=errors,
         )
 
     # ── Pipeline versions ──────────────────────────────────────────────────

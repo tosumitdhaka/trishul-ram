@@ -78,6 +78,7 @@ class RunResult:
     error: Optional[str] = None
     dlq_count: int = 0
     node_id: str = ""
+    errors: list = field(default_factory=list)  # per-record error strings
 
     @classmethod
     def from_context(
@@ -97,6 +98,7 @@ class RunResult:
             records_skipped=ctx.records_skipped,
             error=error,
             dlq_count=ctx.dlq_count,
+            errors=list(ctx.errors),
         )
 
     def to_dict(self) -> dict:
@@ -111,5 +113,6 @@ class RunResult:
             "records_skipped": self.records_skipped,
             "dlq_count": self.dlq_count,
             "error": self.error,
+            "errors": self.errors,
             "node": self.node_id or None,
         }
