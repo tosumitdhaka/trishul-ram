@@ -6,12 +6,6 @@ Items discussed after completing v1.1.1. Priority TBD.
 
 ## Backend
 
-- **Pipeline DB persistence in cluster mode** — API-registered pipelines (`POST /api/pipelines`)
-  are currently in-memory only on the receiving pod; other pods don't see them until restart.
-  Pipelines should be persisted to the shared DB and loaded by all nodes on startup/reload,
-  so the `TRAM_PIPELINE_DIR` ConfigMap is not the only path to multi-node visibility.
-  Workaround today: add pipelines to the Helm `pipelines:` ConfigMap.
-
 - **Pipeline cloning** — copy pipeline as new with name prompt
 - **Per-sink record counts** — run-level metrics broken down by sink
 - **Scheduled alert evaluation** — cron-based alert checks, not just post-run
