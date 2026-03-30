@@ -135,6 +135,12 @@ class SyslogSource(BaseSource):
                 f"Syslog TCP bind failed on {self.host}:{self.port} — {exc}"
             ) from exc
 
+    def test_connection(self) -> dict:
+        host = self.config.get("host", "0.0.0.0")
+        port = self.config.get("port", 514)
+        protocol = self.config.get("protocol", "udp")
+        return {"ok": True, "latency_ms": None, "detail": f"Local {protocol.upper()} listener on {host}:{port}"}
+
     def read(self) -> Iterator[tuple[bytes, dict]]:
         if self.protocol == "udp":
             yield from self._read_udp()

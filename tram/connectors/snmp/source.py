@@ -65,6 +65,11 @@ class SNMPTrapSource(BaseSource):
         self.context_name: str = config.get("context_name", "")
         self._stop_event: threading.Event = threading.Event()
 
+    def test_connection(self) -> dict:
+        host = self.config.get("host", "0.0.0.0")
+        port = self.config.get("port", 162)
+        return {"ok": True, "latency_ms": None, "detail": f"Local UDP trap listener on {host}:{port}"}
+
     def stop(self) -> None:
         self._stop_event.set()
 
