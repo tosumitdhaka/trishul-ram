@@ -2,6 +2,47 @@
 
 ---
 
+## Bug: API-registered pipelines not visible across cluster nodes
+
+### Problem
+`POST /api/pipelines` registers a pipeline in-memory on the single pod that received
+the HTTP request. Other pods never discover it. When the NodePort load-balances a
+subsequent request to a different pod, the pipeline is invisible — appears missing from
+the UI, shows wrong active count, and cannot be triggered or monitored from those pods.
+
+Pipelines loaded from `TRAM_PIPELINE_DIR` (Helm ConfigMap) work correctly because every
+pod reads the filesystem directory at startup. API-registered pipelines have no equivalent
+broadcast mechanism today.
+
+### Files to change
+
+**`tram/persistence/db.py`**
+- New table `registered_pipelines (name TEXT PK, yaml_text TEXT, created_at, updated_at, deleted BOOL DEFAULT FALSE)`
+- Schema migration via existing `_add_column_if_missing` pattern — safe on existing DBs
+- Methods: `save_pipeline(name, yaml_text)`, `delete_pipeline(name)`, `get_all_pipelines() → list[tuple[str,str]]`
+
+**`tram/api/routers/pipelines.py`**
+- `POST /api/pipelines` → also `db.save_pipeline(name, yaml_text)`
+- `PUT /api/pipelines/{name}` → also `db.save_pipeline(name, updated_yaml)`
+- `DELETE /api/pipelines/{name}` → also `db.delete_pipeline(name)` (soft delete)
+
+**`tram/scheduler/scheduler.py`**
+- On startup: after `TRAM_PIPELINE_DIR` load, call `_load_from_db()` — registers any DB pipeline not already loaded from filesystem (filesystem wins on name collision)
+- New background thread `_sync_from_db()` polling DB every `TRAM_PIPELINE_SYNC_INTERVAL` seconds — registers newly added pipelines, deregisters deleted ones; all pods converge without restart
+- Ownership/rebalance logic unchanged — non-owning pods register pipeline (visible in API) but do not execute it
+
+**`tram/core/config.py`**
+- Add `TRAM_PIPELINE_SYNC_INTERVAL: int = 30` — DB poll interval in seconds
+
+### Behaviour after fix
+- `POST /api/pipelines` on any pod → written to shared PostgreSQL → all pods pick it up within `TRAM_PIPELINE_SYNC_INTERVAL` seconds
+- Pipeline visible on all pods regardless of which pod the UI hits
+- Consistent ownership: hash decides which pod runs it, all pods report correct status
+- `TRAM_PIPELINE_DIR` (ConfigMap) pipelines load at startup as before; DB-registered pipelines layer on top
+- SQLite (standalone, single pod): DB persistence still works, sync loop is a no-op in practice
+
+---
+
 ## ASN.1 Serializer (`type: asn1`)
 
 ### Background
