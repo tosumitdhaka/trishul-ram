@@ -165,6 +165,17 @@ def _create_tables(engine: Engine) -> None:
             )
         """))
 
+        # v1.1.2: API-registered pipeline persistence (shared across cluster nodes)
+        conn.execute(text("""
+            CREATE TABLE IF NOT EXISTS registered_pipelines (
+                name        TEXT PRIMARY KEY NOT NULL,
+                yaml_text   TEXT NOT NULL,
+                created_at  TEXT NOT NULL,
+                updated_at  TEXT NOT NULL,
+                deleted     INTEGER NOT NULL DEFAULT 0
+            )
+        """))
+
         # v0.7.0 column migrations: add new columns to existing databases
         _add_column_if_missing(conn, dialect, "run_history", "node_id", "TEXT NOT NULL DEFAULT ''")
         _add_column_if_missing(conn, dialect, "run_history", "dlq_count", "INTEGER NOT NULL DEFAULT 0")
@@ -640,6 +651,66 @@ class TramDB:
                     VALUES (:u, :h, :now)
                     ON CONFLICT (username) DO UPDATE SET password_hash = :h, updated_at = :now
                 """), {"u": username, "h": password_hash, "now": now})
+
+    # ── Registered pipelines (v1.1.2) ─────────────────────────────────────
+
+    def save_pipeline(self, name: str, yaml_text: str) -> None:
+        """Upsert a pipeline YAML into the shared registry (marks deleted=False)."""
+        now = datetime.now(timezone.utc).isoformat()
+        dialect = self._engine.dialect.name
+        with self._engine.begin() as conn:
+            if dialect == "postgresql":
+                conn.execute(text("""
+                    INSERT INTO registered_pipelines (name, yaml_text, created_at, updated_at, deleted)
+                    VALUES (:name, :yaml, :now, :now, 0)
+                    ON CONFLICT (name) DO UPDATE
+                      SET yaml_text = EXCLUDED.yaml_text,
+                          updated_at = EXCLUDED.updated_at,
+                          deleted = 0
+                """), {"name": name, "yaml": yaml_text, "now": now})
+            elif dialect == "mysql":
+                conn.execute(text("""
+                    INSERT INTO registered_pipelines (name, yaml_text, created_at, updated_at, deleted)
+                    VALUES (:name, :yaml, :now, :now, 0)
+                    ON DUPLICATE KEY UPDATE
+                      yaml_text = VALUES(yaml_text),
+                      updated_at = VALUES(updated_at),
+                      deleted = 0
+                """), {"name": name, "yaml": yaml_text, "now": now})
+            else:  # sqlite
+                conn.execute(text("""
+                    INSERT INTO registered_pipelines (name, yaml_text, created_at, updated_at, deleted)
+                    VALUES (:name, :yaml, :now, :now, 0)
+                    ON CONFLICT (name) DO UPDATE
+                      SET yaml_text = excluded.yaml_text,
+                          updated_at = excluded.updated_at,
+                          deleted = 0
+                """), {"name": name, "yaml": yaml_text, "now": now})
+
+    def delete_pipeline(self, name: str) -> None:
+        """Soft-delete a pipeline from the shared registry."""
+        now = datetime.now(timezone.utc).isoformat()
+        with self._engine.begin() as conn:
+            conn.execute(
+                text("UPDATE registered_pipelines SET deleted = 1, updated_at = :now WHERE name = :name"),
+                {"now": now, "name": name},
+            )
+
+    def get_all_pipelines(self) -> list[tuple[str, str]]:
+        """Return (name, yaml_text) for all non-deleted registered pipelines."""
+        with self._engine.connect() as conn:
+            rows = conn.execute(
+                text("SELECT name, yaml_text FROM registered_pipelines WHERE deleted = 0 ORDER BY name")
+            ).fetchall()
+        return [(r[0], r[1]) for r in rows]
+
+    def get_deleted_pipeline_names(self) -> list[str]:
+        """Return names of soft-deleted pipelines (used by sync to deregister)."""
+        with self._engine.connect() as conn:
+            rows = conn.execute(
+                text("SELECT name FROM registered_pipelines WHERE deleted = 1")
+            ).fetchall()
+        return [r[0] for r in rows]
 
     # ── Lifecycle ──────────────────────────────────────────────────────────
 

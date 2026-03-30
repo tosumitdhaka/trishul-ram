@@ -67,6 +67,8 @@ class AppConfig:
     auth_users: str
     # v1.1.0 bundled pipeline templates directory
     templates_dir: str
+    # v1.1.2 DB-registered pipeline sync interval (seconds)
+    pipeline_sync_interval: int
 
     @classmethod
     def from_env(cls) -> "AppConfig":
@@ -104,6 +106,7 @@ class AppConfig:
             ui_dir=os.environ.get("TRAM_UI_DIR", "/ui"),
             auth_users=os.environ.get("TRAM_AUTH_USERS", ""),
             templates_dir=os.environ.get("TRAM_TEMPLATES_DIR", "/tram-templates"),
+            pipeline_sync_interval=_env_int("TRAM_PIPELINE_SYNC_INTERVAL", 30),
         )
 
 
