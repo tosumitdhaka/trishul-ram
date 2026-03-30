@@ -31,6 +31,28 @@ class AzureBlobSink(BaseSink):
         self.content_type: str = config.get("content_type", "application/json")
         self.overwrite: bool = bool(config.get("overwrite", True))
 
+    def test_connection(self) -> dict:
+        import time
+        t0 = time.monotonic()
+        try:
+            from azure.storage.blob import BlobServiceClient
+        except ImportError:
+            raise RuntimeError("azure-storage-blob not installed — pip install tram[azure]")
+        conn_str = self.config.get("connection_string")
+        account_name = self.config.get("account_name")
+        account_key = self.config.get("account_key")
+        if conn_str:
+            client = BlobServiceClient.from_connection_string(conn_str)
+        elif account_name and account_key:
+            account_url = f"https://{account_name}.blob.core.windows.net"
+            client = BlobServiceClient(account_url=account_url, credential=account_key)
+        else:
+            raise RuntimeError("Requires connection_string or account_name+account_key")
+        client.get_account_information()
+        latency = int((time.monotonic() - t0) * 1000)
+        container = self.config.get("container", "")
+        return {"ok": True, "latency_ms": latency, "detail": f"Azure Blob account reachable, container '{container}'"}
+
     def _get_service_client(self):
         try:
             from azure.storage.blob import BlobServiceClient

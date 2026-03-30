@@ -47,6 +47,23 @@ class GcsSource(BaseSource):
         except Exception as exc:
             raise SourceError(f"GCS client creation failed: {exc}") from exc
 
+    def test_connection(self) -> dict:
+        import time
+        t0 = time.monotonic()
+        try:
+            from google.cloud import storage
+        except ImportError:
+            raise RuntimeError("google-cloud-storage not installed — pip install tram[gcs]")
+        sa = self.config.get("service_account_json")
+        try:
+            client = storage.Client.from_service_account_json(sa) if sa else storage.Client()
+        except Exception as exc:
+            raise RuntimeError(f"GCS client creation failed: {exc}")
+        bucket = self.config.get("bucket", "")
+        client.get_bucket(bucket)
+        latency = int((time.monotonic() - t0) * 1000)
+        return {"ok": True, "latency_ms": latency, "detail": f"GCS bucket '{bucket}' accessible"}
+
     def read(self) -> Iterator[tuple[bytes, dict]]:
         client = self._get_client()
         try:

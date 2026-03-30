@@ -29,6 +29,22 @@ class AmqpSource(BaseSource):
         self._stop_event = threading.Event()
         self._msg_queue: queue.SimpleQueue = queue.SimpleQueue()
 
+    def test_connection(self) -> dict:
+        import socket
+        import time
+        from urllib.parse import urlparse
+        t0 = time.monotonic()
+        url = self.config.get("url", "amqp://guest:guest@localhost:5672/")
+        parsed = urlparse(url)
+        host = parsed.hostname or "localhost"
+        port = parsed.port or 5672
+        try:
+            with socket.create_connection((host, port), timeout=8):
+                latency = int((time.monotonic() - t0) * 1000)
+                return {"ok": True, "latency_ms": latency, "detail": f"TCP {host}:{port} OK"}
+        except Exception as exc:
+            raise RuntimeError(f"AMQP TCP probe failed: {exc}")
+
     def read(self) -> Iterator[tuple[bytes, dict]]:
         try:
             import pika
