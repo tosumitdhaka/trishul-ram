@@ -27,6 +27,16 @@ spec:
     spec:
       serviceAccountName: {{ include "tram.serviceAccountName" . }}
       enableServiceLinks: false
+      securityContext:
+        ## fsGroup ensures Secret volumes are group-owned by the tram gid (1000),
+        ## so key files (defaultMode 0440) are readable by the tram user.
+        fsGroup: {{ .Values.securityContext.fsGroup | default 1000 }}
+        {{- with .Values.securityContext.runAsUser }}
+        runAsUser: {{ . }}
+        {{- end }}
+        {{- with .Values.securityContext.runAsGroup }}
+        runAsGroup: {{ . }}
+        {{- end }}
       containers:
         - name: tram
           image: "{{ if .Values.image.registry }}{{ .Values.image.registry }}/{{ end }}{{ .Values.image.repository }}:{{ .Values.image.tag }}"
@@ -168,11 +178,12 @@ spec:
             claimName: data-{{ include "tram.fullname" . }}
         {{- end }}
         {{- if .Values.keys.secretName }}
-        ## Connector key files — rotated zero-restart via kubectl apply on the Secret
+        ## Connector key files — rotated zero-restart via kubectl apply on the Secret.
+        ## 0440 + fsGroup:1000 → root:tram ownership, tram user can read, not world-readable.
         - name: keys
           secret:
             secretName: {{ .Values.keys.secretName }}
-            defaultMode: 0400
+            defaultMode: 0440
         {{- end }}
         {{- if .Values.tls.enabled }}
         - name: tls
