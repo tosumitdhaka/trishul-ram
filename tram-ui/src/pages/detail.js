@@ -66,19 +66,55 @@ function renderRuns(runs) {
     tbody.innerHTML = '<tr><td colspan="11" class="text-secondary text-center py-4">No runs yet</td></tr>'
     return
   }
-  tbody.innerHTML = runs.map(r => `<tr>
-    <td style="width:28px"></td>
-    <td class="mono" style="font-size:11px">${esc(String(r.run_id || r.id || '').slice(0,8))}</td>
-    <td class="text-secondary">${esc(r.node || '—')}</td>
-    <td class="text-secondary">${r.started_at ? relTime(r.started_at) : '—'}</td>
-    <td class="text-secondary">${fmtDur(r.started_at, r.finished_at)}</td>
-    <td class="num-in">${fmtNum(r.records_in)}</td>
-    <td class="num-out">${fmtNum(r.records_out)}</td>
-    <td class="text-secondary">${fmtNum(r.records_skipped)}</td>
-    <td class="text-secondary">${fmtNum(r.dlq_count)}</td>
-    <td>${statusBadge(r.status)}</td>
-    <td class="text-secondary" style="font-size:11px;max-width:200px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="${esc(r.error||'')}">${esc(r.error || '')}</td>
-  </tr>`).join('')
+  const rows = []
+  runs.forEach((r, i) => {
+    const hasDetail = r.error || r.dlq_count > 0 || (r.errors && r.errors.length > 0)
+    const chevron = hasDetail
+      ? `<button class="btn-flat" style="padding:0 2px;font-size:11px" title="Show log" onclick="window._runToggleLog(${i})">
+           <i class="bi bi-chevron-right" id="run-chev-${i}"></i>
+         </button>`
+      : ''
+    rows.push(`<tr id="run-row-${i}">
+      <td style="width:28px">${chevron}</td>
+      <td class="mono" style="font-size:11px">${esc(String(r.run_id || r.id || '').slice(0,8))}</td>
+      <td class="text-secondary">${esc(r.node || '—')}</td>
+      <td class="text-secondary">${r.started_at ? relTime(r.started_at) : '—'}</td>
+      <td class="text-secondary">${fmtDur(r.started_at, r.finished_at)}</td>
+      <td class="num-in">${fmtNum(r.records_in)}</td>
+      <td class="num-out">${fmtNum(r.records_out)}</td>
+      <td class="text-secondary">${fmtNum(r.records_skipped)}</td>
+      <td class="text-secondary">${fmtNum(r.dlq_count)}</td>
+      <td>${statusBadge(r.status)}</td>
+      <td class="text-secondary" style="font-size:11px;max-width:200px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="${esc(r.error||'')}">${esc(r.error || '')}</td>
+    </tr>`)
+  })
+  tbody.innerHTML = rows.join('')
+
+  window._runToggleLog = (i) => {
+    const existingLog = document.getElementById(`run-log-${i}`)
+    const chev = document.getElementById(`run-chev-${i}`)
+    if (existingLog) {
+      existingLog.remove()
+      if (chev) { chev.classList.remove('bi-chevron-down'); chev.classList.add('bi-chevron-right') }
+      return
+    }
+    const r = runs[i]
+    const lines = [...(r.errors || [])]
+    if (r.error && !lines.includes(r.error)) lines.unshift(r.error)
+    let content
+    if (lines.length) {
+      content = lines.map(e => `<div style="color:#f85149;padding:1px 0"><i class="bi bi-x-circle me-1" style="font-size:10px"></i>${esc(e)}</div>`).join('')
+    } else if (r.dlq_count > 0) {
+      content = `<div class="text-secondary">${r.dlq_count} record(s) sent to DLQ — no inline error messages captured</div>`
+    } else {
+      content = '<div class="text-secondary">No error details available</div>'
+    }
+    const logRow = document.createElement('tr')
+    logRow.id = `run-log-${i}`
+    logRow.innerHTML = `<td></td><td colspan="10" style="background:#161b22;padding:8px 12px;font-size:11px;font-family:monospace">${content}</td>`
+    document.getElementById(`run-row-${i}`)?.after(logRow)
+    if (chev) { chev.classList.remove('bi-chevron-right'); chev.classList.add('bi-chevron-down') }
+  }
 }
 
 function wireActions(pipeline) {
