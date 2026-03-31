@@ -275,7 +275,7 @@ async def trigger_run(name: str, request: Request) -> dict:
 
 @router.post("/reload")
 async def reload_pipelines(request: Request) -> dict:
-    """Re-scan pipeline_dir and reload all YAML files."""
+    """Re-scan pipeline_dir and reload all YAML files, then re-sync DB pipelines."""
     manager = request.app.state.manager
     scheduler = request.app.state.scheduler
     pipeline_dir = request.app.state.config.pipeline_dir
@@ -300,7 +300,11 @@ async def reload_pipelines(request: Request) -> dict:
         except Exception as exc:
             logger.error("Failed to register pipeline %s: %s", config.name, exc)
 
-    return {"reloaded": loaded, "total": len(results)}
+    # Re-load DB-registered pipelines (API-created pipelines not on disk)
+    scheduler._load_from_db()
+    total = len(manager.list_all())
+
+    return {"reloaded": loaded, "total": total}
 
 
 # ── Version history + rollback ─────────────────────────────────────────────

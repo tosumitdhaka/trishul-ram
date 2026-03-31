@@ -62,6 +62,9 @@ class TramScheduler:
         if self._coordinator:
             self._coordinator.refresh()
 
+        # Compute rank-based ownership with the full filesystem pipeline set before scheduling
+        self._update_ownership()
+
         for state in self.manager.list_all():
             if state.config.enabled:
                 self._schedule_pipeline(state.config)
@@ -105,6 +108,12 @@ class TramScheduler:
 
     # ── Cluster rebalancing ────────────────────────────────────────────────
 
+    def _update_ownership(self) -> None:
+        """Recompute coordinator ownership with the current pipeline list."""
+        if self._coordinator:
+            all_names = [s.config.name for s in self.manager.list_all()]
+            self._coordinator.rebalance_ownership(all_names)
+
     def _rebalance_loop(self) -> None:
         """Background thread: poll for topology changes and rebalance ownership."""
         while not self._rebalance_stop.wait(self._rebalance_interval):
@@ -117,6 +126,8 @@ class TramScheduler:
     def _rebalance(self) -> None:
         """Re-evaluate pipeline ownership; start newly owned, stop released pipelines."""
         logger.info("Rebalancing pipeline ownership")
+        # Recompute rank-based ownership with current pipeline set before acting on it
+        self._update_ownership()
         for state in self.manager.list_all():
             config = state.config
             if not config.enabled or not self._coordinator:
@@ -171,6 +182,7 @@ class TramScheduler:
         try:
             from tram.pipeline.loader import load_pipeline_from_yaml
             rows = self._db.get_all_pipelines()
+            loaded = 0
             for name, yaml_text in rows:
                 if self.manager.exists(name):
                     logger.debug("DB pipeline already loaded from filesystem — skipping", extra={"pipeline": name})
@@ -178,11 +190,19 @@ class TramScheduler:
                 try:
                     config = load_pipeline_from_yaml(yaml_text)
                     self.manager.register(config, yaml_text=yaml_text)
-                    if config.enabled:
-                        self._schedule_pipeline(config)
+                    loaded += 1
                     logger.info("Loaded pipeline from DB", extra={"pipeline": name})
                 except Exception as exc:
                     logger.warning("Failed to load DB pipeline", extra={"pipeline": name, "error": str(exc)})
+            if loaded:
+                # Recompute ownership with full pipeline set before scheduling any DB pipelines
+                self._update_ownership()
+                for name, yaml_text in rows:
+                    if not self.manager.exists(name):
+                        continue
+                    state = self.manager.get(name)
+                    if state.config.enabled and state.status == "stopped":
+                        self._schedule_pipeline(state.config)
         except Exception as exc:
             logger.error("_load_from_db failed", extra={"error": str(exc)})
 
@@ -200,15 +220,18 @@ class TramScheduler:
             return
         from tram.pipeline.loader import load_pipeline_from_yaml
 
-        # Register newly added pipelines
+        changed = False
+
+        # Register newly added pipelines (register all first, schedule after ownership recompute)
+        new_configs = []
         for name, yaml_text in self._db.get_all_pipelines():
             if self.manager.exists(name):
                 continue
             try:
                 config = load_pipeline_from_yaml(yaml_text)
                 self.manager.register(config, yaml_text=yaml_text)
-                if config.enabled:
-                    self._schedule_pipeline(config)
+                new_configs.append(config)
+                changed = True
                 logger.info("Sync: registered pipeline from DB", extra={"pipeline": name})
             except Exception as exc:
                 logger.warning("Sync: failed to register pipeline", extra={"pipeline": name, "error": str(exc)})
@@ -222,9 +245,17 @@ class TramScheduler:
                 if state.status == "running":
                     self.stop_pipeline(name)
                 self.manager.deregister(name)
+                changed = True
                 logger.info("Sync: deregistered deleted pipeline", extra={"pipeline": name})
             except Exception as exc:
                 logger.warning("Sync: failed to deregister pipeline", extra={"pipeline": name, "error": str(exc)})
+
+        # Recompute ownership once with full updated pipeline set, then schedule new ones
+        if changed:
+            self._update_ownership()
+        for config in new_configs:
+            if config.enabled:
+                self._schedule_pipeline(config)
 
     def stop(self, timeout: int = 30) -> None:
         """Stop scheduler and all running stream/batch pipelines.
