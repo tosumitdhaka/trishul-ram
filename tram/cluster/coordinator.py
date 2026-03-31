@@ -48,6 +48,7 @@ class ClusterCoordinator:
         self._lock = threading.Lock()
         self._live_nodes: list[dict] = []
         self._my_position: int = 0
+        self._owned: frozenset[str] | None = None  # pre-computed ownership set
 
     # ── Topology ───────────────────────────────────────────────────────────
 
@@ -79,11 +80,42 @@ class ClusterCoordinator:
             )
         return changed
 
-    def owns(self, pipeline_name: str) -> bool:
-        """Return True if this node is responsible for running the pipeline."""
+    def rebalance_ownership(self, all_names: list[str]) -> None:
+        """Pre-compute which pipelines this node owns using rank-based assignment.
+
+        Pipelines are sorted by stable hash, then assigned round-robin across
+        nodes (rank % count == position).  This guarantees at most 1 pipeline
+        difference between any two nodes regardless of name hashes.
+        """
         with self._lock:
             count = len(self._live_nodes)
             pos = self._my_position
+
+        if count == 0:
+            owned: frozenset[str] = frozenset(all_names)
+        else:
+            ranked = sorted(all_names, key=_stable_hash)
+            owned = frozenset(n for i, n in enumerate(ranked) if i % count == pos)
+
+        with self._lock:
+            self._owned = owned
+
+        logger.debug(
+            "Ownership recomputed",
+            extra={"owned": len(owned), "total": len(all_names), "position": pos, "nodes": count},
+        )
+
+    def owns(self, pipeline_name: str) -> bool:
+        """Return True if this node is responsible for running the pipeline."""
+        with self._lock:
+            owned = self._owned
+            count = len(self._live_nodes)
+            pos = self._my_position
+
+        if owned is not None:
+            return pipeline_name in owned
+
+        # Fallback: modulo (before first rebalance_ownership call)
         if count == 0:
             return True  # no peers yet — own everything as a safe fallback
         return _stable_hash(pipeline_name) % count == pos
@@ -91,18 +123,24 @@ class ClusterCoordinator:
     def get_state(self, pipeline_names: list[str] | None = None) -> dict:
         """Return cluster state dict for the API endpoint.
 
-        pipeline_names: list of all registered pipeline names — used to compute
-        per-node pipeline assignments via the same consistent-hash formula.
+        pipeline_names: list of all registered pipeline names — annotates each
+        node with its pipelines using the same rank-based formula as owns().
         """
         with self._lock:
             nodes = list(self._live_nodes)
             count = len(nodes)
 
+        # Rank-based assignment — consistent with rebalance_ownership()
+        if pipeline_names and count > 0:
+            ranked = sorted(pipeline_names, key=_stable_hash)
+        else:
+            ranked = []
+
         # Annotate each node with its owned pipelines (computed, not stored in DB)
         enriched = []
         for i, node in enumerate(nodes):
-            if pipeline_names and count > 0:
-                owned = [p for p in pipeline_names if _stable_hash(p) % count == i]
+            if ranked and count > 0:
+                owned = [n for j, n in enumerate(ranked) if j % count == i]
             else:
                 owned = []
             enriched.append({

@@ -17,9 +17,10 @@ function renderCluster(status) {
   const nodes = status?.nodes || []
   const enabled = status?.cluster_enabled
 
+  const totalPipelines = nodes.reduce((sum, n) => sum + (n.pipeline_count || 0), 0)
   if (txt) txt.textContent = !enabled
     ? 'Cluster disabled — running in standalone mode'
-    : `Cluster active · ${nodes.length} node${nodes.length !== 1 ? 's' : ''}`
+    : `Cluster active · ${nodes.length} node${nodes.length !== 1 ? 's' : ''} · ${totalPipelines} pipeline${totalPipelines !== 1 ? 's' : ''}`
 
   const container = document.getElementById('cluster-nodes')
   if (!container) return
