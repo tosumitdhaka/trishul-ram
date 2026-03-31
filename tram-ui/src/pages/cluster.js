@@ -41,8 +41,8 @@ function renderCluster(status) {
                 style="background:#0d1117;color:#e6edf3;font-size:13px">
           ${dot}${esc(node.node_id || node.id || `Node ${i + 1}`)}
           <span class="ms-2 text-secondary" style="font-size:12px">${esc(node.address || '')}</span>
-          <span class="ms-auto me-2 badge bg-secondary" style="font-size:11px">${node.pipeline_count ?? 0} pipeline${node.pipeline_count !== 1 ? 's' : ''}</span>
-          <span class="me-2 text-secondary" style="font-size:12px">${node.last_heartbeat ? relTime(node.last_heartbeat) : ''}</span>
+          <span class="ms-auto me-2 text-secondary" style="font-size:12px">${node.last_heartbeat ? relTime(node.last_heartbeat) : ''}</span>
+          <span class="me-2 badge bg-secondary" style="font-size:11px">${node.pipeline_count ?? 0} pipeline${node.pipeline_count !== 1 ? 's' : ''}</span>
         </button>
       </h2>
       <div id="cn-${i}" class="accordion-collapse collapse">
