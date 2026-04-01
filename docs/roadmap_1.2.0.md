@@ -26,9 +26,7 @@ Items discussed after completing v1.1.1. Priority TBD.
 
 ## Integrations / Connectors
 
-- **ClickHouse sink — batch buffering** — accumulate records up to `batch_size` (default 5000)
-  or `batch_timeout_seconds` (default 2.0) then flush as a single bulk `INSERT`; prevents
-  `Too many parts` on MergeTree tables under high-throughput stream pipelines (e.g. Kafka source)
+- ~~**ClickHouse sink — batch buffering**~~ — _implemented in v1.1.2_
 - **SMTP sink** — outbound email delivery
 - **gRPC sink** — generic gRPC unary call sink
 - **Syslog sink** — forward records to remote syslog server (RFC 5424)

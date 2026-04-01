@@ -874,6 +874,10 @@ class ClickHouseSinkConfig(BaseModel):
     retry_delay_seconds: float = 1.0
     circuit_breaker_threshold: int = 0
     serializer_out: SerializerConfig | None = None  # per-sink override; None = use global
+    # Batching — accumulate rows before flushing to prevent ClickHouse "too many parts"
+    batch_size: int = 5000
+    batch_timeout_seconds: float = 2.0
+    batch_flush_on_stop: bool = True
 
 
 SinkConfig = Annotated[
