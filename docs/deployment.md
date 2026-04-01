@@ -187,7 +187,7 @@ tram mib compile /path/to/vendor-mibs/ --out /mibs
 **Air-gapped environments** — copy pre-compiled MIB `.py` files into the image:
 
 ```dockerfile
-FROM ghcr.io/OWNER/tram:1.1.1
+FROM ghcr.io/OWNER/tram:1.1.3
 COPY compiled-mibs/*.py /mibs/
 ```
 
@@ -232,7 +232,7 @@ curl -X DELETE http://localhost:8765/api/schemas/cisco/GenericRecord.proto
 **Mount host directory** for development (read-write):
 
 ```bash
-docker run -v ./schemas:/schemas tram:1.1.1
+docker run -v ./schemas:/schemas tram:1.1.3
 ```
 
 ## Schema Registry Integration (v1.0.4)
@@ -355,7 +355,7 @@ Mount a volume at `/data` (or set `TRAM_DB_URL`) to persist run history and pipe
 
 ### Installed extras in the default image
 
-The default `tram:1.1.1` image installs (`clickhouse` added in v1.0.4):
+The default `tram:1.1.3` image installs (`clickhouse` added in v1.0.4):
 
 `kafka`, `opensearch`, `snmp`, `avro`, `protobuf_ser`, `msgpack_ser`, `mqtt`, `amqp`, `nats`,
 `gnmi`, `jmespath`, `sql`, `influxdb`, `redis`, `websocket`, `elasticsearch`, `metrics`,
@@ -375,7 +375,7 @@ The following extras are **excluded by default** to keep the image lean. Extend 
 | `otel` | only needed when `TRAM_OTEL_ENDPOINT` is set; no-op fallback when absent | ~15 MB |
 
 ```dockerfile
-FROM ghcr.io/OWNER/tram:1.1.1
+FROM ghcr.io/OWNER/tram:1.1.3
 RUN pip install "tram[parquet,s3,gcs,azure,otel]"
 ```
 
@@ -397,7 +397,7 @@ TRAM ships a production-ready Helm chart in `helm/`. Published to GHCR OCI on ev
 # Add chart from OCI registry
 helm install tram oci://ghcr.io/OWNER/charts/tram \
   --namespace tram --create-namespace \
-  --set image.tag=1.1.1
+  --set image.tag=1.1.3
 
 # Mount pipelines from local files
 helm upgrade tram oci://ghcr.io/OWNER/charts/tram \
@@ -414,7 +414,7 @@ helm upgrade tram oci://ghcr.io/OWNER/charts/tram \
 | Value | Default | Description |
 |-------|---------|-------------|
 | `image.repository` | `ghcr.io/OWNER/tram` | Docker image repository |
-| `image.tag` | `"1.1.1"` | Image tag |
+| `image.tag | "1.1.3"` | Image tag |
 | `replicaCount` | `1` | Replicas — `1` = standalone, `N` = cluster |
 | `clusterMode.enabled` | `false` | Activate cluster mode (sets `TRAM_CLUSTER_ENABLED`, requires external DB) |
 | `persistence.enabled` | `true` | Provision a per-pod RWO PVC via `volumeClaimTemplates` mounted at `/data`; auto-sets `TRAM_DB_URL=sqlite:////data/tram.db`, `TRAM_SCHEMA_DIR=/data/schemas`, `TRAM_MIB_DIR=/data/mibs`; disable in cluster mode when using `sharedStorage` |
@@ -446,7 +446,7 @@ helm upgrade tram oci://ghcr.io/OWNER/charts/tram \
 ```bash
 helm install tram oci://ghcr.io/OWNER/charts/tram \
   --namespace tram --create-namespace \
-  --set image.tag=1.1.1
+  --set image.tag=1.1.3
 ```
 
 A single-replica `StatefulSet` with pod name `tram-0` runs the full daemon. A `PersistentVolumeClaim` (`data-tram-0`) is auto-provisioned via `volumeClaimTemplates` and mounted at `/data`. SQLite run history, API-uploaded schemas (`/data/schemas`), and runtime MIBs (`/data/mibs`) all share this single PVC and survive pod restarts. Standard MIBs baked into the image at `/mibs` remain available alongside any runtime-downloaded ones.
@@ -465,7 +465,7 @@ kubectl create secret generic tram-db \
 
 helm install tram oci://ghcr.io/OWNER/charts/tram \
   --namespace tram --create-namespace \
-  --set image.tag=1.1.1 \
+  --set image.tag=1.1.3 \
   --set clusterMode.enabled=true \
   --set replicaCount=3 \
   --set envSecret.TRAM_DB_URL.secretName=tram-db \
@@ -494,7 +494,7 @@ For a self-contained cluster deployment on Kubernetes (e.g. kind/minikube) witho
 ```bash
 helm install trishul-ram helm/ \
   --namespace trishul-ram --create-namespace \
-  --set image.tag=1.1.1 \
+  --set image.tag=1.1.3 \
   --set replicaCount=3 \
   --set clusterMode.enabled=true \
   --set postgresql.enabled=true
@@ -530,7 +530,7 @@ Then install/upgrade TRAM with shared storage enabled:
 ```bash
 helm upgrade trishul-ram helm/ \
   --namespace trishul-ram \
-  --set image.tag=1.1.1 \
+  --set image.tag=1.1.3 \
   --set replicaCount=3 \
   --set clusterMode.enabled=true \
   --set postgresql.enabled=true \
@@ -611,7 +611,7 @@ spec:
     spec:
       containers:
       - name: tram
-        image: ghcr.io/OWNER/tram:1.1.1
+        image: ghcr.io/OWNER/tram:1.1.3
         command: ["tram", "daemon"]
         ports:
         - containerPort: 8765
