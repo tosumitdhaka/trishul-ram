@@ -2,8 +2,8 @@ name: Release
 
 on:
   push:
-    tags:
-      - "v*"
+    branches:
+      - main
 
 jobs:
   test:
@@ -21,16 +21,17 @@ jobs:
           cache: pip
 
       - name: Install dependencies
-        run: pip install -e ".[dev]"
+        run: pip install -e ".[dev,snmp,avro,protobuf_ser,parquet,msgpack_ser,jmespath,sql,asn1]"
 
       - name: Lint with ruff
         run: ruff check .
 
-      - name: Run unit tests
-        run: pytest tests/unit/ -q --tb=short
-
-      - name: Run integration tests
-        run: pytest tests/integration/ -q --tb=short
+      - name: Run tests with coverage
+        run: |
+          pytest tests/unit/ tests/integration/ -q --tb=short \
+            --cov=tram \
+            --cov-report=term-missing \
+            --cov-fail-under=60
 
   docker:
     name: Build & Push Docker image
@@ -44,16 +45,11 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Derive version from tag
-        # Strip the leading "v" from the tag (v1.0.1 → 1.0.1) and patch
-        # pyproject.toml so the installed wheel carries the exact release version.
-        # tram/__init__.py reads version via importlib.metadata at runtime, so
-        # this one edit propagates to the CLI, REST API, and package metadata.
+      - name: Read version from pyproject.toml
         run: |
-          VERSION=${GITHUB_REF_NAME#v}
+          VERSION=$(grep -oP '(?<=^version = ").*(?=")' pyproject.toml)
           echo "VERSION=$VERSION" >> $GITHUB_ENV
-          sed -i "s/^version = \".*\"/version = \"$VERSION\"/" pyproject.toml
-          echo "Patched pyproject.toml → version = \"$VERSION\""
+          echo "Detected version: $VERSION"
 
       - name: Log in to GHCR
         uses: docker/login-action@v3
@@ -68,9 +64,8 @@ jobs:
         with:
           images: ghcr.io/${{ github.repository_owner }}/tram
           tags: |
-            type=semver,pattern={{version}}
-            type=semver,pattern={{major}}.{{minor}}
-            type=raw,value=latest,enable={{is_default_branch}}
+            type=raw,value=${{ env.VERSION }}
+            type=raw,value=latest
 
       - name: Set up QEMU
         uses: docker/setup-qemu-action@v3
@@ -101,11 +96,9 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Derive version from tag
-        # Patch Chart.yaml (chart version + appVersion) and values.yaml (image tag)
-        # from the git tag. These are workspace-only changes — nothing is committed.
+      - name: Read version from pyproject.toml
         run: |
-          VERSION=${GITHUB_REF_NAME#v}
+          VERSION=$(grep -oP '(?<=^version = ").*(?=")' pyproject.toml)
           echo "VERSION=$VERSION" >> $GITHUB_ENV
           sed -i "s/^version: .*/version: $VERSION/" helm/Chart.yaml
           sed -i "s/^appVersion: .*/appVersion: \"$VERSION\"/" helm/Chart.yaml

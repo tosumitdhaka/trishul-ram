@@ -98,6 +98,7 @@ all = [
     "tram[metrics]",
     "tram[prometheus_rw]",
     "tram[clickhouse]",
+    "tram[asn1]",
     "tram[corba]",
     "tram[mib]",
     "tram[otel]",

@@ -58,6 +58,9 @@ sinks:
     retry_count: 3
     retry_delay_seconds: 2.0
     circuit_breaker_threshold: 5     # open circuit after 5 consecutive failures; 0 = disabled
+    batch_size: 5000                 # flush when buffer reaches N rows
+    batch_timeout_seconds: 2.0       # flush every N seconds regardless of buffer size
+    batch_flush_on_stop: true        # flush remaining rows when pipeline stops
     transforms:
       - type: field_drop
         fields: [env]                # strip internal field before insert

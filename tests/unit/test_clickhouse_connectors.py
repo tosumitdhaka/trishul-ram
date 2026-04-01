@@ -143,7 +143,8 @@ class TestClickHouseSource:
 
 class TestClickHouseSink:
     def _make_sink(self, extra: dict | None = None) -> ClickHouseSink:
-        cfg = {"table": "events"}
+        # batch_size=1 forces immediate flush on write; batch_timeout_seconds=0 disables timer
+        cfg = {"table": "events", "batch_size": 1, "batch_timeout_seconds": 0}
         if extra:
             cfg.update(extra)
         return ClickHouseSink(cfg)
@@ -238,3 +239,52 @@ class TestClickHouseSink:
         sink = self._make_sink({"secure": True, "verify": False})
         assert sink.secure is True
         assert sink.verify is False
+
+    def test_batch_config_defaults(self):
+        sink = ClickHouseSink({"table": "t", "batch_timeout_seconds": 0})
+        assert sink.batch_size == 5000
+        assert sink.batch_timeout_seconds == 0
+        assert sink.batch_flush_on_stop is True
+        sink.close()
+
+    def test_batching_accumulates_until_batch_size(self):
+        mock_module, mock_client = self._mock_module()
+        records = [{"id": i} for i in range(3)]
+
+        with patch.dict(sys.modules, {"clickhouse_driver": mock_module}):
+            sink = ClickHouseSink({"table": "events", "batch_size": 3, "batch_timeout_seconds": 0})
+            # First two writes should NOT flush
+            sink.write(json.dumps([records[0]]).encode(), {})
+            sink.write(json.dumps([records[1]]).encode(), {})
+            mock_client.execute.assert_not_called()
+            # Third write fills the buffer — should flush
+            sink.write(json.dumps([records[2]]).encode(), {})
+
+        mock_client.execute.assert_called_once()
+        assert mock_client.execute.call_args[0][1] == records
+
+    def test_close_flushes_remaining_buffer(self):
+        mock_module, mock_client = self._mock_module()
+        records = [{"id": 1}, {"id": 2}]
+
+        with patch.dict(sys.modules, {"clickhouse_driver": mock_module}):
+            sink = ClickHouseSink({"table": "events", "batch_size": 100, "batch_timeout_seconds": 0})
+            sink.write(json.dumps(records).encode(), {})
+            mock_client.execute.assert_not_called()
+            sink.close()
+
+        mock_client.execute.assert_called_once()
+        assert mock_client.execute.call_args[0][1] == records
+
+    def test_close_with_flush_on_stop_false_discards_buffer(self):
+        mock_module, mock_client = self._mock_module()
+
+        with patch.dict(sys.modules, {"clickhouse_driver": mock_module}):
+            sink = ClickHouseSink({
+                "table": "events", "batch_size": 100,
+                "batch_timeout_seconds": 0, "batch_flush_on_stop": False,
+            })
+            sink.write(json.dumps([{"id": 1}]).encode(), {})
+            sink.close()
+
+        mock_client.execute.assert_not_called()
