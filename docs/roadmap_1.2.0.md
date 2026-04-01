@@ -32,6 +32,10 @@ Items discussed after completing v1.1.1. Priority TBD.
 - **Syslog sink** — forward records to remote syslog server (RFC 5424)
 - **Kafka schema registry** — Avro with schema ID framing (Confluent wire format)
 
+## Testing / Quality
+
+- **Test coverage to 75%** — Tier 3 unit tests for scheduler, pipeline executor, persistence DB, pipeline watcher, and health/runs/metrics API routers; currently at 69% (threshold: 60%)
+
 ## Security
 
 - **Role-based access** — read-only vs admin token scopes

@@ -9,6 +9,24 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ---
 
+## [1.1.3] — 2026-04-01
+
+### Added
+
+**Test coverage — Tier 1 + Tier 2 unit tests**
+- 8 new unit test files covering API routers, auth utilities, and serializers:
+  - `test_auth_utils.py` — token create/verify, password hash, `parse_users`, `extract_bearer`
+  - `test_api_auth_router.py` — login, `/me`, change-password (all happy + error paths)
+  - `test_api_pipelines.py` — pipeline CRUD, lifecycle (start/stop/run), dry-run, alerts CRUD, versions, reload
+  - `test_api_connectors_router.py` — `/test` and `/test-pipeline` endpoints, host/port extraction helpers
+  - `test_api_stats_router.py` — in-memory stats fallback, pipeline status counts, sparkline buckets
+  - `test_api_ai_router.py` — AI status, generate/explain modes, error paths (503/502/400)
+  - `test_api_misc_routers.py` — webhooks (404/401/202/503), templates (cache, YAML parse), mibs (list/delete/upload)
+  - `test_serializers_text_ndjson.py` — `TextSerializer` and `NdjsonSerializer` parse + serialize + error paths
+- **846 tests total** (up from 701); coverage **69%** (up from 63%); threshold 60%
+
+---
+
 ## [1.1.2] — 2026-03-30
 
 ### Added
