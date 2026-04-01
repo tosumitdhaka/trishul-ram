@@ -4,8 +4,8 @@ from __future__ import annotations
 
 import logging
 from collections import deque
-from datetime import datetime, timezone
-from typing import TYPE_CHECKING, Optional
+from datetime import UTC, datetime
+from typing import TYPE_CHECKING
 
 from tram.core.context import RunResult
 from tram.core.exceptions import PipelineAlreadyExistsError, PipelineNotFoundError
@@ -23,13 +23,13 @@ _MAX_RUN_HISTORY = 500  # per-pipeline
 class PipelineState:
     """Tracks the live state of a registered pipeline."""
 
-    def __init__(self, config: PipelineConfig, yaml_text: Optional[str] = None) -> None:
+    def __init__(self, config: PipelineConfig, yaml_text: str | None = None) -> None:
         self.config = config
-        self.yaml_text: Optional[str] = yaml_text
+        self.yaml_text: str | None = yaml_text
         self.status: str = "stopped"  # stopped | running | error
-        self.registered_at: datetime = datetime.now(timezone.utc)
-        self.last_run: Optional[datetime] = None
-        self.last_run_status: Optional[str] = None
+        self.registered_at: datetime = datetime.now(UTC)
+        self.last_run: datetime | None = None
+        self.last_run_status: str | None = None
         self.run_history: deque[RunResult] = deque(maxlen=_MAX_RUN_HISTORY)
 
     def record_run(self, result: RunResult) -> None:
@@ -75,8 +75,8 @@ class PipelineManager:
 
     def __init__(
         self,
-        db: Optional["TramDB"] = None,
-        alert_evaluator: Optional["AlertEvaluator"] = None,
+        db: TramDB | None = None,
+        alert_evaluator: AlertEvaluator | None = None,
     ) -> None:
         self._pipelines: dict[str, PipelineState] = {}
         self._db = db
@@ -88,7 +88,7 @@ class PipelineManager:
         self,
         config: PipelineConfig,
         replace: bool = False,
-        yaml_text: Optional[str] = None,
+        yaml_text: str | None = None,
     ) -> PipelineState:
         """Register a pipeline configuration."""
         if config.name in self._pipelines and not replace:
@@ -155,11 +155,11 @@ class PipelineManager:
 
     def get_runs(
         self,
-        pipeline_name: Optional[str] = None,
-        status: Optional[str] = None,
+        pipeline_name: str | None = None,
+        status: str | None = None,
         limit: int = 100,
         offset: int = 0,
-        from_dt: Optional[datetime] = None,
+        from_dt: datetime | None = None,
     ) -> list[RunResult]:
         """Return run history. Uses DB if available (survives restarts)."""
         if self._db:
@@ -187,7 +187,7 @@ class PipelineManager:
 
         return all_runs[offset: offset + limit]
 
-    def get_run(self, run_id: str) -> Optional[RunResult]:
+    def get_run(self, run_id: str) -> RunResult | None:
         if self._db:
             return self._db.get_run(run_id)
         for state in self._pipelines.values():

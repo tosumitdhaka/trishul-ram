@@ -33,7 +33,8 @@ def verify_hashed_password(password: str, stored_hash: str) -> bool:
 
 # Signing secret — shared across cluster nodes via TRAM_AUTH_SECRET env var.
 # Falls back to a per-process random (tokens invalidated on restart) when unset.
-import os as _os
+import os as _os  # noqa: E402
+
 _SECRET = _os.environ.get("TRAM_AUTH_SECRET") or secrets.token_hex(32)
 
 

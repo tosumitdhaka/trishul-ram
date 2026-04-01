@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import logging
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 
 from tram.core.exceptions import SinkError
 from tram.interfaces.base_sink import BaseSink
@@ -89,7 +89,7 @@ class S3Sink(BaseSink):
         return {"ok": True, "latency_ms": latency, "detail": "S3 endpoint reachable"}
 
     def _render_key(self, meta: dict) -> str:
-        ts = datetime.now(timezone.utc).isoformat().replace(":", "-")
+        ts = datetime.now(UTC).isoformat().replace(":", "-")
         return self.key_template.format(
             pipeline=meta.get("pipeline_name", "tram"),
             timestamp=ts,

@@ -1,10 +1,13 @@
 """Avro serializer with optional Schema Registry support."""
 from __future__ import annotations
+
 import io
 import os
+
 from tram.core.exceptions import SerializerError
 from tram.interfaces.base_serializer import BaseSerializer
 from tram.registry.registry import register_serializer
+
 
 @register_serializer("avro")
 class AvroSerializer(BaseSerializer):
@@ -77,7 +80,7 @@ class AvroSerializer(BaseSerializer):
             import json
             schema_dict = json.loads(self.schema_str)
         else:
-            with open(self.schema_file, "r") as f:
+            with open(self.schema_file) as f:
                 import json
                 schema_dict = json.load(f)
 

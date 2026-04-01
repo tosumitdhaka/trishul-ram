@@ -2,21 +2,20 @@
 
 from __future__ import annotations
 
-from typing import Annotated, Any, Literal, Optional, Union
+from typing import Annotated, Any, Literal
 
 from pydantic import BaseModel, Field, field_validator, model_validator
-
 
 # ── Schedule ───────────────────────────────────────────────────────────────
 
 
 class ScheduleConfig(BaseModel):
     type: Literal["interval", "cron", "stream", "manual"] = "manual"
-    interval_seconds: Optional[int] = None
-    cron: Optional[str] = None
+    interval_seconds: int | None = None
+    cron: str | None = None
 
     @model_validator(mode="after")
-    def check_schedule_params(self) -> "ScheduleConfig":
+    def check_schedule_params(self) -> ScheduleConfig:
         if self.type == "interval" and self.interval_seconds is None:
             raise ValueError("interval_seconds required when type=interval")
         if self.type == "cron" and self.cron is None:
@@ -32,17 +31,17 @@ class SFTPSourceConfig(BaseModel):
     host: str
     port: int = 22
     username: str
-    password: Optional[str] = None
-    private_key_path: Optional[str] = None
+    password: str | None = None
+    private_key_path: str | None = None
     remote_path: str
     file_pattern: str = "*"
-    move_after_read: Optional[str] = None
+    move_after_read: str | None = None
     delete_after_read: bool = False
     skip_processed: bool = False   # track processed files in DB; skip on re-run
     read_chunk_bytes: int = 0      # 0 = read all at once; >0 = stream in chunks
 
     @model_validator(mode="after")
-    def check_auth(self) -> "SFTPSourceConfig":
+    def check_auth(self) -> SFTPSourceConfig:
         if self.password is None and self.private_key_path is None:
             raise ValueError("Either password or private_key_path must be provided")
         return self
@@ -52,7 +51,7 @@ class LocalSourceConfig(BaseModel):
     type: Literal["local"]
     path: str
     file_pattern: str = "*"
-    move_after_read: Optional[str] = None
+    move_after_read: str | None = None
     delete_after_read: bool = False
     recursive: bool = False
     skip_processed: bool = False
@@ -64,36 +63,36 @@ class RestSourceConfig(BaseModel):
     method: str = "GET"
     headers: dict[str, str] = Field(default_factory=dict)
     params: dict[str, Any] = Field(default_factory=dict)
-    body: Optional[Any] = None
+    body: Any | None = None
     auth_type: Literal["none", "basic", "bearer", "apikey"] = "none"
-    username: Optional[str] = None
-    password: Optional[str] = None
-    token: Optional[str] = None
-    api_key: Optional[str] = None
+    username: str | None = None
+    password: str | None = None
+    token: str | None = None
+    api_key: str | None = None
     api_key_header: str = "X-API-Key"
     timeout: int = 30
-    response_path: Optional[str] = None
+    response_path: str | None = None
     paginate: bool = False
     page_param: str = "offset"
     page_size: int = 100
-    total_path: Optional[str] = None
+    total_path: str | None = None
     verify_ssl: bool = True
 
 
 class KafkaSourceConfig(BaseModel):
     type: Literal["kafka"]
     brokers: list[str]
-    topic: Union[str, list[str]]
-    group_id: Optional[str] = None   # None → use pipeline name at runtime
+    topic: str | list[str]
+    group_id: str | None = None   # None → use pipeline name at runtime
     auto_offset_reset: Literal["latest", "earliest"] = "latest"
     enable_auto_commit: bool = True
     max_poll_records: int = 500
     session_timeout_ms: int = 30000
     security_protocol: str = "PLAINTEXT"
-    sasl_mechanism: Optional[str] = None
-    sasl_username: Optional[str] = None
-    sasl_password: Optional[str] = None
-    ssl_cafile: Optional[str] = None
+    sasl_mechanism: str | None = None
+    sasl_username: str | None = None
+    sasl_password: str | None = None
+    ssl_cafile: str | None = None
     reconnect_delay_seconds: float = 5.0
     max_reconnect_attempts: int = 0   # 0 = infinite
 
@@ -106,7 +105,7 @@ class FtpSourceConfig(BaseModel):
     password: str
     remote_path: str = "/"
     file_pattern: str = "*"
-    move_after_read: Optional[str] = None
+    move_after_read: str | None = None
     delete_after_read: bool = False
     passive: bool = True
     skip_processed: bool = False
@@ -117,11 +116,11 @@ class S3SourceConfig(BaseModel):
     bucket: str
     prefix: str = ""
     file_pattern: str = "*"
-    endpoint_url: Optional[str] = None
+    endpoint_url: str | None = None
     region_name: str = "us-east-1"
     aws_access_key_id: str = ""
     aws_secret_access_key: str = ""
-    move_after_read: Optional[str] = None
+    move_after_read: str | None = None
     delete_after_read: bool = False
     skip_processed: bool = False
     read_chunk_bytes: int = 0      # 0 = read all at once; >0 = stream in chunks
@@ -148,9 +147,9 @@ class SnmpTrapSourceConfig(BaseModel):
     # SNMPv3 USM (used when version="3"; trap decoding is best-effort for v3)
     security_name: str = ""
     auth_protocol: str = "SHA"
-    auth_key: Optional[str] = None
+    auth_key: str | None = None
     priv_protocol: str = "AES128"
-    priv_key: Optional[str] = None
+    priv_key: str | None = None
     context_name: str = ""
 
 
@@ -171,9 +170,9 @@ class SnmpPollSourceConfig(BaseModel):
     # SNMPv3 USM (used when version="3")
     security_name: str = ""
     auth_protocol: str = "SHA"        # MD5 | SHA | SHA224 | SHA256 | SHA384 | SHA512
-    auth_key: Optional[str] = None    # auth passphrase; None → noAuthNoPriv
+    auth_key: str | None = None    # auth passphrase; None → noAuthNoPriv
     priv_protocol: str = "AES128"     # DES | 3DES | AES | AES128 | AES192 | AES256
-    priv_key: Optional[str] = None    # priv passphrase; None → authNoPriv
+    priv_key: str | None = None    # priv passphrase; None → authNoPriv
     context_name: str = ""            # SNMPv3 contextName (usually empty)
 
 
@@ -184,8 +183,8 @@ class MqttSourceConfig(BaseModel):
     topic: str
     qos: int = 0
     client_id: str = ""
-    username: Optional[str] = None
-    password: Optional[str] = None
+    username: str | None = None
+    password: str | None = None
     tls: bool = False
     keepalive: int = 60
 
@@ -202,8 +201,8 @@ class NatsSourceConfig(BaseModel):
     type: Literal["nats"]
     servers: list[str] = Field(default_factory=lambda: ["nats://localhost:4222"])
     subject: str
-    queue_group: Optional[str] = None   # None → use pipeline name at runtime; "" → broadcast
-    credentials_file: Optional[str] = None
+    queue_group: str | None = None   # None → use pipeline name at runtime; "" → broadcast
+    credentials_file: str | None = None
     max_reconnect_attempts: int = -1   # -1 = infinite
     reconnect_time_wait: float = 2.0
 
@@ -215,7 +214,7 @@ class GnmiSourceConfig(BaseModel):
     username: str = ""
     password: str = ""
     tls: bool = True
-    tls_ca: Optional[str] = None
+    tls_ca: str | None = None
     subscriptions: list[dict[str, Any]] = Field(default_factory=list)
 
 
@@ -241,7 +240,7 @@ class RedisSourceConfig(BaseModel):
     host: str = "localhost"
     port: int = 6379
     db: int = 0
-    password: Optional[str] = None
+    password: str | None = None
     mode: Literal["list", "stream"] = "list"
     key: str
     count: int = 100
@@ -255,21 +254,21 @@ class GcsSourceConfig(BaseModel):
     bucket: str
     prefix: str = ""
     file_pattern: str = "*"
-    service_account_json: Optional[str] = None
-    move_after_read: Optional[str] = None
+    service_account_json: str | None = None
+    move_after_read: str | None = None
     delete_after_read: bool = False
     skip_processed: bool = False
 
 
 class AzureBlobSourceConfig(BaseModel):
     type: Literal["azure_blob"]
-    connection_string: Optional[str] = None
-    account_name: Optional[str] = None
-    account_key: Optional[str] = None
+    connection_string: str | None = None
+    account_name: str | None = None
+    account_key: str | None = None
     container: str
     prefix: str = ""
     file_pattern: str = "*"
-    move_after_read: Optional[str] = None
+    move_after_read: str | None = None
     delete_after_read: bool = False
     skip_processed: bool = False
 
@@ -280,7 +279,7 @@ class AzureBlobSourceConfig(BaseModel):
 class WebhookSourceConfig(BaseModel):
     type: Literal["webhook"]
     path: str
-    secret: Optional[str] = None
+    secret: str | None = None
     max_queue_size: int = 1000
 
 
@@ -300,17 +299,17 @@ class ElasticsearchSourceConfig(BaseModel):
     query: dict[str, Any] = Field(default_factory=lambda: {"match_all": {}})
     scroll: str = "2m"
     batch_size: int = 500
-    username: Optional[str] = None
-    password: Optional[str] = None
-    api_key: Optional[str] = None
-    ca_certs: Optional[str] = None
+    username: str | None = None
+    password: str | None = None
+    api_key: str | None = None
+    ca_certs: str | None = None
     verify_certs: bool = True
 
 
 class PrometheusRWSourceConfig(BaseModel):
     type: Literal["prometheus_rw"]
     path: str = "prom-rw"
-    secret: Optional[str] = None
+    secret: str | None = None
 
 
 class ClickHouseSourceConfig(BaseModel):
@@ -344,48 +343,23 @@ class CorbaSourceConfig(BaseModel):
         skip_processed   (bool, default False)  Skip invocations already recorded in DB
     """
     type: Literal["corba"]
-    ior: Optional[str] = None
-    naming_service: Optional[str] = None
-    object_name: Optional[str] = None
+    ior: str | None = None
+    naming_service: str | None = None
+    object_name: str | None = None
     operation: str
     args: list = Field(default_factory=list)
     timeout_seconds: int = 30
     skip_processed: bool = False
 
     @model_validator(mode="after")
-    def check_endpoint(self) -> "CorbaSourceConfig":
+    def check_endpoint(self) -> CorbaSourceConfig:
         if not self.ior and not self.naming_service:
             raise ValueError("Either 'ior' or 'naming_service' must be provided")
         return self
 
 
 SourceConfig = Annotated[
-    Union[
-        SFTPSourceConfig,
-        LocalSourceConfig,
-        RestSourceConfig,
-        KafkaSourceConfig,
-        FtpSourceConfig,
-        S3SourceConfig,
-        SyslogSourceConfig,
-        SnmpTrapSourceConfig,
-        SnmpPollSourceConfig,
-        MqttSourceConfig,
-        AmqpSourceConfig,
-        NatsSourceConfig,
-        GnmiSourceConfig,
-        SqlSourceConfig,
-        ClickHouseSourceConfig,
-        InfluxDbSourceConfig,
-        RedisSourceConfig,
-        GcsSourceConfig,
-        AzureBlobSourceConfig,
-        WebhookSourceConfig,
-        WebSocketSourceConfig,
-        ElasticsearchSourceConfig,
-        PrometheusRWSourceConfig,
-        CorbaSourceConfig,
-    ],
+    SFTPSourceConfig | LocalSourceConfig | RestSourceConfig | KafkaSourceConfig | FtpSourceConfig | S3SourceConfig | SyslogSourceConfig | SnmpTrapSourceConfig | SnmpPollSourceConfig | MqttSourceConfig | AmqpSourceConfig | NatsSourceConfig | GnmiSourceConfig | SqlSourceConfig | ClickHouseSourceConfig | InfluxDbSourceConfig | RedisSourceConfig | GcsSourceConfig | AzureBlobSourceConfig | WebhookSourceConfig | WebSocketSourceConfig | ElasticsearchSourceConfig | PrometheusRWSourceConfig | CorbaSourceConfig,
     Field(discriminator="type"),
 ]
 
@@ -418,7 +392,7 @@ class ValueMapTransformConfig(BaseModel):
     type: Literal["value_map"]
     field: str
     mapping: dict[str, Any]
-    default: Optional[Any] = None
+    default: Any | None = None
 
 
 class FilterTransformConfig(BaseModel):
@@ -436,7 +410,7 @@ class FlattenTransformConfig(BaseModel):
 class TimestampNormalizeTransformConfig(BaseModel):
     type: Literal["timestamp_normalize"]
     fields: list[str]
-    input_format: Optional[str] = None
+    input_format: str | None = None
     output_format: str = "iso"
     on_error: Literal["raise", "null", "keep"] = "raise"
 
@@ -452,8 +426,8 @@ class EnrichTransformConfig(BaseModel):
     lookup_file: str
     lookup_format: Literal["csv", "json"] = "csv"
     join_key: str
-    lookup_key: Optional[str] = None
-    add_fields: Optional[list[str]] = None
+    lookup_key: str | None = None
+    add_fields: list[str] | None = None
     prefix: str = ""
     on_miss: Literal["keep", "null_fields"] = "keep"
 
@@ -476,7 +450,7 @@ class RegexExtractTransformConfig(BaseModel):
     type: Literal["regex_extract"]
     field: str
     pattern: str
-    destination: Optional[str] = None
+    destination: str | None = None
     on_no_match: Literal["keep", "null", "drop"] = "keep"
 
 
@@ -525,28 +499,7 @@ class UnnestTransformConfig(BaseModel):
 
 
 TransformConfig = Annotated[
-    Union[
-        RenameTransformConfig,
-        CastTransformConfig,
-        AddFieldTransformConfig,
-        DropTransformConfig,
-        ValueMapTransformConfig,
-        FilterTransformConfig,
-        FlattenTransformConfig,
-        TimestampNormalizeTransformConfig,
-        AggregateTransformConfig,
-        EnrichTransformConfig,
-        ExplodeTransformConfig,
-        DeduplicateTransformConfig,
-        RegexExtractTransformConfig,
-        TemplateTransformConfig,
-        MaskTransformConfig,
-        ValidateTransformConfig,
-        SortTransformConfig,
-        LimitTransformConfig,
-        JmesPathExtractTransformConfig,
-        UnnestTransformConfig,
-    ],
+    RenameTransformConfig | CastTransformConfig | AddFieldTransformConfig | DropTransformConfig | ValueMapTransformConfig | FilterTransformConfig | FlattenTransformConfig | TimestampNormalizeTransformConfig | AggregateTransformConfig | EnrichTransformConfig | ExplodeTransformConfig | DeduplicateTransformConfig | RegexExtractTransformConfig | TemplateTransformConfig | MaskTransformConfig | ValidateTransformConfig | SortTransformConfig | LimitTransformConfig | JmesPathExtractTransformConfig | UnnestTransformConfig,
     Field(discriminator="type"),
 ]
 
@@ -559,19 +512,19 @@ class SFTPSinkConfig(BaseModel):
     host: str
     port: int = 22
     username: str
-    password: Optional[str] = None
-    private_key_path: Optional[str] = None
+    password: str | None = None
+    private_key_path: str | None = None
     remote_path: str
     filename_template: str = "{pipeline}_{timestamp}.bin"
-    condition: Optional[str] = None
+    condition: str | None = None
     transforms: list[TransformConfig] = Field(default_factory=list)
     retry_count: int = 0
     retry_delay_seconds: float = 1.0
     circuit_breaker_threshold: int = 0
-    serializer_out: Optional[SerializerConfig] = None  # per-sink override; None = use global
+    serializer_out: SerializerConfig | None = None  # per-sink override; None = use global
 
     @model_validator(mode="after")
-    def check_auth(self) -> "SFTPSinkConfig":
+    def check_auth(self) -> SFTPSinkConfig:
         if self.password is None and self.private_key_path is None:
             raise ValueError("Either password or private_key_path must be provided")
         return self
@@ -582,12 +535,12 @@ class LocalSinkConfig(BaseModel):
     path: str
     filename_template: str = "{pipeline}_{timestamp}.bin"
     overwrite: bool = True
-    condition: Optional[str] = None
+    condition: str | None = None
     transforms: list[TransformConfig] = Field(default_factory=list)
     retry_count: int = 0
     retry_delay_seconds: float = 1.0
     circuit_breaker_threshold: int = 0
-    serializer_out: Optional[SerializerConfig] = None  # per-sink override; None = use global
+    serializer_out: SerializerConfig | None = None  # per-sink override; None = use global
 
 
 class RestSinkConfig(BaseModel):
@@ -597,61 +550,61 @@ class RestSinkConfig(BaseModel):
     headers: dict[str, str] = Field(default_factory=dict)
     content_type: str = "application/json"
     auth_type: Literal["none", "basic", "bearer", "apikey"] = "none"
-    username: Optional[str] = None
-    password: Optional[str] = None
-    token: Optional[str] = None
-    api_key: Optional[str] = None
+    username: str | None = None
+    password: str | None = None
+    token: str | None = None
+    api_key: str | None = None
     api_key_header: str = "X-API-Key"
     timeout: int = 30
     verify_ssl: bool = True
     expected_status: list[int] = Field(default_factory=lambda: [200, 201, 202, 204])
-    condition: Optional[str] = None
+    condition: str | None = None
     transforms: list[TransformConfig] = Field(default_factory=list)
     retry_count: int = 0
     retry_delay_seconds: float = 1.0
     circuit_breaker_threshold: int = 0
-    serializer_out: Optional[SerializerConfig] = None  # per-sink override; None = use global
+    serializer_out: SerializerConfig | None = None  # per-sink override; None = use global
 
 
 class KafkaSinkConfig(BaseModel):
     type: Literal["kafka"]
     brokers: list[str]
     topic: str
-    key_field: Optional[str] = None
+    key_field: str | None = None
     security_protocol: str = "PLAINTEXT"
-    sasl_mechanism: Optional[str] = None
-    sasl_username: Optional[str] = None
-    sasl_password: Optional[str] = None
-    ssl_cafile: Optional[str] = None
-    acks: Union[str, int] = "all"
-    compression_type: Optional[str] = None
-    condition: Optional[str] = None
+    sasl_mechanism: str | None = None
+    sasl_username: str | None = None
+    sasl_password: str | None = None
+    ssl_cafile: str | None = None
+    acks: str | int = "all"
+    compression_type: str | None = None
+    condition: str | None = None
     transforms: list[TransformConfig] = Field(default_factory=list)
     retry_count: int = 0
     retry_delay_seconds: float = 1.0
     circuit_breaker_threshold: int = 0
-    serializer_out: Optional[SerializerConfig] = None  # per-sink override; None = use global
+    serializer_out: SerializerConfig | None = None  # per-sink override; None = use global
 
 
 class OpenSearchSinkConfig(BaseModel):
     type: Literal["opensearch"]
     hosts: list[str]
     index: str
-    id_field: Optional[str] = None
-    pipeline: Optional[str] = None
-    username: Optional[str] = None
-    password: Optional[str] = None
+    id_field: str | None = None
+    pipeline: str | None = None
+    username: str | None = None
+    password: str | None = None
     verify_ssl: bool = True
     use_ssl: bool = False
     timeout: int = 30
     chunk_size: int = 500
     refresh: str = "false"
-    condition: Optional[str] = None
+    condition: str | None = None
     transforms: list[TransformConfig] = Field(default_factory=list)
     retry_count: int = 0
     retry_delay_seconds: float = 1.0
     circuit_breaker_threshold: int = 0
-    serializer_out: Optional[SerializerConfig] = None  # per-sink override; None = use global
+    serializer_out: SerializerConfig | None = None  # per-sink override; None = use global
 
 
 class FtpSinkConfig(BaseModel):
@@ -663,12 +616,12 @@ class FtpSinkConfig(BaseModel):
     remote_path: str = "/"
     filename_template: str = "{pipeline}_{timestamp}.bin"
     passive: bool = True
-    condition: Optional[str] = None
+    condition: str | None = None
     transforms: list[TransformConfig] = Field(default_factory=list)
     retry_count: int = 0
     retry_delay_seconds: float = 1.0
     circuit_breaker_threshold: int = 0
-    serializer_out: Optional[SerializerConfig] = None  # per-sink override; None = use global
+    serializer_out: SerializerConfig | None = None  # per-sink override; None = use global
 
 
 class VesSinkConfig(BaseModel):
@@ -684,29 +637,29 @@ class VesSinkConfig(BaseModel):
     password: str = ""
     token: str = ""
     expected_status: list[int] = Field(default_factory=lambda: [202])
-    condition: Optional[str] = None
+    condition: str | None = None
     transforms: list[TransformConfig] = Field(default_factory=list)
     retry_count: int = 0
     retry_delay_seconds: float = 1.0
     circuit_breaker_threshold: int = 0
-    serializer_out: Optional[SerializerConfig] = None  # per-sink override; None = use global
+    serializer_out: SerializerConfig | None = None  # per-sink override; None = use global
 
 
 class S3SinkConfig(BaseModel):
     type: Literal["s3"]
     bucket: str
     key_template: str = "{pipeline}_{timestamp}.bin"
-    endpoint_url: Optional[str] = None
+    endpoint_url: str | None = None
     region_name: str = "us-east-1"
     aws_access_key_id: str = ""
     aws_secret_access_key: str = ""
     content_type: str = "application/json"
-    condition: Optional[str] = None
+    condition: str | None = None
     transforms: list[TransformConfig] = Field(default_factory=list)
     retry_count: int = 0
     retry_delay_seconds: float = 1.0
     circuit_breaker_threshold: int = 0
-    serializer_out: Optional[SerializerConfig] = None  # per-sink override; None = use global
+    serializer_out: SerializerConfig | None = None  # per-sink override; None = use global
 
 
 class VarbindConfig(BaseModel):
@@ -730,16 +683,16 @@ class SnmpTrapSinkConfig(BaseModel):
     # SNMPv3 USM (used when version="3")
     security_name: str = ""
     auth_protocol: str = "SHA"
-    auth_key: Optional[str] = None
+    auth_key: str | None = None
     priv_protocol: str = "AES128"
-    priv_key: Optional[str] = None
+    priv_key: str | None = None
     context_name: str = ""
-    condition: Optional[str] = None
+    condition: str | None = None
     transforms: list[TransformConfig] = Field(default_factory=list)
     retry_count: int = 0
     retry_delay_seconds: float = 1.0
     circuit_breaker_threshold: int = 0
-    serializer_out: Optional[SerializerConfig] = None  # per-sink override; None = use global
+    serializer_out: SerializerConfig | None = None  # per-sink override; None = use global
 
 
 class MqttSinkConfig(BaseModel):
@@ -749,16 +702,16 @@ class MqttSinkConfig(BaseModel):
     topic: str
     qos: int = 0
     retain: bool = False
-    username: Optional[str] = None
-    password: Optional[str] = None
+    username: str | None = None
+    password: str | None = None
     tls: bool = False
     client_id: str = ""
-    condition: Optional[str] = None
+    condition: str | None = None
     transforms: list[TransformConfig] = Field(default_factory=list)
     retry_count: int = 0
     retry_delay_seconds: float = 1.0
     circuit_breaker_threshold: int = 0
-    serializer_out: Optional[SerializerConfig] = None  # per-sink override; None = use global
+    serializer_out: SerializerConfig | None = None  # per-sink override; None = use global
 
 
 class AmqpSinkConfig(BaseModel):
@@ -767,25 +720,25 @@ class AmqpSinkConfig(BaseModel):
     exchange: str = ""
     routing_key: str = ""
     content_type: str = "application/json"
-    condition: Optional[str] = None
+    condition: str | None = None
     transforms: list[TransformConfig] = Field(default_factory=list)
     retry_count: int = 0
     retry_delay_seconds: float = 1.0
     circuit_breaker_threshold: int = 0
-    serializer_out: Optional[SerializerConfig] = None  # per-sink override; None = use global
+    serializer_out: SerializerConfig | None = None  # per-sink override; None = use global
 
 
 class NatsSinkConfig(BaseModel):
     type: Literal["nats"]
     servers: list[str] = Field(default_factory=lambda: ["nats://localhost:4222"])
     subject: str
-    credentials_file: Optional[str] = None
-    condition: Optional[str] = None
+    credentials_file: str | None = None
+    condition: str | None = None
     transforms: list[TransformConfig] = Field(default_factory=list)
     retry_count: int = 0
     retry_delay_seconds: float = 1.0
     circuit_breaker_threshold: int = 0
-    serializer_out: Optional[SerializerConfig] = None  # per-sink override; None = use global
+    serializer_out: SerializerConfig | None = None  # per-sink override; None = use global
 
 
 class SqlSinkConfig(BaseModel):
@@ -794,12 +747,12 @@ class SqlSinkConfig(BaseModel):
     table: str
     mode: Literal["insert", "upsert"] = "insert"
     upsert_keys: list[str] = Field(default_factory=list)
-    condition: Optional[str] = None
+    condition: str | None = None
     transforms: list[TransformConfig] = Field(default_factory=list)
     retry_count: int = 0
     retry_delay_seconds: float = 1.0
     circuit_breaker_threshold: int = 0
-    serializer_out: Optional[SerializerConfig] = None  # per-sink override; None = use global
+    serializer_out: SerializerConfig | None = None  # per-sink override; None = use global
 
 
 class InfluxDbSinkConfig(BaseModel):
@@ -810,14 +763,14 @@ class InfluxDbSinkConfig(BaseModel):
     bucket: str
     measurement: str
     tag_fields: list[str] = Field(default_factory=list)
-    timestamp_field: Optional[str] = None
+    timestamp_field: str | None = None
     precision: Literal["ns", "us", "ms", "s"] = "ns"
-    condition: Optional[str] = None
+    condition: str | None = None
     transforms: list[TransformConfig] = Field(default_factory=list)
     retry_count: int = 0
     retry_delay_seconds: float = 1.0
     circuit_breaker_threshold: int = 0
-    serializer_out: Optional[SerializerConfig] = None  # per-sink override; None = use global
+    serializer_out: SerializerConfig | None = None  # per-sink override; None = use global
 
 
 class RedisSinkConfig(BaseModel):
@@ -825,47 +778,47 @@ class RedisSinkConfig(BaseModel):
     host: str = "localhost"
     port: int = 6379
     db: int = 0
-    password: Optional[str] = None
+    password: str | None = None
     mode: Literal["list", "pubsub", "stream"] = "list"
     key: str
-    max_len: Optional[int] = None
-    condition: Optional[str] = None
+    max_len: int | None = None
+    condition: str | None = None
     transforms: list[TransformConfig] = Field(default_factory=list)
     retry_count: int = 0
     retry_delay_seconds: float = 1.0
     circuit_breaker_threshold: int = 0
-    serializer_out: Optional[SerializerConfig] = None  # per-sink override; None = use global
+    serializer_out: SerializerConfig | None = None  # per-sink override; None = use global
 
 
 class GcsSinkConfig(BaseModel):
     type: Literal["gcs"]
     bucket: str
     blob_template: str = "{pipeline}_{timestamp}.bin"
-    service_account_json: Optional[str] = None
+    service_account_json: str | None = None
     content_type: str = "application/json"
-    condition: Optional[str] = None
+    condition: str | None = None
     transforms: list[TransformConfig] = Field(default_factory=list)
     retry_count: int = 0
     retry_delay_seconds: float = 1.0
     circuit_breaker_threshold: int = 0
-    serializer_out: Optional[SerializerConfig] = None  # per-sink override; None = use global
+    serializer_out: SerializerConfig | None = None  # per-sink override; None = use global
 
 
 class AzureBlobSinkConfig(BaseModel):
     type: Literal["azure_blob"]
-    connection_string: Optional[str] = None
-    account_name: Optional[str] = None
-    account_key: Optional[str] = None
+    connection_string: str | None = None
+    account_name: str | None = None
+    account_key: str | None = None
     container: str
     blob_template: str = "{pipeline}_{timestamp}.bin"
     content_type: str = "application/json"
     overwrite: bool = True
-    condition: Optional[str] = None
+    condition: str | None = None
     transforms: list[TransformConfig] = Field(default_factory=list)
     retry_count: int = 0
     retry_delay_seconds: float = 1.0
     circuit_breaker_threshold: int = 0
-    serializer_out: Optional[SerializerConfig] = None  # per-sink override; None = use global
+    serializer_out: SerializerConfig | None = None  # per-sink override; None = use global
 
 
 # v0.5.0 new sinks
@@ -875,32 +828,32 @@ class WebSocketSinkConfig(BaseModel):
     type: Literal["websocket"]
     url: str
     extra_headers: dict[str, str] = Field(default_factory=dict)
-    condition: Optional[str] = None
+    condition: str | None = None
     transforms: list[TransformConfig] = Field(default_factory=list)
     retry_count: int = 0
     retry_delay_seconds: float = 1.0
     circuit_breaker_threshold: int = 0
-    serializer_out: Optional[SerializerConfig] = None  # per-sink override; None = use global
+    serializer_out: SerializerConfig | None = None  # per-sink override; None = use global
 
 
 class ElasticsearchSinkConfig(BaseModel):
     type: Literal["elasticsearch"]
     hosts: list[str]
     index_template: str
-    id_field: Optional[str] = None
+    id_field: str | None = None
     chunk_size: int = 500
     refresh: str = "false"
-    username: Optional[str] = None
-    password: Optional[str] = None
-    api_key: Optional[str] = None
-    ca_certs: Optional[str] = None
-    pipeline: Optional[str] = None
-    condition: Optional[str] = None
+    username: str | None = None
+    password: str | None = None
+    api_key: str | None = None
+    ca_certs: str | None = None
+    pipeline: str | None = None
+    condition: str | None = None
     transforms: list[TransformConfig] = Field(default_factory=list)
     retry_count: int = 0
     retry_delay_seconds: float = 1.0
     circuit_breaker_threshold: int = 0
-    serializer_out: Optional[SerializerConfig] = None  # per-sink override; None = use global
+    serializer_out: SerializerConfig | None = None  # per-sink override; None = use global
 
 
 class ClickHouseSinkConfig(BaseModel):
@@ -915,37 +868,16 @@ class ClickHouseSinkConfig(BaseModel):
     verify: bool = True
     connect_timeout: int = 10
     send_receive_timeout: int = 300
-    condition: Optional[str] = None
+    condition: str | None = None
     transforms: list[TransformConfig] = Field(default_factory=list)
     retry_count: int = 0
     retry_delay_seconds: float = 1.0
     circuit_breaker_threshold: int = 0
-    serializer_out: Optional[SerializerConfig] = None  # per-sink override; None = use global
+    serializer_out: SerializerConfig | None = None  # per-sink override; None = use global
 
 
 SinkConfig = Annotated[
-    Union[
-        SFTPSinkConfig,
-        LocalSinkConfig,
-        RestSinkConfig,
-        KafkaSinkConfig,
-        OpenSearchSinkConfig,
-        FtpSinkConfig,
-        VesSinkConfig,
-        S3SinkConfig,
-        SnmpTrapSinkConfig,
-        MqttSinkConfig,
-        AmqpSinkConfig,
-        NatsSinkConfig,
-        SqlSinkConfig,
-        ClickHouseSinkConfig,
-        InfluxDbSinkConfig,
-        RedisSinkConfig,
-        GcsSinkConfig,
-        AzureBlobSinkConfig,
-        WebSocketSinkConfig,
-        ElasticsearchSinkConfig,
-    ],
+    SFTPSinkConfig | LocalSinkConfig | RestSinkConfig | KafkaSinkConfig | OpenSearchSinkConfig | FtpSinkConfig | VesSinkConfig | S3SinkConfig | SnmpTrapSinkConfig | MqttSinkConfig | AmqpSinkConfig | NatsSinkConfig | SqlSinkConfig | ClickHouseSinkConfig | InfluxDbSinkConfig | RedisSinkConfig | GcsSinkConfig | AzureBlobSinkConfig | WebSocketSinkConfig | ElasticsearchSinkConfig,
     Field(discriminator="type"),
 ]
 
@@ -955,7 +887,7 @@ SinkConfig = Annotated[
 
 class JsonSerializerConfig(BaseModel):
     type: Literal["json"]
-    indent: Optional[int] = None
+    indent: int | None = None
     ensure_ascii: bool = True
 
 
@@ -975,17 +907,17 @@ class XmlSerializerConfig(BaseModel):
 
 class AvroSerializerConfig(BaseModel):
     type: Literal["avro"]
-    avro_schema: Optional[str] = Field(default=None, alias="schema")
-    schema_file: Optional[str] = None
-    schema_registry_url: Optional[str] = None
-    schema_registry_subject: Optional[str] = None
-    schema_registry_id: Optional[int] = None
+    avro_schema: str | None = Field(default=None, alias="schema")
+    schema_file: str | None = None
+    schema_registry_url: str | None = None
+    schema_registry_subject: str | None = None
+    schema_registry_id: int | None = None
     use_magic_bytes: bool = True
 
     model_config = {"populate_by_name": True}
 
     @model_validator(mode="after")
-    def check_schema(self) -> "AvroSerializerConfig":
+    def check_schema(self) -> AvroSerializerConfig:
         has_inline = bool(self.avro_schema or self.schema_file)
         has_registry = bool(self.schema_registry_url)
         if not has_inline and not has_registry:
@@ -1000,9 +932,9 @@ class ProtobufSerializerConfig(BaseModel):
     schema_file: str
     message_class: str
     framing: Literal["length_delimited", "none"] = "length_delimited"
-    schema_registry_url: Optional[str] = None
-    schema_registry_subject: Optional[str] = None
-    schema_registry_id: Optional[int] = None
+    schema_registry_url: str | None = None
+    schema_registry_subject: str | None = None
+    schema_registry_id: int | None = None
     use_magic_bytes: bool = True
 
 
@@ -1044,19 +976,7 @@ class Asn1SerializerConfig(BaseModel):
 
 
 SerializerConfig = Annotated[
-    Union[
-        JsonSerializerConfig,
-        CsvSerializerConfig,
-        XmlSerializerConfig,
-        AvroSerializerConfig,
-        ProtobufSerializerConfig,
-        ParquetSerializerConfig,
-        MsgpackSerializerConfig,
-        NdjsonSerializerConfig,
-        BytesSerializerConfig,
-        TextSerializerConfig,
-        Asn1SerializerConfig,
-    ],
+    JsonSerializerConfig | CsvSerializerConfig | XmlSerializerConfig | AvroSerializerConfig | ProtobufSerializerConfig | ParquetSerializerConfig | MsgpackSerializerConfig | NdjsonSerializerConfig | BytesSerializerConfig | TextSerializerConfig | Asn1SerializerConfig,
     Field(discriminator="type"),
 ]
 
@@ -1083,13 +1003,13 @@ class AlertRuleConfig(BaseModel):
     name: str = ""
     condition: str
     action: Literal["webhook", "email"]
-    webhook_url: Optional[str] = None
-    email_to: Optional[str] = None
+    webhook_url: str | None = None
+    email_to: str | None = None
     subject: str = "TRAM Alert: {pipeline}"
     cooldown_seconds: int = 300
 
     @model_validator(mode="after")
-    def check_target(self) -> "AlertRuleConfig":
+    def check_target(self) -> AlertRuleConfig:
         if self.action == "webhook" and not self.webhook_url:
             raise ValueError("webhook_url required when action=webhook")
         if self.action == "email" and not self.email_to:
@@ -1113,24 +1033,24 @@ class PipelineConfig(BaseModel):
     source: SourceConfig
     serializer_in: SerializerConfig
     transforms: list[TransformConfig] = Field(default_factory=list)
-    serializer_out: Optional[SerializerConfig] = None  # None → defaults to json at runtime
+    serializer_out: SerializerConfig | None = None  # None → defaults to json at runtime
     sinks: list[SinkConfig] = Field(default_factory=list, min_length=0)
 
     # Backward compat: singular `sink` auto-wrapped into `sinks`
-    sink: Optional[SinkConfig] = Field(default=None, exclude=True)
+    sink: SinkConfig | None = Field(default=None, exclude=True)
 
     # Dead-letter queue
-    dlq: Optional[SinkConfig] = None
+    dlq: SinkConfig | None = None
 
     # Rate limiting
-    rate_limit_rps: Optional[float] = None
+    rate_limit_rps: float | None = None
 
     # Parallelism
     thread_workers: int = 1   # intra-node worker threads per pipeline run
     parallel_sinks: bool = False   # fan-out sink writes concurrently
 
     # Batch size cap (max records to process per batch run; None = unlimited)
-    batch_size: Optional[int] = None
+    batch_size: int | None = None
 
     # Error handling
     on_error: Literal["continue", "abort", "retry", "dlq"] = "continue"
@@ -1141,7 +1061,7 @@ class PipelineConfig(BaseModel):
     alerts: list[AlertRuleConfig] = Field(default_factory=list)
 
     @model_validator(mode="after")
-    def check_on_error_dlq(self) -> "PipelineConfig":
+    def check_on_error_dlq(self) -> PipelineConfig:
         if self.on_error == "dlq" and self.dlq is None:
             raise ValueError("on_error='dlq' requires a 'dlq' sink to be configured")
         return self
@@ -1157,7 +1077,7 @@ class PipelineConfig(BaseModel):
         return v
 
     @model_validator(mode="after")
-    def normalise_sinks(self) -> "PipelineConfig":
+    def normalise_sinks(self) -> PipelineConfig:
         """Accept legacy `sink: ...` and wrap it in `sinks` list."""
         if self.sink is not None and not self.sinks:
             self.sinks = [self.sink]

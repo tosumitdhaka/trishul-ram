@@ -1,9 +1,12 @@
 """Parquet serializer."""
 from __future__ import annotations
+
 import io
+
 from tram.core.exceptions import SerializerError
 from tram.interfaces.base_serializer import BaseSerializer
 from tram.registry.registry import register_serializer
+
 
 @register_serializer("parquet")
 class ParquetSerializer(BaseSerializer):

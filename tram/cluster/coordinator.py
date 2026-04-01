@@ -42,7 +42,7 @@ class ClusterCoordinator:
     fully covered even when a node fails and the cluster has gaps in ordinals.
     """
 
-    def __init__(self, registry: "NodeRegistry", node_id: str) -> None:
+    def __init__(self, registry: NodeRegistry, node_id: str) -> None:
         self._registry = registry
         self._node_id = node_id
         self._lock = threading.Lock()

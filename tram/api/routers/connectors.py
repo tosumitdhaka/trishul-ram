@@ -89,7 +89,7 @@ def _do_test(conn_type: str, config: dict) -> dict:
     except Exception:
         pass
 
-    from tram.registry.registry import _sources, _sinks
+    from tram.registry.registry import _sinks, _sources
 
     plugin_cls = _sources.get(conn_type) or _sinks.get(conn_type)
 

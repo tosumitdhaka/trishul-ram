@@ -5,8 +5,13 @@ from fastapi import APIRouter, HTTPException, Request
 from pydantic import BaseModel
 
 from tram.api.auth import (
-    create_token, extract_bearer, hash_password, parse_users,
-    verify_hashed_password, verify_password, verify_token,
+    create_token,
+    extract_bearer,
+    hash_password,
+    parse_users,
+    verify_hashed_password,
+    verify_password,
+    verify_token,
 )
 
 router = APIRouter(prefix="/api/auth", tags=["auth"])

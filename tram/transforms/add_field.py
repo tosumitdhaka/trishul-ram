@@ -14,8 +14,9 @@ logger = logging.getLogger(__name__)
 def _make_evaluator():
     """Return a configured simpleeval EvalWithCompoundTypes instance."""
     try:
-        from simpleeval import EvalWithCompoundTypes, DEFAULT_FUNCTIONS
         import math
+
+        from simpleeval import DEFAULT_FUNCTIONS, EvalWithCompoundTypes
         funcs = dict(DEFAULT_FUNCTIONS)
         funcs.update({
             "round": round,

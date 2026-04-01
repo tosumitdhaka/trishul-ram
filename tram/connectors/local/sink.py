@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import logging
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
 
 from tram.core.exceptions import SinkError
@@ -34,7 +34,7 @@ class LocalSink(BaseSink):
         self.overwrite: bool = bool(config.get("overwrite", True))
 
     def _render_filename(self, meta: dict) -> str:
-        ts = datetime.now(timezone.utc).isoformat().replace(":", "-")
+        ts = datetime.now(UTC).isoformat().replace(":", "-")
         return self.filename_template.format(
             pipeline=meta.get("pipeline_name", "tram"),
             timestamp=ts,

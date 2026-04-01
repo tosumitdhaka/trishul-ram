@@ -1,8 +1,10 @@
 """GCS source connector — reads blobs from a Google Cloud Storage bucket."""
 from __future__ import annotations
+
 import fnmatch
 import logging
-from typing import Iterator
+from collections.abc import Iterator
+
 from tram.core.exceptions import SourceError
 from tram.interfaces.base_source import BaseSource
 from tram.registry.registry import register_source

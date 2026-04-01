@@ -71,7 +71,7 @@ class AppConfig:
     pipeline_sync_interval: int
 
     @classmethod
-    def from_env(cls) -> "AppConfig":
+    def from_env(cls) -> AppConfig:
         node_id = os.environ.get("TRAM_NODE_ID", socket.gethostname())
         return cls(
             host=os.environ.get("TRAM_HOST", "0.0.0.0"),

@@ -23,7 +23,7 @@ class PipelineWatcher:
         - File deleted → stop and deregister the pipeline
     """
 
-    def __init__(self, pipeline_dir: str, manager: "PipelineManager") -> None:
+    def __init__(self, pipeline_dir: str, manager: PipelineManager) -> None:
         self._pipeline_dir = pipeline_dir
         self._manager = manager
         self._observer = None
@@ -31,8 +31,8 @@ class PipelineWatcher:
     def start(self) -> None:
         """Start the watchdog Observer thread."""
         try:
+            from watchdog.events import FileSystemEventHandler
             from watchdog.observers import Observer
-            from watchdog.events import FileSystemEventHandler, FileModifiedEvent, FileCreatedEvent, FileDeletedEvent
         except ImportError as exc:
             raise ImportError(
                 "watchdog is required for pipeline file watching — "
@@ -40,7 +40,6 @@ class PipelineWatcher:
             ) from exc
 
         manager = self._manager
-        pipeline_dir = self._pipeline_dir
 
         class _Handler(FileSystemEventHandler):
             def _is_yaml(self, path: str) -> bool:
@@ -72,8 +71,8 @@ class PipelineWatcher:
                         logger.warning("Failed to deregister pipeline %s: %s", name, exc)
 
             def _reload(self, path: str):
-                from tram.pipeline.loader import load_pipeline
                 from tram.core.exceptions import ConfigError
+                from tram.pipeline.loader import load_pipeline
                 try:
                     config = load_pipeline(path)
                     manager.register(config)

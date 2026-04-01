@@ -13,9 +13,8 @@ from __future__ import annotations
 import logging
 import os
 import uuid
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
-from typing import Optional
 
 from sqlalchemy import create_engine, text
 from sqlalchemy.engine import Engine
@@ -254,11 +253,11 @@ class TramDB:
 
     def get_runs(
         self,
-        pipeline_name: Optional[str] = None,
-        status: Optional[str] = None,
+        pipeline_name: str | None = None,
+        status: str | None = None,
         limit: int = 100,
         offset: int = 0,
-        from_dt: Optional[datetime] = None,
+        from_dt: datetime | None = None,
     ) -> list[RunResult]:
         """Return run history with optional filtering and pagination."""
         sql = "SELECT * FROM run_history WHERE 1=1"
@@ -282,7 +281,7 @@ class TramDB:
             rows = conn.execute(text(sql), params).mappings().fetchall()
         return [self._row_to_run_result(r) for r in rows]
 
-    def get_run(self, run_id: str) -> Optional[RunResult]:
+    def get_run(self, run_id: str) -> RunResult | None:
         """Fetch a single run by run_id."""
         with self._engine.connect() as conn:
             row = conn.execute(
@@ -341,7 +340,7 @@ class TramDB:
                     "name": name,
                     "version": next_version,
                     "yaml_content": yaml_content,
-                    "created_at": datetime.now(timezone.utc).isoformat(),
+                    "created_at": datetime.now(UTC).isoformat(),
                 },
             )
         return next_version
@@ -385,7 +384,7 @@ class TramDB:
 
     # ── Alert cooldown state ───────────────────────────────────────────────
 
-    def get_alert_cooldown(self, pipeline_name: str, rule_name: str) -> Optional[datetime]:
+    def get_alert_cooldown(self, pipeline_name: str, rule_name: str) -> datetime | None:
         """Return the last-alerted datetime for a rule, or None if never alerted."""
         with self._engine.connect() as conn:
             row = conn.execute(
@@ -452,7 +451,7 @@ class TramDB:
 
     def register_node(self, node_id: str, ordinal: int) -> None:
         """Upsert node registration with current timestamp."""
-        now = datetime.now(timezone.utc).isoformat()
+        now = datetime.now(UTC).isoformat()
         dialect = self._engine.dialect.name
         with self._engine.begin() as conn:
             if dialect == "sqlite":
@@ -506,7 +505,7 @@ class TramDB:
 
     def heartbeat(self, node_id: str) -> None:
         """Update last_heartbeat timestamp for a node."""
-        now = datetime.now(timezone.utc).isoformat()
+        now = datetime.now(UTC).isoformat()
         with self._engine.begin() as conn:
             conn.execute(
                 text("""
@@ -520,7 +519,7 @@ class TramDB:
     def expire_nodes(self, ttl_seconds: int) -> None:
         """Mark nodes with a stale heartbeat as 'dead'."""
         from datetime import timedelta
-        cutoff = (datetime.now(timezone.utc) - timedelta(seconds=ttl_seconds)).isoformat()
+        cutoff = (datetime.now(UTC) - timedelta(seconds=ttl_seconds)).isoformat()
         with self._engine.begin() as conn:
             conn.execute(
                 text("""
@@ -533,7 +532,7 @@ class TramDB:
     def get_live_nodes(self, ttl_seconds: int) -> list[dict]:
         """Return nodes whose heartbeat is within the TTL window."""
         from datetime import timedelta
-        cutoff = (datetime.now(timezone.utc) - timedelta(seconds=ttl_seconds)).isoformat()
+        cutoff = (datetime.now(UTC) - timedelta(seconds=ttl_seconds)).isoformat()
         with self._engine.connect() as conn:
             rows = conn.execute(
                 text("""
@@ -570,7 +569,7 @@ class TramDB:
 
     def mark_processed(self, pipeline_name: str, source_key: str, filepath: str) -> None:
         """Record a file as successfully processed. Silently ignores duplicates."""
-        now = datetime.now(timezone.utc).isoformat()
+        now = datetime.now(UTC).isoformat()
         dialect = self._engine.dialect.name
         try:
             with self._engine.begin() as conn:
@@ -619,7 +618,7 @@ class TramDB:
 
     # ── User passwords ─────────────────────────────────────────────────────
 
-    def get_password_hash(self, username: str) -> Optional[str]:
+    def get_password_hash(self, username: str) -> str | None:
         """Return the stored password hash for *username*, or None if not overridden."""
         with self._engine.connect() as conn:
             row = conn.execute(
@@ -630,7 +629,7 @@ class TramDB:
 
     def set_password_hash(self, username: str, password_hash: str) -> None:
         """Upsert a password hash for *username*."""
-        now = datetime.now(timezone.utc).isoformat()
+        now = datetime.now(UTC).isoformat()
         dialect = self._engine.dialect.name
         with self._engine.begin() as conn:
             if dialect == "postgresql":
@@ -656,7 +655,7 @@ class TramDB:
 
     def save_pipeline(self, name: str, yaml_text: str) -> None:
         """Upsert a pipeline YAML into the shared registry (marks deleted=False)."""
-        now = datetime.now(timezone.utc).isoformat()
+        now = datetime.now(UTC).isoformat()
         dialect = self._engine.dialect.name
         with self._engine.begin() as conn:
             if dialect == "postgresql":
@@ -689,7 +688,7 @@ class TramDB:
 
     def delete_pipeline(self, name: str) -> None:
         """Soft-delete a pipeline from the shared registry."""
-        now = datetime.now(timezone.utc).isoformat()
+        now = datetime.now(UTC).isoformat()
         with self._engine.begin() as conn:
             conn.execute(
                 text("UPDATE registered_pipelines SET deleted = 1, updated_at = :now WHERE name = :name"),

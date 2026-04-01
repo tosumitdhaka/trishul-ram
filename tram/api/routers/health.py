@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import sys
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 
 from fastapi import APIRouter, Request
 
@@ -59,7 +59,7 @@ async def readiness(request: Request) -> dict:
     # Uptime
     uptime = None
     if started_at is not None:
-        delta = int((datetime.now(timezone.utc) - started_at).total_seconds())
+        delta = int((datetime.now(UTC) - started_at).total_seconds())
         h, rem = divmod(delta, 3600)
         m, s = divmod(rem, 60)
         uptime = f"{h}h {m}m {s}s" if h else f"{m}m {s}s"
@@ -81,7 +81,7 @@ async def meta() -> dict:
     """Build and version information."""
     return {
         "version": __version__,
-        "build_time": datetime.now(timezone.utc).isoformat(),
+        "build_time": datetime.now(UTC).isoformat(),
         "python_version": sys.version.split()[0],
     }
 

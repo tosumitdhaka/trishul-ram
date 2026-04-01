@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import json
 import logging
-from typing import Generator
+from collections.abc import Generator
 
 from tram.core.exceptions import SourceError
 from tram.interfaces.base_source import BaseSource

@@ -1,5 +1,6 @@
 """Protobuf serializer — compiles .proto at runtime via grpcio-tools."""
 from __future__ import annotations
+
 import atexit
 import io
 import os
@@ -7,6 +8,7 @@ import shutil
 import struct
 import sys
 import tempfile
+
 from tram.core.exceptions import SerializerError
 from tram.interfaces.base_serializer import BaseSerializer
 from tram.registry.registry import register_serializer

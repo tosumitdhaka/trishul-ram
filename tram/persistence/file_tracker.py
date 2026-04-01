@@ -34,7 +34,7 @@ class ProcessedFileTracker:
             tracker.mark_processed(pipeline, source_key, filepath)
     """
 
-    def __init__(self, db: "TramDB") -> None:
+    def __init__(self, db: TramDB) -> None:
         self._db = db
 
     def is_processed(self, pipeline_name: str, source_key: str, filepath: str) -> bool:

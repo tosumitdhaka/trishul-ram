@@ -6,7 +6,7 @@ import asyncio
 import logging
 import queue
 import threading
-from typing import Generator
+from collections.abc import Generator
 
 from tram.core.exceptions import SourceError
 from tram.interfaces.base_source import BaseSource

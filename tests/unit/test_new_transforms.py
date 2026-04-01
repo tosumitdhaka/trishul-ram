@@ -293,9 +293,11 @@ class TestEnrichTransform:
         result = t.apply([{"id": "MISSING"}])
         assert result[0]["label"] is None
 
-    def test_missing_lookup_file_raises(self):
-        with pytest.raises(TransformError):
-            EnrichTransform({
-                "lookup_file": "/nonexistent/path/lookup.csv",
-                "join_key": "id",
-            })
+    def test_missing_lookup_file_graceful(self):
+        # Missing file logs a warning and creates an empty table (no exception)
+        t = EnrichTransform({
+            "lookup_file": "/nonexistent/path/lookup.csv",
+            "join_key": "id",
+        })
+        result = t.apply([{"id": "X"}])
+        assert result[0]["id"] == "X"

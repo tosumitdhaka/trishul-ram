@@ -20,7 +20,7 @@ class NodeRegistry:
 
     def __init__(
         self,
-        db: "TramDB",
+        db: TramDB,
         node_id: str,
         ordinal: int,
         heartbeat_seconds: int = 10,

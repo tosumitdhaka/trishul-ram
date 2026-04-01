@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import logging
+from datetime import UTC
 
 from tram.core.exceptions import SinkError
 from tram.interfaces.base_sink import BaseSink
@@ -70,7 +71,7 @@ class ElasticsearchSink(BaseSink):
                 "install with: pip install tram[elasticsearch]"
             ) from exc
 
-        from datetime import datetime, timezone
+        from datetime import datetime
 
         try:
             records = json.loads(data)
@@ -80,7 +81,7 @@ class ElasticsearchSink(BaseSink):
         if not isinstance(records, list):
             records = [records]
 
-        ts = datetime.now(timezone.utc).strftime("%Y%m%d%H%M%S")
+        ts = datetime.now(UTC).strftime("%Y%m%d%H%M%S")
         pipeline_name = meta.get("pipeline_name", "tram")
         index = self.index_template.format(timestamp=ts, pipeline=pipeline_name)
 

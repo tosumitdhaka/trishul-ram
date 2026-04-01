@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import json
 import logging
-from typing import Generator
+from collections.abc import Generator
 
 from tram.core.exceptions import SourceError
 from tram.interfaces.base_source import BaseSource
@@ -69,7 +69,6 @@ class PrometheusRWSource(BaseSource):
             # We parse manually using protobuf's descriptor pool approach
             # to avoid needing generated code.  Fall back to raw proto parsing.
             from google.protobuf import descriptor_pb2, descriptor_pool  # noqa: F401
-            from google.protobuf.message_factory import GetMessages
 
             # Minimal Prometheus WriteRequest proto definition (inline)
             _PROTO_SRC = b"""
@@ -84,7 +83,6 @@ message TimeSeries {
 message WriteRequest { repeated TimeSeries timeseries = 1; }
 """
             # Use dynamic parsing
-            from google.protobuf import descriptor as descriptor_module
             from google.protobuf.descriptor_pool import DescriptorPool
             from google.protobuf.message_factory import MessageFactory
 
@@ -117,7 +115,6 @@ message WriteRequest { repeated TimeSeries timeseries = 1; }
     def _compile_proto_descriptor(self, proto_src: bytes) -> bytes:
         """Compile proto source to FileDescriptorProto bytes using protoc."""
         import os
-        import struct
         import subprocess
         import tempfile
 
@@ -150,7 +147,7 @@ message WriteRequest { repeated TimeSeries timeseries = 1; }
 
         import queue
 
-        from tram.connectors.webhook.source import _WEBHOOK_REGISTRY, _REGISTRY_LOCK
+        from tram.connectors.webhook.source import _REGISTRY_LOCK, _WEBHOOK_REGISTRY
 
         q: queue.SimpleQueue = queue.SimpleQueue()
         with _REGISTRY_LOCK:

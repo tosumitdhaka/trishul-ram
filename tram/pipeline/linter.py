@@ -20,7 +20,7 @@ class LintResult:
     message: str
 
 
-def lint(config: "PipelineConfig") -> list[LintResult]:
+def lint(config: PipelineConfig) -> list[LintResult]:
     """Run all lint rules against *config* and return findings."""
     findings: list[LintResult] = []
 
@@ -36,7 +36,7 @@ def lint(config: "PipelineConfig") -> list[LintResult]:
 # ── Rules ───────────────────────────────────────────────────────────────────
 
 
-def _l001_source_no_sink(config: "PipelineConfig") -> list[LintResult]:
+def _l001_source_no_sink(config: PipelineConfig) -> list[LintResult]:
     """L001 — source configured but no transforms and no sinks have meaningful output."""
     if not config.transforms and not config.sinks:
         return [LintResult(
@@ -50,7 +50,7 @@ def _l001_source_no_sink(config: "PipelineConfig") -> list[LintResult]:
     return []
 
 
-def _l002_skip_no_dlq(config: "PipelineConfig") -> list[LintResult]:
+def _l002_skip_no_dlq(config: PipelineConfig) -> list[LintResult]:
     """L002 — on_error=skip (continue) with no DLQ means failed records are silently dropped."""
     if config.on_error == "continue" and config.dlq is None:
         return [LintResult(
@@ -64,7 +64,7 @@ def _l002_skip_no_dlq(config: "PipelineConfig") -> list[LintResult]:
     return []
 
 
-def _l003_stream_multi_worker(config: "PipelineConfig") -> list[LintResult]:
+def _l003_stream_multi_worker(config: PipelineConfig) -> list[LintResult]:
     """L003 — thread_workers > 1 on a stream pipeline uses a bounded queue for backpressure."""
     if config.schedule.type == "stream" and config.thread_workers > 1:
         return [LintResult(
@@ -79,7 +79,7 @@ def _l003_stream_multi_worker(config: "PipelineConfig") -> list[LintResult]:
     return []
 
 
-def _l004_batch_size_on_stream(config: "PipelineConfig") -> list[LintResult]:
+def _l004_batch_size_on_stream(config: PipelineConfig) -> list[LintResult]:
     """L004 — batch_size is ignored for stream pipelines."""
     if config.schedule.type == "stream" and config.batch_size is not None:
         return [LintResult(
@@ -93,7 +93,7 @@ def _l004_batch_size_on_stream(config: "PipelineConfig") -> list[LintResult]:
     return []
 
 
-def _l005_email_no_smtp(config: "PipelineConfig") -> list[LintResult]:
+def _l005_email_no_smtp(config: PipelineConfig) -> list[LintResult]:
     """L005 — alert rule with action=email but no SMTP env vars configured."""
     findings = []
     smtp_host = os.environ.get("TRAM_SMTP_HOST", "")

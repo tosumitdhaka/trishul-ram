@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import logging
-from typing import Type
 
 from tram.core.exceptions import PluginNotFoundError
 from tram.interfaces.base_serializer import BaseSerializer
@@ -13,10 +12,10 @@ from tram.interfaces.base_transform import BaseTransform
 
 logger = logging.getLogger(__name__)
 
-_sources: dict[str, Type[BaseSource]] = {}
-_sinks: dict[str, Type[BaseSink]] = {}
-_transforms: dict[str, Type[BaseTransform]] = {}
-_serializers: dict[str, Type[BaseSerializer]] = {}
+_sources: dict[str, type[BaseSource]] = {}
+_sinks: dict[str, type[BaseSink]] = {}
+_transforms: dict[str, type[BaseTransform]] = {}
+_serializers: dict[str, type[BaseSerializer]] = {}
 
 
 # ── Registration decorators ────────────────────────────────────────────────
@@ -24,7 +23,7 @@ _serializers: dict[str, Type[BaseSerializer]] = {}
 
 def register_source(key: str):
     """Class decorator to register a BaseSource implementation."""
-    def decorator(cls: Type[BaseSource]) -> Type[BaseSource]:
+    def decorator(cls: type[BaseSource]) -> type[BaseSource]:
         _sources[key] = cls
         logger.debug("Registered source: %s → %s", key, cls.__name__)
         return cls
@@ -33,7 +32,7 @@ def register_source(key: str):
 
 def register_sink(key: str):
     """Class decorator to register a BaseSink implementation."""
-    def decorator(cls: Type[BaseSink]) -> Type[BaseSink]:
+    def decorator(cls: type[BaseSink]) -> type[BaseSink]:
         _sinks[key] = cls
         logger.debug("Registered sink: %s → %s", key, cls.__name__)
         return cls
@@ -42,7 +41,7 @@ def register_sink(key: str):
 
 def register_transform(key: str):
     """Class decorator to register a BaseTransform implementation."""
-    def decorator(cls: Type[BaseTransform]) -> Type[BaseTransform]:
+    def decorator(cls: type[BaseTransform]) -> type[BaseTransform]:
         _transforms[key] = cls
         logger.debug("Registered transform: %s → %s", key, cls.__name__)
         return cls
@@ -51,7 +50,7 @@ def register_transform(key: str):
 
 def register_serializer(key: str):
     """Class decorator to register a BaseSerializer implementation."""
-    def decorator(cls: Type[BaseSerializer]) -> Type[BaseSerializer]:
+    def decorator(cls: type[BaseSerializer]) -> type[BaseSerializer]:
         _serializers[key] = cls
         logger.debug("Registered serializer: %s → %s", key, cls.__name__)
         return cls
@@ -61,19 +60,19 @@ def register_serializer(key: str):
 # ── Lookup helpers ─────────────────────────────────────────────────────────
 
 
-def get_source(key: str) -> Type[BaseSource]:
+def get_source(key: str) -> type[BaseSource]:
     if key not in _sources:
         raise PluginNotFoundError(f"No source registered for key '{key}'. Available: {list(_sources)}")
     return _sources[key]
 
 
-def get_sink(key: str) -> Type[BaseSink]:
+def get_sink(key: str) -> type[BaseSink]:
     if key not in _sinks:
         raise PluginNotFoundError(f"No sink registered for key '{key}'. Available: {list(_sinks)}")
     return _sinks[key]
 
 
-def get_transform(key: str) -> Type[BaseTransform]:
+def get_transform(key: str) -> type[BaseTransform]:
     if key not in _transforms:
         raise PluginNotFoundError(
             f"No transform registered for key '{key}'. Available: {list(_transforms)}"
@@ -81,7 +80,7 @@ def get_transform(key: str) -> Type[BaseTransform]:
     return _transforms[key]
 
 
-def get_serializer(key: str) -> Type[BaseSerializer]:
+def get_serializer(key: str) -> type[BaseSerializer]:
     if key not in _serializers:
         raise PluginNotFoundError(
             f"No serializer registered for key '{key}'. Available: {list(_serializers)}"

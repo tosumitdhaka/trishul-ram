@@ -35,6 +35,19 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - New config: `TRAM_PIPELINE_SYNC_INTERVAL` (integer seconds, default 30)
 - SQLite (standalone, single pod): DB persistence still works, sync loop is effectively a no-op
 
+**Balanced pipeline distribution across cluster nodes**
+- Replaced simple `sha1(name) % node_count` ownership formula with rank-based assignment: all pipeline names sorted by stable hash then distributed round-robin (`rank % count == position`); guarantees at most 1 pipeline difference between any two nodes regardless of name hashes
+- `rebalance_ownership(all_names)` pre-computes and caches the owned set as a `frozenset` on the coordinator; called on topology change, after startup load, and after each DB sync cycle
+- `get_state()` (cluster API endpoint) uses the same rank-based formula so UI pipeline counts match actual ownership
+
+**Reload endpoint now restores DB-registered pipelines**
+- `POST /api/pipelines/reload` previously cleared all in-memory pipelines and re-scanned only the filesystem, causing API-registered pipelines to disappear until the next DB sync cycle (up to 30 s)
+- Fixed: after filesystem scan, reload now calls `_load_from_db()` so all DB-registered pipelines are immediately available; `total` in the response reflects the combined count
+
+**Cluster page — pipeline counts**
+- Node count and total pipeline count added to the cluster status line: `Cluster active · N nodes · M pipelines`
+- Each node accordion header now shows a badge with its assigned pipeline count, right-aligned before the expand chevron
+
 ---
 
 ## [1.1.1] — 2026-03-30
