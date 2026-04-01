@@ -9,7 +9,6 @@ from __future__ import annotations
 
 import logging
 from functools import lru_cache
-from typing import Optional
 
 logger = logging.getLogger(__name__)
 
@@ -43,9 +42,9 @@ def build_v3_auth(
     hlapi,
     security_name: str,
     auth_protocol: str = "SHA",
-    auth_key: Optional[str] = None,
+    auth_key: str | None = None,
     priv_protocol: str = "AES128",
-    priv_key: Optional[str] = None,
+    priv_key: str | None = None,
 ):
     """Build a ``UsmUserData`` object for SNMPv3 USM authentication.
 
@@ -157,7 +156,6 @@ def resolve_oid(mib_view, oid_tuple: tuple) -> str:
         return ".".join(str(x) for x in oid_tuple)
 
     try:
-        from pysnmp.smi.rfc1902 import ObjectIdentity
         from pyasn1.type.univ import ObjectIdentifier
 
         oid_obj = ObjectIdentifier(oid_tuple)
@@ -176,7 +174,7 @@ def oid_str_to_tuple(oid_str: str) -> tuple[int, ...]:
     return tuple(int(x) for x in oid_str.strip(".").split("."))
 
 
-def symbolic_to_oid(mib_view, symbolic: str) -> Optional[tuple[int, ...]]:
+def symbolic_to_oid(mib_view, symbolic: str) -> tuple[int, ...] | None:
     """Resolve a symbolic OID name to a numeric tuple.
 
     Args:

@@ -21,7 +21,7 @@ async def metrics() -> Response:
             detail="prometheus_client is not installed. Install with: pip install tram[metrics]",
         )
 
-    from prometheus_client import generate_latest, CONTENT_TYPE_LATEST
+    from prometheus_client import CONTENT_TYPE_LATEST, generate_latest
 
     output = generate_latest()
     return Response(content=output, media_type=CONTENT_TYPE_LATEST)

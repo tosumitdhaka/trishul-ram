@@ -3,7 +3,7 @@ from __future__ import annotations
 
 import json
 import logging
-from typing import Iterator
+from collections.abc import Iterator
 
 from tram.core.exceptions import SourceError
 from tram.interfaces.base_source import BaseSource

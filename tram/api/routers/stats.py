@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 
 from fastapi import APIRouter, Request
 
@@ -10,7 +10,7 @@ router = APIRouter()
 
 
 def _now() -> datetime:
-    return datetime.now(timezone.utc)
+    return datetime.now(UTC)
 
 
 def _iso(dt: datetime) -> str:
@@ -166,7 +166,7 @@ def _after(dt_val, threshold: datetime) -> bool:
         except ValueError:
             return False
     if dt_val.tzinfo is None:
-        dt_val = dt_val.replace(tzinfo=timezone.utc)
+        dt_val = dt_val.replace(tzinfo=UTC)
     return dt_val >= threshold
 
 
@@ -222,8 +222,8 @@ def _bucket_sparkline(rows, since: datetime, buckets: int, minutes: int) -> list
         try:
             ts = datetime.fromisoformat(str(ts_str))
             if ts.tzinfo is None:
-                ts = ts.replace(tzinfo=timezone.utc)
-            age = (datetime.now(timezone.utc) - ts).total_seconds()
+                ts = ts.replace(tzinfo=UTC)
+            age = (datetime.now(UTC) - ts).total_seconds()
             idx = buckets - 1 - int(age // bucket_secs)
             if 0 <= idx < buckets:
                 counts[idx] += (rec_out or 0)

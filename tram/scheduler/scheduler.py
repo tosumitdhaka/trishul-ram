@@ -6,7 +6,7 @@ import logging
 import threading
 import uuid
 from concurrent.futures import ThreadPoolExecutor
-from typing import TYPE_CHECKING, Optional
+from typing import TYPE_CHECKING
 
 from tram.core.context import RunStatus
 from tram.pipeline.executor import PipelineExecutor
@@ -14,9 +14,9 @@ from tram.pipeline.executor import PipelineExecutor
 if TYPE_CHECKING:
     from tram.cluster.coordinator import ClusterCoordinator
     from tram.models.pipeline import PipelineConfig
-    from tram.pipeline.manager import PipelineManager
     from tram.persistence.db import TramDB
     from tram.persistence.file_tracker import ProcessedFileTracker
+    from tram.pipeline.manager import PipelineManager
 
 logger = logging.getLogger(__name__)
 
@@ -26,11 +26,11 @@ class TramScheduler:
 
     def __init__(
         self,
-        manager: "PipelineManager",
-        coordinator: Optional["ClusterCoordinator"] = None,
+        manager: PipelineManager,
+        coordinator: ClusterCoordinator | None = None,
         rebalance_interval: int = 10,
-        file_tracker: Optional["ProcessedFileTracker"] = None,
-        db: Optional["TramDB"] = None,
+        file_tracker: ProcessedFileTracker | None = None,
+        db: TramDB | None = None,
         pipeline_sync_interval: int = 30,
     ) -> None:
         self.manager = manager
@@ -300,7 +300,7 @@ class TramScheduler:
 
     # ── Pipeline scheduling ────────────────────────────────────────────────
 
-    def _schedule_pipeline(self, config: "PipelineConfig") -> None:
+    def _schedule_pipeline(self, config: PipelineConfig) -> None:
         """Schedule a pipeline based on its schedule type."""
         # In cluster mode, only schedule pipelines owned by this node
         if self._coordinator and not self._coordinator.owns(config.name):
@@ -325,7 +325,7 @@ class TramScheduler:
         elif sched_type == "manual":
             logger.debug("Pipeline is manual — not scheduling", extra={"pipeline": config.name})
 
-    def _add_interval_job(self, config: "PipelineConfig") -> None:
+    def _add_interval_job(self, config: PipelineConfig) -> None:
         from apscheduler.triggers.interval import IntervalTrigger
 
         job_id = f"batch-{config.name}"
@@ -344,7 +344,7 @@ class TramScheduler:
             extra={"pipeline": config.name, "interval_seconds": config.schedule.interval_seconds},
         )
 
-    def _add_cron_job(self, config: "PipelineConfig") -> None:
+    def _add_cron_job(self, config: PipelineConfig) -> None:
         from apscheduler.triggers.cron import CronTrigger
 
         job_id = f"batch-{config.name}"
@@ -363,7 +363,7 @@ class TramScheduler:
             extra={"pipeline": config.name, "cron": config.schedule.cron},
         )
 
-    def _run_batch(self, pipeline_name: str, run_id: Optional[str] = None) -> None:
+    def _run_batch(self, pipeline_name: str, run_id: str | None = None) -> None:
         """APScheduler job callback — runs one batch execution."""
         if not self.manager.exists(pipeline_name):
             logger.warning("Batch job: pipeline not found", extra={"pipeline": pipeline_name})
@@ -395,7 +395,7 @@ class TramScheduler:
 
     # ── Stream pipelines ───────────────────────────────────────────────────
 
-    def _start_stream(self, config: "PipelineConfig") -> None:
+    def _start_stream(self, config: PipelineConfig) -> None:
         """Start a stream pipeline in a dedicated thread."""
         if config.name in self._stream_threads:
             old_thread = self._stream_threads[config.name]
@@ -423,7 +423,7 @@ class TramScheduler:
         thread.start()
         logger.info("Started stream pipeline", extra={"pipeline": config.name})
 
-    def _stream_worker(self, config: "PipelineConfig", stop_event: threading.Event) -> None:
+    def _stream_worker(self, config: PipelineConfig, stop_event: threading.Event) -> None:
         """Thread target for stream pipeline execution."""
         try:
             self.executor.stream_run(config, stop_event)

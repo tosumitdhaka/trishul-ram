@@ -18,7 +18,7 @@ async def receive_webhook(path: str, request: Request) -> Response:
     Returns 404 if no source is registered for the given path.
     Returns 401 if a secret is configured and the Authorization header doesn't match.
     """
-    from tram.connectors.webhook.source import _WEBHOOK_REGISTRY, _REGISTRY_LOCK
+    from tram.connectors.webhook.source import _REGISTRY_LOCK, _WEBHOOK_REGISTRY
 
     path = path.lstrip("/")
 
@@ -32,7 +32,6 @@ async def receive_webhook(path: str, request: Request) -> Response:
     # The secret is stored per-source; we check the Authorization header here.
     # Note: We access the secret from the source config via a separate registry if needed.
     # For now, if a registered source has a secret, the router checks the header.
-    from tram.connectors.webhook.source import _WEBHOOK_REGISTRY as _REG  # noqa: F811
     # Check if there's an associated secret — stored in a separate secrets dict
     from tram.connectors.webhook import _WEBHOOK_SECRETS  # type: ignore[attr-defined]
     secret = _WEBHOOK_SECRETS.get(path)

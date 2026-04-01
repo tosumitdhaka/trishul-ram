@@ -1,10 +1,12 @@
 """NATS source connector — subscribes and streams messages via asyncio bridge."""
 from __future__ import annotations
+
 import asyncio
 import logging
 import queue
 import threading
-from typing import Iterator
+from collections.abc import Iterator
+
 from tram.core.exceptions import SourceError
 from tram.interfaces.base_source import BaseSource
 from tram.registry.registry import register_source

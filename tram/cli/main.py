@@ -2,9 +2,7 @@
 
 from __future__ import annotations
 
-import sys
 from pathlib import Path
-from typing import Optional
 
 import typer
 from rich.console import Console
@@ -125,8 +123,8 @@ def validate(
     pipeline_file: Path = typer.Argument(..., help="Path to pipeline YAML file"),
 ):
     """Validate a pipeline YAML file (schema check + lint). Exit 0 on success."""
-    from tram.pipeline.loader import load_pipeline
     from tram.core.exceptions import ConfigError
+    from tram.pipeline.loader import load_pipeline
 
     try:
         config = load_pipeline(pipeline_file)
@@ -161,10 +159,10 @@ def run(
 ):
     """Execute a pipeline once and exit (no daemon needed)."""
     from tram.core.config import AppConfig
-    from tram.core.log_config import setup_logging
     from tram.core.exceptions import ConfigError
-    from tram.pipeline.loader import load_pipeline
+    from tram.core.log_config import setup_logging
     from tram.pipeline.executor import PipelineExecutor
+    from tram.pipeline.loader import load_pipeline
 
     config = AppConfig.from_env()
     setup_logging(level=config.log_level, fmt="text")
@@ -212,6 +210,7 @@ def daemon(
 ):
     """Start the TRAM daemon (scheduler + REST API)."""
     import os
+
     from tram.core.config import AppConfig
     from tram.daemon.server import serve
 
@@ -363,7 +362,7 @@ def pipeline_rollback(
 
 @runs_app.command("list")
 def runs_list(
-    pipeline: Optional[str] = typer.Option(None, "--pipeline", "-p", help="Filter by pipeline"),
+    pipeline: str | None = typer.Option(None, "--pipeline", "-p", help="Filter by pipeline"),
     limit: int = typer.Option(20, "--limit", "-n"),
 ):
     """List run history."""
@@ -415,7 +414,7 @@ def pipeline_init(
     name: str = typer.Argument(..., help="Pipeline name (alphanumeric, hyphens, underscores)"),
     source: str = typer.Option("local", "--source", "-s", help="Source type"),
     sink: str = typer.Option("local", "--sink", "-k", help="Sink type"),
-    output: Optional[Path] = typer.Option(
+    output: Path | None = typer.Option(
         None, "--output", "-o", help="Write to file (default: stdout)"
     ),
 ):
@@ -474,12 +473,12 @@ def mib_compile(
     Requires the tram[mib] optional extra (pysmi-lextudio).
     """
     try:
+        from pysmi.codegen.pysnmp import PySnmpCodeGen
+        from pysmi.compiler import MibCompiler
+        from pysmi.parser.smi import parserFactory
         from pysmi.reader import FileReader
         from pysmi.searcher import PyFileSearcher, StubSearcher
         from pysmi.writer import PyFileWriter
-        from pysmi.parser.smi import parserFactory
-        from pysmi.codegen.pysnmp import PySnmpCodeGen
-        from pysmi.compiler import MibCompiler
     except ImportError:
         err_console.print(
             "[red]pysmi-lextudio is required for MIB compilation.[/red]\n"
@@ -541,12 +540,12 @@ def mib_download(
         tram mib download IF-MIB ENTITY-MIB HOST-RESOURCES-MIB --out /mibs
     """
     try:
+        from pysmi.codegen.pysnmp import PySnmpCodeGen
+        from pysmi.compiler import MibCompiler
+        from pysmi.parser.smi import parserFactory
         from pysmi.reader import HttpReader
         from pysmi.searcher import PyFileSearcher, StubSearcher
         from pysmi.writer import PyFileWriter
-        from pysmi.parser.smi import parserFactory
-        from pysmi.codegen.pysnmp import PySnmpCodeGen
-        from pysmi.compiler import MibCompiler
     except ImportError:
         err_console.print(
             "[red]pysmi-lextudio is required for MIB download.[/red]\n"

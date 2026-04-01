@@ -7,7 +7,7 @@ import datetime
 import logging
 import socket
 import threading
-from typing import Iterator
+from collections.abc import Iterator
 
 from tram.core.exceptions import SourceError
 from tram.interfaces.base_source import BaseSource
@@ -97,7 +97,7 @@ class SNMPTrapSource(BaseSource):
             while not self._stop_event.is_set():
                 try:
                     raw, addr = sock.recvfrom(65535)
-                except socket.timeout:
+                except TimeoutError:
                     continue
                 except Exception as exc:
                     logger.warning("SNMP trap recv error: %s", exc)
@@ -110,7 +110,9 @@ class SNMPTrapSource(BaseSource):
                 if self.resolve_oids and (self.mib_dirs or self.mib_modules):
                     try:
                         from tram.connectors.snmp.mib_utils import (
-                            get_mib_view, resolve_oid, oid_str_to_tuple,
+                            get_mib_view,
+                            oid_str_to_tuple,
+                            resolve_oid,
                         )
                         mib_view = get_mib_view(self.mib_dirs, self.mib_modules)
                         bindings = {
@@ -354,7 +356,7 @@ class SNMPPollSource(BaseSource):
                 "SNMP poll source requires pysnmp-lextudio — install with: pip install tram[snmp]"
             ) from exc
 
-        polled_at = datetime.datetime.now(datetime.timezone.utc).isoformat()
+        polled_at = datetime.datetime.now(datetime.UTC).isoformat()
 
         try:
             if self.operation == "get":
@@ -374,7 +376,9 @@ class SNMPPollSource(BaseSource):
         if self.resolve_oids and (self.mib_dirs or self.mib_modules):
             try:
                 from tram.connectors.snmp.mib_utils import (
-                    get_mib_view, resolve_oid, oid_str_to_tuple,
+                    get_mib_view,
+                    oid_str_to_tuple,
+                    resolve_oid,
                 )
                 mib_view = get_mib_view(self.mib_dirs, self.mib_modules)
                 bindings = {

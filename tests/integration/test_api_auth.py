@@ -24,6 +24,7 @@ def _make_app(api_key: str = ""):
     mock_config.api_key = api_key
     mock_config.rate_limit = 0
     mock_config.rate_limit_window = 60
+    mock_config.auth_users = {}
 
     with patch("tram.api.middleware.AppConfig.from_env", return_value=mock_config):
         from fastapi import FastAPI

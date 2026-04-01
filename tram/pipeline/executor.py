@@ -10,7 +10,7 @@ import random
 import threading
 import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from typing import TYPE_CHECKING
 
 from tram.core.context import PipelineRunContext, RunResult, RunStatus
@@ -26,7 +26,7 @@ logger = logging.getLogger(__name__)
 
 def _make_evaluator():
     try:
-        from simpleeval import EvalWithCompoundTypes, DEFAULT_FUNCTIONS
+        from simpleeval import DEFAULT_FUNCTIONS, EvalWithCompoundTypes
         funcs = dict(DEFAULT_FUNCTIONS)
         funcs.update({
             "round": round, "abs": abs, "int": int, "float": float,
@@ -70,7 +70,7 @@ def _write_dlq_envelope(
         "_stage": stage,
         "_pipeline": ctx.pipeline_name,
         "_run_id": ctx.run_id,
-        "_timestamp": datetime.now(timezone.utc).isoformat(),
+        "_timestamp": datetime.now(UTC).isoformat(),
         "record": record,
     }
     if stage == "parse" and raw is not None:
@@ -87,7 +87,7 @@ def _write_dlq_envelope(
 class PipelineExecutor:
     """Executes pipeline configurations in batch or stream mode."""
 
-    def __init__(self, file_tracker: "ProcessedFileTracker | None" = None) -> None:
+    def __init__(self, file_tracker: ProcessedFileTracker | None = None) -> None:
         self._last_refill: float = 0.0
         self._tokens: float = 0.0
         self._file_tracker = file_tracker
@@ -113,7 +113,7 @@ class PipelineExecutor:
 
     # ── Internal helpers ───────────────────────────────────────────────────
 
-    def _build_source(self, config: "PipelineConfig"):
+    def _build_source(self, config: PipelineConfig):
         src_cls = get_source(config.source.type)
         src_conf = config.source.model_dump()
         src_conf["_pipeline_name"] = config.name   # connectors use as default group/queue id
@@ -121,7 +121,7 @@ class PipelineExecutor:
             src_conf["_file_tracker"] = self._file_tracker
         return src_cls(src_conf)
 
-    def _build_sinks(self, config: "PipelineConfig") -> list[tuple]:
+    def _build_sinks(self, config: PipelineConfig) -> list[tuple]:
         """Returns list of (sink_instance, condition_str|None, sink_transforms, sink_cfg, per_sink_ser|None)."""
         result = []
         for sink_cfg in config.sinks:
@@ -140,25 +140,25 @@ class PipelineExecutor:
             result.append((sink_cls(sink_cfg.model_dump()), condition, sink_transforms, sink_cfg, per_sink_ser))
         return result
 
-    def _build_dlq_sink(self, config: "PipelineConfig"):
+    def _build_dlq_sink(self, config: PipelineConfig):
         """Build the DLQ sink instance, or None if not configured."""
         if config.dlq is None:
             return None
         sink_cls = get_sink(config.dlq.type)
         return sink_cls(config.dlq.model_dump())
 
-    def _build_serializer_in(self, config: "PipelineConfig"):
+    def _build_serializer_in(self, config: PipelineConfig):
         ser_cls = get_serializer(config.serializer_in.type)
         return ser_cls(config.serializer_in.model_dump())
 
-    def _build_serializer_out(self, config: "PipelineConfig"):
+    def _build_serializer_out(self, config: PipelineConfig):
         if config.serializer_out is None:
             from tram.serializers.json_serializer import JsonSerializer
             return JsonSerializer({})
         ser_cls = get_serializer(config.serializer_out.type)
         return ser_cls(config.serializer_out.model_dump())
 
-    def _build_transforms(self, config: "PipelineConfig") -> list:
+    def _build_transforms(self, config: PipelineConfig) -> list:
         transforms = []
         for t_cfg in config.transforms:
             t_cls = get_transform(t_cfg.type)
@@ -183,7 +183,14 @@ class PipelineExecutor:
 
         Thread-safe: all ctx mutations go through locked helper methods.
         """
-        from tram.metrics.registry import RECORDS_IN, RECORDS_OUT, RECORDS_SKIP, ERRORS, DLQ_RECORDS, DURATION
+        from tram.metrics.registry import (
+            DLQ_RECORDS,
+            DURATION,
+            ERRORS,
+            RECORDS_IN,
+            RECORDS_OUT,
+            RECORDS_SKIP,
+        )
 
         meta = dict(meta)
         meta["pipeline_name"] = ctx.pipeline_name
@@ -385,7 +392,7 @@ class PipelineExecutor:
 
     # ── Batch run ──────────────────────────────────────────────────────────
 
-    def batch_run(self, config: "PipelineConfig", run_id: str | None = None) -> RunResult:
+    def batch_run(self, config: PipelineConfig, run_id: str | None = None) -> RunResult:
         """Execute one discrete batch run."""
         import contextlib
         try:
@@ -398,7 +405,7 @@ class PipelineExecutor:
         with span_ctx:
             return self._batch_run_inner(config, run_id=run_id)
 
-    def _batch_run_inner(self, config: "PipelineConfig", run_id: str | None = None) -> RunResult:
+    def _batch_run_inner(self, config: PipelineConfig, run_id: str | None = None) -> RunResult:
         kw = {"run_id": run_id} if run_id else {}
         ctx = PipelineRunContext(pipeline_name=config.name, **kw)
         logger.info(
@@ -464,7 +471,7 @@ class PipelineExecutor:
 
     def _run_batch_chunks(
         self,
-        config: "PipelineConfig",
+        config: PipelineConfig,
         source,
         sinks,
         serializer_in,
@@ -528,7 +535,7 @@ class PipelineExecutor:
 
     # ── Stream run ─────────────────────────────────────────────────────────
 
-    def stream_run(self, config: "PipelineConfig", stop_event: threading.Event) -> None:
+    def stream_run(self, config: PipelineConfig, stop_event: threading.Event) -> None:
         """Run indefinitely until stop_event is set."""
         logger.info("Stream run started", extra={"pipeline": config.name})
 
@@ -591,7 +598,7 @@ class PipelineExecutor:
 
     def _stream_run_threaded(
         self,
-        config: "PipelineConfig",
+        config: PipelineConfig,
         source,
         sinks,
         serializer_in,
@@ -664,7 +671,7 @@ class PipelineExecutor:
 
     # ── Dry run ────────────────────────────────────────────────────────────
 
-    def dry_run(self, config: "PipelineConfig") -> dict:
+    def dry_run(self, config: PipelineConfig) -> dict:
         """Validate pipeline wiring without performing any I/O."""
         issues = []
 

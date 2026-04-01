@@ -1,7 +1,8 @@
 """Redis sink connector — list, pubsub, or stream write."""
 from __future__ import annotations
-import json
+
 import logging
+
 from tram.core.exceptions import SinkError
 from tram.interfaces.base_sink import BaseSink
 from tram.registry.registry import register_sink

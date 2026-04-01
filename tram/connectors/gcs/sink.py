@@ -1,7 +1,9 @@
 """GCS sink connector — writes blobs to a Google Cloud Storage bucket."""
 from __future__ import annotations
+
 import logging
-from datetime import datetime, timezone
+from datetime import UTC, datetime
+
 from tram.core.exceptions import SinkError
 from tram.interfaces.base_sink import BaseSink
 from tram.registry.registry import register_sink
@@ -57,7 +59,7 @@ class GcsSink(BaseSink):
             raise SinkError(f"GCS client creation failed: {exc}") from exc
 
     def _render_blob_name(self, meta: dict) -> str:
-        ts = datetime.now(timezone.utc).isoformat().replace(":", "-")
+        ts = datetime.now(UTC).isoformat().replace(":", "-")
         return self.blob_template.format(
             pipeline=meta.get("pipeline_name", "tram"),
             timestamp=ts,

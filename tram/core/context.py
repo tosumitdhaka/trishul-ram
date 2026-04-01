@@ -5,12 +5,11 @@ from __future__ import annotations
 import threading
 import uuid
 from dataclasses import dataclass, field
-from datetime import datetime, timezone
-from enum import Enum
-from typing import Optional
+from datetime import UTC, datetime
+from enum import StrEnum
 
 
-class RunStatus(str, Enum):
+class RunStatus(StrEnum):
     PENDING = "pending"
     RUNNING = "running"
     SUCCESS = "success"
@@ -28,7 +27,7 @@ class PipelineRunContext:
 
     pipeline_name: str
     run_id: str = field(default_factory=lambda: str(uuid.uuid4())[:8])
-    started_at: datetime = field(default_factory=lambda: datetime.now(timezone.utc))
+    started_at: datetime = field(default_factory=lambda: datetime.now(UTC))
     records_in: int = 0
     records_out: int = 0
     records_skipped: int = 0
@@ -75,7 +74,7 @@ class RunResult:
     records_in: int
     records_out: int
     records_skipped: int
-    error: Optional[str] = None
+    error: str | None = None
     dlq_count: int = 0
     node_id: str = ""
     errors: list = field(default_factory=list)  # per-record error strings
@@ -85,14 +84,14 @@ class RunResult:
         cls,
         ctx: PipelineRunContext,
         status: RunStatus,
-        error: Optional[str] = None,
-    ) -> "RunResult":
+        error: str | None = None,
+    ) -> RunResult:
         return cls(
             run_id=ctx.run_id,
             pipeline_name=ctx.pipeline_name,
             status=status,
             started_at=ctx.started_at,
-            finished_at=datetime.now(timezone.utc),
+            finished_at=datetime.now(UTC),
             records_in=ctx.records_in,
             records_out=ctx.records_out,
             records_skipped=ctx.records_skipped,

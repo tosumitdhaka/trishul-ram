@@ -6,7 +6,7 @@ import logging
 import re
 import socket
 import threading
-from typing import Iterator
+from collections.abc import Iterator
 
 from tram.core.exceptions import SourceError
 from tram.interfaces.base_source import BaseSource
@@ -159,7 +159,7 @@ class SyslogSource(BaseSource):
             while not self._stop_event.is_set():
                 try:
                     raw, addr = sock.recvfrom(self.buffer_size)
-                except socket.timeout:
+                except TimeoutError:
                     continue
                 except Exception as exc:
                     logger.warning("Syslog UDP recv error: %s", exc)
@@ -189,7 +189,7 @@ class SyslogSource(BaseSource):
             while not self._stop_event.is_set():
                 try:
                     conn, addr = srv.accept()
-                except socket.timeout:
+                except TimeoutError:
                     continue
                 except Exception as exc:
                     logger.warning("Syslog TCP accept error: %s", exc)

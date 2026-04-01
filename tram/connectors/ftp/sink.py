@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import io
 import logging
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 
 from tram.core.exceptions import SinkError
 from tram.interfaces.base_sink import BaseSink
@@ -51,7 +51,7 @@ class FTPSink(BaseSink):
             raise SinkError(f"FTP connect failed to {self.host}:{self.port} — {exc}") from exc
 
     def _render_filename(self, meta: dict) -> str:
-        ts = datetime.now(timezone.utc).isoformat().replace(":", "-")
+        ts = datetime.now(UTC).isoformat().replace(":", "-")
         return self.filename_template.format(
             pipeline=meta.get("pipeline_name", "tram"),
             timestamp=ts,

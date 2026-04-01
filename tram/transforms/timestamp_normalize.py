@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import logging
 import re
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from typing import Any
 
 from tram.core.exceptions import TransformError
@@ -25,8 +25,8 @@ def _parse_timestamp(val: Any, input_format: str | None) -> datetime:
     # Already a datetime
     if isinstance(val, datetime):
         if val.tzinfo is None:
-            return val.replace(tzinfo=timezone.utc)
-        return val.astimezone(timezone.utc)
+            return val.replace(tzinfo=UTC)
+        return val.astimezone(UTC)
 
     # Numeric — unix epoch (sec / ms / us / ns auto-detect)
     if isinstance(val, (int, float)):
@@ -43,8 +43,8 @@ def _parse_timestamp(val: Any, input_format: str | None) -> datetime:
         try:
             dt = datetime.strptime(s, input_format)
             if dt.tzinfo is None:
-                dt = dt.replace(tzinfo=timezone.utc)
-            return dt.astimezone(timezone.utc)
+                dt = dt.replace(tzinfo=UTC)
+            return dt.astimezone(UTC)
         except ValueError as exc:
             raise TransformError(f"Cannot parse {s!r} with format {input_format!r}: {exc}") from exc
 
@@ -61,8 +61,8 @@ def _parse_timestamp(val: Any, input_format: str | None) -> datetime:
         try:
             dt = datetime.strptime(s, fmt)
             if dt.tzinfo is None:
-                dt = dt.replace(tzinfo=timezone.utc)
-            return dt.astimezone(timezone.utc)
+                dt = dt.replace(tzinfo=UTC)
+            return dt.astimezone(UTC)
         except ValueError:
             continue
 
@@ -70,8 +70,8 @@ def _parse_timestamp(val: Any, input_format: str | None) -> datetime:
     try:
         dt = datetime.fromisoformat(s)
         if dt.tzinfo is None:
-            dt = dt.replace(tzinfo=timezone.utc)
-        return dt.astimezone(timezone.utc)
+            dt = dt.replace(tzinfo=UTC)
+        return dt.astimezone(UTC)
     except ValueError:
         pass
 
@@ -88,7 +88,7 @@ def _from_unix(val: float) -> datetime:
         ts_secs = val / 1_000_000
     else:
         ts_secs = val / 1_000_000_000
-    return datetime.fromtimestamp(ts_secs, tz=timezone.utc)
+    return datetime.fromtimestamp(ts_secs, tz=UTC)
 
 
 @register_transform("timestamp_normalize")

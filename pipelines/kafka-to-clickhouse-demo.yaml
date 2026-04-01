@@ -1,0 +1,75 @@
+name: kafka-to-clickhouse-demo
+description: "Demo pipeline — Kafka source → ClickHouse sink (all parameters)"
+enabled: true
+
+schedule:
+  type: stream
+
+source:
+  type: kafka
+  brokers:
+    - kafka-broker-0.kafka.svc.cluster.local:9092
+    - kafka-broker-1.kafka.svc.cluster.local:9092
+    - kafka-broker-2.kafka.svc.cluster.local:9092
+  topic:
+    - tram.pm.raw
+    - tram.fm.raw
+  group_id: tram-clickhouse-consumer
+  auto_offset_reset: earliest        # earliest | latest
+  enable_auto_commit: true
+  max_poll_records: 500
+  session_timeout_ms: 30000
+  security_protocol: SASL_SSL        # PLAINTEXT | SSL | SASL_PLAINTEXT | SASL_SSL
+  sasl_mechanism: SCRAM-SHA-512      # PLAIN | SCRAM-SHA-256 | SCRAM-SHA-512
+  sasl_username: tram
+  sasl_password: secret
+  ssl_cafile: /data/schemas/kafka-ca.pem
+  reconnect_delay_seconds: 5.0
+  max_reconnect_attempts: 0          # 0 = infinite
+
+serializer_in:
+  type: json
+
+transforms:
+  - type: field_rename
+    mappings:
+      ts: timestamp
+      src: source_node
+  - type: field_add
+    fields:
+      pipeline: kafka-to-clickhouse-demo
+      env: production
+  - type: filter
+    condition: "record.get('severity', 0) >= 3"
+
+sinks:
+  - type: clickhouse
+    host: clickhouse.trishul.svc.cluster.local
+    port: 9000
+    database: tram
+    username: tram
+    password: secret
+    table: pm_events
+    secure: false
+    verify: true
+    connect_timeout: 10
+    send_receive_timeout: 300
+    condition: "record.get('env') == 'production'"   # per-record filter
+    retry_count: 3
+    retry_delay_seconds: 2.0
+    circuit_breaker_threshold: 5     # open circuit after 5 consecutive failures; 0 = disabled
+    transforms:
+      - type: field_drop
+        fields: [env]                # strip internal field before insert
+    serializer_out: null             # null = use global serializer_in (json)
+
+on_error: dlq
+
+dlq:
+  type: local
+  path: /data/dlq/kafka-clickhouse-demo
+
+alerts:
+  - condition: "last_run_status == 'error'"
+    action: log
+    message: "kafka-to-clickhouse-demo hit error"

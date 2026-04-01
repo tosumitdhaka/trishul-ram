@@ -11,7 +11,7 @@ import yaml
 from pydantic import ValidationError
 
 from tram.core.exceptions import ConfigError
-from tram.models.pipeline import PipelineConfig, PipelineFile
+from tram.models.pipeline import PipelineConfig
 
 logger = logging.getLogger(__name__)
 

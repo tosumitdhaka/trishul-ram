@@ -4,6 +4,9 @@ from tram.connectors.amqp import sink as _amqp_sink  # noqa: F401
 from tram.connectors.amqp import source as _amqp_source  # noqa: F401
 from tram.connectors.azure_blob import sink as _azure_blob_sink  # noqa: F401
 from tram.connectors.azure_blob import source as _azure_blob_source  # noqa: F401
+from tram.connectors.clickhouse import sink as _clickhouse_sink  # noqa: F401
+from tram.connectors.clickhouse import source as _clickhouse_source  # noqa: F401
+from tram.connectors.corba import source as _corba_source  # noqa: F401
 from tram.connectors.elasticsearch import sink as _elasticsearch_sink  # noqa: F401
 from tram.connectors.elasticsearch import source as _elasticsearch_source  # noqa: F401
 from tram.connectors.ftp import sink as _ftp_sink  # noqa: F401
@@ -40,6 +43,3 @@ from tram.connectors.ves import sink as _ves_sink  # noqa: F401
 from tram.connectors.webhook import source as _webhook_source  # noqa: F401
 from tram.connectors.websocket import sink as _websocket_sink  # noqa: F401
 from tram.connectors.websocket import source as _websocket_source  # noqa: F401
-from tram.connectors.clickhouse import sink as _clickhouse_sink  # noqa: F401
-from tram.connectors.clickhouse import source as _clickhouse_source  # noqa: F401
-from tram.connectors.corba import source as _corba_source  # noqa: F401

@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import json
 import logging
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 
 from tram.core.exceptions import SinkError
 from tram.interfaces.base_sink import BaseSink
@@ -93,7 +93,7 @@ class OpenSearchSink(BaseSink):
                     "detail": f"OpenSearch node={name} version={version}"}
 
     def _current_index(self) -> str:
-        return datetime.now(timezone.utc).strftime(self.index_template)
+        return datetime.now(UTC).strftime(self.index_template)
 
     def _build_bulk_body(self, records: list[dict], index: str) -> bytes:
         lines = []

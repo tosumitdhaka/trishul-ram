@@ -3,8 +3,6 @@
 from __future__ import annotations
 
 import struct
-from typing import Optional
-
 
 _MAGIC_BYTE = b"\x00"
 
@@ -31,7 +29,7 @@ class SchemaRegistryClient:
     Caches schemas by ID in memory.
     """
 
-    def __init__(self, url: str, username: Optional[str] = None, password: Optional[str] = None) -> None:
+    def __init__(self, url: str, username: str | None = None, password: str | None = None) -> None:
         import httpx
 
         self._url = url.rstrip("/")

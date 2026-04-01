@@ -1,7 +1,9 @@
 """SQL sink connector — inserts/upserts records via SQLAlchemy."""
 from __future__ import annotations
+
 import json
 import logging
+
 from tram.core.exceptions import SinkError
 from tram.interfaces.base_sink import BaseSink
 from tram.registry.registry import register_sink
@@ -27,7 +29,7 @@ class SqlSink(BaseSink):
 
     def write(self, data: bytes, meta: dict) -> None:
         try:
-            from sqlalchemy import create_engine, text, Table, MetaData
+            from sqlalchemy import MetaData, Table, create_engine
             from sqlalchemy.dialects.postgresql import insert as pg_insert
             from sqlalchemy.dialects.sqlite import insert as sqlite_insert
         except ImportError as exc:

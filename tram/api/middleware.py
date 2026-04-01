@@ -29,7 +29,7 @@ class APIKeyMiddleware(BaseHTTPMiddleware):
         super().__init__(app)
         self._settings = AppConfig.from_env()
 
-    async def dispatch(self, request: "Request", call_next):
+    async def dispatch(self, request: Request, call_next):
         settings = self._settings
 
         # No auth configured at all
@@ -72,7 +72,7 @@ class RateLimitMiddleware(BaseHTTPMiddleware):
         # {client_ip: deque[float]}  — timestamps of recent requests
         self._windows: dict[str, deque] = {}
 
-    async def dispatch(self, request: "Request", call_next):
+    async def dispatch(self, request: Request, call_next):
         if self._rate_limit <= 0:
             return await call_next(request)
 

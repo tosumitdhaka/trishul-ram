@@ -2,11 +2,10 @@
 
 from __future__ import annotations
 
-import fnmatch
 import logging
 import shutil
+from collections.abc import Iterator
 from pathlib import Path
-from typing import Iterator
 
 from tram.core.exceptions import SourceError
 from tram.interfaces.base_source import BaseSource

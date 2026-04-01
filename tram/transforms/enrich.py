@@ -7,7 +7,6 @@ import io
 import json
 import logging
 from pathlib import Path
-from typing import Any
 
 from tram.core.exceptions import TransformError
 from tram.interfaces.base_transform import BaseTransform

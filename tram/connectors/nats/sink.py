@@ -1,7 +1,9 @@
 """NATS sink connector — publishes data via asyncio.run."""
 from __future__ import annotations
+
 import asyncio
 import logging
+
 from tram.core.exceptions import SinkError
 from tram.interfaces.base_sink import BaseSink
 from tram.registry.registry import register_sink

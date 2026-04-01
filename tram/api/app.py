@@ -5,14 +5,27 @@ from __future__ import annotations
 import logging
 import os
 from contextlib import asynccontextmanager
+from datetime import UTC
 
 from fastapi import FastAPI
 from fastapi.responses import RedirectResponse
 from fastapi.staticfiles import StaticFiles
 
-from tram.api.routers import health, pipelines, runs
-from tram.api.routers import metrics_router, webhooks, mibs, schemas, auth, templates, stats, connectors, ai
 from tram import __version__
+from tram.api.routers import (
+    ai,
+    auth,
+    connectors,
+    health,
+    metrics_router,
+    mibs,
+    pipelines,
+    runs,
+    schemas,
+    stats,
+    templates,
+    webhooks,
+)
 from tram.core.config import AppConfig
 from tram.pipeline.loader import scan_pipeline_dir
 from tram.pipeline.manager import PipelineManager
@@ -194,8 +207,8 @@ def create_app(config: AppConfig | None = None) -> FastAPI:
     app.state.alert_evaluator = alert_evaluator
     app.state.node_registry = node_registry
     app.state.coordinator = coordinator
-    from datetime import datetime, timezone
-    app.state.started_at = datetime.now(timezone.utc)
+    from datetime import datetime
+    app.state.started_at = datetime.now(UTC)
 
     # Add security + rate-limit middleware (outermost = last applied)
     from tram.api.middleware import APIKeyMiddleware, RateLimitMiddleware

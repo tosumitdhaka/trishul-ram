@@ -6,7 +6,7 @@ import logging
 import os
 import tempfile
 
-from fastapi import APIRouter, HTTPException, UploadFile, File
+from fastapi import APIRouter, File, HTTPException, UploadFile
 from pydantic import BaseModel
 
 logger = logging.getLogger(__name__)
@@ -53,12 +53,12 @@ async def upload_mib(file: UploadFile = File(...)) -> dict:
     Requires ``pysmi-lextudio`` (``pip install tram[mib]``).
     """
     try:
+        from pysmi.codegen.pysnmp import PySnmpCodeGen
+        from pysmi.compiler import MibCompiler
+        from pysmi.parser.smi import parserFactory
         from pysmi.reader import FileReader
         from pysmi.searcher import PyFileSearcher, StubSearcher
         from pysmi.writer import PyFileWriter
-        from pysmi.parser.smi import parserFactory
-        from pysmi.codegen.pysnmp import PySnmpCodeGen
-        from pysmi.compiler import MibCompiler
     except ImportError:
         raise HTTPException(
             status_code=501,
@@ -125,12 +125,12 @@ def download_mibs(body: MibDownloadRequest) -> dict:
         raise HTTPException(status_code=400, detail="'names' must be a non-empty list")
 
     try:
+        from pysmi.codegen.pysnmp import PySnmpCodeGen
+        from pysmi.compiler import MibCompiler
+        from pysmi.parser.smi import parserFactory
         from pysmi.reader import HttpReader
         from pysmi.searcher import PyFileSearcher, StubSearcher
         from pysmi.writer import PyFileWriter
-        from pysmi.parser.smi import parserFactory
-        from pysmi.codegen.pysnmp import PySnmpCodeGen
-        from pysmi.compiler import MibCompiler
     except ImportError:
         raise HTTPException(
             status_code=501,

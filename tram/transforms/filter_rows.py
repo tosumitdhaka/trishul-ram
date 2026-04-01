@@ -13,7 +13,7 @@ logger = logging.getLogger(__name__)
 
 def _make_evaluator():
     try:
-        from simpleeval import EvalWithCompoundTypes, DEFAULT_FUNCTIONS
+        from simpleeval import DEFAULT_FUNCTIONS, EvalWithCompoundTypes
         funcs = dict(DEFAULT_FUNCTIONS)
         funcs.update({
             "round": round, "abs": abs, "int": int, "float": float,

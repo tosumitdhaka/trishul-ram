@@ -17,7 +17,7 @@ from __future__ import annotations
 import logging
 import os
 
-from fastapi import APIRouter, HTTPException, Request, UploadFile, File, Query
+from fastapi import APIRouter, File, HTTPException, Query, Request, UploadFile
 from fastapi.responses import PlainTextResponse, Response
 
 logger = logging.getLogger(__name__)
@@ -188,7 +188,7 @@ def get_schema(filepath: str) -> PlainTextResponse:
         raise HTTPException(status_code=404, detail=f"Schema '{filepath}' not found")
 
     try:
-        content = open(full, "r", encoding="utf-8", errors="replace").read()
+        content = open(full, encoding="utf-8", errors="replace").read()
     except Exception as exc:
         raise HTTPException(status_code=500, detail=f"Could not read schema: {exc}")
 

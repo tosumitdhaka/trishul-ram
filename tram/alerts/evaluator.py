@@ -5,9 +5,9 @@ from __future__ import annotations
 import logging
 import os
 import smtplib
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from email.mime.text import MIMEText
-from typing import TYPE_CHECKING, Optional
+from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
     from tram.core.context import RunResult
@@ -20,10 +20,10 @@ logger = logging.getLogger(__name__)
 class AlertEvaluator:
     """Evaluates alert rules after each pipeline run and fires configured actions."""
 
-    def __init__(self, db: Optional["TramDB"] = None) -> None:
+    def __init__(self, db: TramDB | None = None) -> None:
         self._db = db
 
-    def check(self, result: "RunResult", config: "PipelineConfig") -> None:
+    def check(self, result: RunResult, config: PipelineConfig) -> None:
         """Check all alert rules for a pipeline after a run."""
         if not config.alerts:
             return
@@ -78,26 +78,26 @@ class AlertEvaluator:
                     extra={"pipeline": config.name, "rule": rule.name, "error": str(exc)},
                 )
 
-    def _is_in_cooldown(self, pipeline_name: str, rule: "AlertRuleConfig") -> bool:
+    def _is_in_cooldown(self, pipeline_name: str, rule: AlertRuleConfig) -> bool:
         if self._db is None:
             return False
         last_alerted = self._db.get_alert_cooldown(pipeline_name, rule.name)
         if last_alerted is None:
             return False
-        elapsed = (datetime.now(timezone.utc) - last_alerted).total_seconds()
+        elapsed = (datetime.now(UTC) - last_alerted).total_seconds()
         return elapsed < rule.cooldown_seconds
 
-    def _set_cooldown(self, pipeline_name: str, rule: "AlertRuleConfig") -> None:
+    def _set_cooldown(self, pipeline_name: str, rule: AlertRuleConfig) -> None:
         if self._db is not None:
             self._db.set_alert_cooldown(
-                pipeline_name, rule.name, datetime.now(timezone.utc)
+                pipeline_name, rule.name, datetime.now(UTC)
             )
 
     def _fire_webhook(
         self,
-        rule: "AlertRuleConfig",
-        result: "RunResult",
-        config: "PipelineConfig",
+        rule: AlertRuleConfig,
+        result: RunResult,
+        config: PipelineConfig,
     ) -> None:
         try:
             import httpx
@@ -111,7 +111,7 @@ class AlertEvaluator:
                 "records_skipped": result.records_skipped,
                 "error": result.error,
                 "run_id": result.run_id,
-                "timestamp": datetime.now(timezone.utc).isoformat(),
+                "timestamp": datetime.now(UTC).isoformat(),
             }
             httpx.post(rule.webhook_url, json=payload, timeout=10)
             logger.info(
@@ -126,9 +126,9 @@ class AlertEvaluator:
 
     def _fire_email(
         self,
-        rule: "AlertRuleConfig",
-        result: "RunResult",
-        config: "PipelineConfig",
+        rule: AlertRuleConfig,
+        result: RunResult,
+        config: PipelineConfig,
     ) -> None:
         try:
             smtp_host = os.environ.get("TRAM_SMTP_HOST", "localhost")
