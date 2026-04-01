@@ -4,7 +4,7 @@
 image:
   registry:   ""              # e.g. ghcr.io — empty = no registry prefix (local/kind images)
   repository: tram            # image name without registry
-  tag: "1.1.2"
+  tag: "1.1.3"
   pullPolicy: IfNotPresent
 
 ## TRAM always deploys as a StatefulSet (stable pod names: tram-0, tram-1, …).
