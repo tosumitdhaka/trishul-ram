@@ -112,6 +112,9 @@ jobs:
         with:
           version: v3.14.0
 
+      - name: Update Helm dependencies
+        run: helm dependency update helm/
+
       - name: Package Helm chart
         run: helm package helm/
 
