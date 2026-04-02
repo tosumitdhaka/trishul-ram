@@ -65,7 +65,7 @@ jobs:
         id: meta
         uses: docker/metadata-action@v5
         with:
-          images: ghcr.io/${{ github.repository_owner }}/tram
+          images: ghcr.io/${{ github.repository_owner }}/trishul-ram
           tags: |
             type=raw,value=${{ steps.version.outputs.version }}
             type=raw,value=latest
@@ -127,4 +127,4 @@ jobs:
 
       - name: Push Helm chart to OCI registry
         run: |
-          helm push tram-*.tgz oci://ghcr.io/${{ github.repository_owner }}/charts
+          helm push trishul-ram-*.tgz oci://ghcr.io/${{ github.repository_owner }}/charts
