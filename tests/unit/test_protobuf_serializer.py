@@ -1,11 +1,15 @@
 """Tests for Protobuf serializer."""
 from __future__ import annotations
+
 import struct
 import sys
 from unittest.mock import MagicMock, patch
+
 import pytest
-from tram.serializers.protobuf_serializer import ProtobufSerializer
+
 from tram.core.exceptions import SerializerError
+from tram.serializers.protobuf_serializer import ProtobufSerializer
+
 
 class TestProtobufSerializer:
     def test_missing_schema_file_raises(self):

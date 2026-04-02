@@ -6,8 +6,6 @@ import json
 import textwrap
 from unittest.mock import MagicMock, patch
 
-import pytest
-
 from tram.core.context import RunStatus
 from tram.pipeline.executor import PipelineExecutor
 from tram.pipeline.loader import load_pipeline_from_yaml

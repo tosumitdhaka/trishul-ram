@@ -14,7 +14,6 @@ from tram.transforms.mask import MaskTransform
 from tram.transforms.regex_extract import RegexExtractTransform
 from tram.transforms.template import TemplateTransform
 
-
 # ── ExplodeTransform ──────────────────────────────────────────────────────────
 
 

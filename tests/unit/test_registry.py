@@ -2,6 +2,7 @@
 
 import pytest
 
+from tram.core.exceptions import PluginNotFoundError
 from tram.registry.registry import (
     get_serializer,
     get_sink,
@@ -9,7 +10,6 @@ from tram.registry.registry import (
     get_transform,
     list_plugins,
 )
-from tram.core.exceptions import PluginNotFoundError
 
 
 def test_list_plugins_returns_all_categories():

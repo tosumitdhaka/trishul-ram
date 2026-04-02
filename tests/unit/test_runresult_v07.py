@@ -1,13 +1,13 @@
 """Tests for v0.7.0 RunResult additions: dlq_count field."""
 from __future__ import annotations
 
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 
 from tram.core.context import PipelineRunContext, RunResult, RunStatus
 
 
 def test_runresult_has_dlq_count_field():
-    now = datetime.now(timezone.utc)
+    now = datetime.now(UTC)
     r = RunResult(
         run_id="x",
         pipeline_name="p",
@@ -23,7 +23,7 @@ def test_runresult_has_dlq_count_field():
 
 
 def test_runresult_dlq_count_default_zero():
-    now = datetime.now(timezone.utc)
+    now = datetime.now(UTC)
     r = RunResult(
         run_id="x",
         pipeline_name="p",
@@ -46,7 +46,7 @@ def test_from_context_carries_dlq_count():
 
 
 def test_to_dict_includes_dlq_count():
-    now = datetime.now(timezone.utc)
+    now = datetime.now(UTC)
     r = RunResult(
         run_id="x",
         pipeline_name="p",

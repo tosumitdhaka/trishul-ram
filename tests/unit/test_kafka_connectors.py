@@ -1,8 +1,11 @@
 """Tests for Kafka source connector."""
 from __future__ import annotations
+
 import sys
 from unittest.mock import MagicMock, patch
+
 import pytest
+
 from tram.connectors.kafka.source import KafkaSource
 from tram.core.exceptions import SourceError
 

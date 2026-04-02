@@ -3,12 +3,11 @@ from __future__ import annotations
 
 import socket
 
-import pytest
-
 
 def test_node_id_defaults_to_hostname(monkeypatch):
     monkeypatch.delenv("TRAM_NODE_ID", raising=False)
     from importlib import reload
+
     import tram.core.config as cfg_mod
     reload(cfg_mod)
     config = cfg_mod.AppConfig.from_env()
@@ -18,6 +17,7 @@ def test_node_id_defaults_to_hostname(monkeypatch):
 def test_node_id_from_env(monkeypatch):
     monkeypatch.setenv("TRAM_NODE_ID", "worker-3")
     from importlib import reload
+
     import tram.core.config as cfg_mod
     reload(cfg_mod)
     config = cfg_mod.AppConfig.from_env()
@@ -27,6 +27,7 @@ def test_node_id_from_env(monkeypatch):
 def test_db_url_empty_by_default(monkeypatch):
     monkeypatch.delenv("TRAM_DB_URL", raising=False)
     from importlib import reload
+
     import tram.core.config as cfg_mod
     reload(cfg_mod)
     config = cfg_mod.AppConfig.from_env()
@@ -36,6 +37,7 @@ def test_db_url_empty_by_default(monkeypatch):
 def test_db_url_from_env(monkeypatch):
     monkeypatch.setenv("TRAM_DB_URL", "sqlite:////tmp/x.db")
     from importlib import reload
+
     import tram.core.config as cfg_mod
     reload(cfg_mod)
     config = cfg_mod.AppConfig.from_env()
@@ -45,6 +47,7 @@ def test_db_url_from_env(monkeypatch):
 def test_shutdown_timeout_default(monkeypatch):
     monkeypatch.delenv("TRAM_SHUTDOWN_TIMEOUT_SECONDS", raising=False)
     from importlib import reload
+
     import tram.core.config as cfg_mod
     reload(cfg_mod)
     config = cfg_mod.AppConfig.from_env()
@@ -54,6 +57,7 @@ def test_shutdown_timeout_default(monkeypatch):
 def test_shutdown_timeout_from_env(monkeypatch):
     monkeypatch.setenv("TRAM_SHUTDOWN_TIMEOUT_SECONDS", "60")
     from importlib import reload
+
     import tram.core.config as cfg_mod
     reload(cfg_mod)
     config = cfg_mod.AppConfig.from_env()

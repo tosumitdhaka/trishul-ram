@@ -7,13 +7,12 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
-
 # ── ElasticsearchSource ────────────────────────────────────────────────────
 
 
 def test_elasticsearch_source_missing_dep():
-    from tram.core.exceptions import SourceError
     from tram.connectors.elasticsearch.source import ElasticsearchSource
+    from tram.core.exceptions import SourceError
 
     source = ElasticsearchSource({
         "type": "elasticsearch",
@@ -77,8 +76,8 @@ def test_elasticsearch_source_reads_via_scroll():
 
 
 def test_elasticsearch_sink_missing_dep():
-    from tram.core.exceptions import SinkError
     from tram.connectors.elasticsearch.sink import ElasticsearchSink
+    from tram.core.exceptions import SinkError
 
     sink = ElasticsearchSink({
         "type": "elasticsearch",

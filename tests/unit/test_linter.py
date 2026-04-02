@@ -6,9 +6,7 @@ import os
 import textwrap
 from unittest.mock import patch
 
-import pytest
-
-from tram.pipeline.linter import LintResult, lint
+from tram.pipeline.linter import lint
 from tram.pipeline.loader import load_pipeline_from_yaml
 
 

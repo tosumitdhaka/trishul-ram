@@ -1,11 +1,14 @@
 """Tests for SQL source and sink connectors."""
 from __future__ import annotations
+
 import json
 import sys
 from unittest.mock import MagicMock, patch
+
 import pytest
-from tram.connectors.sql.source import SqlSource
+
 from tram.connectors.sql.sink import SqlSink
+from tram.connectors.sql.source import SqlSource
 from tram.core.exceptions import SinkError, SourceError
 
 

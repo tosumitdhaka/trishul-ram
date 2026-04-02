@@ -1,12 +1,14 @@
 """Tests for Avro serializer."""
 from __future__ import annotations
-import io
+
 import json
 import sys
 from unittest.mock import MagicMock, patch
+
 import pytest
-from tram.serializers.avro_serializer import AvroSerializer
+
 from tram.core.exceptions import SerializerError
+from tram.serializers.avro_serializer import AvroSerializer
 
 SCHEMA = json.dumps({"type": "record", "name": "Test", "fields": [{"name": "x", "type": "int"}]})
 

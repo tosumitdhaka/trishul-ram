@@ -1,10 +1,13 @@
 """Tests for Azure Blob Storage source and sink connectors."""
 from __future__ import annotations
+
 import sys
 from unittest.mock import MagicMock, patch
+
 import pytest
-from tram.connectors.azure_blob.source import AzureBlobSource
+
 from tram.connectors.azure_blob.sink import AzureBlobSink
+from tram.connectors.azure_blob.source import AzureBlobSource
 from tram.core.exceptions import SinkError, SourceError
 
 

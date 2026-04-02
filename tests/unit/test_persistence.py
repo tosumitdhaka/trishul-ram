@@ -1,7 +1,7 @@
 """Tests for SQLAlchemy-backed persistence layer (v0.7.0)."""
 from __future__ import annotations
 
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 
 import pytest
 
@@ -10,7 +10,7 @@ from tram.persistence.db import TramDB
 
 
 def _make_result(pipeline="test", status=RunStatus.SUCCESS, run_id="abc123", dlq_count=0):
-    now = datetime.now(timezone.utc)
+    now = datetime.now(UTC)
     return RunResult(
         run_id=run_id,
         pipeline_name=pipeline,

@@ -78,7 +78,7 @@ class TestMibResolveIntegration:
         with patch("tram.connectors.snmp.mib_utils.build_mib_view", return_value=mock_view) as mock_build:
             v1 = mib_utils.get_mib_view([], ["SNMPv2-MIB"])
             v2 = mib_utils.get_mib_view([], ["SNMPv2-MIB"])
-            v3 = mib_utils.get_mib_view([], ["IF-MIB"])  # different params → new call
+            mib_utils.get_mib_view([], ["IF-MIB"])  # different params → new call
 
         assert v1 is v2
         assert mock_build.call_count == 2  # SNMPv2-MIB + IF-MIB

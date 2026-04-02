@@ -3,13 +3,12 @@
 from __future__ import annotations
 
 import logging
-from unittest.mock import MagicMock, patch, PropertyMock
+from unittest.mock import MagicMock
 
 import pytest
 
 from tram.persistence.db import TramDB
 from tram.persistence.file_tracker import ProcessedFileTracker
-
 
 # ── Fixtures ──────────────────────────────────────────────────────────────
 

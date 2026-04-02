@@ -1,10 +1,13 @@
 """Tests for MQTT source and sink connectors."""
 from __future__ import annotations
+
 import sys
 from unittest.mock import MagicMock, patch
+
 import pytest
-from tram.connectors.mqtt.source import MqttSource
+
 from tram.connectors.mqtt.sink import MqttSink
+from tram.connectors.mqtt.source import MqttSource
 from tram.core.exceptions import SinkError, SourceError
 
 

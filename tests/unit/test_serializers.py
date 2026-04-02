@@ -6,11 +6,10 @@ import json
 
 import pytest
 
+from tram.core.exceptions import SerializerError
 from tram.serializers.csv_serializer import CsvSerializer
 from tram.serializers.json_serializer import JsonSerializer
 from tram.serializers.xml_serializer import XmlSerializer
-from tram.core.exceptions import SerializerError
-
 
 # ── JsonSerializer ─────────────────────────────────────────────────────────
 

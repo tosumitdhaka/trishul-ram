@@ -1,10 +1,13 @@
 """Tests for GCS source and sink connectors."""
 from __future__ import annotations
+
 import sys
 from unittest.mock import MagicMock, patch
+
 import pytest
-from tram.connectors.gcs.source import GcsSource
+
 from tram.connectors.gcs.sink import GcsSink
+from tram.connectors.gcs.source import GcsSource
 from tram.core.exceptions import SinkError, SourceError
 
 

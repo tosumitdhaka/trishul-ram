@@ -4,18 +4,16 @@ from __future__ import annotations
 
 import csv
 import json
-import tempfile
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
 
 import pytest
 
+from tram.core.exceptions import TransformError
 from tram.transforms.aggregate import AggregateTransform
 from tram.transforms.enrich import EnrichTransform
 from tram.transforms.flatten import FlattenTransform
 from tram.transforms.timestamp_normalize import TimestampNormalizeTransform
-from tram.core.exceptions import TransformError
-
 
 # ── FlattenTransform ───────────────────────────────────────────────────────
 
@@ -106,7 +104,7 @@ class TestTimestampNormalizeTransform:
 
     def test_already_datetime(self):
         t = TimestampNormalizeTransform({"fields": ["ts"]})
-        dt = datetime(2024, 1, 15, 10, 30, tzinfo=timezone.utc)
+        dt = datetime(2024, 1, 15, 10, 30, tzinfo=UTC)
         result = t.apply([{"ts": dt}])
         assert "2024-01-15" in result[0]["ts"]
 

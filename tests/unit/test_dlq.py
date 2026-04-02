@@ -5,11 +5,9 @@ from __future__ import annotations
 import base64
 import json
 import textwrap
-from unittest.mock import MagicMock, call, patch
+from unittest.mock import MagicMock, patch
 
-import pytest
-
-from tram.core.context import PipelineRunContext, RunStatus
+from tram.core.context import PipelineRunContext
 from tram.pipeline.executor import PipelineExecutor, _write_dlq_envelope
 from tram.pipeline.loader import load_pipeline_from_yaml
 
@@ -202,7 +200,7 @@ class TestDlqInProcessChunk:
 
         ctx, mock_sink = self._run_chunk(
             None, b'[]', {}, parse_records=records,
-            sink_raises=IOError("network error"),
+            sink_raises=OSError("network error"),
             dlq_sink=dlq_sink,
         )
 

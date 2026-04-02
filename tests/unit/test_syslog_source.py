@@ -3,14 +3,12 @@
 from __future__ import annotations
 
 import socket
-import threading
 from unittest.mock import MagicMock, patch
 
 import pytest
 
 from tram.connectors.syslog.source import SyslogSource, _parse_syslog
 from tram.core.exceptions import SourceError
-
 
 # ── Parser unit tests ──────────────────────────────────────────────────────
 

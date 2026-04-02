@@ -1,10 +1,13 @@
 """Tests for AMQP source and sink connectors."""
 from __future__ import annotations
+
 import sys
 from unittest.mock import MagicMock, patch
+
 import pytest
-from tram.connectors.amqp.source import AmqpSource
+
 from tram.connectors.amqp.sink import AmqpSink
+from tram.connectors.amqp.source import AmqpSource
 from tram.core.exceptions import SinkError, SourceError
 
 

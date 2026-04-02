@@ -14,7 +14,6 @@ from __future__ import annotations
 import json
 import os
 import textwrap
-from pathlib import Path
 from unittest.mock import patch
 
 import pytest
@@ -36,7 +35,6 @@ def tmp_dirs(tmp_path):
 @pytest.fixture
 def app(tmp_path):
     """Create a test FastAPI app with in-memory SQLite DB."""
-    import os
     db_path = tmp_path / "test.db"
     pipeline_dir = tmp_path / "pipelines"
     pipeline_dir.mkdir(parents=True, exist_ok=True)

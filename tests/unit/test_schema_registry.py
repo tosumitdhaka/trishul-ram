@@ -63,7 +63,6 @@ def test_encode_decode_large_id():
 
 def _make_mock_httpx_client(responses: dict):
     """Create a mock httpx.Client where .get(path) returns preset responses."""
-    import json
 
     mock_client = MagicMock()
 
@@ -82,6 +81,7 @@ def _make_mock_httpx_client(responses: dict):
 
 def test_get_schema_by_id_cached():
     import json
+
     import httpx
 
     schema_dict = {"type": "record", "name": "Test", "fields": []}
@@ -104,6 +104,7 @@ def test_get_schema_by_id_cached():
 
 def test_get_latest_schema():
     import json
+
     import httpx
 
     schema_dict = {"type": "record", "name": "Event", "fields": [{"name": "id", "type": "int"}]}

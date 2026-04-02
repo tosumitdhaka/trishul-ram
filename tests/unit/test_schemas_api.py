@@ -135,6 +135,7 @@ class TestGetSchema:
     def test_path_traversal_rejected_by_safe_join(self):
         # httpx normalises ../../ in URLs before sending, so test _safe_join directly
         from fastapi import HTTPException as _HTTPException
+
         from tram.api.routers.schemas import _safe_join
         with pytest.raises(_HTTPException) as exc_info:
             _safe_join("/schemas", "../../etc/passwd")
@@ -245,6 +246,7 @@ class TestDeleteSchema:
     def test_delete_path_traversal_rejected_by_safe_join(self):
         # httpx normalises ../../ in URLs before sending, so test _safe_join directly
         from fastapi import HTTPException as _HTTPException
+
         from tram.api.routers.schemas import _safe_join
         with pytest.raises(_HTTPException) as exc_info:
             _safe_join("/schemas", "../../etc/passwd")

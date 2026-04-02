@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import json
-from pathlib import Path
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -11,7 +10,6 @@ import pytest
 from tram.connectors.local.sink import LocalSink
 from tram.connectors.local.source import LocalSource
 from tram.core.exceptions import SinkError, SourceError
-
 
 # ── LocalSource ────────────────────────────────────────────────────────────
 

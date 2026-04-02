@@ -1,9 +1,12 @@
 """Tests for gNMI source connector."""
 from __future__ import annotations
+
 import json
 import sys
 from unittest.mock import MagicMock, patch
+
 import pytest
+
 from tram.connectors.gnmi.source import GnmiSource
 from tram.core.exceptions import SourceError
 

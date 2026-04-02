@@ -5,8 +5,6 @@ from __future__ import annotations
 import sys
 from unittest.mock import MagicMock, patch
 
-import pytest
-
 
 class TestMibUtilsWithMocks:
     """Test MIB utils with mocked pysnmp — no real SNMP stack needed."""
@@ -32,7 +30,7 @@ class TestMibUtilsWithMocks:
         with patch.dict(sys.modules, {"pysnmp": None, "pysnmp.smi": None, "pysnmp.smi.builder": None, "pysnmp.smi.view": None}):
             # Simulate ImportError
             with patch("tram.connectors.snmp.mib_utils.build_mib_view", return_value=None):
-                result = build_mib_view.__wrapped__([], []) if hasattr(build_mib_view, "__wrapped__") else None
+                build_mib_view.__wrapped__([], []) if hasattr(build_mib_view, "__wrapped__") else None
         # Just verify we can call without crash in patched env
         # If pysnmp is installed, test still passes (returns real view)
 
