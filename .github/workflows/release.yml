@@ -40,15 +40,18 @@ jobs:
     permissions:
       contents: read
       packages: write
+    outputs:
+      version: ${{ steps.version.outputs.version }}
 
     steps:
       - name: Checkout
         uses: actions/checkout@v4
 
       - name: Read version from pyproject.toml
+        id: version
         run: |
           VERSION=$(grep -oP '(?<=^version = ").*(?=")' pyproject.toml)
-          echo "VERSION=$VERSION" >> $GITHUB_ENV
+          echo "version=$VERSION" >> $GITHUB_OUTPUT
           echo "Detected version: $VERSION"
 
       - name: Log in to GHCR
@@ -64,7 +67,7 @@ jobs:
         with:
           images: ghcr.io/${{ github.repository_owner }}/tram
           tags: |
-            type=raw,value=${{ env.VERSION }}
+            type=raw,value=${{ steps.version.outputs.version }}
             type=raw,value=latest
 
       - name: Set up QEMU
@@ -96,10 +99,9 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Read version from pyproject.toml
+      - name: Update Helm chart with version
         run: |
-          VERSION=$(grep -oP '(?<=^version = ").*(?=")' pyproject.toml)
-          echo "VERSION=$VERSION" >> $GITHUB_ENV
+          VERSION=${{ needs.docker.outputs.version }}
           sed -i "s/^version: .*/version: $VERSION/" helm/Chart.yaml
           sed -i "s/^appVersion: .*/appVersion: \"$VERSION\"/" helm/Chart.yaml
           sed -i "s/^  tag: \".*\"/  tag: \"$VERSION\"/" helm/values.yaml
