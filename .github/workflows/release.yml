@@ -21,7 +21,7 @@ jobs:
           cache: pip
 
       - name: Install dependencies
-        run: pip install -e ".[dev,snmp,avro,protobuf_ser,parquet,msgpack_ser,jmespath,sql,asn1]"
+        run: pip install -e ".[dev,asn1]"
 
       - name: Lint with ruff
         run: ruff check .
