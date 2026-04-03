@@ -21,7 +21,7 @@ jobs:
           cache: pip
 
       - name: Install dependencies
-        run: pip install -e ".[dev,snmp,avro,protobuf_ser,parquet,msgpack_ser,jmespath,sql,asn1]"
+        run: pip install -e ".[dev,all]"
 
       - name: Lint with ruff
         run: ruff check .
@@ -100,10 +100,7 @@ jobs:
         run: |
           VERSION=$(grep -oP '(?<=^version = ").*(?=")' pyproject.toml)
           echo "VERSION=$VERSION" >> $GITHUB_ENV
-          sed -i "s/^version: .*/version: $VERSION/" helm/Chart.yaml
-          sed -i "s/^appVersion: .*/appVersion: \"$VERSION\"/" helm/Chart.yaml
-          sed -i "s/^  tag: \".*\"/  tag: \"$VERSION\"/" helm/values.yaml
-          echo "Patched helm/ → $VERSION"
+          echo "Using version: $VERSION"
 
       - name: Set up Helm
         uses: azure/setup-helm@v4
@@ -122,4 +119,4 @@ jobs:
 
       - name: Push Helm chart to OCI registry
         run: |
-          helm push tram-*.tgz oci://ghcr.io/${{ github.repository_owner }}/charts
+          helm push trishul-ram-*.tgz oci://ghcr.io/${{ github.repository_owner }}/charts
