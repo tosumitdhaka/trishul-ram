@@ -1,11 +1,13 @@
 """Tests for Redis source and sink connectors."""
 from __future__ import annotations
-import json
+
 import sys
 from unittest.mock import MagicMock, patch
+
 import pytest
-from tram.connectors.redis.source import RedisSource
+
 from tram.connectors.redis.sink import RedisSink
+from tram.connectors.redis.source import RedisSource
 from tram.core.exceptions import SinkError, SourceError
 
 
@@ -60,7 +62,7 @@ class TestRedisSource:
         with patch.dict(sys.modules, {"redis": mock_redis}):
             source = RedisSource({"key": "mystream", "mode": "stream"})
             with pytest.raises(SourceError):
-                results = list(source.read())
+                list(source.read())
 
     def test_invalid_mode_raises(self):
         mock_redis = MagicMock()

@@ -1,10 +1,14 @@
 """Tests for Parquet serializer."""
 from __future__ import annotations
+
 import sys
 from unittest.mock import MagicMock, patch
+
 import pytest
-from tram.serializers.parquet_serializer import ParquetSerializer
+
 from tram.core.exceptions import SerializerError
+from tram.serializers.parquet_serializer import ParquetSerializer
+
 
 class TestParquetSerializer:
     def test_parse_calls_read_table(self):

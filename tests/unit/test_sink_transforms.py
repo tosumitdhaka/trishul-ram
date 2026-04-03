@@ -2,11 +2,8 @@
 
 from __future__ import annotations
 
-import json
 import textwrap
 from unittest.mock import MagicMock, patch
-
-import pytest
 
 from tram.core.context import PipelineRunContext
 from tram.pipeline.executor import PipelineExecutor

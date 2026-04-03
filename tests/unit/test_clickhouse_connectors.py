@@ -7,10 +7,9 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
-from tram.connectors.clickhouse.source import ClickHouseSource
 from tram.connectors.clickhouse.sink import ClickHouseSink
+from tram.connectors.clickhouse.source import ClickHouseSource
 from tram.core.exceptions import SinkError, SourceError
-
 
 # ── ClickHouseSource tests ───────────────────────────────────────────────────
 

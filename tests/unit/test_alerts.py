@@ -3,17 +3,15 @@
 from __future__ import annotations
 
 import textwrap
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 from unittest.mock import MagicMock, patch
 
 import pytest
 
 from tram.alerts.evaluator import AlertEvaluator
-from tram.core.context import RunStatus
-from tram.core.context import RunResult
+from tram.core.context import RunResult, RunStatus
 from tram.models.pipeline import AlertRuleConfig
 from tram.pipeline.loader import load_pipeline_from_yaml
-
 
 # ── AlertRuleConfig validation ─────────────────────────────────────────────
 
@@ -122,7 +120,7 @@ class TestPipelineConfigAlerts:
 
 def _make_result(status=RunStatus.SUCCESS, records_in=10, records_out=10,
                  records_skipped=0, error=None):
-    now = datetime.now(timezone.utc)
+    now = datetime.now(UTC)
     return RunResult(
         run_id="test-run",
         pipeline_name="test-pipe",
@@ -222,7 +220,7 @@ class TestAlertEvaluatorCheck:
     def test_cooldown_prevents_double_fire(self):
         mock_db = MagicMock()
         # Simulate last alerted 10 seconds ago, cooldown is 300s
-        mock_db.get_alert_cooldown.return_value = datetime.now(timezone.utc) - timedelta(seconds=10)
+        mock_db.get_alert_cooldown.return_value = datetime.now(UTC) - timedelta(seconds=10)
 
         rule = AlertRuleConfig(
             name="cooldown-rule",
@@ -244,7 +242,7 @@ class TestAlertEvaluatorCheck:
     def test_cooldown_expired_fires_again(self):
         mock_db = MagicMock()
         # Last alerted 400 seconds ago, cooldown is 300s → expired
-        mock_db.get_alert_cooldown.return_value = datetime.now(timezone.utc) - timedelta(seconds=400)
+        mock_db.get_alert_cooldown.return_value = datetime.now(UTC) - timedelta(seconds=400)
 
         rule = AlertRuleConfig(
             name="cooldown-rule",

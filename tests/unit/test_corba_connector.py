@@ -11,14 +11,12 @@ This is an accepted test-level workaround for the production bug.
 from __future__ import annotations
 
 import json
-import sys
 from unittest.mock import MagicMock, patch
 
 import pytest
 
 from tram.connectors.corba.source import CorbaSource, _corba_to_python
 from tram.core.exceptions import SourceError
-
 
 # ── _corba_to_python conversion ───────────────────────────────────────────
 
@@ -97,6 +95,7 @@ class TestCorbaSourceConfigValidation:
 
     def test_neither_ior_nor_naming_service_raises_validation_error(self):
         from pydantic import ValidationError
+
         from tram.models.pipeline import CorbaSourceConfig
         with pytest.raises(ValidationError, match="Either 'ior' or 'naming_service'"):
             CorbaSourceConfig(type="corba", operation="getData")
@@ -192,8 +191,6 @@ def _make_source_with_mock_corba(config_extras: dict, result_value):
     and _invoke directly."""
     mock_CORBA = _make_mock_corba_with_result(result_value)
     mock_orb = mock_CORBA.ORB_init.return_value
-    mock_obj = mock_orb.string_to_object.return_value
-    mock_request = mock_obj._request.return_value
 
     config = {
         "ior": "IOR:test",

@@ -1,14 +1,11 @@
 """Tests for WebhookSource (v0.5.0)."""
 from __future__ import annotations
 
-import queue
 import threading
 import time
 
-import pytest
-
-from tram.connectors.webhook.source import WebhookSource, _WEBHOOK_REGISTRY, _REGISTRY_LOCK
 from tram.connectors.webhook import _WEBHOOK_SECRETS
+from tram.connectors.webhook.source import _REGISTRY_LOCK, _WEBHOOK_REGISTRY, WebhookSource
 
 
 def test_webhook_source_registers_on_read():
@@ -48,7 +45,7 @@ def test_webhook_source_registers_on_read():
 def test_webhook_source_deregisters_on_exit():
     """Queue is removed from registry when read() exits."""
     source = WebhookSource({"type": "webhook", "path": "exit-test"})
-    stop = threading.Event()
+    threading.Event()
 
     def consume():
         gen = source.read()

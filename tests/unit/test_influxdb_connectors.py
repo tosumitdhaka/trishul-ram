@@ -1,11 +1,14 @@
 """Tests for InfluxDB source and sink connectors."""
 from __future__ import annotations
+
 import json
 import sys
 from unittest.mock import MagicMock, patch
+
 import pytest
-from tram.connectors.influxdb.source import InfluxDbSource
+
 from tram.connectors.influxdb.sink import InfluxDbSink
+from tram.connectors.influxdb.source import InfluxDbSource
 from tram.core.exceptions import SinkError, SourceError
 
 

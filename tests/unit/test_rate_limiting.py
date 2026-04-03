@@ -4,10 +4,8 @@ from __future__ import annotations
 import time
 from unittest.mock import MagicMock
 
-import pytest
-
-from tram.pipeline.executor import PipelineExecutor
 from tram.core.context import PipelineRunContext
+from tram.pipeline.executor import PipelineExecutor
 
 
 def test_rate_limit_no_sleep_first_token():
@@ -44,7 +42,6 @@ def test_process_chunk_with_rate_limit():
     executor = PipelineExecutor()
 
     called_with = []
-    original_rate_limit = executor._rate_limit
 
     def mock_rate_limit(rps):
         called_with.append(rps)
@@ -73,7 +70,6 @@ def test_process_chunk_no_rate_limit():
     executor = PipelineExecutor()
     rate_limit_called = []
 
-    original = executor._rate_limit
     executor._rate_limit = lambda rps: rate_limit_called.append(rps)
 
     sink = MagicMock()

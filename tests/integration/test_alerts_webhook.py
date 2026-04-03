@@ -13,8 +13,6 @@ import textwrap
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
-import pytest
-
 from tram.alerts.evaluator import AlertEvaluator
 from tram.pipeline.executor import PipelineExecutor
 from tram.pipeline.loader import load_pipeline_from_yaml
@@ -47,7 +45,8 @@ class TestAlertWebhookIntegration:
         """Alert fires a webhook POST when records_out == 0 (empty source)."""
         src = tmp_path / "src"
         dst = tmp_path / "dst"
-        src.mkdir(); dst.mkdir()
+        src.mkdir()
+        dst.mkdir()
         # No input files → records_out == 0
 
         config = _make_pipeline(src, dst, condition="records_out == 0")
@@ -71,7 +70,8 @@ class TestAlertWebhookIntegration:
         """No webhook fires when the condition evaluates to False."""
         src = tmp_path / "src"
         dst = tmp_path / "dst"
-        src.mkdir(); dst.mkdir()
+        src.mkdir()
+        dst.mkdir()
         (src / "data.json").write_text(json.dumps([{"id": 1}]))
 
         # Condition: records_out == 0 — but we have a record, so records_out == 1
@@ -91,7 +91,8 @@ class TestAlertWebhookIntegration:
         """Alert fires when records_in > 0."""
         src = tmp_path / "src"
         dst = tmp_path / "dst"
-        src.mkdir(); dst.mkdir()
+        src.mkdir()
+        dst.mkdir()
         (src / "data.json").write_text(json.dumps([{"id": 1}, {"id": 2}]))
 
         config = _make_pipeline(src, dst, condition="records_in > 0")
@@ -111,7 +112,8 @@ class TestAlertWebhookIntegration:
         """Webhook POST payload includes pipeline name and result metadata."""
         src = tmp_path / "src"
         dst = tmp_path / "dst"
-        src.mkdir(); dst.mkdir()
+        src.mkdir()
+        dst.mkdir()
 
         config = _make_pipeline(src, dst, condition="records_out == 0")
         executor = PipelineExecutor()
@@ -141,7 +143,8 @@ class TestAlertWebhookIntegration:
         """No webhook fires for a pipeline with no alerts configured."""
         src = tmp_path / "src"
         dst = tmp_path / "dst"
-        src.mkdir(); dst.mkdir()
+        src.mkdir()
+        dst.mkdir()
 
         config = load_pipeline_from_yaml(textwrap.dedent(f"""
             pipeline:

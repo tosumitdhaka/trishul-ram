@@ -5,13 +5,10 @@ from __future__ import annotations
 import json
 import threading
 from concurrent.futures import Future
-from unittest.mock import MagicMock, call, patch
-
-import pytest
+from unittest.mock import MagicMock, patch
 
 from tram.core.context import PipelineRunContext, RunStatus
 from tram.pipeline.executor import PipelineExecutor
-
 
 # ── PipelineRunContext thread-safety ──────────────────────────────────────
 
@@ -261,8 +258,9 @@ class TestBatchRunWithThreadWorkers:
 
     def test_batch_run_thread_workers_1_success(self):
         """batch_run with thread_workers=1 should process records and return SUCCESS."""
-        from tram.pipeline.loader import load_pipeline_from_yaml
         import textwrap
+
+        from tram.pipeline.loader import load_pipeline_from_yaml
 
         yaml_text = textwrap.dedent("""
             pipeline:
@@ -312,8 +310,9 @@ class TestBatchRunWithThreadWorkers:
 
     def test_batch_run_thread_workers_1_empty_source(self):
         """thread_workers=1 with empty source → SUCCESS, 0 records."""
-        from tram.pipeline.loader import load_pipeline_from_yaml
         import textwrap
+
+        from tram.pipeline.loader import load_pipeline_from_yaml
 
         yaml_text = textwrap.dedent("""
             pipeline:

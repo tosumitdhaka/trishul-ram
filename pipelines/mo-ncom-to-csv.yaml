@@ -1,0 +1,25 @@
+pipeline:
+  name: mo-ncom-to-csv
+  description: Convert 3GPP PM XML (Nokia NCOM measData) to CSV
+  schedule:
+    type: manual
+
+  source:
+    type: local
+    path: /home/dhaka/test
+    file_pattern: "mo_ncom.txt"
+    recursive: false
+
+  serializer_in:
+    type: pm_xml
+    numeric_values: true
+    add_managed_element: true
+    add_duration: false
+
+  sinks:
+    - type: local
+      path: /home/dhaka/test
+      filename_template: "{source_filename}.csv"
+      serializer_out:
+        type: csv
+        include_header: true

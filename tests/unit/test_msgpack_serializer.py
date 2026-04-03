@@ -1,10 +1,14 @@
 """Tests for MessagePack serializer."""
 from __future__ import annotations
+
 import sys
 from unittest.mock import MagicMock, patch
+
 import pytest
-from tram.serializers.msgpack_serializer import MsgpackSerializer
+
 from tram.core.exceptions import SerializerError
+from tram.serializers.msgpack_serializer import MsgpackSerializer
+
 
 class TestMsgpackSerializer:
     def test_parse_list(self):

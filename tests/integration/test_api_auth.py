@@ -8,10 +8,8 @@ Tests the full FastAPI app with APIKeyMiddleware:
 
 from __future__ import annotations
 
-import os
 from unittest.mock import MagicMock, patch
 
-import pytest
 from fastapi.testclient import TestClient
 
 

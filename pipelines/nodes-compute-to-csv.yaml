@@ -1,0 +1,38 @@
+pipeline:
+  name: nodes-compute-to-csv
+  description: Convert compute node utilization JSON to CSV (current cpu/memory/disk per node)
+  schedule:
+    type: manual
+
+  source:
+    type: local
+    path: /home/dhaka/test
+    file_pattern: "nodes_compute.txt"
+    recursive: false
+
+  serializer_in:
+    type: json
+    skip_lines: 7   # skip HTTP metadata header before JSON body
+
+  transforms:
+    - type: explode
+      field: nodes
+      include_index: true
+      index_field: node_index
+
+    - type: add_field
+      fields:
+        cpu_current: "cpu['current']"
+        memory_current: "memory['current']"
+        disk_current: "storage['diskUsage']['current']"
+
+    - type: drop
+      fields: [cpu, memory, storage]
+
+  sinks:
+    - type: local
+      path: /home/dhaka/test
+      filename_template: "{source_filename}.csv"
+      serializer_out:
+        type: csv
+        include_header: true

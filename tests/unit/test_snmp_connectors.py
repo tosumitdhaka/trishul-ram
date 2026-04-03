@@ -12,7 +12,6 @@ from tram.connectors.snmp.sink import SNMPTrapSink
 from tram.connectors.snmp.source import SNMPPollSource, SNMPTrapSource
 from tram.core.exceptions import SinkError, SourceError
 
-
 # ── SNMPTrapSource ─────────────────────────────────────────────────────────
 
 

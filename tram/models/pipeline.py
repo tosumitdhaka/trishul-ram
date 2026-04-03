@@ -979,8 +979,16 @@ class Asn1SerializerConfig(BaseModel):
     encoding: Literal["ber", "der", "per", "uper", "xer", "jer"] = "ber"
 
 
+class PmXmlSerializerConfig(BaseModel):
+    type: Literal["pm_xml"]
+    encoding: str = "utf-8"
+    add_managed_element: bool = True
+    add_duration: bool = False
+    numeric_values: bool = True
+
+
 SerializerConfig = Annotated[
-    JsonSerializerConfig | CsvSerializerConfig | XmlSerializerConfig | AvroSerializerConfig | ProtobufSerializerConfig | ParquetSerializerConfig | MsgpackSerializerConfig | NdjsonSerializerConfig | BytesSerializerConfig | TextSerializerConfig | Asn1SerializerConfig,
+    JsonSerializerConfig | CsvSerializerConfig | XmlSerializerConfig | AvroSerializerConfig | ProtobufSerializerConfig | ParquetSerializerConfig | MsgpackSerializerConfig | NdjsonSerializerConfig | BytesSerializerConfig | TextSerializerConfig | Asn1SerializerConfig | PmXmlSerializerConfig,
     Field(discriminator="type"),
 ]
 

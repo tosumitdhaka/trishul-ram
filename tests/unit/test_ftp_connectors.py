@@ -2,15 +2,13 @@
 
 from __future__ import annotations
 
-import io
-from unittest.mock import MagicMock, call, patch
+from unittest.mock import MagicMock, patch
 
 import pytest
 
 from tram.connectors.ftp.sink import FTPSink
 from tram.connectors.ftp.source import FTPSource
 from tram.core.exceptions import SinkError, SourceError
-
 
 # ── FTPSource ──────────────────────────────────────────────────────────────
 

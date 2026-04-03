@@ -1,10 +1,13 @@
 """Tests for NATS source and sink connectors."""
 from __future__ import annotations
+
 import sys
 from unittest.mock import AsyncMock, MagicMock, patch
+
 import pytest
-from tram.connectors.nats.source import NatsSource
+
 from tram.connectors.nats.sink import NatsSink
+from tram.connectors.nats.source import NatsSource
 from tram.core.exceptions import SinkError, SourceError
 
 

@@ -2,9 +2,6 @@
 
 from __future__ import annotations
 
-import time
-from unittest.mock import MagicMock, patch
-
 import pytest
 from starlette.requests import Request
 from starlette.responses import JSONResponse
@@ -114,7 +111,6 @@ class TestRateLimitMiddleware:
         assert response.status_code == 429
 
         # After window (simulated by injecting old timestamp into window)
-        import time
         mw._windows["127.0.0.1"].clear()  # clear all timestamps
         # Now should pass again
         response = await mw.dispatch(req, _call_next)

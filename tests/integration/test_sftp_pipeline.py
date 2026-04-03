@@ -6,7 +6,6 @@ source → transform → sink pipeline run without requiring a real SFTP server.
 
 from __future__ import annotations
 
-import io
 import json
 import textwrap
 from unittest.mock import MagicMock, patch
@@ -115,7 +114,6 @@ class TestSFTPPipelineIntegration:
 
         sink_sftp.open.side_effect = capture_write
 
-        import paramiko
 
         with (
             patch("paramiko.Transport") as mock_transport_cls,
@@ -138,12 +136,10 @@ class TestSFTPPipelineIntegration:
     def test_pipeline_applies_transforms_correctly(self, sftp_pipeline_config):
         """Verify transform chain produces expected field transformations."""
         from tram.pipeline.executor import PipelineExecutor
-        from tram.core.context import PipelineRunContext
 
         executor = PipelineExecutor()
 
         # Test just the transform chain in isolation
-        from tram.registry.registry import get_transform
         transforms = executor._build_transforms(sftp_pipeline_config)
 
         records = [

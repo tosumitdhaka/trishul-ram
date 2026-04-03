@@ -1,14 +1,12 @@
 """Tests for conditional multi-sink routing (v0.5.0)."""
 from __future__ import annotations
 
-import threading
-from unittest.mock import MagicMock, patch
+from unittest.mock import MagicMock
 
 import pytest
 
 from tram.core.context import PipelineRunContext
 from tram.pipeline.executor import PipelineExecutor, _filter_by_condition
-
 
 # ── _filter_by_condition ───────────────────────────────────────────────────
 
@@ -152,6 +150,7 @@ def test_pipelineconfig_legacy_sink_wrapped():
 
 def test_pipelineconfig_no_sink_raises():
     from pydantic import ValidationError
+
     from tram.models.pipeline import PipelineConfig
 
     with pytest.raises(ValidationError):

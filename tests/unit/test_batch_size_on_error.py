@@ -14,7 +14,6 @@ from tram.models.pipeline import PipelineConfig
 from tram.pipeline.executor import PipelineExecutor
 from tram.pipeline.loader import load_pipeline_from_yaml
 
-
 # ── Helpers ───────────────────────────────────────────────────────────────
 
 
@@ -219,11 +218,11 @@ class TestOnErrorDlqExecution:
     def test_on_error_dlq_sink_failure_writes_to_dlq_and_continues(self):
         """When on_error='dlq' and sink raises, the record goes to DLQ
         and processing continues (same behaviour as 'continue' with dlq_sink)."""
-        config = _make_pipeline_with_dlq("on_error: dlq")
+        _make_pipeline_with_dlq("on_error: dlq")
         executor = PipelineExecutor()
 
         mock_sink = MagicMock()
-        mock_sink.write.side_effect = IOError("network error")
+        mock_sink.write.side_effect = OSError("network error")
 
         mock_dlq = MagicMock()
 
@@ -247,7 +246,7 @@ class TestOnErrorDlqExecution:
 
     def test_on_error_dlq_parse_failure_writes_to_dlq(self):
         """Parse failure with DLQ configured writes envelope to DLQ."""
-        config = _make_pipeline_with_dlq("on_error: dlq")
+        _make_pipeline_with_dlq("on_error: dlq")
         executor = PipelineExecutor()
 
         mock_sink = MagicMock()

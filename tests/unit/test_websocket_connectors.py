@@ -2,18 +2,17 @@
 from __future__ import annotations
 
 import sys
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import MagicMock, patch
 
 import pytest
-
 
 # ── WebSocketSource ────────────────────────────────────────────────────────
 
 
 def test_websocket_source_missing_dep():
     """Raises SourceError when websockets is not installed."""
-    from tram.core.exceptions import SourceError
     from tram.connectors.websocket.source import WebSocketSource
+    from tram.core.exceptions import SourceError
 
     source = WebSocketSource({
         "type": "websocket",
@@ -59,8 +58,8 @@ def test_websocket_source_config_custom():
 
 def test_websocket_sink_missing_dep():
     """Raises SinkError when websockets is not installed."""
-    from tram.core.exceptions import SinkError
     from tram.connectors.websocket.sink import WebSocketSink
+    from tram.core.exceptions import SinkError
 
     sink = WebSocketSink({"type": "websocket", "url": "ws://localhost:9000"})
 

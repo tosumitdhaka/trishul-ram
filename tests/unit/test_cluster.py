@@ -2,16 +2,14 @@
 from __future__ import annotations
 
 import time
-import uuid
-from datetime import datetime, timezone, timedelta
-from unittest.mock import MagicMock, patch
+from datetime import UTC, datetime, timedelta
+from unittest.mock import MagicMock
 
 import pytest
 
 from tram.cluster.coordinator import ClusterCoordinator, _stable_hash, detect_ordinal
 from tram.cluster.registry import NodeRegistry
 from tram.persistence.db import TramDB
-
 
 # ── Fixtures ──────────────────────────────────────────────────────────────────
 
@@ -92,7 +90,7 @@ def test_expire_nodes(db):
     db.register_node("n1", 0)
     # Manually backdate the heartbeat to simulate a stale node
     from sqlalchemy import text
-    stale_ts = (datetime.now(timezone.utc) - timedelta(seconds=60)).isoformat()
+    stale_ts = (datetime.now(UTC) - timedelta(seconds=60)).isoformat()
     with db._engine.begin() as conn:
         conn.execute(text("UPDATE node_registry SET last_heartbeat = :ts WHERE node_id = 'n1'"), {"ts": stale_ts})
 
@@ -256,6 +254,7 @@ def test_coordinator_refresh_returns_true_on_change(db):
 def test_config_cluster_disabled_by_default(monkeypatch):
     monkeypatch.delenv("TRAM_CLUSTER_ENABLED", raising=False)
     from importlib import reload
+
     import tram.core.config as m
     reload(m)
     assert m.AppConfig.from_env().cluster_enabled is False
@@ -267,6 +266,7 @@ def test_config_cluster_enabled(monkeypatch):
     monkeypatch.setenv("TRAM_HEARTBEAT_SECONDS", "5")
     monkeypatch.setenv("TRAM_NODE_TTL_SECONDS", "15")
     from importlib import reload
+
     import tram.core.config as m
     reload(m)
     cfg = m.AppConfig.from_env()

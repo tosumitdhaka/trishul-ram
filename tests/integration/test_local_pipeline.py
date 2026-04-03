@@ -7,7 +7,6 @@ transforms, and writes them to a second temp directory, then asserts output.
 from __future__ import annotations
 
 import json
-import os
 import textwrap
 from pathlib import Path
 

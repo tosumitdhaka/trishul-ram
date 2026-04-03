@@ -2,13 +2,12 @@
 from __future__ import annotations
 
 import uuid
-from datetime import datetime, timezone, timedelta
+from datetime import UTC, datetime, timedelta
 
 import pytest
 
 from tram.core.context import RunResult, RunStatus
 from tram.persistence.db import TramDB
-
 
 # ── Fixtures ──────────────────────────────────────────────────────────────────
 
@@ -21,7 +20,7 @@ def db(tmp_path):
 
 
 def _run(run_id=None, pipeline="p", status=RunStatus.SUCCESS, dlq_count=0, started_offset_s=0):
-    now = datetime.now(timezone.utc) + timedelta(seconds=started_offset_s)
+    now = datetime.now(UTC) + timedelta(seconds=started_offset_s)
     return RunResult(
         run_id=run_id or str(uuid.uuid4())[:8],
         pipeline_name=pipeline,
@@ -131,7 +130,7 @@ def test_get_runs_from_dt(db):
     db.save_run(old)
     db.save_run(recent)
 
-    cutoff = datetime.now(timezone.utc) - timedelta(minutes=30)
+    cutoff = datetime.now(UTC) - timedelta(minutes=30)
     results = db.get_runs(from_dt=cutoff)
     ids = [r.run_id for r in results]
     assert "new1" in ids
@@ -147,7 +146,7 @@ def test_alert_cooldown_none_initially(db):
 
 
 def test_alert_cooldown_set_and_get(db):
-    now = datetime.now(timezone.utc)
+    now = datetime.now(UTC)
     db.set_alert_cooldown("p", "rule1", now)
     fetched = db.get_alert_cooldown("p", "rule1")
     assert fetched is not None
@@ -156,8 +155,8 @@ def test_alert_cooldown_set_and_get(db):
 
 
 def test_alert_cooldown_upsert(db):
-    t1 = datetime(2026, 1, 1, tzinfo=timezone.utc)
-    t2 = datetime(2026, 1, 2, tzinfo=timezone.utc)
+    t1 = datetime(2026, 1, 1, tzinfo=UTC)
+    t2 = datetime(2026, 1, 2, tzinfo=UTC)
     db.set_alert_cooldown("p", "r", t1)
     db.set_alert_cooldown("p", "r", t2)  # should overwrite
     assert db.get_alert_cooldown("p", "r").date() == t2.date()

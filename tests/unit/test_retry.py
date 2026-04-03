@@ -2,14 +2,12 @@
 
 from __future__ import annotations
 
-import textwrap
-from unittest.mock import MagicMock, call, patch
+from unittest.mock import MagicMock, patch
 
 import pytest
 
 from tram.core.context import PipelineRunContext
 from tram.pipeline.executor import PipelineExecutor
-from tram.pipeline.loader import load_pipeline_from_yaml
 
 
 def _ctx():
