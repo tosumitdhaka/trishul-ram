@@ -187,7 +187,7 @@ tram mib compile /path/to/vendor-mibs/ --out /mibs
 **Air-gapped environments** — copy pre-compiled MIB `.py` files into the image:
 
 ```dockerfile
-FROM ghcr.io/OWNER/trishul-ram:1.1.3
+FROM ghcr.io/tosumitdhaka/trishul-ram:1.1.3
 COPY compiled-mibs/*.py /mibs/
 ```
 
@@ -375,7 +375,7 @@ The following extras are **excluded by default** to keep the image lean. Extend 
 | `otel` | only needed when `TRAM_OTEL_ENDPOINT` is set; no-op fallback when absent | ~15 MB |
 
 ```dockerfile
-FROM ghcr.io/OWNER/trishul-ram:1.1.3
+FROM ghcr.io/tosumitdhaka/trishul-ram:1.1.3
 RUN pip install "tram[parquet,s3,gcs,azure,otel]"
 ```
 
@@ -395,16 +395,16 @@ TRAM ships a production-ready Helm chart in `helm/`. Published to GHCR OCI on ev
 
 ```bash
 # Add chart from OCI registry
-helm install tram oci://ghcr.io/OWNER/charts/trishul-ram \
+helm install tram oci://ghcr.io/tosumitdhaka/charts/trishul-ram \
   --namespace tram --create-namespace \
   --set image.tag=1.1.3
 
 # Mount pipelines from local files
-helm upgrade tram oci://ghcr.io/OWNER/charts/trishul-ram \
+helm upgrade tram oci://ghcr.io/tosumitdhaka/charts/trishul-ram \
   --set-file "pipelines.pm-ingest\.yaml=./pipelines/pm-ingest.yaml"
 
 # Inject SFTP credentials from a Kubernetes Secret
-helm upgrade tram oci://ghcr.io/OWNER/charts/trishul-ram \
+helm upgrade tram oci://ghcr.io/tosumitdhaka/charts/trishul-ram \
   --set envSecret.NE_SFTP_PASS.secretName=ne-creds \
   --set envSecret.NE_SFTP_PASS.secretKey=password
 ```
@@ -413,7 +413,7 @@ helm upgrade tram oci://ghcr.io/OWNER/charts/trishul-ram \
 
 | Value | Default | Description |
 |-------|---------|-------------|
-| `image.repository` | `ghcr.io/OWNER/trishul-ram` | Docker image repository |
+| `image.repository` | `ghcr.io/tosumitdhaka/trishul-ram` | Docker image repository |
 | `image.tag | "1.1.3"` | Image tag |
 | `replicaCount` | `1` | Replicas — `1` = standalone, `N` = cluster |
 | `clusterMode.enabled` | `false` | Activate cluster mode (sets `TRAM_CLUSTER_ENABLED`, requires external DB) |
@@ -444,7 +444,7 @@ helm upgrade tram oci://ghcr.io/OWNER/charts/trishul-ram \
 ### Standalone (default)
 
 ```bash
-helm install tram oci://ghcr.io/OWNER/charts/trishul-ram \
+helm install tram oci://ghcr.io/tosumitdhaka/charts/trishul-ram \
   --namespace tram --create-namespace \
   --set image.tag=1.1.3
 ```
@@ -463,7 +463,7 @@ kubectl create secret generic tram-db \
   --namespace tram \
   --from-literal=url='postgresql+psycopg2://tram:secret@postgres:5432/tramdb'
 
-helm install tram oci://ghcr.io/OWNER/charts/trishul-ram \
+helm install tram oci://ghcr.io/tosumitdhaka/charts/trishul-ram \
   --namespace tram --create-namespace \
   --set image.tag=1.1.3 \
   --set clusterMode.enabled=true \
@@ -611,7 +611,7 @@ spec:
     spec:
       containers:
       - name: tram
-        image: ghcr.io/OWNER/trishul-ram:1.1.3
+        image: ghcr.io/tosumitdhaka/trishul-ram:1.1.3
         command: ["tram", "daemon"]
         ports:
         - containerPort: 8765

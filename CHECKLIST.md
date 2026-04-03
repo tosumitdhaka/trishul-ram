@@ -93,7 +93,7 @@ When making changes that affect user-facing behavior, update:
 
 #### 2. CHANGELOG Update
 - [ ] Move `## [Unreleased]` items to `## [X.Y.Z] - YYYY-MM-DD`
-- [ ] Add comparison link at bottom: `[X.Y.Z]: https://github.com/OWNER/tram/compare/vX.Y.(Z-1)...vX.Y.Z`
+- [ ] Add comparison link at bottom: `[X.Y.Z]: https://github.com/tosumitdhaka/tram/compare/vX.Y.(Z-1)...vX.Y.Z`
 - [ ] Create new empty `## [Unreleased]` section
 
 #### 3. Documentation Sync
@@ -146,8 +146,8 @@ When making changes that affect user-facing behavior, update:
   git push origin vX.Y.Z
   ```
 - [ ] Monitor release workflow in GitHub Actions
-- [ ] Verify Docker image pushed: `ghcr.io/OWNER/trishul-ram:X.Y.Z`
-- [ ] Verify Helm chart pushed: `oci://ghcr.io/OWNER/charts/trishul-ram:X.Y.Z`
+- [ ] Verify Docker image pushed: `ghcr.io/tosumitdhaka/trishul-ram:X.Y.Z`
+- [ ] Verify Helm chart pushed: `oci://ghcr.io/tosumitdhaka/charts/trishul-ram:X.Y.Z`
 
 ---
 
@@ -160,10 +160,10 @@ When making changes that affect user-facing behavior, update:
 - [ ] Mark as "Latest release"
 
 #### 2. Verification
-- [ ] Test pull image: `docker pull ghcr.io/OWNER/trishul-ram:X.Y.Z`
+- [ ] Test pull image: `docker pull ghcr.io/tosumitdhaka/trishul-ram:X.Y.Z`
 - [ ] Test Helm install:
   ```bash
-  helm install tram oci://ghcr.io/OWNER/charts/trishul-ram --version X.Y.Z --dry-run
+  helm install tram oci://ghcr.io/tosumitdhaka/charts/trishul-ram --version X.Y.Z --dry-run
   ```
 - [ ] Verify version endpoint: `curl http://localhost:8765/api/meta`
 
@@ -203,7 +203,7 @@ If a release has critical issues:
 - [ ] Tag rollback release: `vX.Y.Z-rollback` pointing to `vX.Y.Z-1`
 - [ ] Update Helm deployments:
   ```bash
-  helm upgrade tram oci://ghcr.io/OWNER/charts/trishul-ram --version X.Y.Z-1
+  helm upgrade tram oci://ghcr.io/tosumitdhaka/charts/trishul-ram --version X.Y.Z-1
   ```
 - [ ] Update CHANGELOG with rollback note
 - [ ] Communicate issue and rollback to users

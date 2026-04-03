@@ -328,16 +328,16 @@ The default image includes most connector and serializer extras — Kafka, MQTT,
 
 ```bash
 # Standalone (default) — single PVC at /data holds SQLite DB, schemas, and MIBs
-helm install tram oci://ghcr.io/OWNER/charts/trishul-ram \
+helm install tram oci://ghcr.io/tosumitdhaka/charts/trishul-ram \
   --set image.tag=1.1.3
 
 # With API key authentication
-helm install tram oci://ghcr.io/OWNER/charts/trishul-ram \
+helm install tram oci://ghcr.io/tosumitdhaka/charts/trishul-ram \
   --set image.tag=1.1.3 \
   --set apiKey=mysecret
 
 # Cluster mode (3-replica StatefulSet + external PostgreSQL)
-helm install tram oci://ghcr.io/OWNER/charts/trishul-ram \
+helm install tram oci://ghcr.io/tosumitdhaka/charts/trishul-ram \
   --set image.tag=1.1.3 \
   --set clusterMode.enabled=true \
   --set replicaCount=3 \
@@ -345,7 +345,7 @@ helm install tram oci://ghcr.io/OWNER/charts/trishul-ram \
   --set envSecret.TRAM_DB_URL.secretKey=url
 
 # TLS (cert-manager)
-helm install tram oci://ghcr.io/OWNER/charts/trishul-ram \
+helm install tram oci://ghcr.io/tosumitdhaka/charts/trishul-ram \
   --set tls.enabled=true \
   --set tls.certManagerIssuer=letsencrypt-prod
 ```

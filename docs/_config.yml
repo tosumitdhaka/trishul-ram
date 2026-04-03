@@ -15,7 +15,7 @@ description: >-
   Python daemon for telecom data pipeline orchestration.
 
 baseurl: "/trishul-ram" # Update this to match your repository name
-url: "https://OWNER.github.io" # Update OWNER to your GitHub username/org
+url: "https://tosumitdhaka.github.io" # Update tosumitdhaka to your GitHub username/org
 
 # Markdown settings
 markdown: kramdown
@@ -50,8 +50,8 @@ navigation:
 # GitHub Pages specific
 github:
   repository_name: trishul-ram
-  repository_url: https://github.com/OWNER/trishul-ram
-  owner_name: OWNER
+  repository_url: https://github.com/tosumitdhaka/trishul-ram
+  owner_name: tosumitdhaka
 
 # Show/hide elements
 show_downloads: true

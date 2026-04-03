@@ -15,9 +15,9 @@ Lightweight, container-native Python daemon for telecom data pipeline orchestrat
 
 ## Quick Links
 
-- [GitHub Repository](https://github.com/OWNER/trishul-ram)
-- [Docker Image](https://ghcr.io/OWNER/trishul-ram)
-- [Helm Chart](https://ghcr.io/OWNER/charts/trishul-ram)
+- [GitHub Repository](https://github.com/tosumitdhaka/trishul-ram)
+- [Docker Image](https://ghcr.io/tosumitdhaka/trishul-ram)
+- [Helm Chart](https://ghcr.io/tosumitdhaka/charts/trishul-ram)
 
 ---
 
@@ -58,7 +58,7 @@ open http://localhost:8765/ui/
 ### Docker
 
 ```bash
-docker pull ghcr.io/OWNER/trishul-ram:1.1.3
+docker pull ghcr.io/tosumitdhaka/trishul-ram:1.1.3
 docker compose up
 curl http://localhost:8765/api/ready
 ```
@@ -67,11 +67,11 @@ curl http://localhost:8765/api/ready
 
 ```bash
 # Standalone mode
-helm install tram oci://ghcr.io/OWNER/charts/trishul-ram \
+helm install tram oci://ghcr.io/tosumitdhaka/charts/trishul-ram \
   --set image.tag=1.1.3
 
 # Cluster mode (3 replicas + PostgreSQL)
-helm install tram oci://ghcr.io/OWNER/charts/trishul-ram \
+helm install tram oci://ghcr.io/tosumitdhaka/charts/trishul-ram \
   --set image.tag=1.1.3 \
   --set clusterMode.enabled=true \
   --set replicaCount=3
@@ -178,8 +178,8 @@ docs/
 
 ## Support & Contributing
 
-- **Issues**: [GitHub Issues](https://github.com/OWNER/trishul-ram/issues)
-- **Discussions**: [GitHub Discussions](https://github.com/OWNER/trishul-ram/discussions)
+- **Issues**: [GitHub Issues](https://github.com/tosumitdhaka/trishul-ram/issues)
+- **Discussions**: [GitHub Discussions](https://github.com/tosumitdhaka/trishul-ram/discussions)
 - **License**: Apache 2.0
 
 ---
