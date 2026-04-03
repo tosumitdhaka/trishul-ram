@@ -1,0 +1,60 @@
+# GitHub Pages Configuration for TRAM Documentation
+
+# Theme
+theme: jekyll-theme-cayman
+# Alternative themes:
+# - jekyll-theme-minimal
+# - jekyll-theme-slate
+# - jekyll-theme-architect
+# - jekyll-theme-modernist
+
+# Site settings
+title: TRAM Documentation
+description: >-
+  Trishul Real-time Aggregation & Mediation - Lightweight, container-native
+  Python daemon for telecom data pipeline orchestration.
+
+baseurl: "/trishul-ram" # Update this to match your repository name
+url: "https://OWNER.github.io" # Update OWNER to your GitHub username/org
+
+# Markdown settings
+markdown: kramdown
+kramdown:
+  input: GFM
+  syntax_highlighter: rouge
+  syntax_highlighter_opts:
+    block:
+      line_numbers: false
+
+# Exclude from processing
+exclude:
+  - README.md
+  - roadmap_1.1.0/
+  - "*.draft.md"
+
+# Navigation
+navigation:
+  - title: Home
+    url: /
+  - title: Architecture
+    url: /architecture
+  - title: API Reference
+    url: /api
+  - title: Connectors
+    url: /connectors
+  - title: Transforms
+    url: /transforms
+  - title: Deployment
+    url: /deployment
+
+# GitHub Pages specific
+github:
+  repository_name: trishul-ram
+  repository_url: https://github.com/OWNER/trishul-ram
+  owner_name: OWNER
+
+# Show/hide elements
+show_downloads: true
+
+# Google Analytics (optional - add your tracking ID)
+# google_analytics: UA-XXXXXXXXX-X
