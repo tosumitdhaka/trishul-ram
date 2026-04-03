@@ -754,7 +754,7 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 **GitHub Actions**
 - `.github/workflows/ci.yml` — triggers on push to `main`/`develop` and all PRs; runs ruff + pytest on Python 3.11 and 3.12
-- `.github/workflows/release.yml` — triggers on `v*` tags; builds multi-arch Docker image (linux/amd64 + linux/arm64) → `ghcr.io/{owner}/tram:{semver}`; packages + pushes Helm chart → `oci://ghcr.io/{owner}/charts/tram`
+- `.github/workflows/release.yml` — triggers on `v*` tags; builds multi-arch Docker image (linux/amd64 + linux/arm64) → `ghcr.io/{owner}/trishul-ram:{semver}`; packages + pushes Helm chart → `oci://ghcr.io/{owner}/charts/trishul-ram`
 
 **SQLite**
 - New `alert_state` table: `(pipeline_name, rule_name, last_alerted_at)` primary key
