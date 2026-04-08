@@ -7,7 +7,10 @@
     <option>success</option><option>failed</option><option>partial</option>
   </select>
   <input type="date" class="form-control form-control-sm" style="width:150px" id="runs-from"/>
-  <button class="btn-flat ms-auto" title="Export CSV" onclick="window._runsExport?.()">
+  <button class="btn-flat ms-auto" title="Refresh" onclick="window._runsRefresh?.()">
+    <i class="bi bi-arrow-clockwise"></i>
+  </button>
+  <button class="btn-flat" title="Export CSV" onclick="window._runsExport?.()">
     <i class="bi bi-download"></i>
   </button>
 </div>

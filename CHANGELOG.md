@@ -9,6 +9,66 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ---
 
+## [1.1.4] — 2026-04-08
+
+### Added
+
+**AI Assist — pipeline generation and modification in the YAML editor**
+- New AI panel in the YAML editor: "Generate" mode for new pipelines (describe in plain text → get YAML), "Modify" mode for existing pipelines (plain-English instruction → diff shown inline)
+- Supports three providers: `anthropic` (Claude), `openai` / OpenAI-compatible (Ollama, LiteLLM, etc.), `bedrock` (AWS Bedrock proxy via Bearer token)
+- AI config (provider, API key, model, base URL) stored in DB `settings` table — survives pod restarts and overrides `TRAM_AI_*` env vars
+- New Settings page card: Save / Test AI config, shows enabled status and key hint
+- New API endpoints: `GET /api/ai/config`, `POST /api/ai/config`, `POST /api/ai/test`
+- AI context builder (`ai_docs.py`) always includes CRITICAL RULES with full expression syntax reference — prevents AI from generating `{{now()}}` Jinja2-style expressions
+
+**YAML editor improvements**
+- Copy-to-clipboard button in editor toolbar
+- "Diff vs saved" button (edit mode only): toggles an inline two-pane diff showing current edits vs last saved version; also auto-opens after AI modify
+- Save button label changes to "Update Pipeline" in edit mode; no-op toast if YAML is unchanged
+- Wider layout (8/4 column split) to accommodate AI panel alongside reference pills
+
+**Extended timestamp functions in `add_field`**
+- `now()` → UTC ISO-8601 string; `now('%Y-%m-%d')` / `now('%H:%M:%S')` etc. → strftime-formatted string
+- `epoch()` → Unix timestamp float; `epoch_ms()` → Unix milliseconds integer
+- Nested function calls work: `str(round(rx_mbps, 2)) + ' at ' + now('%H:%M:%S')`
+
+**Pipeline context in `add_field` expressions**
+- Expressions now have access to a `pipeline` variable: `pipeline.name`, `pipeline.source.host`, `pipeline.source.community`, etc.
+- Both dot-access (`pipeline.source.host`) and dict-access (`pipeline['source']['host']`) work
+- Injected at transform construction time via `_DotDict` wrapper; available in global and per-sink transforms
+
+**DB as single source of truth for pipelines**
+- ConfigMap / filesystem pipelines seeded to DB at startup and on reload — not registered to manager directly
+- `registered_pipelines` gains a `source` column (`disk` | `api`): disk seed skips pipelines with `source='api'` (user-owned), preventing reload from reverting UI edits
+- Reload endpoint uses seed-then-`_load_from_db()` — no more direct disk-to-manager registration or soft-deleted pipeline resurrection
+
+**Cluster pipeline update propagation**
+- `_sync_from_db()` detects `yaml_text` changes from other nodes and re-registers the updated config (stop → deregister → re-register → reschedule)
+- Eliminates stale-config bug where node-1 kept running old pipeline YAML after node-0 saved an update
+
+**SNMP improvements**
+- `snmp_poll` source: `classify: true` mode adds `_index_parts` list metadata alongside `_index` in classified output (multi-component OID index support)
+- `snmp_poll` source: real SNMP GET for `sysDescr.0` in `test_connection()` — verifies host, port, and community string with actual latency measurement
+- `snmp_trap` source: `test_connection()` verifies UDP port bind availability
+
+**UI auto-refresh and refresh buttons**
+- Pipelines page auto-polls at configured interval (default 10 s)
+- Refresh icon (`↻`) added to: pipelines page toolbar, global run history page, pipeline detail run history tab
+- Pipeline page: separate Refresh (status only) and Reload (disk + DB sync) buttons
+
+**Helm: `hostNetwork` support**
+- New `hostNetwork: false` value (default off); set `true` to share the kind/host network namespace
+- Required for UDP-based sources (SNMP, syslog) on WSL2 / kind where CNI overlay drops UDP return packets
+- Sets `dnsPolicy: ClusterFirstWithHostNet` automatically when enabled
+
+### Fixed
+
+- Pausing a disk-loaded (ConfigMap) pipeline now persists correctly across pod restarts — all pipelines are in DB from startup, so the `paused=1` flag always has a row to update
+- `trigger_run()` raises an error if the target pipeline is paused, preventing accidental manual execution
+- API key auth rate-limit middleware now exempts `/api/auth/login` and standard metadata endpoints (`/docs`, `/redoc`, `/openapi.json`, `/favicon.ico`) to avoid 429 on browser load
+
+---
+
 ## [1.1.3] — 2026-04-01
 
 ### Added

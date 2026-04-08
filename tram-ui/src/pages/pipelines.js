@@ -2,14 +2,27 @@ import { api } from '../api.js'
 import { relTime, fmtNum, statusBadge, schedBadge, esc, toast } from '../utils.js'
 
 let _all = []
+let _pollTimer = null
 
 export async function init() {
+  if (_pollTimer) { clearInterval(_pollTimer); _pollTimer = null }
+  const pollMs = (parseInt(localStorage.getItem('tram_poll_interval') || '10', 10)) * 1000
+  _pollTimer = setInterval(() => {
+    if (!document.getElementById('pl-table')) { clearInterval(_pollTimer); _pollTimer = null; return }
+    refresh()
+  }, pollMs)
   // Load templates when modal opens; reset to list view on each open
   document.getElementById('pl-templates-modal')?.addEventListener('show.bs.modal', () => {
     document.getElementById('pl-tpl-list-view').style.display = ''
     document.getElementById('pl-tpl-yaml-view').style.display = 'none'
     _openTemplates()
   })
+  window._plRefresh = async () => {
+    const btn = document.querySelector('[onclick="window._plRefresh?.()"] i')
+    if (btn) btn.className = 'bi bi-arrow-clockwise spin'
+    try { await refresh() } catch (e) { toast(e.message, 'error') }
+    finally { if (btn) btn.className = 'bi bi-arrow-clockwise' }
+  }
   window._plReload  = async () => {
     try { await api.pipelines.reload(); toast('Pipelines reloaded'); _all = await api.pipelines.list(); renderTable(filtered()) }
     catch (e) { toast(e.message, 'error') }
@@ -17,6 +30,8 @@ export async function init() {
   window._plStart   = async (name) => { try { await api.pipelines.start(name);  toast(`Started ${name}`);  refresh() } catch (e) { toast(e.message, 'error') } }
   window._plStop    = async (name) => { try { await api.pipelines.stop(name);   toast(`Stopped ${name}`);  refresh() } catch (e) { toast(e.message, 'error') } }
   window._plRun     = async (name) => { try { await api.pipelines.run(name);    toast(`Triggered ${name}`); setTimeout(refresh, 800) } catch (e) { toast(e.message, 'error') } }
+  window._plPause   = async (name) => { try { await api.pipelines.pause(name);  toast(`Paused ${name}`);   refresh() } catch (e) { toast(e.message, 'error') } }
+  window._plResume  = async (name) => { try { await api.pipelines.resume(name); toast(`Resumed ${name}`);  refresh() } catch (e) { toast(e.message, 'error') } }
   window._plEdit    = (name) => { window._editorPipeline = name; navigate('editor') }
   window._plDelete  = async (name) => {
     if (!confirm(`Delete pipeline "${name}"?`)) return
@@ -205,12 +220,18 @@ function renderTable(pipelines) {
   }
   tbody.innerHTML = pipelines.map(p => {
     const isRunning = p.status === 'running'
+    const isPaused  = p.status === 'paused'
     const isStream  = p.schedule_type === 'stream'
     const actionBtn = isRunning
       ? `<button class="btn-flat-danger" title="Stop"     onclick="window._plStop('${esc(p.name)}')"><i class="bi bi-stop-fill"></i></button>`
-      : isStream
-        ? `<button class="btn-flat-primary" title="Start"  onclick="window._plStart('${esc(p.name)}')"><i class="bi bi-play-fill"></i></button>`
-        : `<button class="btn-flat-primary" title="Run now" onclick="window._plRun('${esc(p.name)}')"><i class="bi bi-play-fill"></i></button>`
+      : isPaused
+        ? `<button class="btn-flat-primary" title="Resume" onclick="window._plResume('${esc(p.name)}')"><i class="bi bi-play-fill"></i></button>`
+        : isStream
+          ? `<button class="btn-flat-primary" title="Start"  onclick="window._plStart('${esc(p.name)}')"><i class="bi bi-play-fill"></i></button>`
+          : `<button class="btn-flat-primary" title="Run now" onclick="window._plRun('${esc(p.name)}')"><i class="bi bi-play-fill"></i></button>`
+    const pauseBtn = (!isPaused && !isRunning)
+      ? `<button class="btn-flat" title="Pause" onclick="window._plPause('${esc(p.name)}')"><i class="bi bi-pause-fill"></i></button>`
+      : ''
     const sinks = Array.isArray(p.sinks) ? p.sinks.map(s => esc(s.type || s)).join(', ') : '—'
     return `<tr onclick="navigate('detail');window._detailPipeline='${esc(p.name)}'" style="cursor:pointer">
       <td class="fw-semibold">${esc(p.name)}</td>
@@ -222,6 +243,7 @@ function renderTable(pipelines) {
       <td>${p.last_run_status ? statusBadge(p.last_run_status) : '—'}</td>
       <td class="text-end" onclick="event.stopPropagation()">
         ${actionBtn}
+        ${pauseBtn}
         <button class="btn-flat" title="Edit"     onclick="window._plEdit('${esc(p.name)}')"><i class="bi bi-pencil"></i></button>
         <button class="btn-flat" title="Export YAML" onclick="window._plDownload('${esc(p.name)}')"><i class="bi bi-download"></i></button>
         <button class="btn-flat-danger" title="Delete" onclick="window._plDelete('${esc(p.name)}')"><i class="bi bi-trash"></i></button>

@@ -62,6 +62,68 @@ export async function init() {
     }
   }
 
+  // Load AI config
+  try {
+    const aiCfg = await api.ai.getConfig()
+    const provEl = document.getElementById('ai-provider')
+    const modelEl = document.getElementById('ai-model')
+    const baseEl  = document.getElementById('ai-base-url')
+    const hintEl  = document.getElementById('ai-key-hint')
+    const badge   = document.getElementById('ai-status-badge')
+    if (provEl) provEl.value = aiCfg.provider || 'anthropic'
+    if (modelEl) modelEl.value = aiCfg.model || ''
+    if (baseEl)  baseEl.value  = aiCfg.base_url || ''
+    if (hintEl)  hintEl.textContent = aiCfg.api_key_set
+      ? `Current key: ${aiCfg.api_key_hint} (${aiCfg.source})`
+      : 'No API key configured'
+    if (badge) {
+      badge.textContent = aiCfg.api_key_set ? '● enabled' : '○ disabled'
+      badge.style.color = aiCfg.api_key_set ? '#3fb950' : '#8b949e'
+    }
+  } catch { /* AI not available */ }
+
+  window._settingsSaveAI = async () => {
+    const s = document.getElementById('ai-cfg-status')
+    const payload = {
+      provider: document.getElementById('ai-provider')?.value || '',
+      api_key:  document.getElementById('ai-api-key')?.value  || '',
+      model:    document.getElementById('ai-model')?.value    || '',
+      base_url: document.getElementById('ai-base-url')?.value || '',
+    }
+    try {
+      if (s) { s.textContent = 'Saving…'; s.style.color = '#8b949e' }
+      await api.ai.saveConfig(payload)
+      // Clear the password field after save
+      const keyEl = document.getElementById('ai-api-key')
+      if (keyEl) keyEl.value = ''
+      // Refresh hint
+      const aiCfg = await api.ai.getConfig()
+      const hintEl = document.getElementById('ai-key-hint')
+      const badge  = document.getElementById('ai-status-badge')
+      if (hintEl) hintEl.textContent = aiCfg.api_key_set
+        ? `Current key: ${aiCfg.api_key_hint} (${aiCfg.source})`
+        : 'No API key configured'
+      if (badge) {
+        badge.textContent = aiCfg.api_key_set ? '● enabled' : '○ disabled'
+        badge.style.color = aiCfg.api_key_set ? '#3fb950' : '#8b949e'
+      }
+      if (s) { s.textContent = '✓ Saved'; s.style.color = '#3fb950' }
+    } catch (e) {
+      if (s) { s.textContent = `✗ ${e.message}`; s.style.color = '#f85149' }
+    }
+  }
+
+  window._settingsTestAI = async () => {
+    const s = document.getElementById('ai-cfg-status')
+    try {
+      if (s) { s.textContent = 'Testing…'; s.style.color = '#8b949e' }
+      const r = await api.ai.test()
+      if (s) { s.textContent = `✓ Connected · ${r.provider} / ${r.model}`; s.style.color = '#3fb950' }
+    } catch (e) {
+      if (s) { s.textContent = `✗ ${e.message}`; s.style.color = '#f85149' }
+    }
+  }
+
   // Load daemon status
   try {
     const [ready, meta] = await Promise.all([api.ready(), api.meta()])

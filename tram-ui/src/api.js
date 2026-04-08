@@ -69,6 +69,8 @@ export const api = {
     delete:   (name)       => req(`/api/pipelines/${name}`, { method: 'DELETE' }),
     start:    (name)       => req(`/api/pipelines/${name}/start`,  { method: 'POST' }),
     stop:     (name)       => req(`/api/pipelines/${name}/stop`,   { method: 'POST' }),
+    pause:    (name)       => req(`/api/pipelines/${name}/pause`,  { method: 'POST' }),
+    resume:   (name)       => req(`/api/pipelines/${name}/resume`, { method: 'POST' }),
     run:      (name)       => req(`/api/pipelines/${name}/run`,    { method: 'POST' }),
     reload:   ()           => req('/api/pipelines/reload',          { method: 'POST' }),
     versions: (name)       => req(`/api/pipelines/${name}/versions`),
@@ -142,8 +144,11 @@ export const api = {
 
   // ── AI assist ──────────────────────────────────────────────────────────────
   ai: {
-    status:  ()        => req('/api/ai/status'),
-    suggest: (payload) => req('/api/ai/suggest', { method: 'POST', body: payload }),
+    status:    ()        => req('/api/ai/status'),
+    getConfig: ()        => req('/api/ai/config'),
+    saveConfig:(payload) => req('/api/ai/config', { method: 'POST', body: payload }),
+    test:      ()        => req('/api/ai/test',   { method: 'POST', body: {} }),
+    suggest:   (payload) => req('/api/ai/suggest', { method: 'POST', body: payload }),
   },
 
   // ── Pipeline version YAML ──────────────────────────────────────────────────

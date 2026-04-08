@@ -18,7 +18,13 @@ export async function init() {
   document.getElementById('runs-status')?.addEventListener('change',   loadFiltered)
   document.getElementById('runs-from')?.addEventListener('change',     loadFiltered)
 
-  window._runsExport = exportCsv
+  window._runsExport   = exportCsv
+  window._runsRefresh = async () => {
+    const btn = document.querySelector('[onclick="window._runsRefresh?.()"] i')
+    if (btn) btn.className = 'bi bi-arrow-clockwise spin'
+    try { await loadFiltered() } catch (e) { toast(e.message, 'error') }
+    finally { if (btn) btn.className = 'bi bi-arrow-clockwise' }
+  }
 }
 
 async function loadFiltered() {

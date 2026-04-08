@@ -59,17 +59,34 @@ async def lifespan(app: FastAPI):
     import tram.serializers  # noqa: F401
     import tram.transforms  # noqa: F401
 
-    # Load pipelines from directory
+    # Seed disk pipelines into DB, then load everything from DB.
+    # DB is the single source of truth — disk (ConfigMap) is read once at startup
+    # and seeded only when the pipeline is new or not yet user-modified (source='disk').
     if config.reload_on_start:
+        db = getattr(app.state, "db", None)
         for pipeline_config, yaml_text in scan_pipeline_dir(config.pipeline_dir):
-            try:
-                manager.register(pipeline_config, yaml_text=yaml_text)
-                logger.info("Loaded pipeline", extra={"pipeline": pipeline_config.name})
-            except Exception as exc:
-                logger.error(
-                    "Failed to load pipeline",
-                    extra={"pipeline": pipeline_config.name, "error": str(exc)},
-                )
+            if db is not None:
+                existing_source = db.get_pipeline_source(pipeline_config.name)
+                if existing_source == "api":
+                    # User has edited this pipeline via UI/API — never overwrite
+                    logger.debug(
+                        "Disk seed skipped (user-owned pipeline)",
+                        extra={"pipeline": pipeline_config.name},
+                    )
+                    continue
+                # New pipeline or still disk-owned — upsert with source='disk'
+                db.save_pipeline(pipeline_config.name, yaml_text, source="disk")
+                logger.info("Seeded pipeline to DB", extra={"pipeline": pipeline_config.name})
+            else:
+                # No DB configured — register directly (shouldn't happen in normal deployments)
+                try:
+                    manager.register(pipeline_config, yaml_text=yaml_text)
+                    logger.info("Loaded pipeline", extra={"pipeline": pipeline_config.name})
+                except Exception as exc:
+                    logger.error(
+                        "Failed to load pipeline",
+                        extra={"pipeline": pipeline_config.name, "error": str(exc)},
+                    )
 
     # Start node registry (heartbeat) before scheduler so coordinator
     # has an initial topology before the first pipeline is scheduled

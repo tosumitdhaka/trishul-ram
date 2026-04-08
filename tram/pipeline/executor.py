@@ -128,9 +128,12 @@ class PipelineExecutor:
             sink_cls = get_sink(sink_cfg.type)
             condition = getattr(sink_cfg, "condition", None)
             sink_transforms = []
+            pipeline_ctx = {"name": config.name, "source": config.source.model_dump()}
             for t_cfg in getattr(sink_cfg, "transforms", []):
                 t_cls = get_transform(t_cfg.type)
-                sink_transforms.append(t_cls(t_cfg.model_dump()))
+                d = t_cfg.model_dump()
+                d["_pipeline"] = pipeline_ctx
+                sink_transforms.append(t_cls(d))
             # Per-sink serializer_out override (None → use global serializer_out)
             per_sink_ser = None
             sink_ser_cfg = getattr(sink_cfg, "serializer_out", None)
@@ -159,10 +162,13 @@ class PipelineExecutor:
         return ser_cls(config.serializer_out.model_dump())
 
     def _build_transforms(self, config: PipelineConfig) -> list:
+        pipeline_ctx = {"name": config.name, "source": config.source.model_dump()}
         transforms = []
         for t_cfg in config.transforms:
             t_cls = get_transform(t_cfg.type)
-            transforms.append(t_cls(t_cfg.model_dump()))
+            d = t_cfg.model_dump()
+            d["_pipeline"] = pipeline_ctx
+            transforms.append(t_cls(d))
         return transforms
 
     def _process_chunk(
@@ -194,6 +200,9 @@ class PipelineExecutor:
 
         meta = dict(meta)
         meta["pipeline_name"] = ctx.pipeline_name
+        meta["run_id"] = ctx.run_id
+        # Human-readable timestamp (run start, consistent across all chunks)
+        meta["run_timestamp"] = ctx.started_at.strftime("%Y%m%dT%H%M%S")
         t_start = time.monotonic()
 
         try:

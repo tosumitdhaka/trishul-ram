@@ -10,7 +10,11 @@
   </select>
   <div class="ms-auto d-flex align-items-center gap-2">
     <button class="btn-flat d-flex align-items-center gap-1" style="font-size:13px;color:#8b949e"
-            title="Reload pipelines from disk" onclick="window._plReload?.()">
+            title="Refresh status" onclick="window._plRefresh?.()">
+      <i class="bi bi-arrow-clockwise" style="font-size:15px"></i>
+    </button>
+    <button class="btn-flat d-flex align-items-center gap-1" style="font-size:13px;color:#8b949e"
+            title="Reload pipelines (disk + DB sync)" onclick="window._plReload?.()">
       <i class="bi bi-arrow-repeat" style="font-size:15px"></i> Reload
     </button>
     <button class="btn btn-sm btn-secondary" title="Import pipeline YAML" onclick="document.getElementById('pl-import-input').click()">

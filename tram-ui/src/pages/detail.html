@@ -2,6 +2,9 @@
   <button class="btn btn-sm btn-primary" id="detail-run-btn" onclick="window._detailRun?.()">
     <i class="bi bi-play-fill me-1"></i>Run Now
   </button>
+  <button class="btn btn-sm btn-outline-secondary" id="detail-pause-btn" onclick="window._detailPause?.()">
+    <i class="bi bi-pause-fill me-1"></i>Pause
+  </button>
   <button class="btn-flat" title="Edit pipeline" onclick="window._detailEdit?.()"><i class="bi bi-pencil"></i></button>
   <button class="btn-flat" title="Download YAML" onclick="window._detailDownload?.()"><i class="bi bi-download"></i></button>
   <button class="btn-flat" title="Test Connectors" id="detail-test-btn" onclick="window._detailTestConnectors?.()"><i class="bi bi-plug"></i></button>
@@ -34,7 +37,8 @@
       <option>success</option><option>failed</option><option>partial</option>
     </select>
     <input type="date" class="form-control form-control-sm" style="width:150px" id="detail-runs-from"/>
-    <button class="btn-flat ms-auto" title="Export CSV" onclick="window._detailExportCsv?.()"><i class="bi bi-download"></i></button>
+    <button class="btn-flat ms-auto" title="Refresh run history" onclick="window._detailRefreshRuns?.()"><i class="bi bi-arrow-clockwise"></i></button>
+    <button class="btn-flat" title="Export CSV" onclick="window._detailExportCsv?.()"><i class="bi bi-download"></i></button>
   </div>
   <div class="table-wrap">
     <table class="table mb-0">
@@ -132,17 +136,26 @@
 
 <!-- YAML Diff modal -->
 <div class="modal fade" id="detail-diff-modal" tabindex="-1">
-  <div class="modal-dialog modal-xl modal-dialog-scrollable">
+  <div class="modal-dialog modal-xl modal-dialog-centered">
     <div class="modal-content" style="background:#0d1117;border:1px solid #30363d">
       <div class="modal-header" style="border-color:#30363d;padding:10px 16px">
-        <h6 class="modal-title text-light">
-          YAML Diff &mdash; <span id="diff-left-label" class="text-secondary"></span> vs <span id="diff-right-label" class="text-secondary"></span>
+        <h6 class="modal-title text-light d-flex align-items-center gap-2 flex-wrap" style="font-size:13px">
+          <i class="bi bi-file-diff"></i>
+          <select id="diff-version-select" style="background:#0d1117;color:#e6edf3;border:1px solid #30363d;border-radius:4px;font-size:11px;padding:2px 8px;cursor:pointer"></select>
+          <span style="color:#555">→ active</span>
+          <span id="diff-stats" class="ms-1" style="font-size:11px;font-weight:normal"></span>
         </h6>
         <button type="button" class="btn-close btn-close-white" data-bs-dismiss="modal"></button>
       </div>
-      <div class="modal-body p-0 d-flex" style="overflow:auto;max-height:70vh">
-        <pre id="diff-left-pane"  style="flex:1;margin:0;padding:12px;background:#161b22;font-size:11px;border-right:1px solid #30363d;overflow:auto;min-width:0"></pre>
-        <pre id="diff-right-pane" style="flex:1;margin:0;padding:12px;background:#161b22;font-size:11px;overflow:auto;min-width:0"></pre>
+      <div class="modal-body p-0 d-flex" style="height:65vh">
+        <div style="flex:1;min-width:0;display:flex;flex-direction:column;border-right:1px solid #30363d">
+          <div id="diff-left-header" style="padding:5px 12px;font-size:11px;color:#8b949e;border-bottom:1px solid #30363d;background:#161b22;flex-shrink:0">Before</div>
+          <div id="diff-left-pane"  style="flex:1;overflow:auto;padding:12px;background:#161b22;font-size:11px;font-family:monospace;white-space:pre"></div>
+        </div>
+        <div style="flex:1;min-width:0;display:flex;flex-direction:column">
+          <div style="padding:5px 12px;font-size:11px;color:#8b949e;border-bottom:1px solid #30363d;background:#161b22;flex-shrink:0">Active</div>
+          <div id="diff-right-pane" style="flex:1;overflow:auto;padding:12px;background:#161b22;font-size:11px;font-family:monospace;white-space:pre"></div>
+        </div>
       </div>
     </div>
   </div>

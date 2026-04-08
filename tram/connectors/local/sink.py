@@ -34,10 +34,14 @@ class LocalSink(BaseSink):
         self.overwrite: bool = bool(config.get("overwrite", True))
 
     def _render_filename(self, meta: dict) -> str:
-        ts = datetime.now(UTC).isoformat().replace(":", "-")
+        # {timestamp} — human-readable run start time (consistent within a run)
+        # {run_id}    — short hex run identifier (groups all chunks from one run)
+        ts = meta.get("run_timestamp") or datetime.now(UTC).strftime("%Y%m%dT%H%M%S")
+        run_id = meta.get("run_id") or ts
         return self.filename_template.format(
             pipeline=meta.get("pipeline_name", "tram"),
             timestamp=ts,
+            run_id=run_id,
             source_filename=meta.get("source_filename", "data"),
         )
 
