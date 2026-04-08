@@ -249,7 +249,7 @@ securityContext:
 ## Placeholder Secret (mount enabled but initially empty):
 ##   kubectl create secret generic tram-keys --from-literal=.keep=""
 keys:
-  secretName: "tram-keys"  # e.g. "tram-keys" — empty ("") disables the mount entirely
+  secretName: ""           # e.g. "tram-keys" — empty ("") disables the mount entirely (default)
   mountPath: /secrets      # path inside the container where key files appear
 
 ## TLS configuration (v1.0.0)
