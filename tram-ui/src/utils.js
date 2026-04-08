@@ -31,6 +31,7 @@ export function statusBadge(status) {
     running:   'badge-running has-dot running',
     scheduled: 'badge-scheduled has-dot scheduled',
     stopped:   'badge-stopped has-dot stopped',
+    paused:    'badge-paused has-dot paused',
     error:    'badge-error has-dot error',
     success:  'badge-success has-dot success',
     failed:   'badge-failed has-dot failed',

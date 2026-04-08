@@ -22,7 +22,8 @@ class APIKeyMiddleware(BaseHTTPMiddleware):
     orchestrators and external producers never need credentials.
     """
 
-    EXEMPT = {"/api/health", "/api/ready", "/metrics", "/", "/api/auth/login", "/favicon.ico"}
+    EXEMPT = {"/api/health", "/api/ready", "/metrics", "/", "/api/auth/login", "/favicon.ico",
+              "/docs", "/redoc", "/openapi.json"}
     EXEMPT_PREFIX = ("/webhooks/", "/ui")
 
     def __init__(self, app) -> None:

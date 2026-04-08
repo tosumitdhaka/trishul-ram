@@ -175,11 +175,24 @@ def _create_tables(engine: Engine) -> None:
             )
         """))
 
+        # v1.1.4: generic key-value settings store (AI config, etc.)
+        conn.execute(text("""
+            CREATE TABLE IF NOT EXISTS settings (
+                key        TEXT PRIMARY KEY NOT NULL,
+                value      TEXT NOT NULL,
+                updated_at TEXT NOT NULL
+            )
+        """))
+
         # v0.7.0 column migrations: add new columns to existing databases
         _add_column_if_missing(conn, dialect, "run_history", "node_id", "TEXT NOT NULL DEFAULT ''")
         _add_column_if_missing(conn, dialect, "run_history", "dlq_count", "INTEGER NOT NULL DEFAULT 0")
         # v1.1.1: per-record error strings
         _add_column_if_missing(conn, dialect, "run_history", "errors_json", "TEXT")
+        # v1.1.4: pause/resume support
+        _add_column_if_missing(conn, dialect, "registered_pipelines", "paused", "INTEGER NOT NULL DEFAULT 0")
+        # v1.1.5: track whether pipeline was last saved by disk seed or API/UI
+        _add_column_if_missing(conn, dialect, "registered_pipelines", "source", "TEXT NOT NULL DEFAULT 'api'")
 
 
 # ── TramDB ────────────────────────────────────────────────────────────────────
@@ -653,38 +666,81 @@ class TramDB:
 
     # ── Registered pipelines (v1.1.2) ─────────────────────────────────────
 
-    def save_pipeline(self, name: str, yaml_text: str) -> None:
-        """Upsert a pipeline YAML into the shared registry (marks deleted=False)."""
+    def pause_pipeline(self, name: str) -> None:
+        """Mark a pipeline as paused (survives pod restarts)."""
+        now = datetime.now(UTC).isoformat()
+        with self._engine.begin() as conn:
+            conn.execute(
+                text("UPDATE registered_pipelines SET paused = 1, updated_at = :now WHERE name = :name"),
+                {"now": now, "name": name},
+            )
+
+    def resume_pipeline(self, name: str) -> None:
+        """Clear the paused flag for a pipeline."""
+        now = datetime.now(UTC).isoformat()
+        with self._engine.begin() as conn:
+            conn.execute(
+                text("UPDATE registered_pipelines SET paused = 0, updated_at = :now WHERE name = :name"),
+                {"now": now, "name": name},
+            )
+
+    def is_pipeline_paused(self, name: str) -> bool:
+        """Return True if the pipeline is currently paused."""
+        with self._engine.connect() as conn:
+            row = conn.execute(
+                text("SELECT paused FROM registered_pipelines WHERE name = :name AND deleted = 0"),
+                {"name": name},
+            ).fetchone()
+        return bool(row[0]) if row else False
+
+    def get_paused_pipeline_names(self) -> list[str]:
+        """Return names of non-deleted pipelines that are paused."""
+        with self._engine.connect() as conn:
+            rows = conn.execute(
+                text("SELECT name FROM registered_pipelines WHERE deleted = 0 AND paused = 1")
+            ).fetchall()
+        return [r[0] for r in rows]
+
+    def save_pipeline(self, name: str, yaml_text: str, source: str = "api") -> None:
+        """Upsert a pipeline YAML into the shared registry (marks deleted=False).
+
+        source: 'api'  — saved by the UI or REST API (user owns it; disk seed will not overwrite)
+                'disk' — seeded from ConfigMap/filesystem (may be overwritten by later disk seed
+                         as long as the user has never saved it via API/UI)
+        """
         now = datetime.now(UTC).isoformat()
         dialect = self._engine.dialect.name
         with self._engine.begin() as conn:
             if dialect == "postgresql":
                 conn.execute(text("""
-                    INSERT INTO registered_pipelines (name, yaml_text, created_at, updated_at, deleted)
-                    VALUES (:name, :yaml, :now, :now, 0)
+                    INSERT INTO registered_pipelines (name, yaml_text, created_at, updated_at, deleted, source)
+                    VALUES (:name, :yaml, :now, :now, 0, :src)
                     ON CONFLICT (name) DO UPDATE
                       SET yaml_text = EXCLUDED.yaml_text,
                           updated_at = EXCLUDED.updated_at,
-                          deleted = 0
-                """), {"name": name, "yaml": yaml_text, "now": now})
+                          deleted = 0,
+                          source = EXCLUDED.source
+                """), {"name": name, "yaml": yaml_text, "now": now, "src": source})
             elif dialect == "mysql":
                 conn.execute(text("""
-                    INSERT INTO registered_pipelines (name, yaml_text, created_at, updated_at, deleted)
-                    VALUES (:name, :yaml, :now, :now, 0)
+                    INSERT INTO registered_pipelines (name, yaml_text, created_at, updated_at, deleted, source)
+                    VALUES (:name, :yaml, :now, :now, 0, :src)
                     ON DUPLICATE KEY UPDATE
                       yaml_text = VALUES(yaml_text),
                       updated_at = VALUES(updated_at),
-                      deleted = 0
-                """), {"name": name, "yaml": yaml_text, "now": now})
+                      deleted = 0,
+                      source = VALUES(source)
+                """), {"name": name, "yaml": yaml_text, "now": now, "src": source})
             else:  # sqlite
                 conn.execute(text("""
-                    INSERT INTO registered_pipelines (name, yaml_text, created_at, updated_at, deleted)
-                    VALUES (:name, :yaml, :now, :now, 0)
+                    INSERT INTO registered_pipelines (name, yaml_text, created_at, updated_at, deleted, source)
+                    VALUES (:name, :yaml, :now, :now, 0, :src)
                     ON CONFLICT (name) DO UPDATE
                       SET yaml_text = excluded.yaml_text,
                           updated_at = excluded.updated_at,
-                          deleted = 0
-                """), {"name": name, "yaml": yaml_text, "now": now})
+                          deleted = 0,
+                          source = excluded.source
+                """), {"name": name, "yaml": yaml_text, "now": now, "src": source})
 
     def delete_pipeline(self, name: str) -> None:
         """Soft-delete a pipeline from the shared registry."""
@@ -694,6 +750,15 @@ class TramDB:
                 text("UPDATE registered_pipelines SET deleted = 1, updated_at = :now WHERE name = :name"),
                 {"now": now, "name": name},
             )
+
+    def get_pipeline_source(self, name: str) -> str | None:
+        """Return the source ('disk' or 'api') of a pipeline, or None if not found."""
+        with self._engine.connect() as conn:
+            row = conn.execute(
+                text("SELECT source FROM registered_pipelines WHERE name = :name AND deleted = 0"),
+                {"name": name},
+            ).fetchone()
+        return row[0] if row else None
 
     def get_all_pipelines(self) -> list[tuple[str, str]]:
         """Return (name, yaml_text) for all non-deleted registered pipelines."""
@@ -710,6 +775,40 @@ class TramDB:
                 text("SELECT name FROM registered_pipelines WHERE deleted = 1")
             ).fetchall()
         return [r[0] for r in rows]
+
+    # ── Settings (v1.1.4) ─────────────────────────────────────────────────
+
+    def get_setting(self, key: str) -> str | None:
+        """Return the stored value for *key*, or None if not set."""
+        with self._engine.connect() as conn:
+            row = conn.execute(
+                text("SELECT value FROM settings WHERE key = :k"),
+                {"k": key},
+            ).fetchone()
+        return row[0] if row else None
+
+    def set_setting(self, key: str, value: str) -> None:
+        """Upsert a key-value setting."""
+        now = datetime.now(UTC).isoformat()
+        dialect = self._engine.dialect.name
+        with self._engine.begin() as conn:
+            if dialect == "mysql":
+                conn.execute(text("""
+                    INSERT INTO settings (key, value, updated_at)
+                    VALUES (:k, :v, :now)
+                    ON DUPLICATE KEY UPDATE value = :v, updated_at = :now
+                """), {"k": key, "v": value, "now": now})
+            else:  # sqlite + postgresql both support this syntax
+                conn.execute(text("""
+                    INSERT INTO settings (key, value, updated_at)
+                    VALUES (:k, :v, :now)
+                    ON CONFLICT (key) DO UPDATE SET value = :v, updated_at = :now
+                """), {"k": key, "v": value, "now": now})
+
+    def delete_setting(self, key: str) -> None:
+        """Remove a setting, reverting to env-var / default."""
+        with self._engine.begin() as conn:
+            conn.execute(text("DELETE FROM settings WHERE key = :k"), {"k": key})
 
     # ── Lifecycle ──────────────────────────────────────────────────────────
 

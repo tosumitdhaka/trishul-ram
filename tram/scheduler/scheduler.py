@@ -6,6 +6,7 @@ import logging
 import threading
 import uuid
 from concurrent.futures import ThreadPoolExecutor
+from datetime import UTC, datetime, timedelta
 from typing import TYPE_CHECKING
 
 from tram.core.context import RunStatus
@@ -132,6 +133,8 @@ class TramScheduler:
             config = state.config
             if not config.enabled or not self._coordinator:
                 continue
+            if state.status == "paused":
+                continue
 
             owns = self._coordinator.owns(config.name)
             sched_type = config.schedule.type
@@ -197,10 +200,14 @@ class TramScheduler:
             if loaded:
                 # Recompute ownership with full pipeline set before scheduling any DB pipelines
                 self._update_ownership()
+                paused_names = set(self._db.get_paused_pipeline_names()) if self._db else set()
                 for name, yaml_text in rows:
                     if not self.manager.exists(name):
                         continue
                     state = self.manager.get(name)
+                    if name in paused_names:
+                        self.manager.set_status(name, "paused")
+                        continue
                     if state.config.enabled and state.status == "stopped":
                         self._schedule_pipeline(state.config)
         except Exception as exc:
@@ -222,10 +229,31 @@ class TramScheduler:
 
         changed = False
 
-        # Register newly added pipelines (register all first, schedule after ownership recompute)
+        # Register newly added pipelines or re-register updated ones
         new_configs = []
         for name, yaml_text in self._db.get_all_pipelines():
             if self.manager.exists(name):
+                # Re-register if yaml changed on another node
+                state = self.manager.get(name)
+                if state.yaml_text == yaml_text:
+                    continue
+                try:
+                    if state.status == "running":
+                        # Defer re-registration — don't interrupt an active run
+                        logger.debug(
+                            "Sync: deferring re-registration (pipeline is running)",
+                            extra={"pipeline": name},
+                        )
+                        continue
+                    config = load_pipeline_from_yaml(yaml_text)
+                    self.stop_pipeline(name)
+                    self.manager.deregister(name)
+                    self.manager.register(config, yaml_text=yaml_text)
+                    new_configs.append(config)
+                    changed = True
+                    logger.info("Sync: re-registered updated pipeline", extra={"pipeline": name})
+                except Exception as exc:
+                    logger.warning("Sync: failed to re-register pipeline", extra={"pipeline": name, "error": str(exc)})
                 continue
             try:
                 config = load_pipeline_from_yaml(yaml_text)
@@ -241,9 +269,10 @@ class TramScheduler:
             if not self.manager.exists(name):
                 continue
             try:
-                state = self.manager.get(name)
-                if state.status == "running":
-                    self.stop_pipeline(name)
+                # Always stop (removes APScheduler job + stream thread) regardless of status.
+                # Without this, a "scheduled" pipeline keeps its APScheduler job alive after
+                # deregistration, causing PipelineNotFoundError on every subsequent fire.
+                self.stop_pipeline(name)
                 self.manager.deregister(name)
                 changed = True
                 logger.info("Sync: deregistered deleted pipeline", extra={"pipeline": name})
@@ -253,8 +282,11 @@ class TramScheduler:
         # Recompute ownership once with full updated pipeline set, then schedule new ones
         if changed:
             self._update_ownership()
+        paused_names = set(self._db.get_paused_pipeline_names()) if self._db else set()
         for config in new_configs:
-            if config.enabled:
+            if config.name in paused_names:
+                self.manager.set_status(config.name, "paused")
+            elif config.enabled:
                 self._schedule_pipeline(config)
 
     def stop(self, timeout: int = 30) -> None:
@@ -328,20 +360,40 @@ class TramScheduler:
     def _add_interval_job(self, config: PipelineConfig) -> None:
         from apscheduler.triggers.interval import IntervalTrigger
 
+        interval = config.schedule.interval_seconds
         job_id = f"batch-{config.name}"
+
+        # Compute next_run_time based on last run so a restarted pod fires at the
+        # correct time rather than always waiting a full interval from now.
+        # If last run was >interval ago (or never ran), fire immediately.
+        now = datetime.now(UTC)
+        state = self.manager.get(config.name) if self.manager.exists(config.name) else None
+        last_run = state.last_run if state else None
+        if last_run is None:
+            next_run_time = now  # never ran — fire ASAP
+        else:
+            elapsed = (now - last_run).total_seconds()
+            delay = max(0.0, interval - elapsed)
+            next_run_time = now + timedelta(seconds=delay)
+
         self._scheduler.add_job(
             func=self._run_batch,
-            trigger=IntervalTrigger(seconds=config.schedule.interval_seconds),
+            trigger=IntervalTrigger(seconds=interval),
             id=job_id,
             args=[config.name],
             max_instances=1,
             replace_existing=True,
             misfire_grace_time=60,
+            next_run_time=next_run_time,
         )
         self.manager.set_status(config.name, "scheduled")
         logger.info(
             "Scheduled interval pipeline",
-            extra={"pipeline": config.name, "interval_seconds": config.schedule.interval_seconds},
+            extra={
+                "pipeline": config.name,
+                "interval_seconds": interval,
+                "next_run_in_seconds": round((next_run_time - now).total_seconds()),
+            },
         )
 
     def _add_cron_job(self, config: PipelineConfig) -> None:
@@ -366,7 +418,11 @@ class TramScheduler:
     def _run_batch(self, pipeline_name: str, run_id: str | None = None) -> None:
         """APScheduler job callback — runs one batch execution."""
         if not self.manager.exists(pipeline_name):
-            logger.warning("Batch job: pipeline not found", extra={"pipeline": pipeline_name})
+            # Pipeline was deleted after this job was scheduled — remove the orphan job.
+            job_id = f"batch-{pipeline_name}"
+            if self._scheduler and self._scheduler.get_job(job_id):
+                self._scheduler.remove_job(job_id)
+            logger.warning("Batch job: pipeline not found, removed orphan job", extra={"pipeline": pipeline_name})
             return
 
         state = self.manager.get(pipeline_name)
@@ -381,11 +437,21 @@ class TramScheduler:
         try:
             result = self.executor.batch_run(state.config, run_id=run_id)
             self.manager.record_run(pipeline_name, result)
+            # Don't overwrite "paused" if the pipeline was paused mid-run
+            if self.manager.get(pipeline_name).status == "paused":
+                return
             if result.status == RunStatus.SUCCESS:
-                # If the job is still scheduled, go back to "scheduled" not "stopped"
                 job_id = f"batch-{pipeline_name}"
                 has_job = self._scheduler and self._scheduler.get_job(job_id)
-                final_status = "scheduled" if has_job else "stopped"
+                sched_type = state.config.schedule.type
+                if has_job:
+                    final_status = "scheduled"
+                elif sched_type in ("interval", "cron") and state.config.enabled:
+                    # Manual trigger on a stopped scheduled pipeline — re-register it
+                    self._schedule_pipeline(state.config)
+                    return  # _schedule_pipeline already sets status to "scheduled"
+                else:
+                    final_status = "stopped"
             else:
                 final_status = "error"
             self.manager.set_status(pipeline_name, final_status)
@@ -477,11 +543,26 @@ class TramScheduler:
 
         self.manager.set_status(name, "stopped")
 
+    def pause_pipeline(self, name: str) -> None:
+        """Pause a pipeline: stop its scheduler job and persist the paused flag."""
+        self.stop_pipeline(name)
+        self.manager.set_status(name, "paused")
+        if self._db is not None:
+            self._db.pause_pipeline(name)
+
+    def resume_pipeline(self, name: str) -> None:
+        """Resume a paused pipeline: clear the flag and re-schedule it."""
+        if self._db is not None:
+            self._db.resume_pipeline(name)
+        self.start_pipeline(name)
+
     def trigger_run(self, name: str) -> str:
         """Trigger an immediate run of a batch pipeline (manual trigger).
 
         Returns the pre-generated run_id so callers can poll for results.
         """
+        if self._db is not None and self._db.is_pipeline_paused(name):
+            raise ValueError(f"Pipeline '{name}' is paused — resume it before triggering")
         state = self.manager.get(name)
         if state.config.schedule.type == "stream":
             raise ValueError(f"Pipeline '{name}' is a stream pipeline — cannot trigger manually")

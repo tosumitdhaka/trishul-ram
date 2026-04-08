@@ -89,7 +89,7 @@ async def register_pipeline(request: Request) -> dict:
     db = getattr(request.app.state, "db", None)
     if db is not None:
         try:
-            db.save_pipeline(config.name, yaml_text)
+            db.save_pipeline(config.name, yaml_text, source="api")
         except Exception as exc:
             logger.warning("Failed to persist pipeline to DB: %s", exc)
 
@@ -166,7 +166,7 @@ async def update_pipeline(name: str, request: Request) -> dict:
     db = getattr(request.app.state, "db", None)
     if db is not None:
         try:
-            db.save_pipeline(config.name, yaml_text)
+            db.save_pipeline(config.name, yaml_text, source="api")
         except Exception as exc:
             logger.warning("Failed to persist pipeline update to DB: %s", exc)
 
@@ -211,6 +211,50 @@ async def delete_pipeline(name: str, request: Request) -> Response:
 
 
 # ── Lifecycle ──────────────────────────────────────────────────────────────
+
+
+@router.post("/{name}/pause")
+async def pause_pipeline(name: str, request: Request) -> dict:
+    manager = request.app.state.manager
+    scheduler = request.app.state.scheduler
+
+    try:
+        manager.get(name)
+    except PipelineNotFoundError as exc:
+        raise HTTPException(status_code=404, detail=str(exc))
+
+    db = getattr(request.app.state, "db", None)
+    if db is None:
+        raise HTTPException(status_code=503, detail="Pause/resume requires a database — check TRAM_DB_URL")
+
+    try:
+        scheduler.pause_pipeline(name)
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=str(exc))
+
+    return {"name": name, "status": "paused"}
+
+
+@router.post("/{name}/resume")
+async def resume_pipeline(name: str, request: Request) -> dict:
+    manager = request.app.state.manager
+    scheduler = request.app.state.scheduler
+
+    try:
+        manager.get(name)
+    except PipelineNotFoundError as exc:
+        raise HTTPException(status_code=404, detail=str(exc))
+
+    db = getattr(request.app.state, "db", None)
+    if db is None:
+        raise HTTPException(status_code=503, detail="Pause/resume requires a database — check TRAM_DB_URL")
+
+    try:
+        scheduler.resume_pipeline(name)
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=str(exc))
+
+    return {"name": name, "status": "resumed"}
 
 
 @router.post("/{name}/start")
@@ -289,22 +333,31 @@ async def reload_pipelines(request: Request) -> dict:
                 logger.warning("Error stopping %s during reload: %s", state.config.name, exc)
         manager.deregister(state.config.name)
 
-    results = scan_pipeline_dir(pipeline_dir)
-    loaded = 0
-    for config, yaml_text in results:
-        try:
-            manager.register(config, yaml_text=yaml_text)
-            if config.enabled and config.schedule.type != "manual":
-                scheduler.start_pipeline(config.name)
-            loaded += 1
-        except Exception as exc:
-            logger.error("Failed to register pipeline %s: %s", config.name, exc)
+    # Seed disk pipelines to DB (skipping user-owned ones), then reload from DB
+    db = getattr(request.app.state, "db", None)
+    seeded = 0
+    for config, yaml_text in scan_pipeline_dir(pipeline_dir):
+        if db is not None:
+            existing_source = db.get_pipeline_source(config.name)
+            if existing_source == "api":
+                logger.debug("Reload: skipping disk seed for user-owned pipeline %s", config.name)
+                continue
+            db.save_pipeline(config.name, yaml_text, source="disk")
+            seeded += 1
+        else:
+            try:
+                manager.register(config, yaml_text=yaml_text)
+                if config.enabled and config.schedule.type != "manual":
+                    scheduler.start_pipeline(config.name)
+                seeded += 1
+            except Exception as exc:
+                logger.error("Failed to register pipeline %s: %s", config.name, exc)
 
-    # Re-load DB-registered pipelines (API-created pipelines not on disk)
+    # Load everything from DB (includes freshly seeded disk pipelines + API pipelines)
     scheduler._load_from_db()
-    total = len(manager.list_all())
 
-    return {"reloaded": loaded, "total": total}
+    total = len(manager.list_all())
+    return {"reloaded": seeded, "total": total}
 
 
 # ── Version history + rollback ─────────────────────────────────────────────

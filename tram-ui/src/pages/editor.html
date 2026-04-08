@@ -1,9 +1,18 @@
 <div class="row g-3">
-  <div class="col-9">
+  <div class="col-8">
     <div class="editor-wrap">
       <div class="editor-bar">
         <span class="editor-filename" id="editor-filename">new-pipeline.yaml</span>
         <div class="ms-auto d-flex gap-2">
+          <button class="btn-flat d-flex align-items-center gap-1" style="font-size:13px;color:#8b949e"
+                  title="Copy YAML" onclick="window._editorCopy?.()">
+            <i class="bi bi-clipboard" style="font-size:15px"></i>
+          </button>
+          <button class="btn-flat d-flex align-items-center gap-1" id="editor-diff-btn"
+                  style="font-size:13px;color:#8b949e" hidden
+                  title="Diff vs saved" onclick="window._editorDiffSaved?.()">
+            <i class="bi bi-file-diff" style="font-size:15px"></i> Diff
+          </button>
           <button class="btn-flat d-flex align-items-center gap-1" style="font-size:13px;color:#8b949e"
                   onclick="navigate('pipelines')">
             <i class="bi bi-x" style="font-size:15px"></i> Cancel
@@ -16,16 +25,50 @@
                   onclick="window._editorDryRun?.()">
             <i class="bi bi-lightning" style="font-size:15px"></i> Dry Run
           </button>
-          <button class="btn btn-sm btn-primary" onclick="window._editorSave?.()">
-            <i class="bi bi-check-lg"></i> Save Pipeline
+          <button class="btn btn-sm btn-primary" id="editor-save-btn" onclick="window._editorSave?.()">
+            <i class="bi bi-check-lg"></i> <span id="editor-save-label">Save Pipeline</span>
           </button>
         </div>
       </div>
-      <textarea id="editor-textarea" class="editor-body w-100" style="resize:none;outline:none;border:none;min-height:520px"
+      <textarea id="editor-textarea" class="editor-body w-100" style="resize:none;outline:none;border:none;min-height:580px"
                 spellcheck="false" placeholder="Paste or type YAML pipeline definition…"></textarea>
     </div>
   </div>
-  <div class="col-3">
+  <div class="col-4">
+    <!-- AI assist panel (hidden until AI is configured) -->
+    <div id="editor-ai-section" class="d-none mb-3 p-3 rounded" style="background:#161b22;border:1px solid #30363d">
+      <div class="d-flex align-items-center mb-2">
+        <i class="bi bi-stars me-2" style="color:#9e6bde"></i>
+        <span style="font-size:13px;font-weight:500;color:#e6edf3">AI Assist</span>
+        <span class="ms-auto text-secondary" style="font-size:10px" id="editor-ai-model"></span>
+      </div>
+
+      <!-- NEW mode: generate -->
+      <div id="editor-ai-generate-panel">
+        <textarea id="editor-ai-prompt" rows="5" class="form-control form-control-sm mb-2"
+                  style="background:#0d1117;color:#e6edf3;border-color:#30363d;resize:vertical;font-size:12px"
+                  placeholder="Describe the pipeline you want to create…&#10;&#10;e.g. Poll SFTP every 5 min, parse CSV, push to Kafka topic pm-raw"></textarea>
+        <button class="btn btn-sm w-100" id="editor-ai-gen-btn"
+                style="border:1px solid #9e6bde;color:#9e6bde;background:transparent"
+                onclick="window._editorAiGenerate?.()">
+          <i class="bi bi-stars me-1"></i>Generate YAML
+        </button>
+      </div>
+
+      <!-- EDIT mode: modify -->
+      <div id="editor-ai-modify-panel" class="d-none">
+        <textarea id="editor-ai-instruction" rows="5" class="form-control form-control-sm mb-2"
+                  style="background:#0d1117;color:#e6edf3;border-color:#30363d;resize:vertical;font-size:12px"
+                  placeholder="Describe the change to make…&#10;&#10;e.g. Add an add_field transform with source_address: 172.25.242.55&#10;e.g. Change interval to every 10 minutes"></textarea>
+        <button class="btn btn-sm w-100" id="editor-ai-mod-btn"
+                style="border:1px solid #9e6bde;color:#9e6bde;background:transparent"
+                onclick="window._editorAiModify?.()">
+          <i class="bi bi-stars me-1"></i>Modify Pipeline
+        </button>
+      </div>
+
+      <div id="editor-ai-status" class="mt-2 text-secondary" style="font-size:11px"></div>
+    </div>
     <div class="ref-panel">
       <div class="ref-cat">Sources</div>
       <span class="ref-pill">sftp</span><span class="ref-pill">kafka</span><span class="ref-pill">rest</span><span class="ref-pill">local</span><span class="ref-pill">s3</span><span class="ref-pill">syslog</span><span class="ref-pill">snmp_trap</span><span class="ref-pill">snmp_poll</span><span class="ref-pill">mqtt</span><span class="ref-pill">amqp</span><span class="ref-pill">nats</span><span class="ref-pill">webhook</span><span class="ref-pill">gnmi</span><span class="ref-pill">redis</span><span class="ref-pill">sql</span><span class="ref-pill">ftp</span><span class="ref-pill">gcs</span><span class="ref-pill">azure_blob</span><span class="ref-pill">websocket</span><span class="ref-pill">influxdb</span><span class="ref-pill">elasticsearch</span><span class="ref-pill">prometheus_rw</span><span class="ref-pill">clickhouse</span><span class="ref-pill">corba</span>

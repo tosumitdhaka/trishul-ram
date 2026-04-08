@@ -66,9 +66,20 @@ class SNMPTrapSource(BaseSource):
         self._stop_event: threading.Event = threading.Event()
 
     def test_connection(self) -> dict:
+        """Verify the trap listener port is available by attempting a UDP bind."""
+        import time
         host = self.config.get("host", "0.0.0.0")
-        port = self.config.get("port", 162)
-        return {"ok": True, "latency_ms": None, "detail": f"Local UDP trap listener on {host}:{port}"}
+        port = int(self.config.get("port", 162))
+        t0 = time.monotonic()
+        try:
+            sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+            sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+            sock.bind((host, port))
+            sock.close()
+            latency = int((time.monotonic() - t0) * 1000)
+            return {"ok": True, "latency_ms": latency, "detail": f"UDP {host}:{port} bind OK — trap listener ready"}
+        except OSError as exc:
+            return {"ok": False, "latency_ms": None, "error": f"UDP {host}:{port} bind failed: {exc}"}
 
     def stop(self) -> None:
         self._stop_event.set()
@@ -206,6 +217,7 @@ class SNMPPollSource(BaseSource):
         self.resolve_oids: bool = bool(config.get("resolve_oids", True))
         self.yield_rows: bool = bool(config.get("yield_rows", False))
         self.index_depth: int = int(config.get("index_depth", 0))
+        self.classify: bool = bool(config.get("classify", False))
         # Auto-prepend /mibs and TRAM_MIB_DIR
         import os as _os
         for _d in ["/mibs", _os.environ.get("TRAM_MIB_DIR", "")]:
@@ -262,6 +274,52 @@ class SNMPPollSource(BaseSource):
 
         return [rows[k] for k in sorted(rows)]
 
+    def test_connection(self) -> dict:
+        """Send a real SNMP GET for sysDescr.0 to verify host, port, and community string."""
+        import time
+        _SYSDESCR = "1.3.6.1.2.1.1.1.0"
+        host      = self.config.get("host", "")
+        port      = int(self.config.get("port", 161))
+        community = self.config.get("community", "public")
+        version   = str(self.config.get("version", "2c"))
+        t0 = time.monotonic()
+        try:
+            import pysnmp.hlapi.asyncio as hlapi
+        except ImportError:
+            return {"ok": False, "latency_ms": None, "error": "pysnmp not installed — pip install tram[snmp]"}
+
+        mp_model  = 0 if version == "1" else 1
+        auth_data = hlapi.CommunityData(community, mpModel=mp_model)
+
+        async def _probe():
+            engine = hlapi.SnmpEngine()
+            target = hlapi.UdpTransportTarget((host, port), timeout=5.0, retries=1)
+            errInd, errStatus, _, varBinds = await hlapi.getCmd(
+                engine, auth_data, target, hlapi.ContextData(),
+                hlapi.ObjectType(hlapi.ObjectIdentity(_SYSDESCR)),
+                lookupMib=False,
+            )
+            if errInd:
+                raise OSError(str(errInd))
+            if errStatus:
+                raise OSError(errStatus.prettyPrint())
+            return str(varBinds[0][1]) if varBinds else ""
+
+        try:
+            loop = asyncio.new_event_loop()
+            try:
+                sysDescr = loop.run_until_complete(_probe())
+            finally:
+                loop.close()
+            latency = int((time.monotonic() - t0) * 1000)
+            detail = f"SNMP {host}:{port} OK"
+            if sysDescr:
+                detail += f" — sysDescr: {sysDescr[:80]}"
+            return {"ok": True, "latency_ms": latency, "detail": detail}
+        except Exception as exc:
+            latency = int((time.monotonic() - t0) * 1000)
+            return {"ok": False, "latency_ms": latency, "error": f"SNMP {host}:{port} — {exc}"}
+
     def _build_auth(self, hlapi_mod):
         """Build CommunityData or UsmUserData depending on SNMP version."""
         if self.version == "3":
@@ -277,7 +335,71 @@ class SNMPPollSource(BaseSource):
         mp_model = 0 if self.version == "1" else 1
         return hlapi_mod.CommunityData(self.community, mpModel=mp_model)
 
-    async def _do_get(self, hlapi_mod) -> dict:
+    # SNMP type names that map to metrics (numeric counters/gauges)
+    _METRIC_TYPES = frozenset({
+        "Counter32", "Counter64", "Gauge32", "Unsigned32", "TimeTicks",
+    })
+    # Field name suffixes that classify Integer32 values as labels
+    _LABEL_SUFFIXES = ("Id", "ID", "Index", "Port", "Vdom")
+
+    @staticmethod
+    def _classify_bindings(bindings_typed: dict[str, tuple[str, str]]) -> dict:
+        """Classify ``{key: (str_val, type_name)}`` into ``_metrics`` and ``_labels``.
+
+        Rules (applied per field, stripping any trailing ``.index`` suffix first):
+        - Counter32 / Counter64 / Gauge32 / Unsigned32 / TimeTicks → metric (int)
+        - Integer32 ending in an Id/Index/Port/Vdom suffix → label (str)
+        - Integer32 (other) → metric (int)
+        - Everything else (OctetString, IpAddress, ObjectIdentifier, ...) → label (str)
+        """
+        metrics: dict = {}
+        labels: dict = {}
+        for key, (str_val, type_name) in bindings_typed.items():
+            # Strip trailing dot-index portion (e.g. "ifDescr.1" → base="ifDescr")
+            base = key.split(".")[0] if "." in key else key
+            if type_name in SNMPPollSource._METRIC_TYPES:
+                try:
+                    metrics[base] = int(str_val)
+                except ValueError:
+                    metrics[base] = str_val
+            elif type_name == "Integer32":
+                if any(base.endswith(sfx) for sfx in SNMPPollSource._LABEL_SUFFIXES):
+                    labels[base] = str_val
+                else:
+                    try:
+                        metrics[base] = int(str_val)
+                    except ValueError:
+                        metrics[base] = str_val
+            else:
+                labels[base] = str_val
+        return {"_metrics": metrics, "_labels": labels}
+
+    @staticmethod
+    def _snmp_val_to_str(val_obj) -> str:
+        """Serialize an SNMP value to a clean string.
+
+        OctetString values containing non-printable bytes are hex-encoded:
+        - 6-byte values (MAC addresses) → ``aa:bb:cc:dd:ee:ff``
+        - Other binary values → ``0xAABBCC...``
+        All other types fall back to ``str()``.
+        """
+        type_name = type(val_obj).__name__
+        if type_name == "OctetString":
+            try:
+                raw = bytes(val_obj)
+            except Exception:
+                return str(val_obj)
+            # Printable ASCII — return as plain string
+            if all(0x20 <= b < 0x7F for b in raw):
+                return raw.decode("ascii")
+            # 6-byte binary → MAC address format
+            if len(raw) == 6:
+                return ":".join(f"{b:02x}" for b in raw)
+            # Other binary → prefixed hex
+            return "0x" + raw.hex()
+        return str(val_obj)
+
+    async def _do_get(self, hlapi_mod, typed: bool = False) -> dict:
         engine = hlapi_mod.SnmpEngine()
         auth_data = self._build_auth(hlapi_mod)
         target = hlapi_mod.UdpTransportTarget(
@@ -306,9 +428,11 @@ class SNMPPollSource(BaseSource):
                 f"SNMP GET PDU error: {errStatus.prettyPrint()} "
                 f"at {errIdx and varBinds[int(errIdx) - 1][0] or '?'}"
             )
-        return {str(oid): str(val) for oid, val in varBinds}
+        if typed:
+            return {str(oid): (self._snmp_val_to_str(val), type(val).__name__) for oid, val in varBinds}
+        return {str(oid): self._snmp_val_to_str(val) for oid, val in varBinds}
 
-    async def _do_walk(self, hlapi_mod) -> dict:
+    async def _do_walk(self, hlapi_mod, typed: bool = False) -> dict:
         engine = hlapi_mod.SnmpEngine()
         auth_data = self._build_auth(hlapi_mod)
         target = hlapi_mod.UdpTransportTarget(
@@ -341,7 +465,10 @@ class SNMPPollSource(BaseSource):
                     if not oid_str.startswith(base_oid.rstrip(".0")):
                         stop = True
                         break
-                    bindings[oid_str] = str(val_obj)
+                    if typed:
+                        bindings[oid_str] = (self._snmp_val_to_str(val_obj), type(val_obj).__name__)
+                    else:
+                        bindings[oid_str] = self._snmp_val_to_str(val_obj)
                     current_oid = oid_str
                 if stop:
                     break
@@ -356,13 +483,19 @@ class SNMPPollSource(BaseSource):
                 "SNMP poll source requires pysnmp-lextudio — install with: pip install tram[snmp]"
             ) from exc
 
+        if self.classify and not self.resolve_oids:
+            logger.warning(
+                "SNMP classify=True works best with resolve_oids=True — "
+                "field names will be raw OID strings"
+            )
+
         polled_at = datetime.datetime.now(datetime.UTC).isoformat()
 
         try:
             if self.operation == "get":
-                bindings = asyncio.run(self._do_get(_hlapi))
+                raw = asyncio.run(self._do_get(_hlapi, typed=self.classify))
             elif self.operation == "walk":
-                bindings = asyncio.run(self._do_walk(_hlapi))
+                raw = asyncio.run(self._do_walk(_hlapi, typed=self.classify))
             else:
                 raise SourceError(
                     f"SNMP poll: unsupported operation '{self.operation}' (use get or walk)"
@@ -371,6 +504,64 @@ class SNMPPollSource(BaseSource):
             raise
         except Exception as exc:
             raise SourceError(f"SNMP poll failed: {exc}") from exc
+
+        if self.classify:
+            # raw is {oid: (str_val, type_name)} — resolve OID keys then classify
+            if self.resolve_oids and (self.mib_dirs or self.mib_modules):
+                try:
+                    from tram.connectors.snmp.mib_utils import (
+                        get_mib_view,
+                        oid_str_to_tuple,
+                        resolve_oid,
+                    )
+                    mib_view = get_mib_view(self.mib_dirs, self.mib_modules)
+                    raw = {
+                        resolve_oid(mib_view, oid_str_to_tuple(oid)): type_tuple
+                        for oid, type_tuple in raw.items()
+                    }
+                except Exception as _exc:
+                    logger.warning("MIB OID resolution failed for poll: %s", _exc)
+            # For yield_rows mode: group by index preserving type tuples, then classify per row
+            meta = {
+                "source_host": self.host,
+                "source_port": self.port,
+                "operation": self.operation,
+                "oids": self.oids,
+                "polled_at": polled_at,
+            }
+            logger.info(
+                "SNMP poll completed",
+                extra={"host": self.host, "operation": self.operation, "bindings": len(raw)},
+            )
+            if self.yield_rows:
+                # Group by index (str vals only) for index extraction, then re-classify
+                str_bindings = {k: v[0] for k, v in raw.items()}
+                rows = self._group_by_index(str_bindings, self.index_depth)
+                all_rows = []
+                for row in rows:
+                    index = row.get("_index", "")
+                    index_parts = row.get("_index_parts", [])
+                    # Rebuild typed subset for this row index
+                    row_typed = {
+                        k: v for k, v in raw.items()
+                        if k.endswith(f".{index}") or (not index and "." not in k)
+                    }
+                    classified = self._classify_bindings(row_typed)
+                    classified["_index"] = index
+                    classified["_index_parts"] = index_parts
+                    classified["_polled_at"] = polled_at
+                    all_rows.append(classified)
+                # Yield all rows as a single payload so the executor processes
+                # them as one chunk → one write per sink (prevents file overwrite)
+                yield json.dumps(all_rows).encode("utf-8"), meta
+            else:
+                classified = self._classify_bindings(raw)
+                classified["_polled_at"] = polled_at
+                yield json.dumps(classified).encode("utf-8"), meta
+            return
+
+        # ── Standard (non-classify) path ──────────────────────────────────────
+        bindings: dict = raw  # type: ignore[assignment]
 
         # Optional MIB-based OID resolution
         if self.resolve_oids and (self.mib_dirs or self.mib_modules):
@@ -404,7 +595,8 @@ class SNMPPollSource(BaseSource):
             rows = self._group_by_index(bindings, self.index_depth)
             for row in rows:
                 row["_polled_at"] = polled_at
-                yield json.dumps(row).encode("utf-8"), meta
+            # Yield all rows as a single payload → one chunk → one write per sink
+            yield json.dumps(rows).encode("utf-8"), meta
         else:
             bindings["_polled_at"] = polled_at
             yield json.dumps(bindings).encode("utf-8"), meta

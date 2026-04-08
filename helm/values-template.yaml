@@ -5,7 +5,7 @@
 image:
   registry:   ""              # e.g. ghcr.io — empty = no registry prefix (local/kind images)
   repository: OWNER/tram      # image name; replace OWNER with your registry namespace
-  tag: "1.0.9"
+  tag: "1.1.3"
   pullPolicy: IfNotPresent
 
 ## TRAM always deploys as a StatefulSet (stable pod names: tram-0, tram-1, …).
@@ -25,6 +25,14 @@ clusterMode:
 ## Override to shorten or rename — e.g. nameOverride: "tram" gives back short names like tram-0.
 nameOverride: ""
 fullnameOverride: ""
+
+## Share the host (kind-node) network namespace with pods.
+## Required when pods need to reach services on the host via UDP (e.g. SNMP trap/poll via socat
+## on the WSL2/Docker host), because the CNI overlay NAT silently drops UDP return packets.
+## With hostNetwork=true pods bypass CNI and reach 127.0.0.1 / host IP directly.
+## Caveat: all pod ports occupy the host port space — only one TRAM replica per k8s node.
+## Keep false in production multi-node clusters.
+hostNetwork: false
 
 service:
   type: ClusterIP

@@ -27,6 +27,10 @@ spec:
     spec:
       serviceAccountName: {{ include "tram.serviceAccountName" . }}
       enableServiceLinks: false
+      {{- if .Values.hostNetwork }}
+      hostNetwork: true
+      dnsPolicy: ClusterFirstWithHostNet
+      {{- end }}
       securityContext:
         ## fsGroup ensures Secret volumes are group-owned by the tram gid (1000),
         ## so key files (defaultMode 0440) are readable by the tram user.

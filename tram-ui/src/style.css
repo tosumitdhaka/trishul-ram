@@ -130,6 +130,7 @@ body {
 .tram-badge.running::before    { background:#3fb950; box-shadow:0 0 4px #3fb950; animation: pulse 2s infinite; }
 .tram-badge.scheduled::before  { background:var(--badge-yellow-fg); }
 .tram-badge.stopped::before    { background:var(--fg-2); }
+.tram-badge.paused::before     { background:#39c5cf; }
 .tram-badge.error::before    { background:#f85149; }
 .tram-badge.success::before  { background:#3fb950; }
 .tram-badge.failed::before   { background:#f85149; }
@@ -143,6 +144,7 @@ body {
 .badge-success  { background: var(--badge-green-bg);  color: var(--badge-green-fg); }
 .badge-failed   { background: var(--badge-red-bg);    color: var(--badge-red-fg); }
 .badge-partial  { background: var(--badge-yellow-bg); color: var(--badge-yellow-fg); }
+.badge-paused   { background: var(--badge-cyan-bg);   color: var(--badge-cyan-fg); }
 .badge-disabled { background: var(--badge-off-bg);    color: var(--badge-off-fg); }
 .badge-stream   { background: var(--badge-cyan-bg);   color: var(--badge-cyan-fg); }
 .badge-interval { background: var(--badge-muted-bg);  color: var(--badge-muted-fg); }
@@ -279,3 +281,5 @@ body {
 .wiz-step.done .wiz-num { background: #3fb950; border-color: #3fb950; color: #fff; }
 .wiz-step.active .wiz-lbl { color: var(--fg); font-weight: 600; }
 .wiz-step.done .wiz-lbl { color: #3fb950; }
+@keyframes spin { to { transform: rotate(360deg); } }
+.spin { display: inline-block; animation: spin 0.6s linear infinite; }

@@ -120,18 +120,37 @@ function renderRuns(runs) {
 
 function wireActions(pipeline) {
   window._detailEdit = () => { window._editorPipeline = _name; navigate('editor') }
-  const btn = document.getElementById('detail-run-btn')
+  window._detailRefreshRuns = async () => { try { await reloadRuns() } catch (e) { toast(e.message, 'error') } }
+  const btn      = document.getElementById('detail-run-btn')
+  const pauseBtn = document.getElementById('detail-pause-btn')
   if (!btn) return
   const isRunning = pipeline.status === 'running'
+  const isPaused  = pipeline.status === 'paused'
   const isStream  = pipeline.schedule_type === 'stream'
+
+  // Configure run/stop button
   if (isRunning) {
     btn.innerHTML = '<i class="bi bi-stop-fill me-1"></i>Stop'
     btn.className = 'btn btn-sm btn-danger'
     btn.onclick = () => window._detailStop?.()
+  } else if (isPaused) {
+    btn.innerHTML = '<i class="bi bi-play-fill me-1"></i>Resume'
+    btn.className = 'btn btn-sm btn-primary'
+    btn.onclick = () => window._detailResume?.()
   } else {
     btn.innerHTML = `<i class="bi bi-play-fill me-1"></i>${isStream ? 'Start' : 'Run Now'}`
     btn.className = 'btn btn-sm btn-primary'
     btn.onclick = () => window._detailRun?.()
+  }
+
+  // Configure pause button — only visible when not already paused or running
+  if (pauseBtn) {
+    if (isPaused || isRunning) {
+      pauseBtn.setAttribute('hidden', '')
+    } else {
+      pauseBtn.removeAttribute('hidden')
+      pauseBtn.onclick = () => window._detailPause?.()
+    }
   }
 
   window._detailRun = async () => {
@@ -144,6 +163,16 @@ function wireActions(pipeline) {
 
   window._detailStop = async () => {
     try { await api.pipelines.stop(_name); toast(`Stopped ${_name}`); setTimeout(() => init(), 800) }
+    catch (e) { toast(e.message, 'error') }
+  }
+
+  window._detailPause = async () => {
+    try { await api.pipelines.pause(_name); toast(`Paused ${_name}`); setTimeout(() => init(), 800) }
+    catch (e) { toast(e.message, 'error') }
+  }
+
+  window._detailResume = async () => {
+    try { await api.pipelines.resume(_name); toast(`Resumed ${_name}`); setTimeout(() => init(), 800) }
     catch (e) { toast(e.message, 'error') }
   }
 
@@ -218,18 +247,35 @@ async function loadVersions() {
       catch (e) { toast(e.message, 'error') }
     }
 
-    window._detailDiff = async (ver) => {
+    // Cached active YAML for diff
+    let _diffActiveYaml = null
+    const _getDiffActive = async () => {
+      if (!_diffActiveYaml)
+        _diffActiveYaml = _activeYaml || await api.pipelines.get(_name).then(p => p.yaml || '')
+      return _diffActiveYaml
+    }
+
+    const _openDiff = async (ver) => {
       try {
-        const oldYaml = await api.versions.yaml(_name, ver)
-        const newYaml = _activeYaml || await api.pipelines.get(_name).then(p => p.yaml || '')
-        const versionEntry = versions.find(v => v.version === ver)
-        const leftLabel  = `v${ver}${versionEntry?.created_at ? ' · ' + relTime(versionEntry.created_at) : ''}`
-        const rightLabel = 'active'
-        document.getElementById('diff-left-label').textContent  = leftLabel
-        document.getElementById('diff-right-label').textContent = rightLabel
+        const [oldYaml, newYaml] = await Promise.all([api.versions.yaml(_name, ver), _getDiffActive()])
+        const lh = document.getElementById('diff-left-header')
+        const entry = versions.find(v => v.version === ver)
+        if (lh) lh.textContent = `v${ver}${entry?.created_at ? ' · ' + relTime(entry.created_at) : ''}`
         _renderDiffPanes(oldYaml, newYaml)
-        new bootstrap.Modal(document.getElementById('detail-diff-modal')).show()
       } catch (e) { toast(`Diff error: ${e.message}`, 'error') }
+    }
+
+    window._detailDiff = async (ver) => {
+      // Populate version selector
+      const sel = document.getElementById('diff-version-select')
+      if (sel) {
+        sel.innerHTML = versions.map(v =>
+          `<option value="${v.version}" ${v.version === ver ? 'selected' : ''}>v${v.version}${v.created_at ? ' · ' + relTime(v.created_at) : ''}${v.is_active ? ' (active)' : ''}</option>`
+        ).join('')
+        sel.onchange = () => _openDiff(parseInt(sel.value))
+      }
+      await _openDiff(ver)
+      new bootstrap.Modal(document.getElementById('detail-diff-modal')).show()
     }
   } catch (e) { toast(e.message, 'error') }
 }
@@ -277,20 +323,40 @@ function _backtrack(trace, a, b, max) {
 
 function _renderDiffPanes(oldYaml, newYaml) {
   const hunks = _myersDiff(oldYaml.split('\n'), newYaml.split('\n'))
-  let leftHtml = '', rightHtml = ''
+  const blank = `<div style="background:#0d1117"> </div>`
+  let leftHtml = '', rightHtml = '', adds = 0, dels = 0
   for (const h of hunks) {
     const line = esc(h.line)
     if (h.type === 'equal') {
-      leftHtml  += `<span style="opacity:.5">${line}\n</span>`
-      rightHtml += `<span style="opacity:.5">${line}\n</span>`
+      const eq = `<div style="color:#8b949e">  ${line}</div>`
+      leftHtml  += eq
+      rightHtml += eq
     } else if (h.type === 'delete') {
-      leftHtml  += `<span style="background:#3d1a1a;display:block">- ${line}\n</span>`
+      leftHtml  += `<div style="background:#3d1a1a;color:#ff7b72">- ${line}</div>`
+      rightHtml += blank
+      dels++
     } else {
-      rightHtml += `<span style="background:#1a3328;display:block">+ ${line}\n</span>`
+      leftHtml  += blank
+      rightHtml += `<div style="background:#1a3328;color:#3fb950">+ ${line}</div>`
+      adds++
     }
   }
-  document.getElementById('diff-left-pane').innerHTML  = leftHtml  || '<span style="opacity:.4">— empty —</span>'
-  document.getElementById('diff-right-pane').innerHTML = rightHtml || '<span style="opacity:.4">— empty —</span>'
+  const leftPane  = document.getElementById('diff-left-pane')
+  const rightPane = document.getElementById('diff-right-pane')
+  if (leftPane)  leftPane.innerHTML  = leftHtml  || '<div style="opacity:.4">— empty —</div>'
+  if (rightPane) rightPane.innerHTML = rightHtml || '<div style="opacity:.4">— empty —</div>'
+
+  if (leftPane && rightPane) {
+    leftPane.onscroll  = () => { rightPane.scrollTop = leftPane.scrollTop }
+    rightPane.onscroll = () => { leftPane.scrollTop  = rightPane.scrollTop }
+  }
+
+  const stats = document.getElementById('diff-stats')
+  if (stats) {
+    stats.innerHTML = (adds === 0 && dels === 0)
+      ? '<span style="color:#8b949e">no changes</span>'
+      : `<span style="color:#3fb950">+${adds}</span> <span style="color:#ff7b72">−${dels}</span>`
+  }
 }
 
 // ── Config tab ──────────────────────────────────────────────────────────────
