@@ -3,7 +3,7 @@
 
 image:
   registry:   ""              # e.g. ghcr.io — empty = no registry prefix (local/kind images)
-  repository: trishul-ram     # image name without registry
+  repository: trishul-ram      # image name without registry
   tag: "1.1.4"
   pullPolicy: IfNotPresent
 
