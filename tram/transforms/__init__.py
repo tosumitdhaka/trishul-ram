@@ -12,6 +12,7 @@ from tram.transforms.flatten import FlattenTransform  # noqa: F401
 from tram.transforms.jmespath_extract import JmesPathExtractTransform  # noqa: F401
 from tram.transforms.limit import LimitTransform  # noqa: F401
 from tram.transforms.mask import MaskTransform  # noqa: F401
+from tram.transforms.melt import MeltTransform  # noqa: F401
 from tram.transforms.regex_extract import RegexExtractTransform  # noqa: F401
 from tram.transforms.rename import RenameTransform  # noqa: F401
 from tram.transforms.sort import SortTransform  # noqa: F401
