@@ -120,6 +120,37 @@ class ClusterCoordinator:
             return True  # no peers yet — own everything as a safe fallback
         return _stable_hash(pipeline_name) % count == pos
 
+    def live_node_ids(self) -> list[str]:
+        """Return the current list of live node IDs (sorted)."""
+        with self._lock:
+            return [n["node_id"] for n in self._live_nodes]
+
+    def is_node_alive(self, node_id: str) -> bool:
+        """Return True if node_id is currently in the live nodes set."""
+        with self._lock:
+            return any(n["node_id"] == node_id for n in self._live_nodes)
+
+    def least_loaded_node(self, pipeline_counts: dict[str, int], exclude: str = "") -> str:
+        """Return the live node with the fewest owned pipelines.
+
+        Uses node_id as a deterministic tiebreak so all pods independently
+        arrive at the same assignment without coordination.
+
+        Args:
+            pipeline_counts: {node_id: count} from DB (may omit nodes with 0 pipelines)
+            exclude:         node_id to skip (e.g. the dead node being replaced)
+        """
+        with self._lock:
+            live = [n["node_id"] for n in self._live_nodes if n["node_id"] != exclude]
+
+        if not live:
+            return self._node_id  # fallback: self
+
+        # Fill zeros for nodes not yet in the counts map
+        counts = {node: pipeline_counts.get(node, 0) for node in live}
+        # Primary sort: count ASC; secondary: node_id ASC (deterministic tiebreak)
+        return min(live, key=lambda n: (counts[n], n))
+
     def get_state(self, pipeline_names: list[str] | None = None) -> dict:
         """Return cluster state dict for the API endpoint.
 

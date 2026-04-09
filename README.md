@@ -84,8 +84,8 @@ curl http://localhost:8765/api/schemas/cisco/GenericRecord.proto
 |----------|------|
 | **Sources** | `sftp`, `local`, `rest`, `kafka`, `ftp`, `s3`, `syslog`, `snmp_trap`, `snmp_poll`, `mqtt`, `amqp`, `nats`, `gnmi`, `sql`, `clickhouse`, `influxdb`, `redis`, `gcs`, `azure_blob`, `webhook`, `websocket`, `elasticsearch`, `prometheus_rw`, `corba` |
 | **Sinks** | `sftp`, `local`, `rest`, `kafka`, `opensearch`, `ftp`, `ves`, `s3`, `snmp_trap`, `mqtt`, `amqp`, `nats`, `sql`, `clickhouse`, `influxdb`, `redis`, `gcs`, `azure_blob`, `websocket`, `elasticsearch` |
-| **Serializers** | `json`, `ndjson`, `csv`, `xml`, `avro`, `parquet`, `msgpack`, `protobuf`, `bytes`, `text` |
-| **Transforms** | `rename`, `cast`, `add_field`, `drop`, `value_map`, `filter`, `flatten`, `timestamp_normalize`, `aggregate`, `enrich`, `explode`, `deduplicate`, `regex_extract`, `template`, `mask`, `validate`, `sort`, `limit`, `jmespath`, `unnest` |
+| **Serializers** | `json`, `ndjson`, `csv`, `xml`, `avro`, `parquet`, `msgpack`, `protobuf`, `bytes`, `text`, `asn1`, `pm_xml` |
+| **Transforms** | `rename`, `cast`, `add_field`, `drop`, `value_map`, `filter`, `flatten`, `timestamp_normalize`, `aggregate`, `enrich`, `explode`, `deduplicate`, `regex_extract`, `template`, `mask`, `validate`, `sort`, `limit`, `jmespath`, `unnest`, `melt` |
 
 Optional extras: `pip install tram[kafka]` · `pip install tram[snmp]` · `pip install tram[mib]` · `pip install tram[otel]` · `pip install tram[watch]` · `pip install tram[metrics]` · `pip install tram[corba]` · `pip install tram[clickhouse]` · `pip install tram[all]`
 
@@ -408,7 +408,7 @@ tram/
 ├── registry/         @register_* decorators + lookup
 ├── models/           Pydantic v2 pipeline schema
 ├── serializers/      json, csv, xml, avro, parquet, msgpack, protobuf
-├── transforms/       20 transforms
+├── transforms/       21 transforms
 ├── connectors/       23 source + 19 sink connectors
 ├── cluster/          NodeRegistry + ClusterCoordinator (v0.8.0)
 ├── persistence/      TramDB (SQLAlchemy Core) + ProcessedFileTracker
@@ -437,7 +437,7 @@ helm/                 Helm chart (StatefulSet, TLS, apiKey, cluster mode, UI ser
 |-----|----------|
 | [`docs/architecture.md`](docs/architecture.md) | Design, data flow, execution modes, cluster |
 | [`docs/connectors.md`](docs/connectors.md) | All connectors, SNMP MIB, SNMPv3, retry/circuit-breaker |
-| [`docs/transforms.md`](docs/transforms.md) | All 20 transforms + expression syntax |
+| [`docs/transforms.md`](docs/transforms.md) | All 21 transforms + expression syntax |
 | [`docs/api.md`](docs/api.md) | REST API reference, auth, rate limiting |
 | [`docs/deployment.md`](docs/deployment.md) | Docker, k8s, TLS, OTel, env vars |
 

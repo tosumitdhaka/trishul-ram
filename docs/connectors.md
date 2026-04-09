@@ -1464,6 +1464,38 @@ A reference schema for Ericsson 3GPP TS 32.401 PM statsfiles is shipped at `docs
 
 ---
 
+### pm_xml
+
+3GPP PM XML (Nokia NCOM / 3GPP TS 32.432 measData) deserializer. Produces one flat record per `<measValue>` element. Auto-closes truncated files. Requires `pip install defusedxml`.
+
+Deserialize only (`serializer_in`).
+
+| Parameter | Default | Description |
+|---|---|---|
+| `encoding` | `utf-8` | File encoding |
+| `add_managed_element` | `true` | Include `managed_element` field (localDn from `<managedElement>`) |
+| `add_duration` | `false` | Include `duration` field (granPeriod duration attribute) |
+| `numeric_values` | `true` | Cast counter values to `float` where possible; keep as string otherwise |
+
+Each output record contains:
+- `end_time` — `granPeriod endTime`
+- `meas_info_id` — `measInfo measInfoId`
+- `meas_obj_ldn` — `measValue measObjLdn`
+- `managed_element` — `managedElement localDn` (if `add_managed_element: true`)
+- one field per `<measType>` counter
+
+```yaml
+serializer_in:
+  type: pm_xml
+  add_managed_element: true
+  numeric_values: true
+
+serializer_out:
+  type: csv
+```
+
+---
+
 ### parquet
 
 Apache Parquet columnar format. Best for S3/GCS batch archival. Requires `pip install tram[parquet]`.

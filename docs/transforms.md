@@ -292,6 +292,38 @@ Lift a nested dict field's keys to the top level.
 
 ---
 
+## melt
+
+Pivot a dict-valued field into one record per key/value pair (wide → long format). Useful for producing time-series rows from wide SNMP/telemetry records.
+
+```yaml
+- type: melt
+  value_field: _metrics          # required — dict field to pivot
+  label_fields: [_labels]        # optional — dict fields to unnest as label columns
+  metric_name_col: metric_name   # default
+  metric_value_col: metric_value # default
+  drop_source: true              # default — remove value_field and label_fields
+  include_only: []               # if set, only melt these keys
+  exclude: []                    # keys to skip
+```
+
+**Example:**
+
+Input:
+```json
+{"_metrics": {"ifInOctets": 1000, "ifOutOctets": 2000}, "_labels": {"ifIndex": "1", "ifDescr": "lo"}, "_polled_at": "2026-04-09T10:00:00Z"}
+```
+
+Output (2 records):
+```json
+{"ifIndex": "1", "ifDescr": "lo", "metric_name": "ifInOctets",  "metric_value": 1000, "_polled_at": "..."}
+{"ifIndex": "1", "ifDescr": "lo", "metric_name": "ifOutOctets", "metric_value": 2000, "_polled_at": "..."}
+```
+
+If `value_field` is missing or not a dict, the record passes through unchanged.
+
+---
+
 ## Transform Ordering Tips
 
 1. **rename** early — rename before other transforms reference field names

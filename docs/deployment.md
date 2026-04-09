@@ -36,7 +36,7 @@ All configuration is via environment variables (12-factor).
 | `TRAM_CLUSTER_ENABLED` | `false` | Enable cluster mode (requires external DB) |
 | `TRAM_HEARTBEAT_SECONDS` | `10` | Seconds between node heartbeats in cluster mode |
 | `TRAM_NODE_TTL_SECONDS` | `30` | Seconds before a silent node is marked dead |
-| `TRAM_PIPELINE_SYNC_INTERVAL` | `30` | Seconds between DB polls for API-registered pipelines (v1.1.2); all cluster pods converge within this interval when a pipeline is added or deleted via the API |
+| `TRAM_PIPELINE_SYNC_INTERVAL` | `10` | Seconds between DB polls for API-registered pipelines (v1.1.2); all cluster pods converge within this interval when a pipeline is added or deleted via the API |
 | `TRAM_API_KEY` | _(empty)_ | API key for request authentication; empty = auth disabled |
 | `TRAM_AUTH_USERS` | _(empty)_ | Comma-separated `user:password` pairs for browser UI login (v1.0.8); issues 8-hour HMAC session tokens; coexists with `TRAM_API_KEY` |
 | `TRAM_AUTH_SECRET` | _(random)_ | Shared HMAC signing secret for session tokens (v1.0.8); **required in cluster mode** — without a shared secret each pod signs tokens independently and cross-pod requests return 401 |

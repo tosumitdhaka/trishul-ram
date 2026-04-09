@@ -189,10 +189,32 @@ def _create_tables(engine: Engine) -> None:
         _add_column_if_missing(conn, dialect, "run_history", "dlq_count", "INTEGER NOT NULL DEFAULT 0")
         # v1.1.1: per-record error strings
         _add_column_if_missing(conn, dialect, "run_history", "errors_json", "TEXT")
-        # v1.1.4: pause/resume support
+        # v1.1.4: pause/resume support (kept for migration; superseded by 'stopped' in v1.5.0)
         _add_column_if_missing(conn, dialect, "registered_pipelines", "paused", "INTEGER NOT NULL DEFAULT 0")
         # v1.1.5: track whether pipeline was last saved by disk seed or API/UI
         _add_column_if_missing(conn, dialect, "registered_pipelines", "source", "TEXT NOT NULL DEFAULT 'api'")
+        # v1.5.0: PipelineController — sticky ownership + unified state machine
+        # 'stopped': user explicitly stopped this pipeline; sync/rebalance must NOT restart it
+        #            replaces 'paused' (same semantics, clearer name)
+        _add_column_if_missing(conn, dialect, "registered_pipelines", "stopped", "INTEGER NOT NULL DEFAULT 0")
+        # 'owner_node': which pod currently owns (schedules) this pipeline
+        #               empty string = unassigned
+        _add_column_if_missing(conn, dialect, "registered_pipelines", "owner_node", "TEXT NOT NULL DEFAULT ''")
+        # 'runtime_status': authoritative status written by owning pod, readable by all pods
+        #                   values: scheduled | running | stopped | error
+        _add_column_if_missing(conn, dialect, "registered_pipelines", "runtime_status", "TEXT NOT NULL DEFAULT 'stopped'")
+        # 'status_updated': when runtime_status was last written (stale-run detection)
+        _add_column_if_missing(conn, dialect, "registered_pipelines", "status_updated", "TEXT")
+        # 'status_node': which node last wrote runtime_status (stale-run detection)
+        _add_column_if_missing(conn, dialect, "registered_pipelines", "status_node", "TEXT NOT NULL DEFAULT ''")
+
+        # v1.5.0 data migration: copy paused=1 → stopped=1 for existing rows
+        try:
+            conn.execute(text(
+                "UPDATE registered_pipelines SET stopped = 1 WHERE paused = 1 AND stopped = 0"
+            ))
+        except Exception:
+            pass  # paused column may not exist on fresh DBs
 
 
 # ── TramDB ────────────────────────────────────────────────────────────────────
@@ -667,39 +689,212 @@ class TramDB:
     # ── Registered pipelines (v1.1.2) ─────────────────────────────────────
 
     def pause_pipeline(self, name: str) -> None:
-        """Mark a pipeline as paused (survives pod restarts)."""
-        now = datetime.now(UTC).isoformat()
-        with self._engine.begin() as conn:
-            conn.execute(
-                text("UPDATE registered_pipelines SET paused = 1, updated_at = :now WHERE name = :name"),
-                {"now": now, "name": name},
-            )
+        """Mark a pipeline as paused (legacy — maps to stop_pipeline in v1.5.0)."""
+        self.stop_pipeline(name)
 
     def resume_pipeline(self, name: str) -> None:
-        """Clear the paused flag for a pipeline."""
+        """Clear the paused flag (legacy — maps to start_pipeline in v1.5.0)."""
+        self.start_pipeline_flag(name)
+
+    def is_pipeline_paused(self, name: str) -> bool:
+        """Return True if the pipeline is stopped (legacy alias for is_pipeline_stopped)."""
+        return self.is_pipeline_stopped(name)
+
+    def get_paused_pipeline_names(self) -> list[str]:
+        """Return names of stopped pipelines (legacy alias for get_stopped_pipeline_names)."""
+        return self.get_stopped_pipeline_names()
+
+    # ── v1.5.0: stopped flag (replaces paused) ────────────────────────────
+
+    def stop_pipeline(self, name: str) -> None:
+        """Set stopped=1: pipeline will not be auto-restarted by sync or rebalance."""
         now = datetime.now(UTC).isoformat()
         with self._engine.begin() as conn:
             conn.execute(
-                text("UPDATE registered_pipelines SET paused = 0, updated_at = :now WHERE name = :name"),
+                text("UPDATE registered_pipelines SET stopped = 1, updated_at = :now WHERE name = :name"),
                 {"now": now, "name": name},
             )
 
-    def is_pipeline_paused(self, name: str) -> bool:
-        """Return True if the pipeline is currently paused."""
+    def start_pipeline_flag(self, name: str) -> None:
+        """Clear stopped=0: pipeline is free to be scheduled again."""
+        now = datetime.now(UTC).isoformat()
+        with self._engine.begin() as conn:
+            conn.execute(
+                text("UPDATE registered_pipelines SET stopped = 0, updated_at = :now WHERE name = :name"),
+                {"now": now, "name": name},
+            )
+
+    def is_pipeline_stopped(self, name: str) -> bool:
+        """Return True if the pipeline has been explicitly stopped by the user."""
         with self._engine.connect() as conn:
             row = conn.execute(
-                text("SELECT paused FROM registered_pipelines WHERE name = :name AND deleted = 0"),
+                text("SELECT stopped FROM registered_pipelines WHERE name = :name AND deleted = 0"),
                 {"name": name},
             ).fetchone()
         return bool(row[0]) if row else False
 
-    def get_paused_pipeline_names(self) -> list[str]:
-        """Return names of non-deleted pipelines that are paused."""
+    def get_stopped_pipeline_names(self) -> list[str]:
+        """Return names of non-deleted pipelines that are explicitly stopped."""
         with self._engine.connect() as conn:
             rows = conn.execute(
-                text("SELECT name FROM registered_pipelines WHERE deleted = 0 AND paused = 1")
+                text("SELECT name FROM registered_pipelines WHERE deleted = 0 AND stopped = 1")
             ).fetchall()
         return [r[0] for r in rows]
+
+    # ── v1.5.0: ownership ─────────────────────────────────────────────────
+
+    def set_pipeline_owner(self, name: str, owner_node: str) -> None:
+        """Assign a pipeline to a node. Empty string = unassigned."""
+        now = datetime.now(UTC).isoformat()
+        with self._engine.begin() as conn:
+            conn.execute(
+                text("UPDATE registered_pipelines SET owner_node = :node, updated_at = :now WHERE name = :name"),
+                {"node": owner_node, "now": now, "name": name},
+            )
+
+    def get_pipeline_owner(self, name: str) -> str:
+        """Return the owner_node for a pipeline, or empty string if unassigned/not found."""
+        with self._engine.connect() as conn:
+            row = conn.execute(
+                text("SELECT owner_node FROM registered_pipelines WHERE name = :name AND deleted = 0"),
+                {"name": name},
+            ).fetchone()
+        return row[0] if row else ""
+
+    def get_pipelines_by_owner(self, owner_node: str) -> list[str]:
+        """Return names of all non-deleted pipelines owned by a specific node."""
+        with self._engine.connect() as conn:
+            rows = conn.execute(
+                text("SELECT name FROM registered_pipelines WHERE owner_node = :node AND deleted = 0"),
+                {"node": owner_node},
+            ).fetchall()
+        return [r[0] for r in rows]
+
+    def get_pipeline_counts_by_node(self) -> dict[str, int]:
+        """Return {owner_node: pipeline_count} for all non-deleted, non-stopped pipelines."""
+        with self._engine.connect() as conn:
+            rows = conn.execute(
+                text("""
+                    SELECT owner_node, COUNT(*) as cnt
+                    FROM registered_pipelines
+                    WHERE deleted = 0 AND stopped = 0 AND owner_node != ''
+                    GROUP BY owner_node
+                """)
+            ).fetchall()
+        return {r[0]: r[1] for r in rows}
+
+    def claim_orphaned_pipelines(self, dead_node: str, new_owner: str) -> list[str]:
+        """Reassign all pipelines owned by dead_node to new_owner in one transaction.
+
+        Returns the list of pipeline names that were reassigned.
+        """
+        now = datetime.now(UTC).isoformat()
+        with self._engine.begin() as conn:
+            rows = conn.execute(
+                text("SELECT name FROM registered_pipelines WHERE owner_node = :dead AND deleted = 0"),
+                {"dead": dead_node},
+            ).fetchall()
+            names = [r[0] for r in rows]
+            if names:
+                conn.execute(
+                    text("""
+                        UPDATE registered_pipelines
+                           SET owner_node = :new, updated_at = :now
+                         WHERE owner_node = :dead AND deleted = 0
+                    """),
+                    {"new": new_owner, "dead": dead_node, "now": now},
+                )
+        return names
+
+    # ── v1.5.0: runtime status ────────────────────────────────────────────
+
+    def set_runtime_status(self, name: str, status: str, node_id: str) -> None:
+        """Write runtime_status for a pipeline (called by owning pod on every transition)."""
+        now = datetime.now(UTC).isoformat()
+        with self._engine.begin() as conn:
+            conn.execute(
+                text("""
+                    UPDATE registered_pipelines
+                       SET runtime_status = :status,
+                           status_node    = :node,
+                           status_updated = :now,
+                           updated_at     = :now
+                     WHERE name = :name
+                """),
+                {"status": status, "node": node_id, "now": now, "name": name},
+            )
+
+    def get_pipeline_runtime(self, name: str) -> dict | None:
+        """Return runtime fields for a pipeline: owner_node, runtime_status, status_node,
+        status_updated, stopped. Returns None if pipeline not found."""
+        with self._engine.connect() as conn:
+            row = conn.execute(
+                text("""
+                    SELECT owner_node, runtime_status, status_node, status_updated, stopped
+                    FROM registered_pipelines
+                    WHERE name = :name AND deleted = 0
+                """),
+                {"name": name},
+            ).fetchone()
+        if not row:
+            return None
+        return {
+            "owner_node":     row[0],
+            "runtime_status": row[1],
+            "status_node":    row[2],
+            "status_updated": datetime.fromisoformat(row[3]) if row[3] else None,
+            "stopped":        bool(row[4]),
+        }
+
+    def claim_run(self, name: str, node_id: str) -> bool:
+        """Atomically mark a pipeline as running for node_id.
+
+        Returns True if this node successfully claimed the run (rowcount == 1).
+        Returns False if another pod is already running it (rowcount == 0).
+
+        Uses a compare-and-swap: only succeeds when runtime_status != 'running',
+        preventing two pods from executing the same pipeline simultaneously during
+        a rebalance window.
+        """
+        now = datetime.now(UTC).isoformat()
+        with self._engine.begin() as conn:
+            result = conn.execute(
+                text("""
+                    UPDATE registered_pipelines
+                       SET runtime_status = 'running',
+                           status_node    = :node,
+                           status_updated = :now,
+                           updated_at     = :now
+                     WHERE name           = :name
+                       AND runtime_status != 'running'
+                """),
+                {"node": node_id, "now": now, "name": name},
+            )
+        return result.rowcount == 1
+
+    def get_all_pipeline_runtime(self) -> list[dict]:
+        """Return runtime fields for all non-deleted pipelines (used at startup)."""
+        with self._engine.connect() as conn:
+            rows = conn.execute(
+                text("""
+                    SELECT name, owner_node, runtime_status, status_node,
+                           status_updated, stopped
+                    FROM registered_pipelines
+                    WHERE deleted = 0
+                    ORDER BY name
+                """)
+            ).fetchall()
+        return [
+            {
+                "name":           r[0],
+                "owner_node":     r[1],
+                "runtime_status": r[2],
+                "status_node":    r[3],
+                "status_updated": datetime.fromisoformat(r[4]) if r[4] else None,
+                "stopped":        bool(r[5]),
+            }
+            for r in rows
+        ]
 
     def save_pipeline(self, name: str, yaml_text: str, source: str = "api") -> None:
         """Upsert a pipeline YAML into the shared registry (marks deleted=False).

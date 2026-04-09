@@ -121,58 +121,38 @@ function renderRuns(runs) {
 function wireActions(pipeline) {
   window._detailEdit = () => { window._editorPipeline = _name; navigate('editor') }
   window._detailRefreshRuns = async () => { try { await reloadRuns() } catch (e) { toast(e.message, 'error') } }
-  const btn      = document.getElementById('detail-run-btn')
-  const pauseBtn = document.getElementById('detail-pause-btn')
+  const btn     = document.getElementById('detail-run-btn')
+  const stopBtn = document.getElementById('detail-pause-btn')  // element kept, repurposed as Stop
   if (!btn) return
-  const isRunning = pipeline.status === 'running'
-  const isPaused  = pipeline.status === 'paused'
-  const isStream  = pipeline.schedule_type === 'stream'
+  const isActive = pipeline.status === 'running' || pipeline.status === 'scheduled'
+  const isManual = pipeline.schedule_type === 'manual'
 
-  // Configure run/stop button
-  if (isRunning) {
+  // Primary action button
+  if (isActive) {
     btn.innerHTML = '<i class="bi bi-stop-fill me-1"></i>Stop'
     btn.className = 'btn btn-sm btn-danger'
     btn.onclick = () => window._detailStop?.()
-  } else if (isPaused) {
-    btn.innerHTML = '<i class="bi bi-play-fill me-1"></i>Resume'
-    btn.className = 'btn btn-sm btn-primary'
-    btn.onclick = () => window._detailResume?.()
   } else {
-    btn.innerHTML = `<i class="bi bi-play-fill me-1"></i>${isStream ? 'Start' : 'Run Now'}`
+    btn.innerHTML = `<i class="bi bi-play-fill me-1"></i>${isManual ? 'Run Now' : 'Start'}`
     btn.className = 'btn btn-sm btn-primary'
     btn.onclick = () => window._detailRun?.()
   }
 
-  // Configure pause button — only visible when not already paused or running
-  if (pauseBtn) {
-    if (isPaused || isRunning) {
-      pauseBtn.setAttribute('hidden', '')
-    } else {
-      pauseBtn.removeAttribute('hidden')
-      pauseBtn.onclick = () => window._detailPause?.()
-    }
+  // Secondary stop button (hidden — only relevant when scheduled and we want a dedicated stop button)
+  if (stopBtn) {
+    stopBtn.setAttribute('hidden', '')
   }
 
   window._detailRun = async () => {
     try {
-      if (isStream) { await api.pipelines.start(_name); toast(`Started ${_name}`) }
-      else          { await api.pipelines.run(_name);   toast(`Triggered ${_name}`) }
+      if (isManual) { await api.pipelines.run(_name);   toast(`Triggered ${_name}`) }
+      else          { await api.pipelines.start(_name); toast(`Started ${_name}`) }
       setTimeout(() => init(), 800)
     } catch (e) { toast(e.message, 'error') }
   }
 
   window._detailStop = async () => {
     try { await api.pipelines.stop(_name); toast(`Stopped ${_name}`); setTimeout(() => init(), 800) }
-    catch (e) { toast(e.message, 'error') }
-  }
-
-  window._detailPause = async () => {
-    try { await api.pipelines.pause(_name); toast(`Paused ${_name}`); setTimeout(() => init(), 800) }
-    catch (e) { toast(e.message, 'error') }
-  }
-
-  window._detailResume = async () => {
-    try { await api.pipelines.resume(_name); toast(`Resumed ${_name}`); setTimeout(() => init(), 800) }
     catch (e) { toast(e.message, 'error') }
   }
 

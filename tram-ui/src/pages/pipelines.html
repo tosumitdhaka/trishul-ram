@@ -2,7 +2,7 @@
   <input class="form-control form-control-sm" style="width:220px" id="pl-search" placeholder="Search pipelines…" oninput="window._plFilter?.()"/>
   <select class="form-select form-select-sm" style="width:130px" id="pl-status" onchange="window._plFilter?.()">
     <option value="">All status</option>
-    <option>running</option><option>stopped</option><option>error</option><option>disabled</option>
+    <option>running</option><option>scheduled</option><option>stopped</option><option>error</option>
   </select>
   <select class="form-select form-select-sm" style="width:120px" id="pl-type" onchange="window._plFilter?.()">
     <option value="">All types</option>
@@ -14,7 +14,7 @@
       <i class="bi bi-arrow-clockwise" style="font-size:15px"></i>
     </button>
     <button class="btn-flat d-flex align-items-center gap-1" style="font-size:13px;color:#8b949e"
-            title="Reload pipelines (disk + DB sync)" onclick="window._plReload?.()">
+            title="Reload pipelines" onclick="window._plReload?.()">
       <i class="bi bi-arrow-repeat" style="font-size:15px"></i> Reload
     </button>
     <button class="btn btn-sm btn-secondary" title="Import pipeline YAML" onclick="document.getElementById('pl-import-input').click()">
