@@ -54,16 +54,30 @@ async def dry_run_pipeline(request: Request) -> dict:
 
 @router.get("")
 async def list_pipelines(request: Request) -> list[dict]:
-    """List all registered pipelines with their current status."""
+    """List all registered pipelines with their current status.
+
+    DB runtime_status is overlaid on each pipeline so all pods return a
+    consistent view regardless of which pod the load balancer routes to.
+    """
     manager = request.app.state.manager
-    return [state.to_dict() for state in manager.list_all()]
+    db = getattr(request.app.state, "db", None)
+    states = manager.list_all()
+    if db is not None:
+        runtime = {r["name"]: r["runtime_status"] for r in db.get_all_pipeline_runtime()}
+        result = []
+        for state in states:
+            d = state.to_dict()
+            if state.config.name in runtime:
+                d["status"] = runtime[state.config.name]
+            result.append(d)
+        return result
+    return [state.to_dict() for state in states]
 
 
 @router.post("", status_code=status.HTTP_201_CREATED)
 async def register_pipeline(request: Request) -> dict:
     """Register a new pipeline from YAML text in request body."""
-    manager = request.app.state.manager
-    scheduler = request.app.state.scheduler
+    controller = request.app.state.controller
 
     content_type = request.headers.get("content-type", "")
     if "yaml" in content_type or "text" in content_type or "plain" in content_type:
@@ -81,23 +95,9 @@ async def register_pipeline(request: Request) -> dict:
         raise HTTPException(status_code=400, detail=str(exc))
 
     try:
-        state = manager.register(config, yaml_text=yaml_text)
+        state = controller.register(config, yaml_text=yaml_text, source="api")
     except PipelineAlreadyExistsError as exc:
         raise HTTPException(status_code=409, detail=str(exc))
-
-    # Persist to shared DB so all cluster nodes can discover it
-    db = getattr(request.app.state, "db", None)
-    if db is not None:
-        try:
-            db.save_pipeline(config.name, yaml_text, source="api")
-        except Exception as exc:
-            logger.warning("Failed to persist pipeline to DB: %s", exc)
-
-    if config.enabled and config.schedule.type != "manual":
-        try:
-            scheduler.start_pipeline(config.name)
-        except Exception as exc:
-            logger.warning("Could not auto-start pipeline %s: %s", config.name, exc)
 
     return state.to_dict()
 
@@ -108,25 +108,26 @@ async def register_pipeline(request: Request) -> dict:
 @router.get("/{name}")
 async def get_pipeline(name: str, request: Request) -> dict:
     manager = request.app.state.manager
+    db = getattr(request.app.state, "db", None)
     try:
         state = manager.get(name)
     except PipelineNotFoundError as exc:
         raise HTTPException(status_code=404, detail=str(exc))
-    return state.to_detail_dict()
+    d = state.to_detail_dict()
+    if db is not None:
+        rt = db.get_pipeline_runtime(name)
+        if rt and rt.get("runtime_status"):
+            d["status"] = rt["runtime_status"]
+    return d
 
 
 @router.put("/{name}")
 async def update_pipeline(name: str, request: Request) -> dict:
-    """Update an existing pipeline from YAML text in request body.
-
-    Stops the pipeline if running, replaces the configuration, saves a new
-    version to history, then restarts if enabled.
-    """
-    manager = request.app.state.manager
-    scheduler = request.app.state.scheduler
+    """Update an existing pipeline YAML. Restarts if it was running/scheduled."""
+    controller = request.app.state.controller
 
     try:
-        state = manager.get(name)
+        controller.get(name)
     except PipelineNotFoundError as exc:
         raise HTTPException(status_code=404, detail=str(exc))
 
@@ -151,61 +152,27 @@ async def update_pipeline(name: str, request: Request) -> dict:
             detail=f"Pipeline name in YAML '{config.name}' does not match URL '{name}'",
         )
 
-    # Stop if running
-    if state.status == "running":
-        try:
-            scheduler.stop_pipeline(name)
-        except Exception as exc:
-            logger.warning("Error stopping pipeline before update: %s", exc)
-
-    # Deregister old config, register new one (preserves run history)
-    manager.deregister(name)
-    new_state = manager.register(config, yaml_text=yaml_text)
-
-    # Persist updated YAML to shared DB
-    db = getattr(request.app.state, "db", None)
-    if db is not None:
-        try:
-            db.save_pipeline(config.name, yaml_text, source="api")
-        except Exception as exc:
-            logger.warning("Failed to persist pipeline update to DB: %s", exc)
-
-    # Restart if enabled
-    if config.enabled and config.schedule.type != "manual":
-        try:
-            scheduler.start_pipeline(config.name)
-        except Exception as exc:
-            logger.warning("Could not restart pipeline after update: %s", exc)
+    try:
+        new_state = controller.update(name, yaml_text)
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=str(exc))
 
     return new_state.to_dict()
 
 
 @router.delete("/{name}", status_code=status.HTTP_204_NO_CONTENT)
 async def delete_pipeline(name: str, request: Request) -> Response:
-    manager = request.app.state.manager
-    scheduler = request.app.state.scheduler
+    controller = request.app.state.controller
 
     try:
-        state = manager.get(name)
+        controller.get(name)
     except PipelineNotFoundError as exc:
         raise HTTPException(status_code=404, detail=str(exc))
 
-    # Stop first
-    if state.status == "running":
-        try:
-            scheduler.stop_pipeline(name)
-        except Exception as exc:
-            logger.warning("Error stopping pipeline before delete: %s", exc)
-
-    manager.deregister(name)
-
-    # Soft-delete from shared DB so other nodes stop serving it
-    db = getattr(request.app.state, "db", None)
-    if db is not None:
-        try:
-            db.delete_pipeline(name)
-        except Exception as exc:
-            logger.warning("Failed to soft-delete pipeline from DB: %s", exc)
+    try:
+        controller.delete(name)
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=str(exc))
 
     return Response(status_code=204)
 
@@ -215,60 +182,27 @@ async def delete_pipeline(name: str, request: Request) -> Response:
 
 @router.post("/{name}/pause")
 async def pause_pipeline(name: str, request: Request) -> dict:
-    manager = request.app.state.manager
-    scheduler = request.app.state.scheduler
-
-    try:
-        manager.get(name)
-    except PipelineNotFoundError as exc:
-        raise HTTPException(status_code=404, detail=str(exc))
-
-    db = getattr(request.app.state, "db", None)
-    if db is None:
-        raise HTTPException(status_code=503, detail="Pause/resume requires a database — check TRAM_DB_URL")
-
-    try:
-        scheduler.pause_pipeline(name)
-    except Exception as exc:
-        raise HTTPException(status_code=500, detail=str(exc))
-
-    return {"name": name, "status": "paused"}
+    """Deprecated alias for /stop. Use POST /{name}/stop instead."""
+    return await stop_pipeline(name, request)
 
 
 @router.post("/{name}/resume")
 async def resume_pipeline(name: str, request: Request) -> dict:
-    manager = request.app.state.manager
-    scheduler = request.app.state.scheduler
-
-    try:
-        manager.get(name)
-    except PipelineNotFoundError as exc:
-        raise HTTPException(status_code=404, detail=str(exc))
-
-    db = getattr(request.app.state, "db", None)
-    if db is None:
-        raise HTTPException(status_code=503, detail="Pause/resume requires a database — check TRAM_DB_URL")
-
-    try:
-        scheduler.resume_pipeline(name)
-    except Exception as exc:
-        raise HTTPException(status_code=500, detail=str(exc))
-
-    return {"name": name, "status": "resumed"}
+    """Deprecated alias for /start. Use POST /{name}/start instead."""
+    return await start_pipeline(name, request)
 
 
 @router.post("/{name}/start")
 async def start_pipeline(name: str, request: Request) -> dict:
-    manager = request.app.state.manager
-    scheduler = request.app.state.scheduler
+    controller = request.app.state.controller
 
     try:
-        manager.get(name)
+        controller.get(name)
     except PipelineNotFoundError as exc:
         raise HTTPException(status_code=404, detail=str(exc))
 
     try:
-        scheduler.start_pipeline(name)
+        controller.start_pipeline(name)
     except Exception as exc:
         raise HTTPException(status_code=500, detail=str(exc))
 
@@ -277,16 +211,15 @@ async def start_pipeline(name: str, request: Request) -> dict:
 
 @router.post("/{name}/stop")
 async def stop_pipeline(name: str, request: Request) -> dict:
-    manager = request.app.state.manager
-    scheduler = request.app.state.scheduler
+    controller = request.app.state.controller
 
     try:
-        manager.get(name)
+        controller.get(name)
     except PipelineNotFoundError as exc:
         raise HTTPException(status_code=404, detail=str(exc))
 
     try:
-        scheduler.stop_pipeline(name)
+        controller.stop_pipeline(name)
     except Exception as exc:
         raise HTTPException(status_code=500, detail=str(exc))
 
@@ -295,19 +228,17 @@ async def stop_pipeline(name: str, request: Request) -> dict:
 
 @router.post("/{name}/run")
 async def trigger_run(name: str, request: Request) -> dict:
-    manager = request.app.state.manager
-    scheduler = request.app.state.scheduler
+    controller = request.app.state.controller
 
     try:
-        state = manager.get(name)
+        controller.get(name)
     except PipelineNotFoundError as exc:
         raise HTTPException(status_code=404, detail=str(exc))
 
-    if state.config.schedule.type == "stream":
-        raise HTTPException(status_code=400, detail="Cannot trigger a stream pipeline manually")
-
     try:
-        run_id = scheduler.trigger_run(name)
+        run_id = controller.trigger_run(name)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
     except Exception as exc:
         raise HTTPException(status_code=500, detail=str(exc))
 
@@ -319,22 +250,11 @@ async def trigger_run(name: str, request: Request) -> dict:
 
 @router.post("/reload")
 async def reload_pipelines(request: Request) -> dict:
-    """Re-scan pipeline_dir and reload all YAML files, then re-sync DB pipelines."""
-    manager = request.app.state.manager
-    scheduler = request.app.state.scheduler
+    """Re-scan pipeline_dir, seed to DB, then trigger sync loop immediately."""
+    controller = request.app.state.controller
     pipeline_dir = request.app.state.config.pipeline_dir
-
-    # Stop all running pipelines
-    for state in manager.list_all():
-        if state.status == "running":
-            try:
-                scheduler.stop_pipeline(state.config.name)
-            except Exception as exc:
-                logger.warning("Error stopping %s during reload: %s", state.config.name, exc)
-        manager.deregister(state.config.name)
-
-    # Seed disk pipelines to DB (skipping user-owned ones), then reload from DB
     db = getattr(request.app.state, "db", None)
+
     seeded = 0
     for config, yaml_text in scan_pipeline_dir(pipeline_dir):
         if db is not None:
@@ -344,19 +264,11 @@ async def reload_pipelines(request: Request) -> dict:
                 continue
             db.save_pipeline(config.name, yaml_text, source="disk")
             seeded += 1
-        else:
-            try:
-                manager.register(config, yaml_text=yaml_text)
-                if config.enabled and config.schedule.type != "manual":
-                    scheduler.start_pipeline(config.name)
-                seeded += 1
-            except Exception as exc:
-                logger.error("Failed to register pipeline %s: %s", config.name, exc)
 
-    # Load everything from DB (includes freshly seeded disk pipelines + API pipelines)
-    scheduler._load_from_db()
+    # Trigger an immediate sync to pick up newly seeded pipelines
+    controller._sync_from_db()
 
-    total = len(manager.list_all())
+    total = len(controller.list_all())
     return {"reloaded": seeded, "total": total}
 
 

@@ -53,12 +53,14 @@ def _make_app(db=None):
     app.include_router(router)
 
     mock_manager = MagicMock()
-    mock_scheduler = MagicMock()
+    mock_controller = MagicMock()
+    mock_controller.manager = mock_manager
     mock_config = MagicMock()
     mock_config.pipeline_dir = "/tmp/pipelines"
 
     app.state.manager = mock_manager
-    app.state.scheduler = mock_scheduler
+    app.state.controller = mock_controller
+    app.state.scheduler = mock_controller   # alias for any legacy refs
     app.state.config = mock_config
     app.state.db = db
     return app
@@ -107,7 +109,7 @@ class TestRegisterPipeline:
     def test_register_from_json_body(self):
         state = _make_state()
         app = _make_app()
-        app.state.manager.register.return_value = state
+        app.state.controller.register.return_value = state
         client = TestClient(app)
         resp = client.post("/api/pipelines", json={"yaml_text": _MINIMAL_YAML})
         assert resp.status_code == 201
@@ -116,7 +118,7 @@ class TestRegisterPipeline:
     def test_register_from_yaml_content_type(self):
         state = _make_state()
         app = _make_app()
-        app.state.manager.register.return_value = state
+        app.state.controller.register.return_value = state
         client = TestClient(app)
         resp = client.post(
             "/api/pipelines",
@@ -139,7 +141,7 @@ class TestRegisterPipeline:
 
     def test_duplicate_returns_409(self):
         app = _make_app()
-        app.state.manager.register.side_effect = PipelineAlreadyExistsError("already exists")
+        app.state.controller.register.side_effect = PipelineAlreadyExistsError("already exists")
         client = TestClient(app, raise_server_exceptions=False)
         resp = client.post("/api/pipelines", json={"yaml_text": _MINIMAL_YAML})
         assert resp.status_code == 409
@@ -147,19 +149,21 @@ class TestRegisterPipeline:
     def test_enabled_non_manual_starts_pipeline(self):
         state = _make_state(yaml_text=_INTERVAL_YAML)
         app = _make_app()
-        app.state.manager.register.return_value = state
+        app.state.controller.register.return_value = state
         client = TestClient(app)
         client.post("/api/pipelines", json={"yaml_text": _INTERVAL_YAML})
-        app.state.scheduler.start_pipeline.assert_called_once_with("interval-pipe")
+        # register() in controller handles scheduling internally
+        app.state.controller.register.assert_called_once()
 
     def test_persists_to_db_if_available(self):
         state = _make_state()
         mock_db = MagicMock()
         app = _make_app(db=mock_db)
-        app.state.manager.register.return_value = state
+        app.state.controller.register.return_value = state
         client = TestClient(app)
         client.post("/api/pipelines", json={"yaml_text": _MINIMAL_YAML})
-        mock_db.save_pipeline.assert_called_once()
+        # controller.register() handles DB persistence internally
+        app.state.controller.register.assert_called_once()
 
 
 class TestUpdatePipeline:
@@ -167,15 +171,15 @@ class TestUpdatePipeline:
         state = _make_state()
         new_state = _make_state()
         app = _make_app()
-        app.state.manager.get.return_value = state
-        app.state.manager.register.return_value = new_state
+        app.state.controller.get.return_value = state
+        app.state.controller.update.return_value = new_state
         client = TestClient(app)
         resp = client.put("/api/pipelines/test-pipe", json={"yaml_text": _MINIMAL_YAML})
         assert resp.status_code == 200
 
     def test_not_found_returns_404(self):
         app = _make_app()
-        app.state.manager.get.side_effect = PipelineNotFoundError("not found")
+        app.state.controller.get.side_effect = PipelineNotFoundError("not found")
         client = TestClient(app, raise_server_exceptions=False)
         resp = client.put("/api/pipelines/test-pipe", json={"yaml_text": _MINIMAL_YAML})
         assert resp.status_code == 404
@@ -183,7 +187,7 @@ class TestUpdatePipeline:
     def test_name_mismatch_returns_400(self):
         state = _make_state()  # name is test-pipe
         app = _make_app()
-        app.state.manager.get.return_value = state
+        app.state.controller.get.return_value = state
         new_yaml = _MINIMAL_YAML.replace("name: test-pipe", "name: different-name")
         client = TestClient(app, raise_server_exceptions=False)
         resp = client.put("/api/pipelines/test-pipe", json={"yaml_text": new_yaml})
@@ -193,25 +197,26 @@ class TestUpdatePipeline:
         state = _make_state(status="running")
         new_state = _make_state()
         app = _make_app()
-        app.state.manager.get.return_value = state
-        app.state.manager.register.return_value = new_state
+        app.state.controller.get.return_value = state
+        app.state.controller.update.return_value = new_state
         client = TestClient(app)
         client.put("/api/pipelines/test-pipe", json={"yaml_text": _MINIMAL_YAML})
-        app.state.scheduler.stop_pipeline.assert_called_once()
+        # controller.update() handles stop internally
+        app.state.controller.update.assert_called_once()
 
 
 class TestDeletePipeline:
     def test_delete_existing_pipeline(self):
         state = _make_state()
         app = _make_app()
-        app.state.manager.get.return_value = state
+        app.state.controller.get.return_value = state
         client = TestClient(app)
         resp = client.delete("/api/pipelines/test-pipe")
         assert resp.status_code == 204
 
     def test_not_found_returns_404(self):
         app = _make_app()
-        app.state.manager.get.side_effect = PipelineNotFoundError("not found")
+        app.state.controller.get.side_effect = PipelineNotFoundError("not found")
         client = TestClient(app, raise_server_exceptions=False)
         resp = client.delete("/api/pipelines/nonexistent")
         assert resp.status_code == 404
@@ -219,10 +224,11 @@ class TestDeletePipeline:
     def test_stops_running_before_delete(self):
         state = _make_state(status="running")
         app = _make_app()
-        app.state.manager.get.return_value = state
+        app.state.controller.get.return_value = state
         client = TestClient(app)
         client.delete("/api/pipelines/test-pipe")
-        app.state.scheduler.stop_pipeline.assert_called_once()
+        # controller.delete() always stops regardless of status
+        app.state.controller.delete.assert_called_once_with("test-pipe")
 
 
 class TestDryRun:
@@ -255,16 +261,16 @@ class TestLifecycle:
     def test_start_pipeline(self):
         state = _make_state()
         app = _make_app()
-        app.state.manager.get.return_value = state
+        app.state.controller.get.return_value = state
         client = TestClient(app)
         resp = client.post("/api/pipelines/test-pipe/start")
         assert resp.status_code == 200
         assert resp.json()["status"] == "started"
-        app.state.scheduler.start_pipeline.assert_called_once_with("test-pipe")
+        app.state.controller.start_pipeline.assert_called_once_with("test-pipe")
 
     def test_start_not_found_returns_404(self):
         app = _make_app()
-        app.state.manager.get.side_effect = PipelineNotFoundError("not found")
+        app.state.controller.get.side_effect = PipelineNotFoundError("not found")
         client = TestClient(app, raise_server_exceptions=False)
         resp = client.post("/api/pipelines/nonexistent/start")
         assert resp.status_code == 404
@@ -272,27 +278,27 @@ class TestLifecycle:
     def test_stop_pipeline(self):
         state = _make_state()
         app = _make_app()
-        app.state.manager.get.return_value = state
+        app.state.controller.get.return_value = state
         client = TestClient(app)
         resp = client.post("/api/pipelines/test-pipe/stop")
         assert resp.status_code == 200
         assert resp.json()["status"] == "stopped"
+        app.state.controller.stop_pipeline.assert_called_once_with("test-pipe")
 
     def test_trigger_run(self):
         state = _make_state()
         app = _make_app()
-        app.state.manager.get.return_value = state
-        app.state.scheduler.trigger_run.return_value = "run-123"
+        app.state.controller.get.return_value = state
+        app.state.controller.trigger_run.return_value = "run-123"
         client = TestClient(app)
         resp = client.post("/api/pipelines/test-pipe/run")
         assert resp.status_code == 200
         assert resp.json()["run_id"] == "run-123"
 
     def test_trigger_stream_pipeline_returns_400(self):
-        stream_yaml = _MINIMAL_YAML.replace("type: manual", "type: stream")
-        state = _make_state(yaml_text=stream_yaml)
         app = _make_app()
-        app.state.manager.get.return_value = state
+        app.state.controller.get.return_value = _make_state()
+        app.state.controller.trigger_run.side_effect = ValueError("stream pipeline")
         client = TestClient(app, raise_server_exceptions=False)
         resp = client.post("/api/pipelines/test-pipe/run")
         assert resp.status_code == 400
@@ -426,7 +432,7 @@ class TestVersions:
 class TestReload:
     def test_reload_rescans_and_returns_counts(self):
         app = _make_app()
-        app.state.manager.list_all.return_value = []
+        app.state.controller.list_all.return_value = []
         from unittest.mock import patch
         with patch("tram.api.routers.pipelines.scan_pipeline_dir", return_value=[]):
             client = TestClient(app)

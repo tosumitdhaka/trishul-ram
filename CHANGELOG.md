@@ -7,6 +7,21 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+### Added
+
+- **`melt` transform** — wide → long pivot: converts a dict-valued field into one record per key/value pair; supports `label_fields` unnesting, `include_only`/`exclude` key filtering, and configurable output column names (`metric_name_col`, `metric_value_col`)
+- **`pm_xml` serializer** — 3GPP PM XML (Nokia NCOM / TS 32.432 measData) deserializer; produces one flat record per `measValue`; auto-closes truncated files; configurable managed_element and numeric casting
+
+### Changed
+
+- **`PipelineController`** replaces split `TramScheduler` + `PipelineManager` lifecycle handling — single authority for all pipeline state transitions
+- **4-state machine** — `paused` state removed; states are `scheduled`, `running`, `stopped`, `error`
+- **`_sync_from_db()` stopped-flag detection** — picks up DB stopped/cleared flags even when pipeline YAML is unchanged (fixes pipelines not starting on non-owning pods)
+- **`_seen_nodes` tracking** — eliminates infinite cooling-period cycles when detecting newly joined cluster nodes
+- **DB `runtime_status` overlay** on `GET /api/pipelines` and `GET /api/pipelines/{name}` — all pods return a consistent status view regardless of which pod the load balancer routes to
+- **`TRAM_PIPELINE_SYNC_INTERVAL` default** — reduced from 30 s to 10 s for faster cluster convergence
+- **UI** — removed `paused`/`resume` buttons and badge; status filter updated (`scheduled`, `running`, `stopped`, `error`)
+
 ---
 
 ## [1.1.4] — 2026-04-08

@@ -27,9 +27,8 @@ from tram.api.routers import (
     webhooks,
 )
 from tram.core.config import AppConfig
+from tram.pipeline.controller import PipelineController
 from tram.pipeline.loader import scan_pipeline_dir
-from tram.pipeline.manager import PipelineManager
-from tram.scheduler.scheduler import TramScheduler
 
 logger = logging.getLogger(__name__)
 
@@ -38,14 +37,12 @@ logger = logging.getLogger(__name__)
 async def lifespan(app: FastAPI):
     """Application startup and shutdown."""
     config: AppConfig = app.state.config
-    manager: PipelineManager = app.state.manager
-    scheduler: TramScheduler = app.state.scheduler
+    controller: PipelineController = app.state.controller
     node_registry = getattr(app.state, "node_registry", None)
 
     # ── Startup ────────────────────────────────────────────────────────────
     logger.info("TRAM daemon starting", extra={"node_id": config.node_id})
 
-    # Init OpenTelemetry tracing if configured
     if config.otel_endpoint:
         try:
             from tram.telemetry.tracing import init_tracing
@@ -59,56 +56,38 @@ async def lifespan(app: FastAPI):
     import tram.serializers  # noqa: F401
     import tram.transforms  # noqa: F401
 
-    # Seed disk pipelines into DB, then load everything from DB.
-    # DB is the single source of truth — disk (ConfigMap) is read once at startup
-    # and seeded only when the pipeline is new or not yet user-modified (source='disk').
+    # Seed disk pipelines into DB (DB is single source of truth).
+    # Disk seed skips pipelines already owned by user (source='api').
     if config.reload_on_start:
         db = getattr(app.state, "db", None)
         for pipeline_config, yaml_text in scan_pipeline_dir(config.pipeline_dir):
             if db is not None:
                 existing_source = db.get_pipeline_source(pipeline_config.name)
                 if existing_source == "api":
-                    # User has edited this pipeline via UI/API — never overwrite
-                    logger.debug(
-                        "Disk seed skipped (user-owned pipeline)",
-                        extra={"pipeline": pipeline_config.name},
-                    )
+                    logger.debug("Disk seed skipped (user-owned pipeline)",
+                                 extra={"pipeline": pipeline_config.name})
                     continue
-                # New pipeline or still disk-owned — upsert with source='disk'
                 db.save_pipeline(pipeline_config.name, yaml_text, source="disk")
                 logger.info("Seeded pipeline to DB", extra={"pipeline": pipeline_config.name})
-            else:
-                # No DB configured — register directly (shouldn't happen in normal deployments)
-                try:
-                    manager.register(pipeline_config, yaml_text=yaml_text)
-                    logger.info("Loaded pipeline", extra={"pipeline": pipeline_config.name})
-                except Exception as exc:
-                    logger.error(
-                        "Failed to load pipeline",
-                        extra={"pipeline": pipeline_config.name, "error": str(exc)},
-                    )
 
-    # Start node registry (heartbeat) before scheduler so coordinator
-    # has an initial topology before the first pipeline is scheduled
+    # Start node registry before controller so coordinator has topology at boot
     if node_registry is not None:
         node_registry.start()
         logger.info("Cluster mode active", extra={"node_id": config.node_id})
 
-    # Start scheduler
-    scheduler.start()
+    # Start controller — loads pipelines from DB, schedules owned ones
+    controller.start()
 
-    # Start pipeline file watcher if enabled
     watcher = None
     if config.watch_pipelines:
         try:
             from tram.watcher.pipeline_watcher import PipelineWatcher
-            watcher = PipelineWatcher(pipeline_dir=config.pipeline_dir, manager=manager)
+            watcher = PipelineWatcher(pipeline_dir=config.pipeline_dir,
+                                      manager=controller.manager)
             watcher.start()
             logger.info("Pipeline file watcher started", extra={"dir": config.pipeline_dir})
         except ImportError:
-            logger.warning(
-                "Pipeline watcher requires watchdog — install with: pip install tram[watch]"
-            )
+            logger.warning("Pipeline watcher requires watchdog — pip install tram[watch]")
         except Exception as exc:
             logger.warning("Pipeline watcher failed to start: %s", exc)
 
@@ -119,17 +98,14 @@ async def lifespan(app: FastAPI):
     # ── Shutdown ───────────────────────────────────────────────────────────
     logger.info("TRAM daemon shutting down")
 
-    # Stop file watcher first
     if watcher is not None:
         watcher.stop()
 
-    scheduler.stop(timeout=config.shutdown_timeout)
+    controller.stop(timeout=config.shutdown_timeout)
 
-    # Stop node registry (deregisters from cluster) after scheduler drain
     if node_registry is not None:
         node_registry.stop()
 
-    # Close DB if present
     db = getattr(app.state, "db", None)
     if db is not None:
         db.close()
@@ -163,8 +139,6 @@ def create_app(config: AppConfig | None = None) -> FastAPI:
     if db is not None:
         from tram.persistence.file_tracker import ProcessedFileTracker
         file_tracker = ProcessedFileTracker(db=db)
-
-    manager = PipelineManager(db=db, alert_evaluator=alert_evaluator)
 
     # Cluster setup (only when enabled + external DB is configured)
     node_registry = None
@@ -200,14 +174,18 @@ def create_app(config: AppConfig | None = None) -> FastAPI:
                 node_registry = None
                 coordinator = None
 
-    scheduler = TramScheduler(
-        manager,
-        coordinator=coordinator,
-        rebalance_interval=config.heartbeat_seconds,
-        file_tracker=file_tracker,
+    controller = PipelineController(
         db=db,
+        coordinator=coordinator,
+        file_tracker=file_tracker,
+        node_id=config.node_id,
+        rebalance_interval=config.heartbeat_seconds,
         pipeline_sync_interval=config.pipeline_sync_interval,
     )
+    # Keep manager reference on controller's alert evaluator
+    controller.manager._alert_evaluator = alert_evaluator
+    # Convenience alias — routers that still reference app.state.manager continue to work
+    manager = controller.manager
 
     app = FastAPI(
         title="TRAM",
@@ -218,8 +196,9 @@ def create_app(config: AppConfig | None = None) -> FastAPI:
 
     # Store shared state
     app.state.config = config
-    app.state.manager = manager
-    app.state.scheduler = scheduler
+    app.state.controller = controller
+    app.state.manager = manager          # alias: controller.manager (routers use both)
+    app.state.scheduler = controller     # alias: routers that use app.state.scheduler still work
     app.state.db = db
     app.state.alert_evaluator = alert_evaluator
     app.state.node_registry = node_registry

@@ -461,5 +461,54 @@ breaking existing automations, then deprecated.
 
 ---
 
-*Created: 2026-04-09*
-*Status: Approved for implementation*
+---
+
+## 13. Implementation Status (post-v1.1.4)
+
+### What was implemented as designed
+
+- ✅ Phase 1 — DB schema: `stopped`, `owner_node`, `runtime_status`, `status_updated`, `status_node` columns
+- ✅ Phase 2 — `PipelineController` core: `_may_schedule()`, `_claim_run()`, fixed startup sequence
+- ✅ Phase 3 — Sticky ownership: `owner_node` in DB, `_rebalance()` Events A/B/C, `least_loaded_node()`
+- ✅ `pause`/`resume` → deprecated aliases for `stop`/`start`
+- ✅ UI updated: removed pause button, `scheduled` status added to filter, `paused` badge removed
+
+### Deviations from design
+
+**§6 Status visibility** — The design called for non-owning pods to cache `runtime_status` from
+DB and refresh on `_sync_loop` tick. Instead, a simpler approach was taken: `GET /api/pipelines`
+and `GET /api/pipelines/{name}` overlay DB `runtime_status` directly on API responses (one query
+per request). This is the "Option A" fix. It solves the flickering problem without changing the
+internal state model.
+
+**§11 `_sync_loop` interval** — Reduced default from 30s to 10s (`TRAM_PIPELINE_SYNC_INTERVAL`).
+
+### Bugs found during implementation (now fixed)
+
+**`_sync_from_db` skipped stopped-flag changes** — The sync loop called
+`continue` for any pipeline with unchanged YAML. When a user clicked Start (clearing the stopped
+flag), the owning pod never saw the change and never re-scheduled. Fixed: stopped-flag state
+is checked even for YAML-unchanged pipelines.
+
+**`_get_newly_joined_nodes` caused infinite cooling-period cycles** — After a cooling-period
+drain completed, the node was removed from `_node_join_times`. On the next rebalance tick
+it re-appeared as "newly joined", triggering another cooling period indefinitely. Fixed: added
+persistent `_seen_nodes` set; nodes are only removed from it when confirmed dead.
+
+### Known limitations (accepted for v1.1.4, resolved in v2.0.0)
+
+- DB `runtime_status` read on every list/get API call adds one round-trip per request.
+- The coordination machinery (`_rebalance_loop`, `_sync_loop`, `_seen_nodes`,
+  `ClusterCoordinator`, `claim_run()`) is inherently complex because N-equal-peer
+  distributed state has no clean solution at this abstraction level.
+- Status shown by `GET /api/pipelines` is DB-authoritative but internal scheduling
+  decisions still use in-memory status, which can diverge temporarily.
+
+**The permanent fix** is the Manager + Worker architecture described in
+`docs/roadmap_1.2.0.md`. The controller design in this document is considered
+feature-complete for v1.x.
+
+---
+
+*Created: 2026-04-09*  
+*Status: Implemented — v1.1.4 (with Option A status-visibility fix applied in v1.2.0 dev branch)*

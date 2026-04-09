@@ -9,7 +9,7 @@ title: TRAM Documentation
 
 Lightweight, container-native Python daemon for telecom data pipeline orchestration.
 
-**Version:** 1.1.3 | **Status:** Production-ready | **Python:** 3.11+
+**Version:** 1.1.4 | **Status:** Production-ready | **Python:** 3.11+
 
 ---
 
@@ -30,9 +30,14 @@ Lightweight, container-native Python daemon for telecom data pipeline orchestrat
 
 ### Features & Configuration
 
-- **[Connectors](connectors.md)** - All 24 sources and 20 sinks (SFTP, Kafka, REST, SNMP, etc.)
-- **[Transforms](transforms.md)** - All 20 transforms and expression syntax
+- **[Connectors](connectors.md)** - All sources and sinks (SFTP, Kafka, REST, SNMP, ClickHouse, etc.)
+- **[Transforms](transforms.md)** - All transforms and expression syntax
 - **[API Reference](api.md)** - REST API endpoints, authentication, rate limiting
+
+### Design & Roadmap
+
+- **[Pipeline Controller Design](pipeline-controller-design.md)** - PipelineController architecture, state machine, DB schema, cluster ownership (implemented in v1.1.4)
+- **[v1.2.0 Roadmap](roadmap_1.2.0.md)** - Manager + Worker architecture, feature backlog
 
 ---
 
@@ -58,7 +63,7 @@ open http://localhost:8765/ui/
 ### Docker
 
 ```bash
-docker pull ghcr.io/tosumitdhaka/trishul-ram:1.1.3
+docker pull ghcr.io/tosumitdhaka/trishul-ram:1.1.4
 docker compose up
 curl http://localhost:8765/api/ready
 ```
@@ -68,11 +73,11 @@ curl http://localhost:8765/api/ready
 ```bash
 # Standalone mode
 helm install tram oci://ghcr.io/tosumitdhaka/charts/trishul-ram \
-  --set image.tag=1.1.3
+  --set image.tag=1.1.4
 
 # Cluster mode (3 replicas + PostgreSQL)
 helm install tram oci://ghcr.io/tosumitdhaka/charts/trishul-ram \
-  --set image.tag=1.1.3 \
+  --set image.tag=1.1.4 \
   --set clusterMode.enabled=true \
   --set replicaCount=3
 ```
@@ -86,22 +91,14 @@ helm install tram oci://ghcr.io/tosumitdhaka/charts/trishul-ram \
 | **Sources** | 24 | sftp, kafka, rest, snmp_poll, snmp_trap, syslog, webhook, mqtt, amqp, nats, gnmi, sql, clickhouse, influxdb, corba, websocket, prometheus_rw |
 | **Sinks** | 20 | sftp, kafka, rest, opensearch, snmp_trap, mqtt, amqp, nats, sql, clickhouse, influxdb, ves, websocket, elasticsearch |
 | **Serializers** | 12 | json, ndjson, csv, xml, avro, parquet, protobuf, msgpack, bytes, text, asn1, pm_xml |
-| **Transforms** | 20 | rename, cast, filter, aggregate, jmespath, flatten, explode, deduplicate, mask, validate, template, enrich |
-
----
-
-## Project Roadmaps
-
-- [v1.2.0 Roadmap](roadmap_1.2.0.md) - ClickHouse batching, UI enhancements
-- [v1.1.0 Planning](roadmap_1.1.0/) - Feature specifications (wizard, metrics, alerts)
-- [v1.1.0 Plan](v1.1.0-plan.md) - Original implementation plan
+| **Transforms** | 21 | rename, cast, filter, aggregate, jmespath, flatten, explode, melt, deduplicate, mask, validate, template, enrich |
 
 ---
 
 ## Key Features
 
 ### Pipeline Management
-- YAML-based pipeline definitions
+- YAML-based pipeline definitions with `${ENV_VAR}` substitution
 - Hot-reload via REST API or file watcher
 - Versioning and rollback support
 - Pipeline templates library
@@ -132,13 +129,14 @@ helm install tram oci://ghcr.io/tosumitdhaka/charts/trishul-ram \
 
 ### Cluster Mode
 - Multi-node StatefulSet deployment
-- Consistent hashing for pipeline distribution
-- Automatic rebalancing on node join/leave
+- `PipelineController` — single authority for all pipeline lifecycle operations
+- Sticky ownership per pipeline (`owner_node` in DB); rebalance only on node join/leave
+- DB-backed `runtime_status` — consistent status view across all pods
 - Shared PostgreSQL state
 
 ### Security
 - API key authentication
-- Browser session authentication (HMAC tokens)
+- Browser session authentication (HMAC tokens, shared secret via `tram-auth` K8s secret)
 - TLS/HTTPS support
 - Rate limiting per IP
 
@@ -165,13 +163,14 @@ Source → Deserialize → Transform → [per-sink routing] → Serialize → Si
 
 ```
 docs/
-├── index.md           # This page
-├── architecture.md    # System design and data flow
-├── api.md            # REST API reference
-├── connectors.md     # All sources and sinks
-├── deployment.md     # Docker, k8s, environment variables
-├── transforms.md     # Transform reference
-└── roadmap_*.md      # Version roadmaps
+├── index.md                      # This page
+├── architecture.md               # System design and data flow
+├── api.md                        # REST API reference
+├── connectors.md                 # All sources and sinks
+├── deployment.md                 # Docker, k8s, environment variables
+├── transforms.md                 # Transform reference
+├── pipeline-controller-design.md # PipelineController design (v1.1.4)
+└── roadmap_1.2.0.md              # v1.2.0 roadmap
 ```
 
 ---
@@ -188,13 +187,15 @@ docs/
 
 See [CHANGELOG.md](../CHANGELOG.md) for detailed release notes.
 
-**Current Release:** v1.1.3
-- Comprehensive documentation (CLAUDE.md, CHECKLIST.md)
-- Enhanced .env.example with all 50+ variables
-- PM XML serializer
-- 846 tests passing, 69% coverage
-- Zero lint errors
+**Current Release:** v1.1.4
+- `PipelineController` — unified pipeline lifecycle authority replacing split scheduler/manager
+- 4-state machine: `scheduled`, `running`, `stopped`, `error` (removed `paused`)
+- Sticky ownership + selective rebalance for cluster mode
+- `melt` transform — wide-to-long pivot for SNMP `_metrics`/`_labels`
+- Helm: auto-create `tram-auth` secret; `keys.secretName` defaults to empty
+- DB-backed `runtime_status` overlay on API responses (consistent UI across pods)
+- SNMP fixes: `yield_rows` overwrite bug, `ifPhysAddress` MAC formatting, `{timestamp}` token
 
 ---
 
-*Last updated: 2026-04-03*
+*Last updated: 2026-04-09*

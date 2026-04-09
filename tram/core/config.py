@@ -106,7 +106,7 @@ class AppConfig:
             ui_dir=os.environ.get("TRAM_UI_DIR", "/ui"),
             auth_users=os.environ.get("TRAM_AUTH_USERS", ""),
             templates_dir=os.environ.get("TRAM_TEMPLATES_DIR", "/tram-templates"),
-            pipeline_sync_interval=_env_int("TRAM_PIPELINE_SYNC_INTERVAL", 30),
+            pipeline_sync_interval=_env_int("TRAM_PIPELINE_SYNC_INTERVAL", 10),
         )
 
 
