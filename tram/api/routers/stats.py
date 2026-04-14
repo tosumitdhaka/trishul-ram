@@ -97,16 +97,16 @@ def _db_agg(db, since: datetime) -> dict:
             SELECT
                 COALESCE(SUM(records_in), 0),
                 COALESCE(SUM(records_out), 0),
-                SUM(CASE WHEN status IN ('error','failed') THEN 1 ELSE 0 END),
+                COALESCE(SUM(CASE WHEN status IN ('error','failed') THEN 1 ELSE 0 END), 0),
                 AVG(CASE
                     WHEN finished_at IS NOT NULL AND started_at IS NOT NULL
                     THEN {dur_expr} ELSE NULL END)
             FROM run_history WHERE finished_at >= :since
         """), {"since": since.isoformat()}).fetchone()
     return {
-        "records_in":    int(row[0]) if row else 0,
-        "records_out":   int(row[1]) if row else 0,
-        "errors":        int(row[2]) if row else 0,
+        "records_in":    int(row[0] or 0) if row else 0,
+        "records_out":   int(row[1] or 0) if row else 0,
+        "errors":        int(row[2] or 0) if row else 0,
         "avg_duration_s": round(row[3], 2) if row and row[3] is not None else None,
     }
 
