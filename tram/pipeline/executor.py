@@ -34,6 +34,10 @@ def _make_evaluator():
         })
         return EvalWithCompoundTypes, funcs
     except ImportError:
+        logger.warning(
+            "simpleeval is not installed — condition-based routing is disabled. "
+            "Install it with: pip install simpleeval"
+        )
         return None, None
 
 
@@ -90,28 +94,37 @@ class PipelineExecutor:
     def __init__(self, file_tracker: ProcessedFileTracker | None = None) -> None:
         self._last_refill: float = 0.0
         self._tokens: float = 0.0
+        self._rate_lock = threading.Lock()  # guards _tokens and _last_refill
         self._file_tracker = file_tracker
         # Circuit breaker state: {sink_key: (failure_count, open_until_monotonic)}
         self._cb_state: dict[str, tuple[int, float]] = {}
         self._cb_lock = threading.Lock()
 
-    # ── Rate limiting ──────────────────────────────────────────────────────
+    # ── Rate limiting ────────────────────────────────────────────────────────────
 
     def _rate_limit(self, rps: float) -> None:
-        """Token-bucket rate limiter. Blocks until a token is available."""
-        now = time.monotonic()
-        elapsed = now - self._last_refill
-        self._tokens = min(rps, self._tokens + elapsed * rps)
-        self._last_refill = now
-        if self._tokens >= 1.0:
-            self._tokens -= 1.0
-        else:
-            sleep_time = (1.0 - self._tokens) / rps
-            time.sleep(sleep_time)
-            self._tokens = 0.0
-            self._last_refill = time.monotonic()
+        """Token-bucket rate limiter. Blocks until a token is available.
 
-    # ── Internal helpers ───────────────────────────────────────────────────
+        Thread-safe: _tokens and _last_refill are protected by _rate_lock.
+        Note: rate_limit_rps is approximate when thread_workers > 1 because
+        the sleep happens outside the lock to avoid holding it during sleep.
+        """
+        with self._rate_lock:
+            now = time.monotonic()
+            elapsed = now - self._last_refill
+            self._tokens = min(rps, self._tokens + elapsed * rps)
+            self._last_refill = now
+            if self._tokens >= 1.0:
+                self._tokens -= 1.0
+                sleep_time = 0.0
+            else:
+                sleep_time = (1.0 - self._tokens) / rps
+                self._tokens = 0.0
+                self._last_refill = time.monotonic()
+        if sleep_time > 0:
+            time.sleep(sleep_time)
+
+    # ── Internal helpers ─────────────────────────────────────────────────────
 
     def _build_source(self, config: PipelineConfig):
         src_cls = get_source(config.source.type)
@@ -171,6 +184,17 @@ class PipelineExecutor:
             transforms.append(t_cls(d))
         return transforms
 
+    @staticmethod
+    def _make_sink_cb_key(config: PipelineConfig, index: int) -> str:
+        """Stable circuit-breaker key that survives object re-creation.
+
+        Keyed by (pipeline_name, sink_type, sink_index) rather than
+        ``id(sink_instance)`` to prevent misidentification when a sink object
+        is garbage-collected and a new one lands at the same memory address.
+        """
+        sink_type = config.sinks[index].type if index < len(config.sinks) else "unknown"
+        return f"{config.name}:{sink_type}:{index}"
+
     def _process_chunk(
         self,
         raw: bytes,
@@ -184,6 +208,7 @@ class PipelineExecutor:
         rate_limit_rps: float | None = None,
         dlq_sink=None,
         parallel_sinks: bool = False,
+        sink_cb_keys: list[str] | None = None,
     ) -> bool:
         """Process one (raw, meta) chunk. Returns True on success.
 
@@ -206,7 +231,7 @@ class PipelineExecutor:
         t_start = time.monotonic()
 
         try:
-            # ── Parse ─────────────────────────────────────────────────────
+            # ── Parse ───────────────────────────────────────────────────────────
             try:
                 records = serializer_in.parse(raw)
             except Exception as exc:
@@ -222,7 +247,7 @@ class PipelineExecutor:
             ctx.inc_records_in(len(records))
             RECORDS_IN.labels(pipeline=ctx.pipeline_name).inc(len(records))
 
-            # ── Per-record global transforms ───────────────────────────────
+            # ── Per-record global transforms ─────────────────────────────────
             surviving_records = []
             for record in records:
                 try:
@@ -241,12 +266,12 @@ class PipelineExecutor:
                     ctx.record_error(str(exc))
             records = surviving_records
 
-            # ── Multi-sink routing with per-sink transforms ────────────────
-            wrote_any = False
+            # ── Multi-sink routing with per-sink transforms ───────────────────
+            # Use threading.Event so parallel sink threads can set it atomically.
+            wrote_any_event = threading.Event()
 
-            def _write_one_sink(sink_tuple, records_in):
+            def _write_one_sink(sink_tuple, records_in, sink_index):
                 """Process one sink entry. Returns True if write succeeded."""
-                nonlocal wrote_any
                 # Accept 3-tuple (legacy/test), 4-tuple, or 5-tuple (current with per-sink ser)
                 if len(sink_tuple) == 5:
                     sink_instance, condition, sink_transforms, sink_cfg, per_sink_ser = sink_tuple
@@ -294,9 +319,13 @@ class PipelineExecutor:
                 if rate_limit_rps is not None:
                     self._rate_limit(rate_limit_rps)
 
-                # Circuit breaker check
+                # Circuit breaker check — use stable string key, not id()
                 cb_threshold = getattr(sink_cfg, "circuit_breaker_threshold", 0)
-                sink_key = id(sink_instance)
+                sink_key = (
+                    sink_cb_keys[sink_index]
+                    if sink_cb_keys and sink_index < len(sink_cb_keys)
+                    else f"__dynamic:{sink_index}"
+                )
                 if cb_threshold > 0:
                     with self._cb_lock:
                         failures, open_until = self._cb_state.get(sink_key, (0, 0.0))
@@ -320,6 +349,7 @@ class PipelineExecutor:
                         if cb_threshold > 0:
                             with self._cb_lock:
                                 self._cb_state[sink_key] = (0, 0.0)
+                        wrote_any_event.set()
                         return True
                     except Exception as exc:
                         last_exc = exc
@@ -367,19 +397,20 @@ class PipelineExecutor:
 
             if parallel_sinks and len(sinks) > 1:
                 with ThreadPoolExecutor(max_workers=len(sinks)) as pool:
-                    futures = [pool.submit(_write_one_sink, s, records) for s in sinks]
+                    futures = [
+                        pool.submit(_write_one_sink, s, records, i)
+                        for i, s in enumerate(sinks)
+                    ]
                     for f in futures:
                         try:
-                            if f.result():
-                                wrote_any = True
+                            f.result()
                         except TramError:
                             raise
             else:
-                for sink_tuple in sinks:
-                    if _write_one_sink(sink_tuple, records):
-                        wrote_any = True
+                for i, sink_tuple in enumerate(sinks):
+                    _write_one_sink(sink_tuple, records, i)
 
-            if wrote_any:
+            if wrote_any_event.is_set():
                 ctx.inc_records_out(len(records))
                 RECORDS_OUT.labels(pipeline=ctx.pipeline_name).inc(len(records))
             else:
@@ -409,7 +440,7 @@ class PipelineExecutor:
             ctx.record_error(msg)
             return False
 
-    # ── Batch run ──────────────────────────────────────────────────────────
+    # ── Batch run ────────────────────────────────────────────────────────────
 
     def batch_run(self, config: PipelineConfig, run_id: str | None = None) -> RunResult:
         """Execute one discrete batch run."""
@@ -438,6 +469,8 @@ class PipelineExecutor:
         serializer_out = self._build_serializer_out(config)
         transforms = self._build_transforms(config)
         dlq_sink = self._build_dlq_sink(config)
+        # Pre-compute stable circuit-breaker keys for all sinks.
+        sink_cb_keys = [self._make_sink_cb_key(config, i) for i in range(len(sinks))]
 
         retry_count = config.retry_count if config.on_error == "retry" else 0
         retry_delay = config.retry_delay_seconds
@@ -446,7 +479,7 @@ class PipelineExecutor:
             try:
                 self._run_batch_chunks(
                     config, source, sinks, serializer_in, serializer_out,
-                    transforms, dlq_sink, ctx,
+                    transforms, dlq_sink, ctx, sink_cb_keys=sink_cb_keys,
                 )
 
                 result = RunResult.from_context(ctx, RunStatus.SUCCESS)
@@ -474,9 +507,17 @@ class PipelineExecutor:
                         },
                     )
                     time.sleep(retry_delay)
-                    # Reset counters for retry
+                    # Reset counters and rebuild ALL components for a clean retry.
+                    # Rebuilding only the source on retry would reuse a potentially
+                    # broken sink connection that caused the original failure.
                     ctx = PipelineRunContext(pipeline_name=config.name)
                     source = self._build_source(config)
+                    sinks = self._build_sinks(config)
+                    serializer_in = self._build_serializer_in(config)
+                    serializer_out = self._build_serializer_out(config)
+                    transforms = self._build_transforms(config)
+                    dlq_sink = self._build_dlq_sink(config)
+                    sink_cb_keys = [self._make_sink_cb_key(config, i) for i in range(len(sinks))]
                     continue
                 else:
                     result = RunResult.from_context(ctx, RunStatus.FAILED, error=str(exc))
@@ -498,6 +539,7 @@ class PipelineExecutor:
         transforms,
         dlq_sink,
         ctx: PipelineRunContext,
+        sink_cb_keys: list[str] | None = None,
     ) -> None:
         """Inner loop: read source chunks and process with optional thread pool."""
         batch_size = config.batch_size
@@ -515,7 +557,7 @@ class PipelineExecutor:
                         self._process_chunk,
                         raw, meta, serializer_in, transforms,
                         serializer_out, sinks, ctx, on_error,
-                        rate_limit_rps, dlq_sink, parallel_sinks,
+                        rate_limit_rps, dlq_sink, parallel_sinks, sink_cb_keys,
                     )
                     futures.append(fut)
                     # batch_size is checked after ctx.records_in is updated by workers
@@ -543,7 +585,7 @@ class PipelineExecutor:
                 self._process_chunk(
                     raw, meta, serializer_in, transforms,
                     serializer_out, sinks, ctx, on_error,
-                    rate_limit_rps, dlq_sink, parallel_sinks,
+                    rate_limit_rps, dlq_sink, parallel_sinks, sink_cb_keys,
                 )
                 if batch_size and ctx.records_in >= batch_size:
                     logger.info(
@@ -552,7 +594,7 @@ class PipelineExecutor:
                     )
                     break
 
-    # ── Stream run ─────────────────────────────────────────────────────────
+    # ── Stream run ────────────────────────────────────────────────────────────
 
     def stream_run(self, config: PipelineConfig, stop_event: threading.Event) -> None:
         """Run indefinitely until stop_event is set."""
@@ -564,6 +606,7 @@ class PipelineExecutor:
         serializer_out = self._build_serializer_out(config)
         transforms = self._build_transforms(config)
         dlq_sink = self._build_dlq_sink(config)
+        sink_cb_keys = [self._make_sink_cb_key(config, i) for i in range(len(sinks))]
 
         ctx = PipelineRunContext(pipeline_name=config.name)
 
@@ -585,6 +628,7 @@ class PipelineExecutor:
                 self._stream_run_threaded(
                     config, source, sinks, serializer_in, serializer_out,
                     transforms, dlq_sink, ctx, stop_event,
+                    sink_cb_keys=sink_cb_keys,
                 )
             else:
                 for raw, meta in source.read():
@@ -596,6 +640,7 @@ class PipelineExecutor:
                         serializer_out, sinks, ctx, config.on_error,
                         config.rate_limit_rps, dlq_sink,
                         getattr(config, "parallel_sinks", False),
+                        sink_cb_keys,
                     )
         except Exception as exc:
             logger.error(
@@ -626,6 +671,7 @@ class PipelineExecutor:
         dlq_sink,
         ctx: PipelineRunContext,
         stop_event: threading.Event,
+        sink_cb_keys: list[str] | None = None,
     ) -> None:
         """Stream mode with N worker threads. Producer reads; workers process."""
         # Bounded queue gives backpressure: producer blocks if workers are slow
@@ -644,6 +690,7 @@ class PipelineExecutor:
                         serializer_out, sinks, ctx, on_error,
                         config.rate_limit_rps, dlq_sink,
                         getattr(config, "parallel_sinks", False),
+                        sink_cb_keys,
                     )
                 except Exception as exc:
                     logger.error(
@@ -688,7 +735,7 @@ class PipelineExecutor:
                 except Exception:
                     pass
 
-    # ── Dry run ────────────────────────────────────────────────────────────
+    # ── Dry run ─────────────────────────────────────────────────────────────
 
     def dry_run(self, config: PipelineConfig) -> dict:
         """Validate pipeline wiring without performing any I/O."""
