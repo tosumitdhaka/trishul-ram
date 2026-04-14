@@ -9,37 +9,90 @@ import base64
 import hashlib
 import hmac
 import json
+import os as _os
 import secrets
 import time
 
 
+# ---------------------------------------------------------------------------
+# Password hashing — scrypt (OWASP recommended)
+# ---------------------------------------------------------------------------
+# Parameters: N=2^14 (16 384), r=8, p=1  → ~64 MB RAM, ~100 ms on modern HW.
+# Stored format: "scrypt$<hex-salt>$<hex-digest>"
+# Legacy SHA-256 hashes ("sha256$...") are still verifiable for migration.
+# ---------------------------------------------------------------------------
+
+_SCRYPT_N = 2 ** 14
+_SCRYPT_R = 8
+_SCRYPT_P = 1
+_SCRYPT_DKLEN = 32
+
+
 def hash_password(password: str) -> str:
-    """Return a salted SHA-256 hash string: ``sha256$<salt>$<hex>``."""
+    """Return a salted scrypt hash string: ``scrypt$<salt>$<hex>``."""
     salt = secrets.token_hex(16)
-    digest = hashlib.sha256(f"{salt}:{password}".encode()).hexdigest()
-    return f"sha256${salt}${digest}"
+    digest = hashlib.scrypt(
+        password.encode(),
+        salt=salt.encode(),
+        n=_SCRYPT_N,
+        r=_SCRYPT_R,
+        p=_SCRYPT_P,
+        dklen=_SCRYPT_DKLEN,
+    ).hex()
+    return f"scrypt${salt}${digest}"
 
 
 def verify_hashed_password(password: str, stored_hash: str) -> bool:
-    """Verify *password* against a hash produced by :func:`hash_password`."""
+    """Verify *password* against a hash produced by :func:`hash_password`.
+
+    Supports both the current ``scrypt`` scheme and the legacy ``sha256``
+    scheme so that existing stored hashes remain valid until rehashed.
+    """
     try:
         scheme, salt, digest = stored_hash.split("$", 2)
-        if scheme != "sha256":
-            return False
-        expected = hashlib.sha256(f"{salt}:{password}".encode()).hexdigest()
-        return hmac.compare_digest(expected, digest)
     except Exception:
         return False
 
+    if scheme == "scrypt":
+        try:
+            candidate = hashlib.scrypt(
+                password.encode(),
+                salt=salt.encode(),
+                n=_SCRYPT_N,
+                r=_SCRYPT_R,
+                p=_SCRYPT_P,
+                dklen=_SCRYPT_DKLEN,
+            ).hex()
+            return hmac.compare_digest(candidate, digest)
+        except Exception:
+            return False
+
+    if scheme == "sha256":
+        # Legacy path — still verifiable; rehash on next login recommended.
+        try:
+            expected = hashlib.sha256(f"{salt}:{password}".encode()).hexdigest()
+            return hmac.compare_digest(expected, digest)
+        except Exception:
+            return False
+
+    return False
+
+
+# ---------------------------------------------------------------------------
 # Signing secret — shared across cluster nodes via TRAM_AUTH_SECRET env var.
 # Falls back to a per-process random (tokens invalidated on restart) when unset.
-import os as _os  # noqa: E402
+# ---------------------------------------------------------------------------
 
 _SECRET = _os.environ.get("TRAM_AUTH_SECRET") or secrets.token_hex(32)
 
 
 def parse_users(raw: str) -> dict[str, str]:
-    """Parse TRAM_AUTH_USERS value: ``user1:pass1,user2:pass2``."""
+    """Parse TRAM_AUTH_USERS value: ``user1:pass1,user2:pass2``.
+
+    Values that are already hashed (``scrypt$...`` or ``sha256$...``) are
+    stored as-is.  Plain-text values are hashed with scrypt on first parse so
+    that the plaintext is never kept in memory beyond this call.
+    """
     users: dict[str, str] = {}
     for entry in raw.split(","):
         entry = entry.strip()
@@ -47,15 +100,24 @@ def parse_users(raw: str) -> dict[str, str]:
             u, p = entry.split(":", 1)
             u, p = u.strip(), p.strip()
             if u:
+                # Hash plain-text passwords immediately so they are never
+                # compared in plaintext again.  Pre-hashed values pass through.
+                if not (p.startswith("scrypt$") or p.startswith("sha256$")):
+                    p = hash_password(p)
                 users[u] = p
     return users
 
 
 def verify_password(username: str, password: str, users: dict[str, str]) -> bool:
+    """Verify *password* for *username* against the users dict.
+
+    All passwords stored in *users* are hashed (either scrypt or legacy sha256)
+    because :func:`parse_users` hashes plain-text values on load.
+    """
     stored = users.get(username)
     if stored is None:
         return False
-    return hmac.compare_digest(stored.encode(), password.encode())
+    return verify_hashed_password(password, stored)
 
 
 def create_token(username: str, ttl: int = 28800) -> str:

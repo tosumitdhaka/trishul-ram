@@ -26,7 +26,10 @@ class PipelineRunContext:
     """
 
     pipeline_name: str
-    run_id: str = field(default_factory=lambda: str(uuid.uuid4())[:8])
+    # 16 hex chars = 64 bits of entropy; birthday-paradox collision probability
+    # stays below 1e-9 even at 1 million runs.  (Previous 8-char / 32-bit value
+    # reached ~1% collision probability after ~65 000 runs.)
+    run_id: str = field(default_factory=lambda: str(uuid.uuid4()).replace("-", "")[:16])
     started_at: datetime = field(default_factory=lambda: datetime.now(UTC))
     records_in: int = 0
     records_out: int = 0
@@ -53,6 +56,11 @@ class PipelineRunContext:
             self.records_skipped += n
 
     def record_error(self, msg: str) -> None:
+        """Record a per-record error and increment records_skipped by 1.
+
+        Callers must NOT also call inc_records_skipped for the same record —
+        this method is the single authoritative path for error-induced skips.
+        """
         with self._lock:  # type: ignore[attr-defined]
             self.errors.append(msg)
             self.records_skipped += 1
