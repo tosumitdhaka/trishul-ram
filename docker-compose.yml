@@ -49,6 +49,69 @@ services:
     depends_on:
       - sftp
 
+  # ── Manager + Worker mode (v1.2.0) ────────────────────────────────────────
+  # docker compose --profile manager-worker up
+  # Manager owns scheduling, DB, and UI on port 8765.
+  # Workers execute pipelines and POST callbacks on port 8766.
+  tram-manager:
+    build: .
+    profiles: [manager-worker]
+    container_name: tram-manager
+    ports:
+      - "8765:8765"
+    volumes:
+      - ./pipelines:/pipelines
+      - tram_manager_data:/data
+    environment:
+      TRAM_MODE: manager
+      TRAM_PIPELINE_DIR: /pipelines
+      TRAM_DB_URL: sqlite:////data/tram.db
+      TRAM_PORT: 8765
+      TRAM_HOST: 0.0.0.0
+      TRAM_LOG_LEVEL: ${TRAM_LOG_LEVEL:-INFO}
+      TRAM_LOG_FORMAT: ${TRAM_LOG_FORMAT:-text}
+      TRAM_NODE_ID: tram-manager
+      TRAM_MANAGER_URL: http://tram-manager:8765
+      TRAM_WORKER_REPLICAS: "2"
+      TRAM_WORKER_SERVICE: tram-worker
+      TRAM_WORKER_NAMESPACE: compose
+      TRAM_WORKER_PORT: "8766"
+      TRAM_MIB_DIR: /data/mibs
+      TRAM_SCHEMA_DIR: /data/schemas
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8765/api/health')"]
+      interval: 30s
+      timeout: 10s
+      start_period: 20s
+      retries: 3
+    restart: unless-stopped
+
+  tram-worker:
+    build:
+      context: .
+      dockerfile: Dockerfile.worker
+    profiles: [manager-worker]
+    deploy:
+      replicas: 2
+    ports:
+      - "8766"
+    environment:
+      TRAM_MODE: worker
+      TRAM_MANAGER_URL: http://tram-manager:8765
+      TRAM_WORKER_PORT: "8766"
+      TRAM_LOG_LEVEL: ${TRAM_LOG_LEVEL:-INFO}
+      TRAM_LOG_FORMAT: ${TRAM_LOG_FORMAT:-text}
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8766/agent/health')"]
+      interval: 30s
+      timeout: 10s
+      start_period: 20s
+      retries: 3
+    restart: unless-stopped
+    depends_on:
+      tram-manager:
+        condition: service_healthy
+
   # ── SFTP server ────────────────────────────────────────────────────────────
   # atmoz/sftp is a lightweight OpenSSH server.
   # Credentials: tram / tram123
@@ -67,3 +130,4 @@ services:
 volumes:
   tram_data:
   tram_mibs:
+  tram_manager_data:

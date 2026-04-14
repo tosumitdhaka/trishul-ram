@@ -1,0 +1,23 @@
+{{- if .Values.manager.enabled }}
+## Headless Service for worker StatefulSet (v1.2.0 manager+worker mode).
+## Enables stable DNS for each worker pod:
+##   <release>-worker-0.<release>-worker.<namespace>.svc.cluster.local
+## The manager uses these names to build TRAM_WORKER_URLS from TRAM_WORKER_REPLICAS.
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "tram.fullname" . }}-worker
+  labels:
+    {{- include "tram.labels" . | nindent 4 }}
+    app.kubernetes.io/component: worker
+spec:
+  clusterIP: None
+  selector:
+    {{- include "tram.selectorLabels" . | nindent 4 }}
+    app.kubernetes.io/component: worker
+  ports:
+    - name: agent
+      port: {{ .Values.worker.port }}
+      targetPort: agent
+      protocol: TCP
+{{- end }}

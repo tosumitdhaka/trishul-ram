@@ -53,6 +53,12 @@ All configuration is via environment variables (12-factor).
 | `TRAM_SCHEMA_REGISTRY_USERNAME` | _(empty)_ | Basic-auth username for the external schema registry; used as default when not set in pipeline YAML (v1.0.4) |
 | `TRAM_SCHEMA_REGISTRY_PASSWORD` | _(empty)_ | Basic-auth password for the external schema registry; used as default when not set in pipeline YAML (v1.0.4) |
 | `TRAM_UI_DIR` | `/ui` | Directory containing built tram-ui static assets; set to empty string to disable the web UI without rebuilding the image (v1.0.8) |
+| `TRAM_MODE` | `standalone` | Deployment mode: `standalone` \| `manager` \| `worker` (v1.2.0) |
+| `TRAM_WORKER_REPLICAS` | `1` | Number of worker StatefulSet replicas (set on manager pod, v1.2.0) |
+| `TRAM_WORKER_SERVICE` | `tram-worker` | Headless Service name used to build worker DNS addresses (v1.2.0) |
+| `TRAM_WORKER_NAMESPACE` | `default` | Kubernetes namespace where worker pods run (v1.2.0) |
+| `TRAM_WORKER_PORT` | `8766` | Port that worker pods listen on (v1.2.0) |
+| `TRAM_MANAGER_URL` | _(empty)_ | Manager base URL used by worker pods for run-complete callbacks (v1.2.0) |
 
 ### Database backends (v0.7.0)
 
@@ -71,6 +77,78 @@ TRAM_DB_URL=mysql+pymysql://tram:secret@mysql:3306/tramdb
 ```
 
 Schema migrations run automatically at startup: `CREATE TABLE IF NOT EXISTS` + `ALTER TABLE ADD COLUMN` guards handle upgrades from v0.6.0 databases.
+
+## Manager + Worker Mode (v1.2.0)
+
+TRAM supports a split deployment where a single **manager** pod owns all scheduling, the database, and the UI, while one or more **worker** pods execute pipelines and return results.
+
+| Mode | `TRAM_MODE` | Role |
+|------|-------------|------|
+| Standalone | `standalone` (default) | All-in-one: scheduler + DB + executor + UI on one pod |
+| Manager | `manager` | Owns scheduling, DB writes, UI; dispatches run requests to workers |
+| Worker | `worker` | Stateless executor; no DB, no scheduler, no UI; listens on port 8766 |
+
+### Manager pod
+
+```bash
+TRAM_MODE=manager
+TRAM_WORKER_REPLICAS=3
+TRAM_WORKER_SERVICE=tram-worker        # headless Service name
+TRAM_WORKER_NAMESPACE=default
+TRAM_WORKER_PORT=8766
+TRAM_DB_URL=postgresql+psycopg2://tram:secret@postgres:5432/tramdb
+```
+
+The manager dispatches `POST /agent/run` to each worker using Kubernetes headless DNS:
+`<service>-N.<service>.<namespace>.svc.cluster.local:<port>`
+
+### Worker pod
+
+```bash
+TRAM_MODE=worker
+TRAM_MANAGER_URL=http://tram:8765      # manager Service DNS or ClusterIP
+```
+
+Workers only need `tram[worker,kafka,snmp,...]` — the `manager` extra (apscheduler, sqlalchemy) is not installed.
+
+### Helm: manager.enabled=true
+
+```yaml
+manager:
+  enabled: true
+  replicaCount: 1
+
+worker:
+  replicaCount: 3
+  resources:
+    requests: {cpu: 200m, memory: 256Mi}
+    limits:   {cpu: 1000m, memory: 1Gi}
+```
+
+This creates:
+- `manager-deployment.yaml` — Deployment for the manager pod
+- `worker-statefulset.yaml` — StatefulSet for worker pods
+- `worker-headless-service.yaml` — headless Service for stable DNS
+- `service-ui.yaml` — optional separate Service for the web UI
+
+### Worker image
+
+```dockerfile
+# Build with Dockerfile.worker (no UI assets, no manager deps)
+docker build -f Dockerfile.worker -t trishul-ram-worker:1.2.0 .
+```
+
+The worker image `EXPOSE`s port 8766, sets `ENV TRAM_MODE=worker`, and health-checks `/agent/health`.
+
+### Worker agent endpoints
+
+| Method | Path | Description |
+|--------|------|-------------|
+| `GET` | `/agent/health` | Worker liveness check |
+| `GET` | `/agent/status` | Lists active batch and stream runs |
+| `POST` | `/agent/run` | Start a pipeline run (batch or stream) |
+| `POST` | `/agent/stop` | Signal a stream run to stop |
+| `POST` | `/api/internal/run-complete` | _(manager)_ Receive run result callback from worker |
 
 ## API Key Authentication (v1.0.0)
 

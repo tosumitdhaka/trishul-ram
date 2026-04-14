@@ -98,10 +98,11 @@ RUN apt-get update && \
 #   otel      — opentelemetry-sdk + OTLP exporter; no-op fallback when absent,
 #               only needed when TRAM_OTEL_ENDPOINT is set (~15 MB)
 COPY --from=builder /build/dist/*.whl .
-# corba (omniORBpy) is excluded: not on PyPI; install python3-omniorb via apt in a custom layer
+# manager extra adds apscheduler + sqlalchemy + DB drivers (moved out of base deps in v1.2.0).
+# corba (omniORBpy) is excluded: not on PyPI; install python3-omniorb via apt in a custom layer.
 RUN whl=$(ls *.whl) && \
     pip install --no-cache-dir \
-        "${whl}[kafka,opensearch,snmp,avro,protobuf_ser,msgpack_ser,mqtt,amqp,nats,gnmi,jmespath,sql,influxdb,redis,websocket,elasticsearch,metrics,prometheus_rw,mib,watch,postgresql,mysql,asn1,ai-anthropic,ai-openai]" && \
+        "${whl}[manager,kafka,opensearch,snmp,avro,protobuf_ser,msgpack_ser,mqtt,amqp,nats,gnmi,jmespath,sql,influxdb,redis,websocket,elasticsearch,metrics,prometheus_rw,mib,watch,asn1,ai-anthropic,ai-openai]" && \
     rm *.whl
 
 # Copy compiled MIBs from mib-builder stage

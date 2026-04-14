@@ -1,0 +1,66 @@
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+.Python
+*.egg-info/
+dist/
+build/
+.eggs/
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+.coverage
+coverage.xml
+htmlcov/
+
+# Virtual environments
+.venv/
+venv/
+env/
+
+# Development / IDE
+.env
+.env.*
+!.env.example
+.idea/
+.vscode/
+*.swp
+*.swo
+.DS_Store
+
+# Tests
+tests/
+docs/
+
+# Git
+.git/
+.gitignore
+.github/
+
+# Node / UI build artefacts (only the built dist/ is needed)
+tram-ui/node_modules/
+tram-ui/src/
+tram-ui/public/
+tram-ui/index.html
+tram-ui/vite.config.js
+tram-ui/package.json
+tram-ui/package-lock.json
+
+# Helm chart (not needed in image)
+helm/
+
+# Docker files (not needed inside the image)
+Dockerfile*
+docker-compose*.yml
+.dockerignore
+
+# Pipelines / output (runtime artefacts)
+pipelines/
+output/
+
+# Misc
+*.md
+*.log
+*.tgz

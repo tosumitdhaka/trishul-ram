@@ -82,9 +82,9 @@ def test_websocket_sink_write_calls_asyncio_run():
 
     sink = WebSocketSink({"type": "websocket", "url": "ws://example.com"})
 
-    with patch("tram.connectors.websocket.sink.asyncio.run") as mock_run:
-        mock_run.return_value = None
-
+    # side_effect closes the coroutine so Python doesn't warn "never awaited"
+    with patch("tram.connectors.websocket.sink.asyncio.run",
+               side_effect=lambda coro: coro.close()) as mock_run:
         # Mock websockets to avoid import error
         mock_ws_module = MagicMock()
         with patch.dict(sys.modules, {"websockets": mock_ws_module}):

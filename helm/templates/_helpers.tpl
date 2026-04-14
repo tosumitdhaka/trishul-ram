@@ -52,6 +52,19 @@ app.kubernetes.io/instance: {{ .Release.Name }}
 {{- end }}
 
 {{/*
+Full image reference for worker pods.
+Falls back to the main image values when worker.image.repository is not set,
+so a single-image deployment (same image for manager and worker) requires
+no extra configuration.
+*/}}
+{{- define "tram.workerImage" -}}
+{{- $reg  := .Values.worker.image.registry    | default .Values.image.registry -}}
+{{- $repo := .Values.worker.image.repository  | default .Values.image.repository -}}
+{{- $tag  := .Values.worker.image.tag         | default .Values.image.tag -}}
+{{- if $reg }}{{ $reg }}/{{ end }}{{ $repo }}:{{ $tag }}
+{{- end }}
+
+{{/*
 Create the name of the service account to use.
 */}}
 {{- define "tram.serviceAccountName" -}}

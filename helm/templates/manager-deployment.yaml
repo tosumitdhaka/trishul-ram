@@ -1,19 +1,20 @@
-{{- if not .Values.manager.enabled }}
+{{- if .Values.manager.enabled }}
+## Manager Deployment (v1.2.0 manager+worker mode)
+## Owns all scheduling state. Dispatches pipeline runs to worker pods.
+## Created only when manager.enabled=true; the standalone StatefulSet is skipped.
 apiVersion: apps/v1
-kind: StatefulSet
+kind: Deployment
 metadata:
-  name: {{ include "tram.fullname" . }}
+  name: {{ include "tram.fullname" . }}-manager
   labels:
     {{- include "tram.labels" . | nindent 4 }}
+    app.kubernetes.io/component: manager
 spec:
-  replicas: {{ .Values.replicaCount }}
-  serviceName: {{ include "tram.fullname" . }}-headless
-  ## OrderedReady ensures tram-0 completes DB schema migration before tram-1 starts,
-  ## preventing ALTER TABLE deadlocks when multiple pods race on first-run migrations.
-  podManagementPolicy: OrderedReady
+  replicas: 1
   selector:
     matchLabels:
       {{- include "tram.selectorLabels" . | nindent 6 }}
+      app.kubernetes.io/component: manager
   template:
     metadata:
       annotations:
@@ -25,6 +26,7 @@ spec:
         {{- end }}
       labels:
         {{- include "tram.selectorLabels" . | nindent 8 }}
+        app.kubernetes.io/component: manager
     spec:
       serviceAccountName: {{ include "tram.serviceAccountName" . }}
       enableServiceLinks: false
@@ -33,8 +35,6 @@ spec:
       dnsPolicy: ClusterFirstWithHostNet
       {{- end }}
       securityContext:
-        ## fsGroup ensures Secret volumes are group-owned by the tram gid (1000),
-        ## so key files (defaultMode 0440) are readable by the tram user.
         fsGroup: {{ .Values.securityContext.fsGroup | default 1000 }}
         {{- with .Values.securityContext.runAsUser }}
         runAsUser: {{ . }}
@@ -49,19 +49,30 @@ spec:
           command: ["tram", "daemon"]
           ports:
             - name: http
-              containerPort: 8765
+              containerPort: {{ .Values.service.port }}
               protocol: TCP
-            {{- range .Values.service.snmpTrapPorts }}
-            - name: snmp-trap-{{ . }}
-              containerPort: {{ . }}
-              protocol: UDP
-            {{- end }}
           env:
-            ## Always inject stable pod name as node identity (e.g. tram-0, tram-1)
             - name: TRAM_NODE_ID
               valueFrom:
                 fieldRef:
                   fieldPath: metadata.name
+            ## Manager mode: own all scheduling, dispatch runs to workers
+            - name: TRAM_MODE
+              value: "manager"
+            ## Point manager at its own service so workers can reach the callback URL
+            - name: TRAM_MANAGER_URL
+              value: "http://{{ include "tram.fullname" . }}:{{ .Values.service.port }}"
+            ## Worker discovery via K8s headless DNS (tram-worker-0.tram-worker.<ns>.svc…)
+            - name: TRAM_WORKER_REPLICAS
+              value: {{ .Values.worker.replicas | quote }}
+            - name: TRAM_WORKER_SERVICE
+              value: "{{ include "tram.fullname" . }}-worker"
+            - name: TRAM_WORKER_NAMESPACE
+              valueFrom:
+                fieldRef:
+                  fieldPath: metadata.namespace
+            - name: TRAM_WORKER_PORT
+              value: {{ .Values.worker.port | quote }}
             {{- if gt (len .Values.pipelines) 0 }}
             - name: TRAM_PIPELINE_DIR
               value: /pipelines
@@ -71,19 +82,21 @@ spec:
               value: {{ $val | quote }}
             {{- end }}
             {{- if .Values.postgresql.enabled }}
-            ## Auto-wired from Bitnami PostgreSQL subchart.
-            ## Uses .Release.Name (not tram.fullname) so nameOverride/fullnameOverride
-            ## can shorten TRAM pod names without breaking the DB connection.
             - name: TRAM_DB_URL
               value: "postgresql+psycopg2://{{ .Values.postgresql.auth.username }}:{{ .Values.postgresql.auth.password }}@{{ .Release.Name }}-postgresql/{{ .Values.postgresql.auth.database }}"
-            {{- else if .Values.persistence.enabled }}
-            ## SQLAlchemy URL for SQLite on the /data PVC (v1.0.3+; replaces TRAM_DB_PATH)
+            {{- else if .Values.manager.persistence.enabled }}
+            ## SQLite on the manager RWO PVC — no external database required.
             - name: TRAM_DB_URL
               value: "sqlite:////data/tram.db"
             {{- end }}
-            {{- if or .Values.sharedStorage.enabled .Values.persistence.enabled }}
-            ## Schemas and MIBs live on /data — either the shared RWX PVC (cluster) or
-            ## the per-pod RWO PVC (standalone). Path is the same in both cases (v1.0.9).
+            {{- if .Values.manager.persistence.enabled }}
+            ## Schemas and MIBs on manager RWO PVC (/data).
+            - name: TRAM_SCHEMA_DIR
+              value: /data/schemas
+            - name: TRAM_MIB_DIR
+              value: /data/mibs
+            {{- else if .Values.sharedStorage.enabled }}
+            ## Shared RWX PVC covers schemas/MIBs when manager.persistence is disabled.
             - name: TRAM_SCHEMA_DIR
               value: /data/schemas
             - name: TRAM_MIB_DIR
@@ -117,7 +130,6 @@ spec:
               value: {{ .Values.authUsers | quote }}
             {{- end }}
             {{- if not .Values.ui.enabled }}
-            ## Disable UI static serving when ui.enabled=false
             - name: TRAM_UI_DIR
               value: ""
             {{- end }}
@@ -133,13 +145,16 @@ spec:
               mountPath: /pipelines
               readOnly: true
             {{- end }}
-            {{- if or .Values.persistence.enabled .Values.sharedStorage.enabled }}
-            ## /data is backed by the shared RWX PVC (cluster) or per-pod RWO PVC (standalone)
+            {{- if .Values.manager.persistence.enabled }}
+            ## RWO PVC — SQLite DB + schemas + MIBs
+            - name: manager-data
+              mountPath: /data
+            {{- else if .Values.sharedStorage.enabled }}
+            ## RWX PVC — schemas + MIBs (no per-manager DB PVC)
             - name: data
               mountPath: /data
             {{- end }}
             {{- if .Values.keys.secretName }}
-            ## Pre-mounted connector key files — see values.yaml keys section
             - name: keys
               mountPath: {{ .Values.keys.mountPath | default "/secrets" }}
               readOnly: true
@@ -171,16 +186,16 @@ spec:
           configMap:
             name: {{ include "tram.fullname" . }}-pipelines
         {{- end }}
-        {{- if .Values.sharedStorage.enabled }}
-        ## Shared RWX PVC — same volume name "data" as the per-pod RWO case so
-        ## TRAM_SCHEMA_DIR/TRAM_MIB_DIR (/data/*) work identically in both modes.
+        {{- if .Values.manager.persistence.enabled }}
+        - name: manager-data
+          persistentVolumeClaim:
+            claimName: manager-data-{{ include "tram.fullname" . }}
+        {{- else if .Values.sharedStorage.enabled }}
         - name: data
           persistentVolumeClaim:
             claimName: data-{{ include "tram.fullname" . }}
         {{- end }}
         {{- if .Values.keys.secretName }}
-        ## Connector key files — rotated zero-restart via kubectl apply on the Secret.
-        ## 0440 + fsGroup:1000 → root:tram ownership, tram user can read, not world-readable.
         - name: keys
           secret:
             secretName: {{ .Values.keys.secretName }}
@@ -203,22 +218,4 @@ spec:
       tolerations:
         {{- toYaml . | nindent 8 }}
       {{- end }}
-  {{- if and .Values.persistence.enabled (not .Values.sharedStorage.enabled) }}
-  ## Per-pod RWO PVC (standalone mode). Skipped when sharedStorage.enabled=true — the
-  ## shared RWX PVC is injected as a regular volume above instead.
-  volumeClaimTemplates:
-    - metadata:
-        name: data
-        labels:
-          {{- include "tram.labels" . | nindent 10 }}
-      spec:
-        accessModes:
-          - {{ .Values.persistence.accessMode }}
-        resources:
-          requests:
-            storage: {{ .Values.persistence.size }}
-        {{- if .Values.persistence.storageClass }}
-        storageClassName: {{ .Values.persistence.storageClass | quote }}
-        {{- end }}
-  {{- end }}
 {{- end }}

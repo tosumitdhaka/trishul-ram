@@ -1,0 +1,123 @@
+# Dockerfile.worker — TRAM worker image (manager+worker mode, v1.2.0)
+#
+# Lighter than the manager image:
+#   ✗  apscheduler       — manager owns scheduling, workers just execute
+#   ✗  sqlalchemy (core) — manager owns DB writes; workers POST callbacks
+#   ✗  Web UI assets     — no browser UI on workers
+#   ✗  ai-anthropic/openai — AI features are UI-driven
+#
+#   ✓  All connectors, transforms, serializers — workers run any pipeline
+#   ✓  tram/agent/server.py — /agent/run /agent/stop /agent/health endpoints
+#   ✓  sql extra (sqlalchemy) — workers may run SQL connector pipelines
+#
+# Usage:
+#   docker build -f Dockerfile.worker -t trishul-ram-worker:1.2.0 .
+#
+# Stage 0  builder     — builds the Python wheel
+# Stage 1  mib-builder — downloads + compiles standard SNMP MIBs
+# Stage 2  runtime     — final image (no UI assets, no manager deps)
+
+# ── Stage 0: build wheel ─────────────────────────────────────────────────────
+FROM python:3.11-slim AS builder
+
+WORKDIR /build
+COPY pyproject.toml README.md ./
+COPY tram/ ./tram/
+
+RUN pip install --no-cache-dir build && python -m build --wheel
+
+# ── Stage 1: download + compile standard SNMP MIBs ───────────────────────────
+FROM python:3.11-slim AS mib-builder
+
+RUN pip install --no-cache-dir "pysmi-lextudio>=1.1"
+
+RUN python - <<'EOF'
+import os, sys
+os.makedirs("/mibs", exist_ok=True)
+try:
+    from pysmi.reader import HttpReader
+    from pysmi.searcher import PyFileSearcher, StubSearcher
+    from pysmi.writer import PyFileWriter
+    from pysmi.parser.smi import parserFactory
+    from pysmi.codegen.pysnmp import PySnmpCodeGen
+    from pysmi.compiler import MibCompiler
+
+    STANDARD_MIBS = [
+        "IANAifType-MIB",
+        "IF-MIB",
+        "IP-MIB",
+        "TCP-MIB",
+        "UDP-MIB",
+        "ENTITY-MIB",
+        "HOST-RESOURCES-MIB",
+    ]
+
+    parser  = parserFactory()()
+    codegen = PySnmpCodeGen()
+    writer  = PyFileWriter("/mibs")
+
+    compiler = MibCompiler(parser, codegen, writer)
+    compiler.addSources(HttpReader("https://mibs.pysnmp.com/asn1/@mib@"))
+    compiler.addSearchers(PyFileSearcher("/mibs"))
+    compiler.addSearchers(StubSearcher(*(PySnmpCodeGen.baseMibs + PySnmpCodeGen.fakeMibs)))
+
+    results = compiler.compile(*STANDARD_MIBS)
+    for name, status in results.items():
+        print(f"  {status}: {name}", flush=True)
+    compiled = sum(1 for s in results.values() if s == "compiled")
+    print(f"Compiled {compiled} MIB module(s) → /mibs", flush=True)
+except Exception as exc:
+    print(f"WARNING: MIB download failed ({exc}); continuing with empty /mibs", flush=True)
+EOF
+
+# ── Stage 2: runtime image ────────────────────────────────────────────────────
+FROM python:3.11-slim
+
+# Non-root user — same uid/gid as manager image so shared PVC files are compatible
+RUN useradd -m -u 1000 -s /bin/bash tram
+
+WORKDIR /app
+
+# omniORBpy (CORBA) requires the omniORB shared runtime libraries
+RUN apt-get update && \
+    ( apt-get install -y --no-install-recommends libomniorb4-3t64 libomnithread4 || \
+      apt-get install -y --no-install-recommends libomniorb4-2 libomnithread4 ) && \
+    rm -rf /var/lib/apt/lists/*
+
+# Install worker extras only — no manager (no apscheduler, no sqlalchemy persistence).
+# sql extra is included so workers can execute SQL connector pipelines (needs sqlalchemy).
+# Excluded to keep the image lean: s3, gcs, azure, otel, parquet, ai-* (UI-driven features).
+# corba (omniORBpy) is excluded: not on PyPI; install python3-omniorb via apt in a custom layer.
+COPY --from=builder /build/dist/*.whl .
+RUN whl=$(ls *.whl) && \
+    pip install --no-cache-dir \
+        "${whl}[worker,kafka,snmp,avro,protobuf_ser,msgpack_ser,mqtt,amqp,nats,gnmi,jmespath,sql,influxdb,redis,websocket,elasticsearch,metrics,prometheus_rw,mib,watch,asn1]" && \
+    rm *.whl
+
+# Copy compiled MIBs from mib-builder stage
+COPY --from=mib-builder /mibs /mibs
+
+# Bundle pipeline templates (read-only reference examples)
+COPY pipelines/ /tram-templates/
+
+# Create data, MIB, and schema directories; set ownership
+# NOTE: no /ui directory — workers do not serve the web UI
+RUN mkdir -p /data /data/mibs /mibs /schemas && \
+    mkdir -p /home/tram/.tram && \
+    chown -R tram:tram /data /mibs /schemas /home/tram /app
+
+USER tram
+
+# Health check targets the agent endpoint on port 8766
+HEALTHCHECK --interval=30s --timeout=10s --start-period=15s --retries=3 \
+    CMD python -c "import urllib.request; urllib.request.urlopen('http://localhost:8766/agent/health')" || exit 1
+
+EXPOSE 8766
+
+ENV TRAM_MIB_DIR=/mibs
+ENV TRAM_SCHEMA_DIR=/schemas
+ENV TRAM_MODE=worker
+ENV TRAM_TEMPLATES_DIR=/tram-templates
+
+ENTRYPOINT ["tram"]
+CMD ["daemon"]

@@ -51,9 +51,12 @@ TRAM {{ .Chart.AppVersion }} has been deployed!
   curl -X POST http://127.0.0.1:8765/api/mibs/download \
     -H "Content-Type: application/json" \
     -d '{"names": ["CISCO-ENTITY-FRU-CONTROL-MIB"]}'
-{{- if .Values.clusterMode.enabled }}
+{{- if .Values.manager.enabled }}
 
-9. Check cluster node topology:
-  kubectl exec --namespace {{ .Release.Namespace }} {{ include "tram.fullname" . }}-0 -- \
-    curl -s http://localhost:8765/api/cluster/nodes
+9. Manager+worker mode is enabled ({{ .Values.worker.replicas }} workers).
+   Check worker pool status:
+  curl http://127.0.0.1:8765/api/cluster/nodes
+   Scale workers:
+  kubectl scale statefulset {{ include "tram.fullname" . }}-worker \
+    --namespace {{ .Release.Namespace }} --replicas=<N>
 {{- end }}

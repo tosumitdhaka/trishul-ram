@@ -1,9 +1,36 @@
+{{- if and .Values.manager.enabled .Values.manager.persistence.enabled }}
+## Manager RWO PVC (v1.2.0).
+## Dedicated ReadWriteOnce volume for the manager Deployment.
+## Holds the SQLite database (/data/tram.db), uploaded schemas (/data/schemas),
+## and downloaded MIBs (/data/mibs). RWO is sufficient because only one manager
+## pod ever mounts this volume — no NFS or shared StorageClass required.
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: manager-data-{{ include "tram.fullname" . }}
+  labels:
+    {{- include "tram.labels" . | nindent 4 }}
+    app.kubernetes.io/component: manager
+spec:
+  accessModes:
+    - {{ .Values.manager.persistence.accessMode }}
+  resources:
+    requests:
+      storage: {{ .Values.manager.persistence.size }}
+  {{- if .Values.manager.persistence.storageClass }}
+  storageClassName: {{ .Values.manager.persistence.storageClass | quote }}
+  {{- end }}
+{{- end }}
+---
 {{- if .Values.sharedStorage.enabled }}
-## Single ReadWriteMany PVC shared across all TRAM pods (v1.0.9).
-## Mounted at /data on every pod — same path as the per-pod RWO PVC in standalone mode.
-## Schemas/MIBs uploaded via the UI land at /data/schemas|mibs and are visible to all replicas.
+## Shared ReadWriteMany PVC.
+##
+## Standalone mode: mounted on every replica so all pods see the same schemas/MIBs.
+## Manager+worker mode: mounted on manager (for writing) and workers (for reading)
+##   when workers need to access schemas/MIBs at pipeline execution time.
+##   The manager SQLite database lives on the manager.persistence RWO PVC instead.
+##
 ## Requires a StorageClass that supports ReadWriteMany (e.g. nfs-rwx, efs-sc, azurefile).
-## For kind clusters deploy ~/kind/nfs-provisioner.yaml first.
 apiVersion: v1
 kind: PersistentVolumeClaim
 metadata:

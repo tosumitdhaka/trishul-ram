@@ -27,7 +27,6 @@ async def readiness(request: Request) -> dict:
     manager = request.app.state.manager
     scheduler = request.app.state.scheduler
     db = getattr(request.app.state, "db", None)
-    coordinator = getattr(request.app.state, "coordinator", None)
     started_at = getattr(request.app.state, "started_at", None)
 
     # DB check
@@ -40,11 +39,6 @@ async def readiness(request: Request) -> dict:
     scheduler_status = "running" if getattr(scheduler, "_running", False) else "stopped"
     if scheduler_status == "stopped":
         raise HTTPException(status_code=503, detail="Scheduler stopped")
-
-    # Cluster status
-    cluster_status = "disabled"
-    if coordinator is not None:
-        cluster_status = "enabled"
 
     # DB engine info
     db_engine = "sqlite"
@@ -70,7 +64,6 @@ async def readiness(request: Request) -> dict:
         "db_engine": db_engine,
         "db_path": db_path,
         "scheduler": scheduler_status,
-        "cluster": cluster_status,
         "pipelines_loaded": len(manager.list_all()),
         "uptime": uptime,
     }
@@ -94,15 +87,19 @@ async def plugins() -> dict:
 
 @router.get("/api/cluster/nodes")
 async def cluster_nodes(request: Request) -> dict:
-    """Cluster node registry — live nodes and ownership state.
+    """Worker pool status (manager mode) or standalone indicator.
 
-    Returns ``{"cluster_enabled": false}`` when running in standalone mode.
+    Returns ``{"mode": "standalone"}`` when no worker pool is configured.
+    In manager mode returns health and active-run counts for each worker.
     """
-    coordinator = getattr(request.app.state, "coordinator", None)
-    if coordinator is None:
-        return {"cluster_enabled": False}
-    manager = request.app.state.manager
-    pipeline_names = [s.config.name for s in manager.list_all()]
-    state = coordinator.get_state(pipeline_names=pipeline_names)
-    state["cluster_enabled"] = True
-    return state
+    worker_pool = getattr(request.app.state, "worker_pool", None)
+    config = getattr(request.app.state, "config", None)
+    mode = getattr(config, "tram_mode", "standalone") if config else "standalone"
+
+    if worker_pool is None:
+        return {"mode": mode, "workers": []}
+
+    return {
+        "mode": mode,
+        "workers": worker_pool.status(),
+    }

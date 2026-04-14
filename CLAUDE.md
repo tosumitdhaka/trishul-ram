@@ -8,12 +8,17 @@ TRAM (Trishul Real-time Aggregation & Mediation) is a production-ready Python da
 
 **Tech stack:** Python 3.11+, FastAPI, Pydantic v2, APScheduler, SQLAlchemy Core, Bootstrap 5 UI
 
+**Deployment modes** (v1.2.0):
+- `standalone` — single StatefulSet pod; all-in-one (scheduler + DB + UI). Default.
+- `manager` — Deployment that owns scheduling, DB, and UI; dispatches runs to workers.
+- `worker` — StatefulSet pods that execute pipelines and POST results back to manager. No DB, no UI.
+
 ## Development Commands
 
 ```bash
 # Installation
-pip install -e ".[dev]"                    # base + dev tools
-pip install -e ".[dev,snmp,avro,kafka]"   # with specific extras
+pip install -e ".[dev,manager]"            # base + manager (apscheduler, sqlalchemy) + dev tools
+pip install -e ".[dev,manager,snmp,avro,kafka]"   # with specific extras
 
 # Testing
 pytest tests/unit/                        # 651 unit tests, no network
@@ -100,7 +105,7 @@ Source → bytes → Deserializer → list[dict] → Global Transforms (per-reco
 - All `${VAR}` / `${VAR:-default}` placeholders resolved from environment at load time
 - Validation happens before scheduling (see `tram/pipeline/loader.py`)
 
-**Runtime state:** SQLite (dev) or PostgreSQL (prod) via SQLAlchemy Core
+**Runtime state:** SQLite (default) or PostgreSQL via SQLAlchemy Core — manager-only in v1.2.0
 - `run_history` — each pipeline execution with metrics (records_in/out/errors/dlq_count, node_id)
 - `pipeline_versions` — YAML snapshots for rollback
 - `processed_files` — idempotent file tracking when `skip_processed: true`
@@ -127,7 +132,7 @@ tram/
 ├── transforms/           # 20 transforms (rename, cast, filter, aggregate, jmespath, ...)
 ├── serializers/          # json, csv, xml, avro, parquet, protobuf, msgpack, ndjson
 ├── persistence/
-│   ├── database.py       # TramDB (SQLAlchemy Core)
+│   ├── db.py             # TramDB (SQLAlchemy Core)
 │   └── file_tracker.py   # ProcessedFileTracker (skip_processed)
 ├── cluster/              # NodeRegistry + ClusterCoordinator (consistent hashing, rebalance)
 ├── alerts/               # AlertEvaluator (webhook + email, cooldown logic)
@@ -149,10 +154,13 @@ tram-ui/                  # Bootstrap 5 SPA (built to /ui, served by FastAPI Sta
 │   └── pages/            # dashboard.js, pipelines.js, detail.js, editor.js, ...
 └── dist/                 # Vite build output (copied into Docker image)
 
-helm/                     # Helm chart (StatefulSet, TLS, cluster mode, UI service)
+helm/                     # Helm chart (standalone + manager+worker mode, TLS, UI service)
 ├── templates/
-│   ├── statefulset.yaml  # always StatefulSet (replicaCount=1 standalone, N for cluster)
-│   └── service-ui.yaml   # optional separate UI service
+│   ├── statefulset.yaml         # standalone StatefulSet (skipped when manager.enabled=true)
+│   ├── manager-deployment.yaml  # manager Deployment (only when manager.enabled=true)
+│   ├── worker-statefulset.yaml  # worker StatefulSet (only when manager.enabled=true)
+│   ├── worker-headless-service.yaml  # headless DNS for workers
+│   └── service-ui.yaml          # optional separate UI service
 └── values.yaml           # default config
 
 tests/
@@ -193,13 +201,14 @@ Every error (parse, transform, write) is wrapped in a JSON envelope and sent to 
 }
 ```
 
-### Cluster mode
+### Manager + Worker mode (v1.2.0)
 
-When `TRAM_CLUSTER_MODE=true` + external PostgreSQL:
-- Each node heartbeats to `node_registry` table
-- `ClusterCoordinator` assigns pipelines via consistent hashing
-- Rebalance thread redistributes pipelines when nodes join/leave
-- Non-owner nodes set pipeline `status=scheduled` but don't execute
+Set `TRAM_MODE=manager` on the manager pod and `TRAM_MODE=worker` on worker pods.
+
+- Manager is the sole scheduler and DB writer — SQLite on a RWO PVC is sufficient
+- Workers are stateless: receive a run request (HTTP POST), execute the pipeline, POST result back to manager via `TRAM_MANAGER_URL`
+- Worker import isolation: `server.py` branches on `TRAM_MODE=worker` **before** importing `create_app`, so workers never import `apscheduler` or `sqlalchemy`
+- `tram[manager]` extra must be installed on manager; workers only need `tram[worker,...]`
 
 ### Pipeline versioning
 
@@ -229,12 +238,14 @@ Every update saves the previous YAML to `pipeline_versions` table. Rollback load
 ## Environment Variables
 
 All runtime config via `TRAM_*` env vars (see `.env.example`). Critical ones:
-- `TRAM_DB_URL` — SQLite (default) or PostgreSQL connection string
+- `TRAM_MODE` — `standalone` (default) | `manager` | `worker`
+- `TRAM_DB_URL` — SQLite (default: `sqlite:////data/tram.db`) or PostgreSQL connection string
 - `TRAM_API_KEY` — enables API key auth (X-API-Key header)
-- `TRAM_CLUSTER_MODE` — enables cluster coordination (requires PostgreSQL)
 - `TRAM_LOG_LEVEL` — DEBUG, INFO, WARNING, ERROR
-- `TRAM_AUTH_USERS` — bcrypt password hashes for browser auth (user:hash,user2:hash2)
+- `TRAM_AUTH_USERS` — `username:password` pairs for browser auth (comma-separated)
 - `TRAM_AUTH_SECRET` — HMAC secret for session tokens
+- `TRAM_MANAGER_URL` — manager base URL used by workers for callbacks (e.g. `http://tram:8765`)
+- `TRAM_WORKER_REPLICAS` / `TRAM_WORKER_SERVICE` / `TRAM_WORKER_PORT` — manager → worker routing
 
 ## Versioning
 

@@ -7,20 +7,55 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+---
+
+## [1.2.0] — 2026-04-10
+
 ### Added
 
-- **`melt` transform** — wide → long pivot: converts a dict-valued field into one record per key/value pair; supports `label_fields` unnesting, `include_only`/`exclude` key filtering, and configurable output column names (`metric_name_col`, `metric_value_col`)
-- **`pm_xml` serializer** — 3GPP PM XML (Nokia NCOM / TS 32.432 measData) deserializer; produces one flat record per `measValue`; auto-closes truncated files; configurable managed_element and numeric casting
+**Manager + Worker mode**
+- New `TRAM_MODE` env var: `standalone` (default) | `manager` | `worker`
+- **Manager Deployment** — owns all scheduling, DB writes, and UI; dispatches pipeline run requests to worker pods via HTTP and receives results via POST callback
+- **Worker StatefulSet** — stateless executors: receive a run request, execute the pipeline, POST result back to manager; no DB access, no scheduler, no UI
+- Worker discovery via Kubernetes headless DNS: `<release>-worker-N.<release>-worker.<ns>.svc.cluster.local`
+- New env vars: `TRAM_WORKER_REPLICAS`, `TRAM_WORKER_SERVICE`, `TRAM_WORKER_NAMESPACE`, `TRAM_WORKER_PORT`
+
+**`tram[manager]` optional extra**
+- `apscheduler>=3.10`, `sqlalchemy>=2.0`, `psycopg2-binary`, and `PyMySQL` moved from base dependencies into `tram[manager]`
+- Worker image installs only `tram[worker,kafka,snmp,avro,...]` — no scheduler or DB libraries
+- `daemon/server.py` checks `TRAM_MODE=worker` before importing the manager module chain — worker boots cleanly without `tram[manager]` installed
+
+**`Dockerfile.worker`**
+- Separate worker image: base deps + connector extras only (no `manager` extra)
+- UI assets omitted — no `COPY tram-ui/dist /ui` stage
+- `EXPOSE 8766`, `ENV TRAM_MODE=worker`, healthcheck on `/agent/health`
+
+**Helm: manager+worker mode** (`manager.enabled=true`)
+- Manager Deployment + Worker StatefulSet created; standalone StatefulSet skipped
+- `manager.persistence` — dedicated ReadWriteOnce PVC (`manager-data-<release>`) for SQLite DB + schemas + MIBs; RWO is sufficient since only one manager pod writes
+- `worker.image` override block — optionally point workers at a dedicated worker image; falls back to main image when unset (`tram.workerImage` helper in `_helpers.tpl`)
+- Main Service adds `app.kubernetes.io/component: manager` selector in manager mode — prevents HTTP traffic from reaching worker pods (port 8766)
+- Headless service `<release>-worker` for stable pod DNS
+
+**`melt` transform** — wide → long pivot: converts a dict-valued field into one record per key/value pair; supports `label_fields` unnesting, `include_only`/`exclude` key filtering, and configurable output column names (`metric_name_col`, `metric_value_col`)
+
+**`pm_xml` serializer** — 3GPP PM XML (Nokia NCOM / TS 32.432 measData) deserializer; produces one flat record per `measValue`; auto-closes truncated files; configurable managed_element and numeric casting
 
 ### Changed
 
 - **`PipelineController`** replaces split `TramScheduler` + `PipelineManager` lifecycle handling — single authority for all pipeline state transitions
 - **4-state machine** — `paused` state removed; states are `scheduled`, `running`, `stopped`, `error`
-- **`_sync_from_db()` stopped-flag detection** — picks up DB stopped/cleared flags even when pipeline YAML is unchanged (fixes pipelines not starting on non-owning pods)
+- **`_sync_from_db()` stopped-flag detection** — picks up DB stopped/cleared flags even when pipeline YAML is unchanged
 - **`_seen_nodes` tracking** — eliminates infinite cooling-period cycles when detecting newly joined cluster nodes
-- **DB `runtime_status` overlay** on `GET /api/pipelines` and `GET /api/pipelines/{name}` — all pods return a consistent status view regardless of which pod the load balancer routes to
-- **`TRAM_PIPELINE_SYNC_INTERVAL` default** — reduced from 30 s to 10 s for faster cluster convergence
+- **`TRAM_PIPELINE_SYNC_INTERVAL` default** — reduced from 30 s to 10 s for faster convergence
 - **UI** — removed `paused`/`resume` buttons and badge; status filter updated (`scheduled`, `running`, `stopped`, `error`)
+- **SQLite in manager mode** — manager is the sole DB writer; `sqlite:////data/tram.db` on a RWO PVC is the recommended setup; no external database required
+- **`postgresql.enabled` default** — changed to `false`; SQLite on `manager.persistence` is the recommended default
+
+### Removed
+
+- **Deprecated DB columns** — `owner_node`, `runtime_status`, `status_updated`, `status_node` no longer added to `registered_pipelines` at startup
+- **Dead cluster DB methods** — `set_pipeline_owner`, `get_pipeline_owner`, `get_pipelines_by_owner`, `get_pipeline_counts_by_node`, `claim_orphaned_pipelines`, `set_runtime_status`, `get_pipeline_runtime`, `claim_run`, `get_all_pipeline_runtime` removed from `TramDB`
 
 ---
 
@@ -1017,3 +1052,17 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 **CLI** — Typer; direct + daemon-proxy commands
 
 **Tests** — 69 total, all passing
+
+---
+
+<!-- Comparison links -->
+[Unreleased]: https://github.com/tosumitdhaka/trishul-ram/compare/v1.2.0...HEAD
+[1.2.0]: https://github.com/tosumitdhaka/trishul-ram/compare/v1.1.4...v1.2.0
+[1.1.4]: https://github.com/tosumitdhaka/trishul-ram/compare/v1.1.3...v1.1.4
+[1.1.3]: https://github.com/tosumitdhaka/trishul-ram/compare/v1.1.2...v1.1.3
+[1.1.2]: https://github.com/tosumitdhaka/trishul-ram/compare/v1.1.1...v1.1.2
+[1.1.1]: https://github.com/tosumitdhaka/trishul-ram/compare/v1.1.0...v1.1.1
+[1.1.0]: https://github.com/tosumitdhaka/trishul-ram/compare/v1.0.9...v1.1.0
+[1.0.9]: https://github.com/tosumitdhaka/trishul-ram/compare/v1.0.8...v1.0.9
+[1.0.8]: https://github.com/tosumitdhaka/trishul-ram/compare/v1.0.7...v1.0.8
+[1.0.7]: https://github.com/tosumitdhaka/trishul-ram/compare/v1.0.6...v1.0.7
