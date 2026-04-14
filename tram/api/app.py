@@ -17,6 +17,7 @@ from tram.api.routers import (
     auth,
     connectors,
     health,
+    internal,
     metrics_router,
     mibs,
     pipelines,
@@ -38,16 +39,18 @@ async def lifespan(app: FastAPI):
     """Application startup and shutdown."""
     config: AppConfig = app.state.config
     controller: PipelineController = app.state.controller
-    node_registry = getattr(app.state, "node_registry", None)
+    worker_pool = getattr(app.state, "worker_pool", None)
 
     # ── Startup ────────────────────────────────────────────────────────────
-    logger.info("TRAM daemon starting", extra={"node_id": config.node_id})
+    logger.info("TRAM daemon starting",
+                extra={"node_id": config.node_id, "mode": config.tram_mode})
 
     if config.otel_endpoint:
         try:
             from tram.telemetry.tracing import init_tracing
             init_tracing(service_name=config.otel_service, otlp_endpoint=config.otel_endpoint)
-            logger.info("OpenTelemetry tracing initialised", extra={"endpoint": config.otel_endpoint})
+            logger.info("OpenTelemetry tracing initialised",
+                        extra={"endpoint": config.otel_endpoint})
         except Exception as exc:
             logger.warning("OTel init failed: %s", exc)
 
@@ -68,14 +71,16 @@ async def lifespan(app: FastAPI):
                                  extra={"pipeline": pipeline_config.name})
                     continue
                 db.save_pipeline(pipeline_config.name, yaml_text, source="disk")
-                logger.info("Seeded pipeline to DB", extra={"pipeline": pipeline_config.name})
+                logger.info("Seeded pipeline to DB",
+                            extra={"pipeline": pipeline_config.name})
 
-    # Start node registry before controller so coordinator has topology at boot
-    if node_registry is not None:
-        node_registry.start()
-        logger.info("Cluster mode active", extra={"node_id": config.node_id})
+    # Start worker pool before controller so workers are ready to receive runs
+    if worker_pool is not None:
+        worker_pool.start()
+        logger.info("Manager mode: WorkerPool started",
+                    extra={"workers": len(worker_pool.healthy_workers())})
 
-    # Start controller — loads pipelines from DB, schedules owned ones
+    # Start controller — loads pipelines from DB, schedules them
     controller.start()
 
     watcher = None
@@ -103,8 +108,8 @@ async def lifespan(app: FastAPI):
 
     controller.stop(timeout=config.shutdown_timeout)
 
-    if node_registry is not None:
-        node_registry.stop()
+    if worker_pool is not None:
+        worker_pool.stop()
 
     db = getattr(app.state, "db", None)
     if db is not None:
@@ -123,7 +128,9 @@ def create_app(config: AppConfig | None = None) -> FastAPI:
         from tram.persistence.db import TramDB
         db = TramDB(url=config.db_url, node_id=config.node_id)
     except Exception as exc:
-        logger.warning("Could not initialise TramDB: %s — run history will be in-memory only", exc)
+        logger.warning(
+            "Could not initialise TramDB: %s — run history will be in-memory only", exc
+        )
         db = None
 
     # Initialise alert evaluator
@@ -140,47 +147,23 @@ def create_app(config: AppConfig | None = None) -> FastAPI:
         from tram.persistence.file_tracker import ProcessedFileTracker
         file_tracker = ProcessedFileTracker(db=db)
 
-    # Cluster setup (only when enabled + external DB is configured)
-    node_registry = None
-    coordinator = None
-    if config.cluster_enabled:
-        if not config.db_url:
+    # Build WorkerPool when running as manager (TRAM_MODE=manager)
+    worker_pool = None
+    if config.tram_mode == "manager":
+        from tram.agent.worker_pool import WorkerPool
+        worker_pool = WorkerPool.from_env(manager_url=config.manager_url)
+        if worker_pool is None:
             logger.warning(
-                "TRAM_CLUSTER_ENABLED=true but TRAM_DB_URL is not set — "
-                "cluster mode requires an external DB (PostgreSQL or MariaDB). "
-                "Falling back to standalone mode."
+                "TRAM_MODE=manager but no workers configured — "
+                "set TRAM_WORKER_URLS or TRAM_WORKER_REPLICAS"
             )
-        elif db is not None:
-            try:
-                from tram.cluster.coordinator import ClusterCoordinator
-                from tram.cluster.registry import NodeRegistry
-                node_registry = NodeRegistry(
-                    db=db,
-                    node_id=config.node_id,
-                    ordinal=config.node_ordinal,
-                    heartbeat_seconds=config.heartbeat_seconds,
-                    ttl_seconds=config.node_ttl_seconds,
-                )
-                coordinator = ClusterCoordinator(
-                    registry=node_registry,
-                    node_id=config.node_id,
-                )
-                logger.info(
-                    "Cluster mode initialised",
-                    extra={"node_id": config.node_id, "ordinal": config.node_ordinal},
-                )
-            except Exception as exc:
-                logger.error("Failed to initialise cluster — running standalone: %s", exc)
-                node_registry = None
-                coordinator = None
 
     controller = PipelineController(
         db=db,
-        coordinator=coordinator,
         file_tracker=file_tracker,
         node_id=config.node_id,
-        rebalance_interval=config.heartbeat_seconds,
-        pipeline_sync_interval=config.pipeline_sync_interval,
+        worker_pool=worker_pool,
+        manager_url=config.manager_url,
     )
     # Keep manager reference on controller's alert evaluator
     controller.manager._alert_evaluator = alert_evaluator
@@ -201,8 +184,7 @@ def create_app(config: AppConfig | None = None) -> FastAPI:
     app.state.scheduler = controller     # alias: routers that use app.state.scheduler still work
     app.state.db = db
     app.state.alert_evaluator = alert_evaluator
-    app.state.node_registry = node_registry
-    app.state.coordinator = coordinator
+    app.state.worker_pool = worker_pool
     from datetime import datetime
     app.state.started_at = datetime.now(UTC)
 
@@ -229,6 +211,7 @@ def create_app(config: AppConfig | None = None) -> FastAPI:
     app.include_router(stats.router)
     app.include_router(connectors.router)
     app.include_router(ai.router)
+    app.include_router(internal.router)
 
     # Mount web UI static files (v1.0.7)
     ui_dir = config.ui_dir

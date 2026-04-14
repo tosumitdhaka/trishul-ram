@@ -24,7 +24,7 @@ class APIKeyMiddleware(BaseHTTPMiddleware):
 
     EXEMPT = {"/api/health", "/api/ready", "/metrics", "/", "/api/auth/login", "/favicon.ico",
               "/docs", "/redoc", "/openapi.json"}
-    EXEMPT_PREFIX = ("/webhooks/", "/ui")
+    EXEMPT_PREFIX = ("/webhooks/", "/ui", "/api/internal/")
 
     def __init__(self, app) -> None:
         super().__init__(app)

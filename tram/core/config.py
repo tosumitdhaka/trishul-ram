@@ -37,11 +37,6 @@ class AppConfig:
     node_id: str
     db_url: str
     shutdown_timeout: int
-    # v0.8.0 cluster additions
-    cluster_enabled: bool
-    node_ordinal: int
-    heartbeat_seconds: int
-    node_ttl_seconds: int
     # v1.0.0 security additions
     api_key: str
     rate_limit: int
@@ -67,8 +62,15 @@ class AppConfig:
     auth_users: str
     # v1.1.0 bundled pipeline templates directory
     templates_dir: str
-    # v1.1.2 DB-registered pipeline sync interval (seconds)
-    pipeline_sync_interval: int
+    # v1.2.0 manager+worker mode
+    tram_mode: str       # "standalone" | "manager" | "worker"
+    manager_url: str     # worker → manager callback base URL (also used by manager itself)
+    # Worker discovery (TRAM_MODE=manager)
+    worker_urls: str     # explicit comma-separated worker agent URLs (TRAM_WORKER_URLS)
+    worker_replicas: int # K8s headless DNS replica count (0 = disabled)
+    worker_service: str  # K8s headless service name
+    worker_namespace: str  # K8s namespace
+    worker_port: int     # worker agent port
 
     @classmethod
     def from_env(cls) -> AppConfig:
@@ -86,10 +88,6 @@ class AppConfig:
             node_id=node_id,
             db_url=os.environ.get("TRAM_DB_URL", ""),
             shutdown_timeout=_env_int("TRAM_SHUTDOWN_TIMEOUT_SECONDS", 30),
-            cluster_enabled=os.environ.get("TRAM_CLUSTER_ENABLED", "false").lower() == "true",
-            node_ordinal=_env_int("TRAM_NODE_ORDINAL", _detect_ordinal(node_id)),
-            heartbeat_seconds=_env_int("TRAM_HEARTBEAT_SECONDS", 10),
-            node_ttl_seconds=_env_int("TRAM_NODE_TTL_SECONDS", 30),
             api_key=os.environ.get("TRAM_API_KEY", ""),
             rate_limit=_env_int("TRAM_RATE_LIMIT", 0),
             rate_limit_window=_env_int("TRAM_RATE_LIMIT_WINDOW", 60),
@@ -106,13 +104,11 @@ class AppConfig:
             ui_dir=os.environ.get("TRAM_UI_DIR", "/ui"),
             auth_users=os.environ.get("TRAM_AUTH_USERS", ""),
             templates_dir=os.environ.get("TRAM_TEMPLATES_DIR", "/tram-templates"),
-            pipeline_sync_interval=_env_int("TRAM_PIPELINE_SYNC_INTERVAL", 10),
+            tram_mode=os.environ.get("TRAM_MODE", "standalone").lower(),
+            manager_url=os.environ.get("TRAM_MANAGER_URL", ""),
+            worker_urls=os.environ.get("TRAM_WORKER_URLS", ""),
+            worker_replicas=_env_int("TRAM_WORKER_REPLICAS", 0),
+            worker_service=os.environ.get("TRAM_WORKER_SERVICE", "tram-worker"),
+            worker_namespace=os.environ.get("TRAM_WORKER_NAMESPACE", "default"),
+            worker_port=_env_int("TRAM_WORKER_PORT", 8766),
         )
-
-
-def _detect_ordinal(node_id: str) -> int:
-    """Extract StatefulSet ordinal from hostname (e.g. ``tram-2`` → ``2``)."""
-    parts = node_id.rsplit("-", 1)
-    if len(parts) == 2 and parts[1].isdigit():
-        return int(parts[1])
-    return 0

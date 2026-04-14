@@ -1,0 +1,155 @@
+{{- if .Values.manager.enabled }}
+## Worker StatefulSet (v1.2.0 manager+worker mode)
+## Stateless executors — receive run requests from manager, execute pipelines,
+## POST results back via callback. No UI. No scheduler.
+## Created only when manager.enabled=true.
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: {{ include "tram.fullname" . }}-worker
+  labels:
+    {{- include "tram.labels" . | nindent 4 }}
+    app.kubernetes.io/component: worker
+spec:
+  replicas: {{ .Values.worker.replicas }}
+  serviceName: {{ include "tram.fullname" . }}-worker
+  ## OrderedReady so worker-0 comes up first and manager starts probing from a known state.
+  podManagementPolicy: OrderedReady
+  selector:
+    matchLabels:
+      {{- include "tram.selectorLabels" . | nindent 6 }}
+      app.kubernetes.io/component: worker
+  template:
+    metadata:
+      annotations:
+        {{- with .Values.podAnnotations }}
+        {{- toYaml . | nindent 8 }}
+        {{- end }}
+      labels:
+        {{- include "tram.selectorLabels" . | nindent 8 }}
+        app.kubernetes.io/component: worker
+    spec:
+      serviceAccountName: {{ include "tram.serviceAccountName" . }}
+      enableServiceLinks: false
+      {{- if .Values.hostNetwork }}
+      hostNetwork: true
+      dnsPolicy: ClusterFirstWithHostNet
+      {{- end }}
+      securityContext:
+        fsGroup: {{ .Values.securityContext.fsGroup | default 1000 }}
+        {{- with .Values.securityContext.runAsUser }}
+        runAsUser: {{ . }}
+        {{- end }}
+        {{- with .Values.securityContext.runAsGroup }}
+        runAsGroup: {{ . }}
+        {{- end }}
+      containers:
+        - name: tram
+          image: "{{ include "tram.workerImage" . }}"
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          command: ["tram", "daemon"]
+          ports:
+            - name: agent
+              containerPort: {{ .Values.worker.port }}
+              protocol: TCP
+          env:
+            - name: TRAM_NODE_ID
+              valueFrom:
+                fieldRef:
+                  fieldPath: metadata.name
+            ## Worker mode: listen on agent port, execute dispatched runs, POST callbacks
+            - name: TRAM_MODE
+              value: "worker"
+            ## Callback target: manager's main service URL
+            - name: TRAM_MANAGER_URL
+              value: "http://{{ include "tram.fullname" . }}:{{ .Values.service.port }}"
+            - name: TRAM_WORKER_PORT
+              value: {{ .Values.worker.port | quote }}
+            {{- range $key, $val := .Values.env }}
+            - name: {{ $key }}
+              value: {{ $val | quote }}
+            {{- end }}
+            ## Workers are stateless executors — no DB URL needed.
+            ## They POST run results back to the manager via callback.
+            {{- if .Values.sharedStorage.enabled }}
+            ## Schemas and MIBs from shared RWX PVC (workers read, manager writes)
+            - name: TRAM_SCHEMA_DIR
+              value: /data/schemas
+            - name: TRAM_MIB_DIR
+              value: /data/mibs
+            {{- end }}
+            {{- if .Values.schemaRegistry.url }}
+            - name: TRAM_SCHEMA_REGISTRY_URL
+              value: {{ .Values.schemaRegistry.url | quote }}
+            {{- end }}
+            {{- if .Values.schemaRegistry.username }}
+            - name: TRAM_SCHEMA_REGISTRY_USERNAME
+              value: {{ .Values.schemaRegistry.username | quote }}
+            {{- end }}
+            {{- if .Values.schemaRegistry.password }}
+            - name: TRAM_SCHEMA_REGISTRY_PASSWORD
+              value: {{ .Values.schemaRegistry.password | quote }}
+            {{- end }}
+            {{- range $key, $ref := .Values.envSecret }}
+            - name: {{ $key }}
+              valueFrom:
+                secretKeyRef:
+                  name: {{ $ref.secretName }}
+                  key: {{ $ref.secretKey }}
+            {{- end }}
+            {{- if .Values.apiKey }}
+            - name: TRAM_API_KEY
+              value: {{ .Values.apiKey | quote }}
+            {{- end }}
+          volumeMounts:
+            {{- if .Values.sharedStorage.enabled }}
+            ## Mount shared RWX at /data so TRAM_SCHEMA_DIR and TRAM_MIB_DIR resolve correctly
+            - name: data
+              mountPath: /data
+            {{- end }}
+            {{- if .Values.keys.secretName }}
+            - name: keys
+              mountPath: {{ .Values.keys.mountPath | default "/secrets" }}
+              readOnly: true
+            {{- end }}
+          livenessProbe:
+            httpGet:
+              path: /agent/health
+              port: agent
+            initialDelaySeconds: 10
+            periodSeconds: 30
+          readinessProbe:
+            httpGet:
+              path: /agent/health
+              port: agent
+            initialDelaySeconds: 5
+            periodSeconds: 10
+          {{- with .Values.worker.resources }}
+          resources:
+            {{- toYaml . | nindent 12 }}
+          {{- end }}
+      volumes:
+        {{- if .Values.sharedStorage.enabled }}
+        - name: data
+          persistentVolumeClaim:
+            claimName: data-{{ include "tram.fullname" . }}
+        {{- end }}
+        {{- if .Values.keys.secretName }}
+        - name: keys
+          secret:
+            secretName: {{ .Values.keys.secretName }}
+            defaultMode: 0440
+        {{- end }}
+      {{- with .Values.nodeSelector }}
+      nodeSelector:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.affinity }}
+      affinity:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.tolerations }}
+      tolerations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+{{- end }}

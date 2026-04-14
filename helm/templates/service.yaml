@@ -23,3 +23,6 @@ spec:
     {{- end }}
   selector:
     {{- include "tram.selectorLabels" . | nindent 4 }}
+    {{- if .Values.manager.enabled }}
+    app.kubernetes.io/component: manager
+    {{- end }}

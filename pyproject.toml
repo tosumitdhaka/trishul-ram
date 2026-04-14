@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "tram"
-version = "1.1.4"
+version = "1.2.0"
 description = "Trishul Real-time Aggregation & Mediation — telecom data pipeline daemon"
 readme = "README.md"
 requires-python = ">=3.11"
@@ -18,23 +18,42 @@ classifiers = [
 ]
 
 dependencies = [
+    # ── Shared: both manager and worker images need these ──────────────────
     "typer[all]>=0.12",
     "fastapi>=0.111",
     "python-multipart>=0.0.9",
     "uvicorn[standard]>=0.30",
     "pydantic>=2.7",
     "pyyaml>=6.0",
-    "paramiko>=3.4",
-    "simpleeval>=1.0",
-    "defusedxml>=0.7",
-    "lxml>=5.2",
-    "apscheduler>=3.10",
-    "rich>=13.7",
-    "httpx>=0.27",
-    "sqlalchemy>=2.0",
+    "paramiko>=3.4",        # SFTP connector
+    "simpleeval>=1.0",      # condition filtering in transforms
+    "defusedxml>=0.7",      # safe XML parsing
+    "lxml>=5.2",            # XPath / XML connector
+    "rich>=13.7",           # CLI output
+    "httpx>=0.27",          # HTTP connector + WorkerPool health calls
 ]
 
 [project.optional-dependencies]
+# ── Deployment profiles ────────────────────────────────────────────────────
+#
+# manager  — everything the manager/standalone pod needs on top of base.
+#            Adds APScheduler (scheduling), SQLAlchemy (persistence), and
+#            the two most common DB drivers.  Install for any pod that owns
+#            the scheduler and writes run history to the database.
+#
+# worker   — semantic marker; base dependencies are already sufficient for
+#            the worker execution plane.  Add connector extras as needed,
+#            e.g. pip install tram[worker,kafka,snmp,avro]
+#
+manager = [
+    "apscheduler>=3.10",
+    "sqlalchemy>=2.0",
+    "psycopg2-binary>=2.9",  # PostgreSQL driver (moved from standalone postgresql extra)
+    "PyMySQL>=1.1",           # MySQL/MariaDB driver (moved from standalone mysql extra)
+]
+worker = []                   # base is sufficient; this is a semantic marker only
+
+# ── Connector / feature extras ─────────────────────────────────────────────
 kafka = ["kafka-python>=2.0"]
 opensearch = ["opensearch-py>=2.4"]
 s3 = ["boto3>=1.35"]
@@ -68,6 +87,7 @@ watch = ["watchdog>=3.0"]
 ai-anthropic = ["anthropic>=0.30"]
 ai-openai = ["openai>=1.40"]
 dev = [
+    "tram[manager]",          # apscheduler + sqlalchemy required by unit/integration tests
     "pytest>=8.0",
     "pytest-asyncio>=0.23",
     "pytest-cov>=5.0",
@@ -75,6 +95,7 @@ dev = [
     "ruff>=0.4",
 ]
 all = [
+    "tram[manager]",          # always include manager profile in all
     "tram[kafka]",
     "tram[opensearch]",
     "tram[s3]",

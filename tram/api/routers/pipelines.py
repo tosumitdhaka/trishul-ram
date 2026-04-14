@@ -54,23 +54,9 @@ async def dry_run_pipeline(request: Request) -> dict:
 
 @router.get("")
 async def list_pipelines(request: Request) -> list[dict]:
-    """List all registered pipelines with their current status.
-
-    DB runtime_status is overlaid on each pipeline so all pods return a
-    consistent view regardless of which pod the load balancer routes to.
-    """
+    """List all registered pipelines with their current status."""
     manager = request.app.state.manager
-    db = getattr(request.app.state, "db", None)
     states = manager.list_all()
-    if db is not None:
-        runtime = {r["name"]: r["runtime_status"] for r in db.get_all_pipeline_runtime()}
-        result = []
-        for state in states:
-            d = state.to_dict()
-            if state.config.name in runtime:
-                d["status"] = runtime[state.config.name]
-            result.append(d)
-        return result
     return [state.to_dict() for state in states]
 
 
@@ -108,17 +94,11 @@ async def register_pipeline(request: Request) -> dict:
 @router.get("/{name}")
 async def get_pipeline(name: str, request: Request) -> dict:
     manager = request.app.state.manager
-    db = getattr(request.app.state, "db", None)
     try:
         state = manager.get(name)
     except PipelineNotFoundError as exc:
         raise HTTPException(status_code=404, detail=str(exc))
-    d = state.to_detail_dict()
-    if db is not None:
-        rt = db.get_pipeline_runtime(name)
-        if rt and rt.get("runtime_status"):
-            d["status"] = rt["runtime_status"]
-    return d
+    return state.to_detail_dict()
 
 
 @router.put("/{name}")

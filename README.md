@@ -2,7 +2,7 @@
 
 > Lightweight, container-native Python daemon that moves and transforms telecom data (PM/FM/Logs) across protocols.
 
-**Version:** 1.1.4 | **Status:** Production-ready | **Python:** 3.11+
+**Version:** 1.2.0 | **Status:** Production-ready | **Python:** 3.11+
 
 ---
 
@@ -329,16 +329,16 @@ The default image includes most connector and serializer extras — Kafka, MQTT,
 ```bash
 # Standalone (default) — single PVC at /data holds SQLite DB, schemas, and MIBs
 helm install tram oci://ghcr.io/tosumitdhaka/charts/trishul-ram \
-  --set image.tag=1.1.4
+  --set image.tag=1.2.0
 
 # With API key authentication
 helm install tram oci://ghcr.io/tosumitdhaka/charts/trishul-ram \
-  --set image.tag=1.1.4 \
+  --set image.tag=1.2.0 \
   --set apiKey=mysecret
 
 # Cluster mode (3-replica StatefulSet + external PostgreSQL)
 helm install tram oci://ghcr.io/tosumitdhaka/charts/trishul-ram \
-  --set image.tag=1.1.4 \
+  --set image.tag=1.2.0 \
   --set clusterMode.enabled=true \
   --set replicaCount=3 \
   --set envSecret.TRAM_DB_URL.secretName=tram-db \
