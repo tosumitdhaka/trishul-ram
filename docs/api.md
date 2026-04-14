@@ -159,14 +159,15 @@ curl -X POST http://localhost:8765/api/pipelines/dry-run \
   --data-binary @my-pipeline.yaml
 ```
 
-Response `200`:
+Response `200` (valid):
 ```json
-{"status": "ok", "pipeline": "pm-ingest", "message": "Pipeline parsed successfully"}
+{"valid": true, "issues": []}
 ```
 
-Response `422` (validation error):
+Response `200` (invalid — always 200, check `valid` field):
 ```json
-{"status": "error", "detail": "serializer_in: unknown type 'xtf'"}
+{"valid": false, "issues": ["serializer_in: unknown type 'xtf'"]
+}
 ```
 
 ---
@@ -371,7 +372,7 @@ curl -X POST http://localhost:8765/api/auth/change-password \
 
 Response `200`:
 ```json
-{"status": "ok", "message": "Password updated"}
+{"ok": true, "username": "admin"}
 ```
 
 ---
@@ -389,8 +390,10 @@ curl -X POST http://localhost:8765/api/connectors/test \
 
 Response:
 ```json
-{"success": true, "connector_type": "kafka", "message": "Connected to kafka:9092"}
+{"ok": true, "latency_ms": 12, "error": null}
 ```
+
+On failure: `{"ok": false, "latency_ms": null, "error": "Connection refused"}`
 
 ### POST /api/connectors/test-pipeline
 Test all source and sink connectors declared in a pipeline YAML. Returns per-connector results.
@@ -404,10 +407,9 @@ curl -X POST http://localhost:8765/api/connectors/test-pipeline \
 Response:
 ```json
 {
-  "pipeline": "pm-ingest",
-  "results": [
-    {"role": "source", "type": "sftp", "host": "sftp.example.com", "success": true},
-    {"role": "sink",   "type": "kafka", "bootstrap_servers": "kafka:9092", "success": false, "error": "Connection refused"}
+  "source": {"type": "sftp", "ok": true, "latency_ms": 45, "error": null},
+  "sinks": [
+    {"type": "kafka", "ok": false, "latency_ms": null, "error": "Connection refused"}
   ]
 }
 ```

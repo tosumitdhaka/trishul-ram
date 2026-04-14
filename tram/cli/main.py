@@ -127,7 +127,7 @@ def validate(
     from tram.pipeline.loader import load_pipeline
 
     try:
-        config = load_pipeline(pipeline_file)
+        config, _ = load_pipeline(pipeline_file)
     except ConfigError as exc:
         err_console.print(f"[red]✗ Validation failed:[/red]\n{exc}")
         raise typer.Exit(1)
@@ -173,7 +173,7 @@ def run(
     import tram.transforms  # noqa: F401
 
     try:
-        pipeline_config = load_pipeline(pipeline_file)
+        pipeline_config, _ = load_pipeline(pipeline_file)
     except ConfigError as exc:
         err_console.print(f"[red]Config error:[/red] {exc}")
         raise typer.Exit(1)
