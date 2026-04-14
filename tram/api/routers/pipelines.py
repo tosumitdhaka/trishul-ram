@@ -206,6 +206,28 @@ async def stop_pipeline(name: str, request: Request) -> dict:
     return {"name": name, "status": "stopped"}
 
 
+@router.post("/{name}/restart")
+async def restart_pipeline(name: str, request: Request) -> dict:
+    """Stop a pipeline's active execution and immediately reschedule it.
+
+    Useful after schema/MIB changes or when a stream needs a fresh start.
+    Works for both batch (interval/cron) and stream pipelines.
+    """
+    controller = request.app.state.controller
+
+    try:
+        controller.get(name)
+    except PipelineNotFoundError as exc:
+        raise HTTPException(status_code=404, detail=str(exc))
+
+    try:
+        controller.restart_pipeline(name)
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=str(exc))
+
+    return {"name": name, "status": "restarting"}
+
+
 @router.post("/{name}/run")
 async def trigger_run(name: str, request: Request) -> dict:
     controller = request.app.state.controller
@@ -246,7 +268,7 @@ async def reload_pipelines(request: Request) -> dict:
             seeded += 1
 
     # Trigger an immediate sync to pick up newly seeded pipelines
-    controller._sync_from_db()
+    controller._boot_load()
 
     total = len(controller.list_all())
     return {"reloaded": seeded, "total": total}

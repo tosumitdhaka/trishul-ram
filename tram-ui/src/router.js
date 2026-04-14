@@ -35,7 +35,7 @@ const meta = {
   runs:      { title: 'Run History',       sub: '' },
   schemas:   { title: 'Schemas',           sub: '' },
   mibs:      { title: 'MIB Modules',       sub: '' },
-  cluster:   { title: 'Cluster',           sub: '' },
+  cluster:   { title: 'Workers',           sub: 'Worker pool status' },
   plugins:   { title: 'Plugins',           sub: '' },
   settings:  { title: 'Settings',          sub: 'Connection & daemon configuration' },
   templates: { title: 'Pipeline Templates', sub: 'Start from a pre-built example' },

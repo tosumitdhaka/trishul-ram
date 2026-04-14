@@ -385,6 +385,16 @@ class PipelineExecutor:
             else:
                 ctx.inc_records_skipped(len(records))
                 RECORDS_SKIP.labels(pipeline=ctx.pipeline_name).inc(len(records))
+                skip_msg = (
+                    "Records skipped — no sink wrote successfully "
+                    "(condition filtered all records or every sink failed/circuit-open)"
+                )
+                ctx.note_skip(skip_msg)
+                logger.warning(
+                    skip_msg,
+                    extra={"pipeline": ctx.pipeline_name, "run_id": ctx.run_id,
+                           "skipped": len(records)},
+                )
 
             duration = time.monotonic() - t_start
             DURATION.labels(pipeline=ctx.pipeline_name).observe(duration)

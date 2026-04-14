@@ -39,12 +39,17 @@ class WorkerPool:
         self._manager_url = manager_url
         self._poll_interval = poll_interval
 
-        # {url: {"ok": bool, "active_runs": int}}
+        # {url: {"ok": bool, "active_runs": int, "running_pipelines": list[str]}}
         self._health: dict[str, dict] = {
-            url: {"ok": True, "active_runs": 0} for url in workers
+            url: {"ok": True, "active_runs": 0, "running_pipelines": []} for url in workers
         }
         # {run_id: worker_url}
         self._assignments: dict[str, str] = {}
+        # {pipeline_name: worker_url} — most recent dispatch per pipeline (for Workers UI)
+        self._pipeline_worker: dict[str, str] = {}
+        # Round-robin counter for tie-breaking equally-loaded workers
+        self._rr_counter: int = 0
+        self._last_healthy_count: int = -1
         self._lock = threading.Lock()
 
         self._poll_stop = threading.Event()
@@ -121,9 +126,10 @@ class WorkerPool:
                     data = resp.json() if resp.status_code == 200 else {}
                     ok = resp.status_code == 200 and bool(data.get("ok"))
                     active = int(data.get("active_runs", 0))
+                    pipelines = list(data.get("running_pipelines", []))
                     with self._lock:
                         prev_ok = self._health[url]["ok"]
-                        self._health[url] = {"ok": ok, "active_runs": active}
+                        self._health[url] = {"ok": ok, "active_runs": active, "running_pipelines": pipelines}
                     if prev_ok and not ok:
                         logger.warning("Worker went down", extra={"worker": url})
                     elif not prev_ok and ok:
@@ -132,11 +138,26 @@ class WorkerPool:
                     with self._lock:
                         was_ok = self._health[url]["ok"]
                         self._health[url]["ok"] = False
+                        self._health[url]["running_pipelines"] = []
                     if was_ok:
                         logger.warning(
                             "Worker health probe failed",
                             extra={"worker": url, "error": str(exc)},
                         )
+
+        with self._lock:
+            healthy = sum(1 for h in self._health.values() if h["ok"])
+        total = len(self._workers)
+        if healthy != self._last_healthy_count:
+            self._last_healthy_count = healthy
+            level = logging.INFO if healthy == total else logging.WARNING
+            logger.log(
+                level,
+                "Worker pool: %d/%d healthy",
+                healthy,
+                total,
+                extra={"healthy": healthy, "total": total},
+            )
 
     # ── Queries ────────────────────────────────────────────────────────────
 
@@ -146,22 +167,38 @@ class WorkerPool:
             return [url for url, h in self._health.items() if h["ok"]]
 
     def least_loaded(self) -> str | None:
-        """Return the healthy worker URL with the fewest active runs."""
+        """Return a healthy worker URL, using least-loaded + round-robin tiebreaker."""
         with self._lock:
             candidates = [
                 (url, h["active_runs"])
                 for url, h in self._health.items()
                 if h["ok"]
             ]
-        if not candidates:
-            return None
-        return min(candidates, key=lambda x: x[1])[0]
+            if not candidates:
+                return None
+            min_runs = min(runs for _, runs in candidates)
+            min_workers = [url for url, runs in candidates if runs == min_runs]
+            # Round-robin among equally loaded workers to spread pipelines evenly
+            idx = self._rr_counter % len(min_workers)
+            self._rr_counter += 1
+        return min_workers[idx]
 
     def status(self) -> list[dict]:
         """Snapshot of all worker health states (for /api/cluster/nodes)."""
         with self._lock:
+            # Build per-worker pipeline assignment list
+            worker_pipelines: dict[str, list[str]] = {url: [] for url in self._health}
+            for pipeline_name, worker_url in self._pipeline_worker.items():
+                if worker_url in worker_pipelines:
+                    worker_pipelines[worker_url].append(pipeline_name)
             return [
-                {"url": url, "ok": h["ok"], "active_runs": h["active_runs"]}
+                {
+                    "url": url,
+                    "ok": h["ok"],
+                    "active_runs": h["active_runs"],
+                    "running_pipelines": h.get("running_pipelines", []),
+                    "assigned_pipelines": sorted(worker_pipelines.get(url, [])),
+                }
                 for url, h in self._health.items()
             ]
 
@@ -211,6 +248,7 @@ class WorkerPool:
 
         with self._lock:
             self._assignments[run_id] = worker_url
+            self._pipeline_worker[pipeline_name] = worker_url
             if worker_url in self._health:
                 self._health[worker_url]["active_runs"] += 1
 

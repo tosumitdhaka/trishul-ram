@@ -91,8 +91,10 @@ class TestHealthPolling:
         with patch("httpx.Client", return_value=mock_client):
             pool._poll_all()
 
-        assert pool._health["http://w0:8766"] == {"ok": True, "active_runs": 2}
-        assert pool._health["http://w1:8766"] == {"ok": True, "active_runs": 0}
+        assert pool._health["http://w0:8766"]["ok"] is True
+        assert pool._health["http://w0:8766"]["active_runs"] == 2
+        assert pool._health["http://w1:8766"]["ok"] is True
+        assert pool._health["http://w1:8766"]["active_runs"] == 0
 
     def test_poll_marks_down_worker_on_error(self):
         pool = _pool("http://w0:8766")

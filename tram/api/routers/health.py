@@ -58,6 +58,17 @@ async def readiness(request: Request) -> dict:
         m, s = divmod(rem, 60)
         uptime = f"{h}h {m}m {s}s" if h else f"{m}m {s}s"
 
+    # Cluster / mode
+    worker_pool = getattr(request.app.state, "worker_pool", None)
+    config = getattr(request.app.state, "config", None)
+    mode = getattr(config, "tram_mode", "standalone") if config else "standalone"
+    if worker_pool is not None:
+        healthy = len(worker_pool.healthy_workers())
+        total = len(worker_pool._workers)
+        cluster = f"manager · {healthy}/{total} workers"
+    else:
+        cluster = mode
+
     return {
         "status": "ready",
         "db": db_status,
@@ -66,6 +77,7 @@ async def readiness(request: Request) -> dict:
         "scheduler": scheduler_status,
         "pipelines_loaded": len(manager.list_all()),
         "uptime": uptime,
+        "cluster": cluster,
     }
 
 

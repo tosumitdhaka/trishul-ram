@@ -218,3 +218,53 @@ If a release has critical issues:
 - **Version bumps are atomic** — all version references must change together
 - **CHANGELOG is user-facing** — write clear, concise entries with examples
 - **Tag format is strict** — always `vX.Y.Z` (lowercase 'v' prefix)
+
+---
+
+## v1.2.1 Release Status — 2026-04-14
+
+### Code Quality
+- [x] `ruff check .` — 5 fixable issues auto-corrected, 0 remaining
+- [x] `ruff check --fix .` — applied
+- [x] Unit tests: `pytest tests/unit/ -q` — **911 passed**
+- [ ] Integration tests — not run (no live SFTP/Kafka in CI)
+- [ ] Coverage check — not run separately (unit suite passes)
+- [x] No secrets in code
+- [x] No hardcoded paths
+
+### Changes in this release
+- [x] `tram/core/context.py` — `note_skip()` method added
+- [x] `tram/pipeline/executor.py` — skip logs WARNING + `note_skip()` call
+- [x] `tram/agent/server.py` — `errors` list propagated in worker callback
+- [x] `tram/api/routers/internal.py` — `RunCompletePayload.errors` field added
+- [x] `tram/pipeline/controller.py` — `on_worker_run_complete` accepts + stores `errors`
+- [x] `tram/core/log_config.py` — `httpx` logger silenced to WARNING
+- [x] `tram/agent/worker_pool.py` — single summary health log on count change
+- [x] `tram/api/routers/health.py` — `/api/ready` returns `cluster` field
+- [x] `tram-ui/src/pages/settings.js` — Daemon Status cluster field fixed
+- [x] `tram-ui/src/pages/dashboard.js` — Start / Stop / Download buttons
+- [x] `tram-ui/src/pages/detail.html` — Run Now trigger button
+- [x] `tram-ui/src/pages/detail.js` — `_detailTrigger` (one-shot) vs `_detailRun` (schedule)
+- [x] `tram-ui/src/pages/cluster.js` — per-worker assigned/running pipelines
+- [x] CSS vars applied across editor, wizard, cluster, plugins, settings, templates
+- [x] `aria-label` on all unlabelled form controls
+- [x] `tests/unit/test_api_internal_router.py` — updated for `errors` field
+
+### Version Bump
+- [x] `pyproject.toml` → `1.2.1`
+- [x] `README.md` → `1.2.1`
+- [x] `helm/Chart.yaml` → `1.2.1`
+- [x] `CHANGELOG.md` — `[1.2.1]` section added, comparison link added
+
+### Docker / Helm
+- [x] `docker build -t trishul-ram:1.2.4 .` — built successfully
+- [x] `docker build -t trishul-ram-worker:1.2.4 . -f Dockerfile.worker` — built successfully
+- [x] `helm upgrade` — REVISION 10, all 4 pods `1/1 Running`
+- [x] Manager logs clean — single `Worker pool: 3/3 healthy` after startup
+- [x] Settings page shows `manager · 3/3 workers`
+- [x] Worker 401s resolved — `TRAM_API_KEY` set on all pods
+
+### Pending (post-release)
+- [ ] `git tag -a v1.2.1 -m "Release version 1.2.1" && git push origin v1.2.1`
+- [ ] GitHub release created from tag
+- [ ] Push images to registry: `ghcr.io/tosumitdhaka/trishul-ram:1.2.1`

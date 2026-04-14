@@ -9,6 +9,54 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ---
 
+## [1.2.1] — 2026-04-14
+
+### Fixed
+
+**Manager + Worker — run metrics propagation**
+- `records_skipped` now correctly propagates from worker executor through the HTTP callback to the manager DB and UI run history (was always 0 in worker mode)
+- Per-record `errors` list now flows through the full worker callback chain (`executor → _post_run_complete → RunCompletePayload → on_worker_run_complete → DB errors_json`) — skip reasons and transform/sink errors are now visible in the run detail expandable row
+- `RunCompletePayload` extended with `errors: list[str]` field; `on_worker_run_complete` accepts and stores it
+
+**Executor — skip reason visibility**
+- Skip path (no sink wrote — condition filtered or all sinks failed/circuit-open) now logs at WARNING instead of DEBUG, and appends the reason to `ctx.errors` via new `PipelineRunContext.note_skip()` method
+- `note_skip()` appends to errors without incrementing `records_skipped` (avoids double-counting)
+
+**Manager logs — health poll noise**
+- `httpx` logger set to WARNING in `log_config.py` — individual per-request lines no longer flood the manager log
+- `WorkerPool._poll_all()` now emits a single `Worker pool: N/M healthy` summary line only when the healthy count changes; logs at WARNING when degraded, INFO when fully healthy
+
+**Settings page — Daemon Status**
+- `/api/ready` now returns a `cluster` field: `"manager · N/M workers"` in manager mode, `"standalone"` otherwise
+- Settings Daemon Status row previously showed `disabled (standalone)` for all deployments — now correctly reflects the running mode
+
+### Changed
+
+**UI — Dashboard actions**
+- Replaced single Run Now / Stop toggle with separate **Start**, **Stop**, and **Download YAML** buttons per pipeline row
+- Run Now removed from dashboard; one-shot trigger remains on the pipeline detail page only
+
+**UI — Pipeline detail**
+- Added **Run Now** button (lightning icon) as a separate one-shot trigger independent of the Start/Stop schedule buttons
+- Run Now on a stopped pipeline no longer re-schedules it — `_on_run_complete` correctly restores `stopped` status when `_may_schedule()` returns False
+
+**UI — Workers page**
+- Renamed "Cluster" → "Workers" in navigation
+- Per-worker card now shows `assigned_pipelines` (most recent dispatch per pipeline) with currently-running ones highlighted in green
+- `WorkerPool` tracks `_pipeline_worker: dict[str, str]` for dispatch history; exposes `assigned_pipelines` in `status()`
+
+**UI — Light/dark mode**
+- Replaced all remaining hardcoded dark hex values (`#0d1117`, `#161b22`, `#30363d`, `#e6edf3`, `#8b949e`) with CSS variables across `editor.html`, `wizard.html`, `cluster.html`, `plugins.html`, `settings.html`, `templates.html`
+- Added `aria-label` attributes to unlabelled form controls in `runs.html`, `wizard.html`, `detail.html` (resolves browser accessibility warnings)
+
+**Load balancing**
+- `WorkerPool.least_loaded()` uses round-robin tiebreaker (`_rr_counter`) among equally-loaded workers — prevents all pipelines being dispatched to `worker-0` when all workers are idle
+
+**Worker image**
+- Dedicated `Dockerfile.worker` validated in production; workers now deploy with `trishul-ram-worker` image (no apscheduler/sqlalchemy/UI assets)
+
+---
+
 ## [1.2.0] — 2026-04-10
 
 ### Added
@@ -1056,7 +1104,8 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 ---
 
 <!-- Comparison links -->
-[Unreleased]: https://github.com/tosumitdhaka/trishul-ram/compare/v1.2.0...HEAD
+[Unreleased]: https://github.com/tosumitdhaka/trishul-ram/compare/v1.2.1...HEAD
+[1.2.1]: https://github.com/tosumitdhaka/trishul-ram/compare/v1.2.0...v1.2.1
 [1.2.0]: https://github.com/tosumitdhaka/trishul-ram/compare/v1.1.4...v1.2.0
 [1.1.4]: https://github.com/tosumitdhaka/trishul-ram/compare/v1.1.3...v1.1.4
 [1.1.3]: https://github.com/tosumitdhaka/trishul-ram/compare/v1.1.2...v1.1.3

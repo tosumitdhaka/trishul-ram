@@ -70,14 +70,14 @@ spec:
               value: {{ $val | quote }}
             {{- end }}
             ## Workers are stateless executors — no DB URL needed.
-            ## They POST run results back to the manager via callback.
-            {{- if .Values.sharedStorage.enabled }}
-            ## Schemas and MIBs from shared RWX PVC (workers read, manager writes)
+            ## Schemas and MIBs are fetched from the manager on every run
+            ## via sync_assets() and cached in the emptyDir at /data.
             - name: TRAM_SCHEMA_DIR
               value: /data/schemas
             - name: TRAM_MIB_DIR
               value: /data/mibs
-            {{- end }}
+            - name: TRAM_DATA_DIR
+              value: /data
             {{- if .Values.schemaRegistry.url }}
             - name: TRAM_SCHEMA_REGISTRY_URL
               value: {{ .Values.schemaRegistry.url | quote }}
@@ -102,11 +102,9 @@ spec:
               value: {{ .Values.apiKey | quote }}
             {{- end }}
           volumeMounts:
-            {{- if .Values.sharedStorage.enabled }}
-            ## Mount shared RWX at /data so TRAM_SCHEMA_DIR and TRAM_MIB_DIR resolve correctly
+            ## emptyDir for schemas/MIBs fetched from manager at runtime
             - name: data
               mountPath: /data
-            {{- end }}
             {{- if .Values.keys.secretName }}
             - name: keys
               mountPath: {{ .Values.keys.mountPath | default "/secrets" }}
@@ -129,11 +127,10 @@ spec:
             {{- toYaml . | nindent 12 }}
           {{- end }}
       volumes:
-        {{- if .Values.sharedStorage.enabled }}
+        ## emptyDir: ephemeral per-pod cache for schemas/MIBs fetched from manager.
+        ## No PVC needed — workers are stateless. Content is re-fetched on pod restart.
         - name: data
-          persistentVolumeClaim:
-            claimName: data-{{ include "tram.fullname" . }}
-        {{- end }}
+          emptyDir: {}
         {{- if .Values.keys.secretName }}
         - name: keys
           secret:

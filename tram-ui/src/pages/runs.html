@@ -1,12 +1,12 @@
 <div class="d-flex gap-2 mb-3 align-items-center">
-  <select class="form-select form-select-sm" style="width:200px" id="runs-pipeline">
+  <select class="form-select form-select-sm" style="width:200px" id="runs-pipeline" aria-label="Filter by pipeline">
     <option value="">All pipelines</option>
   </select>
-  <select class="form-select form-select-sm" style="width:130px" id="runs-status">
+  <select class="form-select form-select-sm" style="width:130px" id="runs-status" aria-label="Filter by status">
     <option value="">All status</option>
     <option>success</option><option>failed</option><option>partial</option>
   </select>
-  <input type="date" class="form-control form-control-sm" style="width:150px" id="runs-from"/>
+  <input type="date" class="form-control form-control-sm" style="width:150px" id="runs-from" aria-label="From date"/>
   <button class="btn-flat ms-auto" title="Refresh" onclick="window._runsRefresh?.()">
     <i class="bi bi-arrow-clockwise"></i>
   </button>

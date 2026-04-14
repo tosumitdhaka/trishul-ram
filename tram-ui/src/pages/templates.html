@@ -21,15 +21,15 @@
 <!-- Preview modal -->
 <div class="modal fade" id="tpl-preview-modal" tabindex="-1">
   <div class="modal-dialog modal-lg modal-dialog-scrollable">
-    <div class="modal-content" style="background:#0d1117;border:1px solid #30363d">
-      <div class="modal-header" style="border-color:#30363d">
-        <h6 class="modal-title text-light" id="tpl-preview-title">Preview</h6>
-        <button type="button" class="btn-close btn-close-white" data-bs-dismiss="modal"></button>
+    <div class="modal-content" style="background:var(--bg-page);border:1px solid var(--border)">
+      <div class="modal-header" style="border-color:var(--border)">
+        <h6 class="modal-title" style="color:var(--fg)" id="tpl-preview-title">Preview</h6>
+        <button type="button" class="btn-close" style="filter:var(--btn-close-filter,none)" data-bs-dismiss="modal"></button>
       </div>
       <div class="modal-body p-0">
-        <pre id="tpl-preview-body" style="margin:0;padding:16px;background:#161b22;font-size:12px;color:#e6edf3;overflow:auto;max-height:60vh"></pre>
+        <pre id="tpl-preview-body" style="margin:0;padding:16px;background:var(--bg-surface);font-size:12px;color:var(--fg);overflow:auto;max-height:60vh"></pre>
       </div>
-      <div class="modal-footer" style="border-color:#30363d">
+      <div class="modal-footer" style="border-color:var(--border)">
         <button type="button" class="btn btn-sm btn-primary" id="tpl-preview-deploy">
           <i class="bi bi-rocket-takeoff me-1"></i>Deploy this template
         </button>

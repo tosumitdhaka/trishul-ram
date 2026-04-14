@@ -22,11 +22,16 @@ Readiness probe. Returns 200 once startup is complete, 503 if DB or scheduler is
 {
   "status": "ready",
   "db": "ok",
+  "db_engine": "sqlite",
+  "db_path": "/data/tram.db",
   "scheduler": "running",
-  "cluster": "disabled",
-  "pipelines_loaded": 3
+  "cluster": "manager · 3/3 workers",
+  "pipelines_loaded": 3,
+  "uptime": "2h 15m 30s"
 }
 ```
+
+`cluster` values: `"manager · N/M workers"` in manager mode, `"standalone"` in standalone mode.
 
 ### GET /api/meta
 Build and version information.
@@ -253,10 +258,14 @@ With SQLite/DB persistence, run history survives daemon restarts.
     "records_out": 1487,
     "records_skipped": 13,
     "dlq_count": 0,
-    "error": null
+    "error": null,
+    "errors": ["Records skipped — no sink wrote successfully (condition filtered all records)"]
   }
 ]
 ```
+
+- `error` — top-level fatal error string if the whole run crashed; `null` on success
+- `errors` — per-record error/skip-reason messages accumulated during the run; non-empty even on `status: "success"` when individual records were skipped or failed with `on_error: continue`
 
 ### GET /api/runs/{run_id}
 Get a single run result.

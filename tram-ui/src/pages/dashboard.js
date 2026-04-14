@@ -117,9 +117,12 @@ function _renderPipelines(perPipeline) {
     return
   }
   tbody.innerHTML = perPipeline.map(p => {
-    const actionBtn = p.status === 'running'
-      ? `<button class="btn-flat-danger" title="Stop" onclick="event.stopPropagation();window._dashStop('${esc(p.name)}')"><i class="bi bi-stop-fill"></i></button>`
-      : `<button class="btn-flat-primary" title="Run now" onclick="event.stopPropagation();window._dashRun('${esc(p.name)}')"><i class="bi bi-play-fill"></i></button>`
+    const isRunning = p.status === 'running' || p.status === 'scheduled'
+    const stopBtn  = `<button class="btn-flat-danger" title="Stop" ${isRunning ? '' : 'disabled style="opacity:.35"'}
+      onclick="event.stopPropagation();window._dashStop('${esc(p.name)}')"><i class="bi bi-stop-fill"></i></button>`
+    const startBtn = `<button class="btn-flat-primary" title="Start" ${isRunning ? 'disabled style="opacity:.35"' : ''}
+      onclick="event.stopPropagation();window._dashStart('${esc(p.name)}')"><i class="bi bi-play-fill"></i></button>`
+    const dlBtn    = `<button class="btn-flat" title="Download YAML" onclick="event.stopPropagation();window._dashDownload('${esc(p.name)}')"><i class="bi bi-download"></i></button>`
     const errStyle = p.errors > 0 ? 'color:#f85149' : ''
     return `<tr style="cursor:pointer" onclick="navigate('detail');window._detailPipeline='${esc(p.name)}'">
       <td class="fw-semibold">${esc(p.name)}</td>
@@ -127,7 +130,7 @@ function _renderPipelines(perPipeline) {
       <td class="text-secondary" style="font-size:12px">${fmtNum(p.records_out)}</td>
       <td class="text-secondary" style="font-size:12px">${p.runs_last_hour}</td>
       <td class="text-secondary" style="font-size:12px;${errStyle}">${p.errors > 0 ? p.errors + ' err' : ''}</td>
-      <td class="text-end">${actionBtn}</td>
+      <td class="text-end d-flex gap-1 justify-content-end">${startBtn}${stopBtn}${dlBtn}</td>
     </tr>`
   }).join('')
 
@@ -170,9 +173,20 @@ window._dashStop = async (name) => {
   try { await api.pipelines.stop(name); toast(`Stopped ${name}`); await _refresh() }
   catch (e) { toast(e.message, 'error') }
 }
-window._dashRun = async (name) => {
-  try { await api.pipelines.run(name); toast(`Triggered ${name}`); setTimeout(_refresh, 800) }
+window._dashStart = async (name) => {
+  try { await api.pipelines.start(name); toast(`Started ${name}`); setTimeout(_refresh, 800) }
   catch (e) { toast(e.message, 'error') }
+}
+window._dashDownload = async (name) => {
+  try {
+    const p = await api.pipelines.get(name)
+    const yaml = p.yaml || p.raw || ''
+    if (!yaml) { toast('No YAML available', 'error'); return }
+    const a = document.createElement('a')
+    a.href = URL.createObjectURL(new Blob([yaml], { type: 'text/yaml' }))
+    a.download = `${name}.yaml`
+    a.click()
+  } catch (e) { toast(e.message, 'error') }
 }
 
 function _set(id, val) {

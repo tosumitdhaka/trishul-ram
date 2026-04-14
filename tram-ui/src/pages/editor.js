@@ -188,12 +188,16 @@ export async function init() {
 async function _checkAI(isEdit) {
   try {
     const status = await api.ai.status()
-    const sec = document.getElementById('editor-ai-section')
-    if (status.enabled && sec) {
-      sec.classList.remove('d-none')
-      const modelEl = document.getElementById('editor-ai-model')
-      if (modelEl) modelEl.textContent = `${status.provider} / ${status.model}`
+    const modelEl   = document.getElementById('editor-ai-model')
+    const uncfgEl   = document.getElementById('editor-ai-unconfigured')
+    const genBtn    = document.getElementById('editor-ai-gen-btn')
+    const modBtn    = document.getElementById('editor-ai-mod-btn')
 
+    if (status.enabled) {
+      if (modelEl)  modelEl.textContent = `${status.provider} / ${status.model}`
+      if (uncfgEl)  uncfgEl.classList.add('d-none')
+      if (genBtn)   genBtn.disabled = false
+      if (modBtn)   modBtn.disabled = false
       // Show generate panel for new pipelines, modify panel for existing
       if (isEdit) {
         document.getElementById('editor-ai-generate-panel')?.classList.add('d-none')
@@ -202,6 +206,11 @@ async function _checkAI(isEdit) {
         document.getElementById('editor-ai-generate-panel')?.classList.remove('d-none')
         document.getElementById('editor-ai-modify-panel')?.classList.add('d-none')
       }
+    } else {
+      if (modelEl)  modelEl.textContent = ''
+      if (uncfgEl)  uncfgEl.classList.remove('d-none')
+      if (genBtn)   genBtn.disabled = true
+      if (modBtn)   modBtn.disabled = true
     }
     window._editorAiEnabled = status.enabled
   } catch (_) {}

@@ -22,7 +22,9 @@ class RunCompletePayload(BaseModel):
     status: str         # success | error | failed
     records_in: int = 0
     records_out: int = 0
+    records_skipped: int = 0
     error: str | None = None
+    errors: list[str] = []
 
 
 @router.post("/api/internal/run-complete")
@@ -49,6 +51,8 @@ async def run_complete(payload: RunCompletePayload, request: Request) -> dict:
         status=payload.status,
         records_in=payload.records_in,
         records_out=payload.records_out,
+        records_skipped=payload.records_skipped,
         error=payload.error,
+        errors=payload.errors,
     )
     return {"ok": True}
