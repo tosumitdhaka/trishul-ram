@@ -11,6 +11,11 @@ metadata:
     app.kubernetes.io/component: manager
 spec:
   replicas: 1
+  ## Recreate: stop the old pod before starting the new one.
+  ## Required because the manager uses a RWO PVC (only one node can mount it)
+  ## and optionally hostNetwork=true (port conflicts block surge pods).
+  strategy:
+    type: Recreate
   selector:
     matchLabels:
       {{- include "tram.selectorLabels" . | nindent 6 }}
