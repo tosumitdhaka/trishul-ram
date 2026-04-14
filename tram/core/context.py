@@ -57,6 +57,11 @@ class PipelineRunContext:
             self.errors.append(msg)
             self.records_skipped += 1
 
+    def note_skip(self, msg: str) -> None:
+        """Append a skip-reason note to errors without incrementing records_skipped."""
+        with self._lock:  # type: ignore[attr-defined]
+            self.errors.append(msg)
+
     def record_dlq(self) -> None:
         with self._lock:  # type: ignore[attr-defined]
             self.dlq_count += 1

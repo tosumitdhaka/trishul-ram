@@ -205,10 +205,39 @@ class PipelineController:
         self.manager.set_status(name, "stopped")
         logger.info("Stopped pipeline", extra={"pipeline": name})
 
+    def restart_pipeline(self, name: str) -> None:
+        """Restart a pipeline — stop active execution then immediately reschedule.
+
+        Works in both standalone and manager+worker mode.  For stream pipelines
+        in manager mode the stream dispatch is cancelled and re-dispatched
+        (potentially on a different worker, as determined by the WorkerPool).
+        """
+        state = self.manager.get(name)
+
+        # Stop any active execution without persisting the stopped flag
+        if state.status in ("running", "scheduled"):
+            sched_type = state.config.schedule.type
+            if sched_type == "stream":
+                self._stop_stream(name)
+            else:
+                job_id = f"batch-{name}"
+                if self._scheduler and self._scheduler.get_job(job_id):
+                    self._scheduler.remove_job(job_id)
+            self.manager.set_status(name, "stopped")
+
+        # Clear any persistent stopped flag so _may_schedule passes
+        if self._db is not None:
+            self._db.start_pipeline_flag(name)
+
+        if state.config.enabled and self._may_schedule(name):
+            self._do_schedule(name)
+        else:
+            self.manager.set_status(name, "stopped")
+
+        logger.info("Restarted pipeline", extra={"pipeline": name})
+
     def trigger_run(self, name: str) -> str:
-        """Immediate one-shot run. Returns run_id. Blocked if pipeline is stopped or running."""
-        if self._db is not None and self._db.is_pipeline_stopped(name):
-            raise ValueError(f"Pipeline '{name}' is stopped — start it before triggering")
+        """Immediate one-shot run. Returns run_id. Works even when pipeline is stopped."""
         state = self.manager.get(name)
         if state.config.schedule.type == "stream":
             raise ValueError(f"Pipeline '{name}' is a stream pipeline — cannot trigger manually")
@@ -410,7 +439,9 @@ class PipelineController:
                     self._do_schedule(pipeline_name)
                     return
                 else:
-                    final_status = "scheduled"
+                    # Pipeline was explicitly stopped or otherwise not schedulable —
+                    # restore stopped status rather than showing misleading "scheduled"
+                    final_status = "stopped"
             else:
                 final_status = "stopped"
         else:
@@ -425,7 +456,9 @@ class PipelineController:
         status: str,
         records_in: int,
         records_out: int,
-        error: str | None,
+        records_skipped: int = 0,
+        error: str | None = None,
+        errors: list[str] | None = None,
     ) -> None:
         """Callback from a worker agent when a dispatched run finishes."""
         from tram.core.context import RunResult, RunStatus
@@ -443,9 +476,10 @@ class PipelineController:
             finished_at=datetime.now(UTC),
             records_in=records_in,
             records_out=records_out,
-            records_skipped=0,
+            records_skipped=records_skipped,
             error=error,
             node_id=self._node_id,
+            errors=errors or [],
         )
 
         if self._worker_pool is not None:

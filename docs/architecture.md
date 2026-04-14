@@ -212,68 +212,108 @@ When configured, failed records are written as JSON envelopes:
 
 Cooldown is persisted in `alert_state` SQLite table so it survives daemon restarts.
 
-## Cluster Mode (v0.8.0)
+## Cluster Mode / Manager + Worker (v1.2.0)
 
-TRAM v0.8.0 adds a self-organising cluster with no external coordinator. Every pod participates in lightweight leader-election-free ownership via a shared database.
+TRAM v1.2.0 replaces the previous shared-DB cluster model with a dedicated **manager + worker** architecture. Set `TRAM_MODE` to choose the deployment shape.
 
-### How it works
+### Deployment modes
+
+| `TRAM_MODE` | Role | Runs |
+|-------------|------|------|
+| `standalone` (default) | All-in-one: scheduler + DB + UI + executor | Single pod |
+| `manager` | Scheduler + DB + UI; dispatches runs to workers | Deployment (1 replica) |
+| `worker` | Stateless executor; no DB, no scheduler, no UI | StatefulSet (N replicas) |
+
+### Architecture diagram
 
 ```
-┌──────────────────────────────────────────────────────────────────┐
-│  Kubernetes StatefulSet                                           │
-│                                                                   │
-│  tram-0 ─────┐                                                   │
-│  tram-1 ─────┼──── node_registry table (PostgreSQL / MariaDB) ───┤
-│  tram-2 ─────┘         node_id  │  last_heartbeat  │  status     │
-│                                                                   │
-│  Each pod:                                                        │
-│    1. NodeRegistry.start() → INSERT/UPSERT own row               │
-│    2. Heartbeat thread → UPDATE last_heartbeat every N seconds   │
-│    3. expire_nodes()  → mark peers with old heartbeat 'dead'     │
-│    4. ClusterCoordinator.refresh() → read live peers             │
-│    5. owns(pipeline)  → sha1(name) % live_count == my_position  │
-│    6. Rebalance loop  → start/stop local pipelines on change     │
-└──────────────────────────────────────────────────────────────────┘
+┌───────────────────────────────────────────────────────────────────────┐
+│  Manager pod (Deployment, 1 replica)                                   │
+│                                                                        │
+│  PipelineController ──── APScheduler ──── PipelineManager             │
+│         │                                      │                       │
+│         │  POST /agent/run                   TramDB (SQLite, RWO PVC) │
+│         ▼                                                              │
+│  WorkerPool                                                            │
+│  ├── least_loaded() + round-robin tiebreaker                           │
+│  ├── _pipeline_worker: {pipeline → worker_url}                        │
+│  └── poll /agent/health every 10s → single summary log on change      │
+│                   │                                                    │
+│  FastAPI REST API + Web UI                                             │
+│  POST /api/internal/run-complete  ← worker callback                   │
+└──────────────────────────┬────────────────────────────────────────────┘
+                           │  HTTP dispatch
+           ┌───────────────┼───────────────┐
+           ▼               ▼               ▼
+    ┌─────────────┐ ┌─────────────┐ ┌─────────────┐
+    │  worker-0   │ │  worker-1   │ │  worker-2   │
+    │  :8766      │ │  :8766      │ │  :8766      │
+    │             │ │             │ │             │
+    │ WorkerAgent │ │ WorkerAgent │ │ WorkerAgent │
+    │ (FastAPI)   │ │ (FastAPI)   │ │ (FastAPI)   │
+    │             │ │             │ │             │
+    │ sync assets │ │ sync assets │ │ sync assets │
+    │ (schemas,   │ │ (schemas,   │ │ (schemas,   │
+    │  MIBs)      │ │  MIBs)      │ │  MIBs)      │
+    │             │ │             │ │             │
+    │ PipelineExe │ │ PipelineExe │ │ PipelineExe │
+    │ cutor       │ │ cutor       │ │ cutor       │
+    └──────┬──────┘ └──────┬──────┘ └──────┬──────┘
+           └───────────────┼───────────────┘
+                           │ POST /api/internal/run-complete
+                           ▼
+                    Manager (callback)
 ```
 
-### Consistent hashing
+### Run lifecycle
 
-```python
-_stable_hash(name) % len(live_nodes) == my_position
+1. APScheduler fires → `PipelineController._run_batch()`
+2. Manager calls `WorkerPool.dispatch()` → picks least-loaded worker (round-robin on ties)
+3. Worker receives `POST /agent/run` with YAML + run_id
+4. Worker syncs schemas/MIBs from manager (`GET /api/schemas`, `GET /api/mibs/{name}`)
+5. Worker executes `PipelineExecutor.batch_run()` in a background thread
+6. Worker POSTs `run-complete` to manager: `records_in/out/skipped`, `error`, `errors[]`
+7. Manager calls `on_worker_run_complete()` → saves to DB, updates pipeline state
+
+### Worker discovery
+
+Workers are resolved from Kubernetes headless DNS:
+
+```
+http://<release>-worker-N.<release>-worker.<namespace>.svc.cluster.local:8766
 ```
 
-- `_stable_hash(name)`: `sha1(name.encode())` — deterministic across all pods and restarts (unlike Python `hash()`)
-- `live_nodes`: sorted by `node_id` — order is identical on every pod
-- `my_position`: index of `this_node_id` in the sorted list — NOT the StatefulSet ordinal
-  - Example: if `tram-1` fails, `tram-0` = position 0, `tram-2` = position 1; full coverage is maintained
+Controlled by `TRAM_WORKER_REPLICAS`, `TRAM_WORKER_SERVICE`, `TRAM_WORKER_NAMESPACE`, `TRAM_WORKER_PORT`. Can also be set explicitly via `TRAM_WORKERS=http://w0:8766,http://w1:8766`.
 
-### Failure recovery
+### Worker agent API (`:8766`)
 
-When a node stops heartbeating for `TRAM_NODE_TTL_SECONDS` (default 30s), peers mark it `'dead'` via `expire_nodes()`. On the next `coordinator.refresh()` call, the rebalance loop detects the topology change and absorbs the dead node's pipelines. No human intervention required.
+| Method | Path | Description |
+|--------|------|-------------|
+| `POST` | `/agent/run` | Dispatch a pipeline run (YAML + run_id) |
+| `POST` | `/agent/stop` | Signal a running pipeline to stop |
+| `GET` | `/agent/status` | Active batch runs and streams |
+| `GET` | `/agent/health` | Liveness + active_runs + running_pipelines |
 
-### Standalone fallback
-
-- `TRAM_CLUSTER_ENABLED=false` (default): `coordinator = None`; scheduler runs all pipelines normally
-- SQLite as `TRAM_DB_URL`: cluster mode is silently disabled with a warning (SQLite cannot handle concurrent multi-node writes)
-- If live nodes list is empty (startup race): node owns all pipelines as a safe fallback
-
-### API
-
-`GET /api/cluster/nodes` — returns topology state:
+### `GET /api/cluster/nodes` (manager)
 
 ```json
 {
-  "cluster_enabled": true,
-  "node_id": "tram-1",
-  "my_position": 1,
-  "live_node_count": 3,
-  "nodes": [
-    {"node_id": "tram-0"},
-    {"node_id": "tram-1"},
-    {"node_id": "tram-2"}
+  "mode": "manager",
+  "workers": [
+    {
+      "url": "http://trishul-ram-worker-0...:8766",
+      "ok": true,
+      "active_runs": 0,
+      "running_pipelines": [],
+      "assigned_pipelines": ["snmp_ifmib_to_sftp"]
+    }
   ]
 }
 ```
+
+### Standalone fallback
+
+`TRAM_MODE=standalone` (default): no `WorkerPool` is created; the manager executes pipelines in-process via `PipelineExecutor` directly. SQLite is sufficient.
 
 ## Persistence (SQLAlchemy Core — v0.7.0)
 
@@ -286,11 +326,11 @@ When a node stops heartbeating for `TRAM_NODE_TTL_SECONDS` (default 30s), peers 
 | MySQL | `mysql+pymysql://user:pass@host/db` |
 
 Tables:
-- `run_history` — every `RunResult`; includes `node_id` (TRAM_NODE_ID) and `dlq_count`
+- `run_history` — every `RunResult`; includes `node_id`, `dlq_count`, `records_skipped`, `errors_json`
 - `pipeline_versions` — every YAML registered; UUID primary key
 - `alert_state` — last-alerted timestamp per `(pipeline_name, rule_name)`
-- `node_registry` — cluster membership: `node_id, ordinal, registered_at, last_heartbeat, status`
 - `processed_files` — `(pipeline_name, source_key, filepath, processed_at)`; used by `skip_processed` to make file-source runs idempotent
+- `user_passwords` — bcrypt-hashed passwords for browser auth (override `TRAM_AUTH_USERS`)
 
 **Schema migrations**: `_create_tables()` runs `CREATE TABLE IF NOT EXISTS` + `ALTER TABLE ADD COLUMN` guards at startup. Existing databases from v0.6.0 are upgraded automatically.
 
@@ -309,6 +349,19 @@ Per-pipeline `on_error` policy:
 - `abort` — raise exception, mark run failed, stop
 - `retry` — retry entire run up to `retry_count` times with `retry_delay_seconds` backoff
 - `dlq` — route ALL failures (parse/transform/sink) to the DLQ sink (requires `dlq:` to be configured)
+
+### Per-record error tracking (v1.2.1)
+
+`PipelineRunContext` accumulates per-record errors throughout a run:
+
+| Method | Effect |
+|--------|--------|
+| `record_error(msg)` | Appends `msg` to `ctx.errors`; increments `records_skipped` by 1 |
+| `note_skip(msg)` | Appends `msg` to `ctx.errors` only — no counter change (used when skip already counted) |
+
+When no sink writes a batch of records (all conditions filtered them out, or all sinks failed/circuit-open), the executor calls `ctx.note_skip("Records skipped — no sink wrote successfully ...")` and logs a WARNING. This means skip reasons are visible in the run detail in the UI.
+
+In manager+worker mode the full `errors` list is sent in the worker callback payload and stored in `run_history.errors_json` so it survives across the HTTP boundary.
 
 ## Security
 

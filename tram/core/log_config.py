@@ -58,3 +58,4 @@ def setup_logging(level: str = "INFO", fmt: str = "json") -> None:
     # Quiet noisy libraries
     logging.getLogger("paramiko").setLevel(logging.WARNING)
     logging.getLogger("uvicorn.access").setLevel(logging.WARNING)
+    logging.getLogger("httpx").setLevel(logging.WARNING)

@@ -57,7 +57,7 @@ function renderMibs(mibs) {
   tbody.innerHTML = mibs.map(m => {
     const name = m.name || m
     const file = m.file || '—'
-    const size = m.size ? fmtSize(m.size) : '—'
+    const size = m.size_bytes ? fmtSize(m.size_bytes) : '—'
     return `<tr>
       <td class="fw-semibold">${esc(name)}</td>
       <td class="text-secondary font-monospace" style="font-size:12px">${esc(file)}</td>

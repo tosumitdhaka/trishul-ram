@@ -40,7 +40,9 @@ class TestRunCompleteEndpoint:
             status="success",
             records_in=100,
             records_out=95,
+            records_skipped=0,
             error=None,
+            errors=[],
         )
 
     def test_passes_error_string(self):

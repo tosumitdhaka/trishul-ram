@@ -257,12 +257,19 @@ async function _loadPlugins() {
 
 async function _checkAI() {
   try {
-    const status = await api.ai.status()
-    const sec = document.getElementById('wiz-ai-section')
-    if (status.enabled && sec) {
-      sec.classList.remove('d-none')
-      const modelEl = document.getElementById('wiz-ai-model')
-      if (modelEl) modelEl.textContent = `${status.provider} / ${status.model}`
+    const status  = await api.ai.status()
+    const modelEl = document.getElementById('wiz-ai-model')
+    const uncfgEl = document.getElementById('wiz-ai-unconfigured')
+    const genBtn  = document.getElementById('wiz-ai-gen-btn')
+
+    if (status.enabled) {
+      if (modelEl)  modelEl.textContent = `${status.provider} / ${status.model}`
+      if (uncfgEl)  uncfgEl.classList.add('d-none')
+      if (genBtn)   genBtn.disabled = false
+    } else {
+      if (modelEl)  modelEl.textContent = ''
+      if (uncfgEl)  uncfgEl.classList.remove('d-none')
+      if (genBtn)   genBtn.disabled = true
     }
   } catch (_) {}
 }

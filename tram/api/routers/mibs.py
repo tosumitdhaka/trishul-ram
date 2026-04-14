@@ -163,6 +163,32 @@ def download_mibs(body: MibDownloadRequest) -> dict:
     return {"compiled": compiled, "mib_dir": mib_dir, "results": dict(results)}
 
 
+# ── GET /api/mibs/{mib_name} ─────────────────────────────────────────────────
+
+
+@router.get("/{mib_name}")
+def get_mib(mib_name: str):
+    """Return the compiled Python source of a MIB module.
+
+    Used by worker agents to pull custom MIB files from the manager on
+    demand before executing a pipeline.  Standard MIBs baked into the
+    image (IF-MIB, ENTITY-MIB, …) are never stored here so a 404 for
+    those is expected and handled gracefully by the worker.
+
+    Accepts both dash and underscore naming (e.g. ``IF-MIB`` or ``IF_MIB``).
+    """
+    from fastapi.responses import PlainTextResponse
+
+    mib_dir = _mib_dir()
+    # pysnmp compiles MIB names with dashes replaced by underscores in filenames
+    for candidate in (mib_name, mib_name.replace("-", "_"), mib_name.replace("_", "-")):
+        fpath = os.path.join(mib_dir, f"{candidate}.py")
+        if os.path.isfile(fpath):
+            with open(fpath, "rb") as fh:
+                return PlainTextResponse(content=fh.read().decode("utf-8", errors="replace"))
+    raise HTTPException(status_code=404, detail=f"MIB '{mib_name}' not found")
+
+
 # ── DELETE /api/mibs/{mib_name} ──────────────────────────────────────────────
 
 

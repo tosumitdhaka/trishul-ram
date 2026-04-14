@@ -134,7 +134,7 @@ export async function init() {
     const dbs = document.getElementById('ds-db-status')
     if (dbs) { dbs.textContent = ready.db || '—'; dbs.style.color = ready.db === 'ok' ? '#3fb950' : '#f85149' }
     set('ds-db-path',    ready.db_path   || '—')
-    set('ds-cluster',    ready.cluster   || 'disabled (standalone)')
+    set('ds-cluster',    ready.cluster   || 'standalone')
     set('ds-pipelines',  ready.pipelines_loaded ?? '—')
     set('ds-python',     meta.python_version || '—')
     set('ds-uptime',     ready.uptime    || '—')

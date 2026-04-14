@@ -92,6 +92,8 @@ def _post_run_complete(
     records_in: int,
     records_out: int,
     error: str | None,
+    records_skipped: int = 0,
+    errors: list[str] | None = None,
 ) -> None:
     """POST run-complete to the manager. Errors are logged and swallowed."""
     if not callback_url:
@@ -102,7 +104,9 @@ def _post_run_complete(
         "status": status,
         "records_in": records_in,
         "records_out": records_out,
+        "records_skipped": records_skipped,
         "error": error,
+        "errors": errors or [],
     }
     try:
         with httpx.Client(timeout=10) as client:
@@ -157,10 +161,12 @@ def create_worker_app(worker_id: str = "", manager_url: str = "") -> FastAPI:
 
     @app.get("/agent/health")
     def health():
+        active = state.snapshot()
         return {
             "ok": True,
             "worker_id": worker_id,
-            "active_runs": len(state.snapshot()),
+            "active_runs": len(active),
+            "running_pipelines": list({r.pipeline_name for r in active}),
         }
 
     # ── GET /agent/status ──────────────────────────────────────────────────
@@ -211,9 +217,14 @@ def create_worker_app(worker_id: str = "", manager_url: str = "") -> FastAPI:
         )
         executor = PipelineExecutor()
 
+        data_dir = os.environ.get("TRAM_DATA_DIR", "/data")
+        api_key  = os.environ.get("TRAM_API_KEY", "")
+
         if req.schedule_type == "stream":
             def _stream_thread():
                 try:
+                    from tram.agent.assets import sync_assets
+                    sync_assets(config, state.manager_url, data_dir, api_key)
                     executor.stream_run(config, active_run.stop_event)
                     _post_run_complete(
                         callback_url, req.run_id, req.pipeline_name,
@@ -243,6 +254,8 @@ def create_worker_app(worker_id: str = "", manager_url: str = "") -> FastAPI:
         else:
             def _batch_thread():
                 try:
+                    from tram.agent.assets import sync_assets
+                    sync_assets(config, state.manager_url, data_dir, api_key)
                     result = executor.batch_run(config, run_id=req.run_id)
                     _post_run_complete(
                         callback_url, req.run_id, req.pipeline_name,
@@ -250,6 +263,8 @@ def create_worker_app(worker_id: str = "", manager_url: str = "") -> FastAPI:
                         result.records_in,
                         result.records_out,
                         result.error,
+                        result.records_skipped,
+                        result.errors,
                     )
                 except Exception as exc:
                     logger.error(

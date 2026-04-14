@@ -120,18 +120,36 @@ async def lifespan(app: FastAPI):
 
 def create_app(config: AppConfig | None = None) -> FastAPI:
     """Create and configure the FastAPI application."""
+    import time
+
     if config is None:
         config = AppConfig.from_env()
 
-    # Initialise persistence
-    try:
-        from tram.persistence.db import TramDB
-        db = TramDB(url=config.db_url, node_id=config.node_id)
-    except Exception as exc:
-        logger.warning(
-            "Could not initialise TramDB: %s — run history will be in-memory only", exc
-        )
-        db = None
+    # Initialise persistence — retry up to 30 s so that PostgreSQL has time to
+    # become ready in Kubernetes before we give up and fall back to in-memory.
+    db = None
+    _db_retry_interval = 5
+    _db_max_retries = 6   # 6 × 5 s = 30 s
+    for _attempt in range(_db_max_retries):
+        try:
+            from tram.persistence.db import TramDB
+            db = TramDB(url=config.db_url, node_id=config.node_id)
+            break
+        except Exception as exc:
+            remaining = _db_max_retries - _attempt - 1
+            if remaining > 0:
+                logger.warning(
+                    "TramDB init attempt %d/%d failed, retrying in %ds: %s",
+                    _attempt + 1, _db_max_retries, _db_retry_interval, exc,
+                )
+                time.sleep(_db_retry_interval)
+            else:
+                logger.warning(
+                    "Could not initialise TramDB after %d attempts: %s"
+                    " — run history will be in-memory only",
+                    _db_max_retries, exc,
+                )
+                db = None
 
     # Initialise alert evaluator
     try:

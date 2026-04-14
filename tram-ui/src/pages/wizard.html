@@ -11,8 +11,8 @@
 
   <!-- Step 1 — Pipeline Info -->
   <div id="wiz-step-1" class="wiz-page">
-    <!-- AI describe (shown when AI enabled) -->
-    <div id="wiz-ai-section" class="d-none mb-4 p-3 rounded" style="background:#161b22;border:1px solid #30363d">
+    <!-- AI describe section -->
+    <div id="wiz-ai-section" class="mb-4 p-3 rounded" style="background:var(--bg-surface);border:1px solid var(--border)">
       <div class="d-flex align-items-center gap-2 mb-2">
         <i class="bi bi-stars" style="color:#8b949e"></i>
         <span class="fw-semibold text-light" style="font-size:13px">Describe your pipeline (AI assist)</span>
@@ -24,6 +24,9 @@
         <i class="bi bi-stars me-1"></i>Generate with AI
       </button>
       <span id="wiz-ai-status" class="ms-2 text-secondary" style="font-size:12px"></span>
+      <div id="wiz-ai-unconfigured" class="d-none mt-2 p-2 rounded" style="background:var(--bg-surface);border:1px solid #3d3020;font-size:11px;color:#d29922">
+        <i class="bi bi-exclamation-triangle me-1"></i>AI not configured — <a href="#" onclick="navigate('settings')" style="color:#d29922">open Settings</a> to add your API key.
+      </div>
     </div>
 
     <div class="row g-3">
@@ -48,8 +51,8 @@
       <div class="col-4" id="wiz-interval-row">
         <label class="form-label text-secondary" style="font-size:12px">Run every</label>
         <div class="d-flex gap-2">
-          <input type="number" class="form-control form-control-sm" id="wiz-interval-val" value="5" min="1" style="width:80px">
-          <select class="form-select form-select-sm" id="wiz-interval-unit">
+          <input type="number" class="form-control form-control-sm" id="wiz-interval-val" value="5" min="1" style="width:80px" aria-label="Interval value">
+          <select class="form-select form-select-sm" id="wiz-interval-unit" aria-label="Interval unit">
             <option value="60">minutes</option>
             <option value="1">seconds</option>
             <option value="3600">hours</option>

@@ -121,39 +121,77 @@ function renderRuns(runs) {
 function wireActions(pipeline) {
   window._detailEdit = () => { window._editorPipeline = _name; navigate('editor') }
   window._detailRefreshRuns = async () => { try { await reloadRuns() } catch (e) { toast(e.message, 'error') } }
-  const btn     = document.getElementById('detail-run-btn')
-  const stopBtn = document.getElementById('detail-pause-btn')  // element kept, repurposed as Stop
+  const btn        = document.getElementById('detail-run-btn')
+  const stopBtn    = document.getElementById('detail-pause-btn')
+  const triggerBtn = document.getElementById('detail-trigger-btn')
   if (!btn) return
   const isActive = pipeline.status === 'running' || pipeline.status === 'scheduled'
   const isManual = pipeline.schedule_type === 'manual'
+  const isStream = pipeline.schedule_type === 'stream'
 
-  // Primary action button
+  // Primary action: Start / Stop
   if (isActive) {
     btn.innerHTML = '<i class="bi bi-stop-fill me-1"></i>Stop'
     btn.className = 'btn btn-sm btn-danger'
     btn.onclick = () => window._detailStop?.()
   } else {
-    btn.innerHTML = `<i class="bi bi-play-fill me-1"></i>${isManual ? 'Run Now' : 'Start'}`
+    btn.innerHTML = '<i class="bi bi-play-fill me-1"></i>Start'
     btn.className = 'btn btn-sm btn-primary'
     btn.onclick = () => window._detailRun?.()
   }
 
-  // Secondary stop button (hidden — only relevant when scheduled and we want a dedicated stop button)
+  // "Run Now" — immediate one-shot trigger (hidden for stream, always available otherwise)
+  if (triggerBtn) {
+    if (isStream) {
+      triggerBtn.setAttribute('hidden', '')
+    } else {
+      triggerBtn.removeAttribute('hidden')
+      triggerBtn.disabled = isActive  // disable if already running
+    }
+  }
+
+  // Secondary stop button — keep hidden (consolidated into primary btn)
   if (stopBtn) {
     stopBtn.setAttribute('hidden', '')
   }
 
   window._detailRun = async () => {
     try {
-      if (isManual) { await api.pipelines.run(_name);   toast(`Triggered ${_name}`) }
-      else          { await api.pipelines.start(_name); toast(`Started ${_name}`) }
+      await api.pipelines.start(_name)
+      toast(`Started ${_name}`)
       setTimeout(() => init(), 800)
     } catch (e) { toast(e.message, 'error') }
+  }
+
+  window._detailTrigger = async () => {
+    if (triggerBtn) { triggerBtn.disabled = true; triggerBtn.innerHTML = '<i class="bi bi-hourglass me-1"></i>Running…' }
+    try {
+      await api.pipelines.run(_name)
+      toast(`Triggered ${_name}`)
+      setTimeout(() => init(), 1200)
+    } catch (e) { toast(e.message, 'error') }
+    finally {
+      if (triggerBtn) { triggerBtn.disabled = false; triggerBtn.innerHTML = '<i class="bi bi-lightning me-1"></i>Run Now' }
+    }
   }
 
   window._detailStop = async () => {
     try { await api.pipelines.stop(_name); toast(`Stopped ${_name}`); setTimeout(() => init(), 800) }
     catch (e) { toast(e.message, 'error') }
+  }
+
+  window._detailRestart = async () => {
+    const btn = document.getElementById('detail-restart-btn')
+    if (btn) { btn.disabled = true; btn.innerHTML = '<i class="bi bi-hourglass-split"></i>' }
+    try {
+      await api.pipelines.restart(_name)
+      toast(`Restarting ${_name}`)
+      setTimeout(() => init(), 1000)
+    } catch (e) {
+      toast(e.message, 'error')
+    } finally {
+      if (btn) { btn.disabled = false; btn.innerHTML = '<i class="bi bi-arrow-clockwise"></i>' }
+    }
   }
 
   window._detailTestConnectors = async () => {
