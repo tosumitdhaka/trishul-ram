@@ -2,6 +2,12 @@
 
 > Lightweight, container-native Python daemon that moves and transforms telecom data (PM/FM/Logs) across protocols.
 
+[![GitHub Stars](https://img.shields.io/github/stars/tosumitdhaka/trishul-ram?style=for-the-badge)](https://github.com/tosumitdhaka/trishul-ram/stargazers)
+[![GitHub Forks](https://img.shields.io/github/forks/tosumitdhaka/trishul-ram?style=for-the-badge)](https://github.com/tosumitdhaka/trishul-ram/network)
+[![GitHub Issues](https://img.shields.io/github/issues/tosumitdhaka/trishul-ram?style=for-the-badge)](https://github.com/tosumitdhaka/trishul-ram/issues)
+[![License](https://img.shields.io/github/license/tosumitdhaka/trishul-ram?style=for-the-badge)](LICENSE)
+[![GHCR](https://img.shields.io/badge/GHCR-Packages-blue?style=for-the-badge&logo=github)](https://github.com/tosumitdhaka?tab=packages&repo_name=trishul-ram)
+
 **Version:** 1.2.1 | **Status:** Production-ready | **Python:** 3.11+
 
 ---
@@ -457,3 +463,28 @@ pytest tests/              # all 695 tests
 ## Changelog
 
 See [`CHANGELOG.md`](CHANGELOG.md).
+
+---
+
+## Star This Repo
+
+If trishul-ram helps you — leave mass star. ⭐
+
+[![Star History Chart](https://api.star-history.com/svg?repos=tosumitdhaka/trishul-ram&type=Date)](https://star-history.com/#tosumitdhaka/trishul-ram&Date)
+
+---
+
+<div align="center">
+
+**Made with 🔱 by [Sumit Dhaka](https://github.com/tosumitdhaka)**
+
+*Trishul-RAM - Trishul Real-time Aggregation & Mediation*
+
+If this project helps you, please consider [⭐ starring it](https://github.com/tosumitdhaka/trishul-ram) and [💰 sponsoring](https://github.com/sponsors/tosumitdhaka)!
+
+[![GitHub](https://img.shields.io/badge/GitHub-tosumitdhaka-181717?style=for-the-badge&logo=github)](https://github.com/tosumitdhaka)
+[![LinkedIn](https://img.shields.io/badge/LinkedIn-Connect-0077B5?style=for-the-badge&logo=linkedin)](https://www.linkedin.com/in/sumit-dhaka-a5a796b3/)
+
+**[⬆ Back to Top](#-trishul-ram)**
+
+</div>
