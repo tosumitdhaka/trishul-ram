@@ -106,10 +106,9 @@ Source → bytes → Deserializer → list[dict] → Global Transforms (per-reco
 - Validation happens before scheduling (see `tram/pipeline/loader.py`)
 
 **Runtime state:** SQLite (default) or PostgreSQL via SQLAlchemy Core — manager-only in v1.2.0
-- `run_history` — each pipeline execution with metrics (records_in/out/errors/dlq_count, node_id)
+- `run_history` — each pipeline execution with metrics (records_in/out/skipped, errors_json, dlq_count, node_id)
 - `pipeline_versions` — YAML snapshots for rollback
 - `processed_files` — idempotent file tracking when `skip_processed: true`
-- `node_registry` — cluster membership (heartbeat, last_seen)
 - `alert_state` — cooldown tracking for alert rules
 - `user_passwords` — bcrypt hashed passwords for browser auth
 
@@ -125,16 +124,21 @@ tram/
 │   ├── loader.py         # YAML → PipelineConfig (env substitution, validation)
 │   ├── executor.py       # batch_run(), stream_run(), dry_run() — core execution logic
 │   ├── manager.py        # PipelineManager (add/remove/run/pause/list)
+│   ├── controller.py     # PipelineController — lifecycle authority, state machine, restart
 │   └── linter.py         # Pipeline lint rules (L001-L005)
 ├── scheduler/
 │   └── scheduler.py      # TramScheduler — APScheduler wrapper + stream thread pool
+├── agent/
+│   ├── server.py         # WorkerAgent — FastAPI on :8766 (run/stop/status/health)
+│   ├── worker_pool.py    # WorkerPool — health polling, least-loaded dispatch, round-robin
+│   └── assets.py         # sync_assets() — pull schemas/MIBs from manager before each run
 ├── connectors/           # 23 sources + 19 sinks (sftp, kafka, rest, s3, opensearch, ...)
 ├── transforms/           # 20 transforms (rename, cast, filter, aggregate, jmespath, ...)
 ├── serializers/          # json, csv, xml, avro, parquet, protobuf, msgpack, ndjson
 ├── persistence/
 │   ├── db.py             # TramDB (SQLAlchemy Core)
 │   └── file_tracker.py   # ProcessedFileTracker (skip_processed)
-├── cluster/              # NodeRegistry + ClusterCoordinator (consistent hashing, rebalance)
+├── cluster/              # Legacy: NodeRegistry + ClusterCoordinator (pre-v1.2.0 HA model)
 ├── alerts/               # AlertEvaluator (webhook + email, cooldown logic)
 ├── metrics/              # Prometheus metrics (tram_records_*, tram_kafka_consumer_lag, etc.)
 ├── telemetry/            # OpenTelemetry tracing (batch_run, sink writes)
@@ -201,7 +205,7 @@ Every error (parse, transform, write) is wrapped in a JSON envelope and sent to 
 }
 ```
 
-### Manager + Worker mode (v1.2.0)
+### Manager + Worker mode (v1.2.0) — the new cluster mode
 
 Set `TRAM_MODE=manager` on the manager pod and `TRAM_MODE=worker` on worker pods.
 
@@ -209,6 +213,10 @@ Set `TRAM_MODE=manager` on the manager pod and `TRAM_MODE=worker` on worker pods
 - Workers are stateless: receive a run request (HTTP POST), execute the pipeline, POST result back to manager via `TRAM_MANAGER_URL`
 - Worker import isolation: `server.py` branches on `TRAM_MODE=worker` **before** importing `create_app`, so workers never import `apscheduler` or `sqlalchemy`
 - `tram[manager]` extra must be installed on manager; workers only need `tram[worker,...]`
+- **Dispatch**: `WorkerPool.least_loaded()` picks the worker with fewest active runs; round-robin tiebreaker among equals
+- **Asset sync**: workers call `sync_assets()` before each run — pulls schemas + MIBs from manager via `GET /api/schemas` and `GET /api/mibs/{name}`; requires `TRAM_API_KEY` on both sides
+- **Error propagation**: `RunResult.errors` (per-record skip reasons + transform/sink errors) flows from executor → `_post_run_complete` → `RunCompletePayload.errors` → `on_worker_run_complete` → `run_history.errors_json`
+- **Restart**: `POST /api/pipelines/{name}/restart` stops active execution and immediately reschedules; works for batch and stream
 
 ### Pipeline versioning
 
