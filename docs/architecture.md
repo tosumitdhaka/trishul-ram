@@ -43,7 +43,7 @@ Every record is a plain Python `dict`. Global transforms apply per-record so a s
 │                              TramServer (daemon)                              │
 │                                                                              │
 │  ┌──────────────────────────┐   ┌──────────────────────────────────────────┐ │
-│  │      TramScheduler       │   │            FastAPI (REST API)            │ │
+│  │   PipelineController     │   │            FastAPI (REST API)            │ │
 │  │  ┌────────────────────┐  │   │  /api/health    /api/pipelines           │ │
 │  │  │  APScheduler       │  │   │  /api/runs      /api/plugins             │ │
 │  │  │  (batch/cron)      │  │   │  /api/pipelines/{name}/versions          │ │
@@ -52,21 +52,17 @@ Every record is a plain Python `dict`. Global transforms apply per-record so a s
 │  │  │  ThreadPool        │  │   │  /webhooks/{path}   /metrics             │ │
 │  │  │  (stream)          │  │   └──────────────────────────────────────────┘ │
 │  │  └────────────────────┘  │                                               │
-│  │  ┌────────────────────┐  │                                               │
-│  │  │  Rebalance thread  │  │                                               │
-│  │  │  (cluster mode)    │  │                                               │
-│  │  └────────────────────┘  │                                               │
 │  └──────────────────────────┘                                               │
 │               │                                                              │
-│  NodeRegistry ── ClusterCoordinator  (cluster mode only)                    │
-│  heartbeat thread  consistent hashing                                        │
+│  WorkerPool  (manager mode only)                                             │
+│  least_loaded() dispatch + round-robin tiebreaker                            │
+│  poll /agent/health every 10s → single summary log on change                │
 │               │                                                              │
 │  PipelineManager ── TramDB (SQLAlchemy)  ── AlertEvaluator                  │
 │        │            run_history (+ node_id,   │  check(result, config)       │
-│        │              dlq_count)              │  → webhook (httpx)           │
+│        │              dlq_count, errors_json) │  → webhook (httpx)           │
 │        │            pipeline_versions         │  → email (smtplib)           │
 │        │            alert_state (cooldown)    │                              │
-│        │            node_registry             │                              │
 │        │            processed_files           │                              │
 │        │                                                                     │
 │  PipelineExecutor                                                            │
