@@ -4,7 +4,7 @@
 image:
   registry:   ""              # e.g. ghcr.io — empty = no registry prefix (local/kind images)
   repository: trishul-ram      # image name without registry
-  tag: "1.2.0"
+  tag: "1.2.1"
   pullPolicy: IfNotPresent
 
 ## Standalone mode: single-replica StatefulSet (replicaCount=1).
@@ -55,7 +55,7 @@ worker:
   ##   image:
   ##     registry: ghcr.io
   ##     repository: trishul/trishul-ram-worker
-  ##     tag: "1.2.0"
+  ##     tag: "1.2.1"
   image:
     registry: ""
     repository: ""   # empty = fall back to .Values.image.repository
