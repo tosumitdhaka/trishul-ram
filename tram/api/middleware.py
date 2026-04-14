@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import time
 from collections import deque
 from typing import TYPE_CHECKING
@@ -64,6 +65,10 @@ class RateLimitMiddleware(BaseHTTPMiddleware):
     ``window_seconds`` are discarded before each check.
 
     Only applies to /api/* paths (not /metrics or /webhooks/).
+
+    Thread safety: each IP slot is guarded by its own ``asyncio.Lock`` so
+    concurrent coroutines for the same client cannot both pass the limit check
+    before either records the timestamp (TOCTOU race).
     """
 
     def __init__(self, app, rate_limit: int = 0, window_seconds: int = 60) -> None:
@@ -72,6 +77,8 @@ class RateLimitMiddleware(BaseHTTPMiddleware):
         self._window = window_seconds
         # {client_ip: deque[float]}  — timestamps of recent requests
         self._windows: dict[str, deque] = {}
+        # {client_ip: asyncio.Lock}  — one lock per IP to prevent TOCTOU races
+        self._locks: dict[str, asyncio.Lock] = {}
 
     async def dispatch(self, request: Request, call_next):
         if self._rate_limit <= 0:
@@ -82,31 +89,40 @@ class RateLimitMiddleware(BaseHTTPMiddleware):
             return await call_next(request)
 
         client_ip = request.client.host if request.client else "unknown"
-        now = time.monotonic()
 
-        if client_ip not in self._windows:
-            self._windows[client_ip] = deque()
+        # Lazily create per-IP lock (dict setdefault is atomic in CPython asyncio
+        # single-thread event loop, but we guard it anyway for clarity).
+        if client_ip not in self._locks:
+            self._locks[client_ip] = asyncio.Lock()
 
-        window = self._windows[client_ip]
+        async with self._locks[client_ip]:
+            now = time.monotonic()
 
-        # Expire old entries
-        cutoff = now - self._window
-        while window and window[0] < cutoff:
-            window.popleft()
+            if client_ip not in self._windows:
+                self._windows[client_ip] = deque()
 
-        if len(window) >= self._rate_limit:
-            return JSONResponse(
-                {"detail": "Too Many Requests"},
-                status_code=429,
-                headers={"Retry-After": str(self._window)},
-            )
+            window = self._windows[client_ip]
 
-        window.append(now)
+            # Expire old entries
+            cutoff = now - self._window
+            while window and window[0] < cutoff:
+                window.popleft()
+
+            if len(window) >= self._rate_limit:
+                return JSONResponse(
+                    {"detail": "Too Many Requests"},
+                    status_code=429,
+                    headers={"Retry-After": str(self._window)},
+                )
+
+            window.append(now)
 
         # Periodically evict idle client entries (empty deques whose last request
         # fell outside the window) to prevent unbounded dict growth under
-        # high-cardinality client traffic.
+        # high-cardinality client traffic.  Done outside the lock since it only
+        # replaces the dict reference and does not mutate individual deques.
         if len(self._windows) > 500:
             self._windows = {k: v for k, v in self._windows.items() if v}
+            self._locks = {k: v for k, v in self._locks.items() if k in self._windows}
 
         return await call_next(request)
