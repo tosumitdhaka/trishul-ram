@@ -198,12 +198,16 @@ Uses `simpleeval` for safe expression evaluation. Available in conditions:
 Every error (parse, transform, write) is wrapped in a JSON envelope and sent to the DLQ sink:
 ```json
 {
-  "error": "Error message",
-  "stage": "transform|write|parse",
-  "record": {...},
-  "timestamp": "2024-01-01T00:00:00Z"
+  "_error":     "ValueError: cannot cast 'N/A' to int",
+  "_stage":     "transform|write|parse",
+  "_pipeline":  "pm-ingest",
+  "_run_id":    "abc12345",
+  "_timestamp": "2026-03-05T12:00:00+00:00",
+  "record":     {"field": "value"},
+  "raw":        null
 }
 ```
+`raw` (base64) is only set when `_stage == "parse"`.
 
 ### Manager + Worker mode (v1.2.0) — the new cluster mode
 
