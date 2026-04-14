@@ -74,8 +74,8 @@ class PipelineWatcher:
                 from tram.core.exceptions import ConfigError
                 from tram.pipeline.loader import load_pipeline
                 try:
-                    config = load_pipeline(path)
-                    manager.register(config)
+                    config, yaml_text = load_pipeline(path)
+                    manager.register(config, replace=True, yaml_text=yaml_text)
                     logger.info("Pipeline reloaded (file changed)", extra={"pipeline": config.name, "path": path})
                 except ConfigError as exc:
                     logger.warning("Pipeline reload failed (config error): %s — %s", path, exc)
