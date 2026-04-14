@@ -26,7 +26,10 @@ class PipelineRunContext:
     """
 
     pipeline_name: str
-    run_id: str = field(default_factory=lambda: str(uuid.uuid4())[:8])
+    # Full UUID to avoid birthday-paradox collisions on high-frequency pipelines.
+    # A truncated 8-char hex ID has only ~4 billion values; at 1000 runs/day the
+    # collision probability becomes material after ~65 000 runs.
+    run_id: str = field(default_factory=lambda: str(uuid.uuid4()))
     started_at: datetime = field(default_factory=lambda: datetime.now(UTC))
     records_in: int = 0
     records_out: int = 0
@@ -38,7 +41,7 @@ class PipelineRunContext:
         # Not a dataclass field — invisible to from_context / to_dict
         object.__setattr__(self, "_lock", threading.Lock())
 
-    # ── Thread-safe counter helpers ────────────────────────────────────────
+    # ── Thread-safe counter helpers ──────────────────────────────────────────
 
     def inc_records_in(self, n: int) -> None:
         with self._lock:  # type: ignore[attr-defined]
@@ -53,12 +56,25 @@ class PipelineRunContext:
             self.records_skipped += n
 
     def record_error(self, msg: str) -> None:
+        """Append an error message and increment records_skipped by 1.
+
+        Use this for per-record transform or sink failures where a single
+        record is being abandoned. Do **not** call this and then also call
+        ``inc_records_skipped`` for the same record — that would double-count.
+        For batch skips (e.g. all sinks filtered out an entire chunk), call
+        ``inc_records_skipped(len(records))`` and then ``note_skip(msg)``.
+        """
         with self._lock:  # type: ignore[attr-defined]
             self.errors.append(msg)
             self.records_skipped += 1
 
     def note_skip(self, msg: str) -> None:
-        """Append a skip-reason note to errors without incrementing records_skipped."""
+        """Append a skip-reason note to errors without incrementing records_skipped.
+
+        Used when the skip counter has already been bumped (e.g. by
+        ``inc_records_skipped``) and you only need to record the reason.
+        Keeping the two concerns separate prevents double-counting.
+        """
         with self._lock:  # type: ignore[attr-defined]
             self.errors.append(msg)
 
