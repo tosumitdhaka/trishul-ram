@@ -52,6 +52,30 @@ All registered plugin keys by category.
 }
 ```
 
+### GET /api/cluster/nodes
+Worker pool status (manager mode) or standalone indicator.
+
+**Standalone:**
+```json
+{"mode": "standalone", "workers": []}
+```
+
+**Manager mode:**
+```json
+{
+  "mode": "manager",
+  "workers": [
+    {
+      "url": "http://trishul-ram-worker-0...:8766",
+      "ok": true,
+      "active_runs": 0,
+      "running_pipelines": [],
+      "assigned_pipelines": ["snmp_ifmib_to_sftp"]
+    }
+  ]
+}
+```
+
 ---
 
 ## Pipelines

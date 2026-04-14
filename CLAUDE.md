@@ -132,8 +132,8 @@ tram/
 │   ├── server.py         # WorkerAgent — FastAPI on :8766 (run/stop/status/health)
 │   ├── worker_pool.py    # WorkerPool — health polling, least-loaded dispatch, round-robin
 │   └── assets.py         # sync_assets() — pull schemas/MIBs from manager before each run
-├── connectors/           # 23 sources + 19 sinks (sftp, kafka, rest, s3, opensearch, ...)
-├── transforms/           # 20 transforms (rename, cast, filter, aggregate, jmespath, ...)
+├── connectors/           # 24 sources + 20 sinks (sftp, kafka, rest, s3, opensearch, ...)
+├── transforms/           # 21 transforms (rename, cast, filter, aggregate, jmespath, melt, ...)
 ├── serializers/          # json, csv, xml, avro, parquet, protobuf, msgpack, ndjson
 ├── persistence/
 │   ├── db.py             # TramDB (SQLAlchemy Core)
