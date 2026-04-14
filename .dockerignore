@@ -1,4 +1,4 @@
-# Python
+# Python build artefacts
 __pycache__/
 *.py[cod]
 *.pyo
@@ -30,7 +30,7 @@ env/
 *.swo
 .DS_Store
 
-# Tests
+# Tests (not needed in image)
 tests/
 docs/
 
@@ -39,14 +39,8 @@ docs/
 .gitignore
 .github/
 
-# Node / UI build artefacts (only the built dist/ is needed)
+# Node build artefacts only (source is needed by the ui-builder stage)
 tram-ui/node_modules/
-tram-ui/src/
-tram-ui/public/
-tram-ui/index.html
-tram-ui/vite.config.js
-tram-ui/package.json
-tram-ui/package-lock.json
 
 # Helm chart (not needed in image)
 helm/
@@ -56,11 +50,9 @@ Dockerfile*
 docker-compose*.yml
 .dockerignore
 
-# Pipelines / output (runtime artefacts)
-pipelines/
+# Runtime output artefacts
 output/
 
 # Misc
-*.md
 *.log
 *.tgz
