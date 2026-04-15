@@ -90,7 +90,8 @@ watch = ["watchdog>=3.0,<7.0"]
 ai-anthropic = ["anthropic>=0.30,<2.0"]
 ai-openai = ["openai>=1.40,<2.0"]
 dev = [
-    "tram[manager]",          # apscheduler + sqlalchemy required by unit/integration tests
+    "apscheduler>=3.10,<4.0", # PipelineController tests import BackgroundScheduler directly
+    "sqlalchemy>=2.0,<3.0",   # DB and stats tests import SQLAlchemy directly
     "tram[snmp]",             # SNMP unit tests exercise trap sink/source code paths
     "pytest>=8.0,<9.0",
     "pytest-asyncio>=0.23,<2.0",
