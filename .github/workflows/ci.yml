@@ -24,6 +24,9 @@ jobs:
           python-version: ${{ matrix.python-version }}
           cache: pip
 
+      - name: Bootstrap pip
+        run: pip install --upgrade pip setuptools wheel
+
       - name: Install dependencies
         run: pip install -e ".[dev,all]"
 
