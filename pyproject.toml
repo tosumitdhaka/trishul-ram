@@ -99,19 +99,19 @@ dev = [
     "respx>=0.20,<1.0",       # HTTP mock for CLI tests
 ]
 all = [
-    # Excluded (heavy cloud SDKs with slow pip resolver / large install):
-    #   corba   — system package only (omniORBpy, no PyPI wheel)
-    #   s3      — boto3 + botocore (~60 MB, causes pip backtrack loop)
-    #   gcs     — google-cloud-storage (~50 MB)
-    #   azure   — azure-storage-blob (~30 MB)
-    #   parquet — pyarrow (~150 MB)
-    # Install individually when needed: pip install tram[s3]
+    # Excluded (cause pip backtrack loop or require system libs):
+    #   corba        — omniORBpy has no PyPI wheel (system package only)
+    #   s3           — boto3↔botocore per-patch coupling causes backtrack (~60 MB)
+    #   gcs          — google-cloud-storage (~50 MB)
+    #   azure        — azure-storage-blob (~30 MB)
+    #   parquet      — pyarrow (~150 MB)
+    #   protobuf_ser — grpcio-tools depends on setuptools with no floor; triggers backtrack
+    # Install individually when needed: pip install tram[s3] / tram[protobuf_ser]
     "tram[manager]",
     "tram[kafka]",
     "tram[opensearch]",
     "tram[snmp]",
     "tram[avro]",
-    "tram[protobuf_ser]",
     "tram[msgpack_ser]",
     "tram[mqtt]",
     "tram[amqp]",
