@@ -95,14 +95,19 @@ dev = [
     "ruff>=0.4",
 ]
 all = [
-    "tram[manager]",          # always include manager profile in all
+    # Excluded (heavy cloud SDKs with slow pip resolver / large install):
+    #   corba   — system package only (omniORBpy, no PyPI wheel)
+    #   s3      — boto3 + botocore (~60 MB, causes pip backtrack loop)
+    #   gcs     — google-cloud-storage (~50 MB)
+    #   azure   — azure-storage-blob (~30 MB)
+    #   parquet — pyarrow (~150 MB)
+    # Install individually when needed: pip install tram[s3]
+    "tram[manager]",
     "tram[kafka]",
     "tram[opensearch]",
-    "tram[s3]",
     "tram[snmp]",
     "tram[avro]",
     "tram[protobuf_ser]",
-    "tram[parquet]",
     "tram[msgpack_ser]",
     "tram[mqtt]",
     "tram[amqp]",
@@ -112,8 +117,6 @@ all = [
     "tram[sql]",
     "tram[influxdb]",
     "tram[redis]",
-    "tram[gcs]",
-    "tram[azure]",
     "tram[websocket]",
     "tram[elasticsearch]",
     "tram[metrics]",
