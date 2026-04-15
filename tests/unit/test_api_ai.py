@@ -10,7 +10,6 @@ from fastapi.testclient import TestClient
 
 from tram.api.routers.ai import _call_ai, _get_ai_cfg, _strip_fences, router
 
-
 # ── App factory ────────────────────────────────────────────────────────────
 
 

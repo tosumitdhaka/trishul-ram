@@ -9,7 +9,6 @@ import pytest
 from tram.core.exceptions import SerializerError
 from tram.serializers.bytes_serializer import BytesSerializer
 
-
 # ── Construction / config validation ──────────────────────────────────────────
 
 

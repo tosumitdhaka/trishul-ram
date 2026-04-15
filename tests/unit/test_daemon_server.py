@@ -2,13 +2,11 @@
 from __future__ import annotations
 
 import signal
-from dataclasses import dataclass
-from unittest.mock import MagicMock, call, patch
+from unittest.mock import MagicMock, patch
 
 import pytest
 
 from tram.daemon.server import serve
-
 
 # ── Helpers ────────────────────────────────────────────────────────────────────
 
@@ -27,10 +25,10 @@ def _make_config(
     log_format: str = "json",
 ):
     """Return a minimal AppConfig-like dataclass instance."""
-    from tram.core.config import AppConfig
     # Build via from_env so we always get a real frozen dataclass;
     # override the fields we care about by constructing manually.
-    import socket
+
+    from tram.core.config import AppConfig
 
     return AppConfig(
         host=host,

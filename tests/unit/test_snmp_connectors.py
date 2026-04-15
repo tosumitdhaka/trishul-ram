@@ -592,7 +592,6 @@ def _make_mock_hlapi():
     mock_hlapi.Counter32 = MagicMock()
     mock_hlapi.Gauge32 = MagicMock()
     # sendNotification returns an awaitable (coroutine-like) — mock to return (None, None, None, [])
-    import asyncio
 
     async def _fake_send(*a, **kw):
         return (None, None, None, [])

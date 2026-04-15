@@ -1,16 +1,13 @@
 """Tests for API key auth and rate-limit middleware."""
 from __future__ import annotations
 
-import os
 import time
 from unittest.mock import patch
 
-import pytest
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
 from tram.api.middleware import APIKeyMiddleware, RateLimitMiddleware
-
 
 # ── Helpers ────────────────────────────────────────────────────────────────
 

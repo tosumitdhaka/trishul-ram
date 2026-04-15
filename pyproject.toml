@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "tram"
-version = "1.2.1"
+version = "1.2.2"
 description = "Trishul Real-time Aggregation & Mediation — telecom data pipeline daemon"
 readme = "README.md"
 requires-python = ">=3.11"
@@ -120,7 +120,6 @@ all = [
     "tram[prometheus_rw]",
     "tram[clickhouse]",
     "tram[asn1]",
-    "tram[corba]",
     "tram[mib]",
     "tram[otel]",
     "tram[watch]",
