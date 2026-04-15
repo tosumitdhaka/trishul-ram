@@ -571,3 +571,221 @@ class TestSNMPTrapSink:
                 except (SinkError, Exception):
                     # Acceptable in test env without actual pysnmp installed
                     pass
+
+
+# ── SNMPTrapSink extended coverage ─────────────────────────────────────────
+
+
+def _make_mock_hlapi():
+    """Build a minimal mock pysnmp hlapi asyncio module."""
+    mock_hlapi = MagicMock()
+    mock_hlapi.SnmpEngine = MagicMock()
+    mock_hlapi.CommunityData = MagicMock()
+    mock_hlapi.UdpTransportTarget = MagicMock()
+    mock_hlapi.ContextData = MagicMock()
+    mock_hlapi.ObjectType = MagicMock()
+    mock_hlapi.ObjectIdentity = MagicMock()
+    mock_hlapi.ObjectIdentifier = MagicMock()
+    mock_hlapi.Integer32 = MagicMock()
+    mock_hlapi.OctetString = MagicMock()
+    mock_hlapi.TimeTicks = MagicMock()
+    mock_hlapi.Counter32 = MagicMock()
+    mock_hlapi.Gauge32 = MagicMock()
+    # sendNotification returns an awaitable (coroutine-like) — mock to return (None, None, None, [])
+    import asyncio
+
+    async def _fake_send(*a, **kw):
+        return (None, None, None, [])
+
+    mock_hlapi.sendNotification = _fake_send
+    return mock_hlapi
+
+
+class TestSNMPTrapSinkExtended:
+    def test_list_payload_skips_non_dict_records(self):
+        """write() skips non-dict items in a list payload (logs warning, no raise)."""
+        sink = SNMPTrapSink({"host": "127.0.0.1"})
+        with patch("tram.connectors.snmp.sink.asyncio.run") as mock_run:
+            sink.write(b'["not-a-dict", "also-not"]', {})
+        mock_run.assert_not_called()
+
+    def test_list_payload_processes_dict_records(self):
+        """write() calls asyncio.run for each dict in a list."""
+        sink = SNMPTrapSink({"host": "127.0.0.1"})
+        with patch("tram.connectors.snmp.sink.asyncio.run") as mock_run:
+            sink.write(b'[{"1.3.6.1": "v1"}, {"1.3.6.2": "v2"}]', {})
+        assert mock_run.call_count == 2
+
+    def test_asyncio_run_general_exception_raises_sink_error(self):
+        """Non-SinkError from asyncio.run is wrapped in SinkError."""
+        sink = SNMPTrapSink({"host": "127.0.0.1"})
+        with patch("tram.connectors.snmp.sink.asyncio.run", side_effect=RuntimeError("timeout")):
+            with pytest.raises(SinkError, match="SNMP trap send failed"):
+                sink.write(b'{"1.3.6.1": "val"}', {})
+
+    def test_asyncio_run_sink_error_re_raised(self):
+        """SinkError from asyncio.run is re-raised directly."""
+        sink = SNMPTrapSink({"host": "127.0.0.1"})
+        with patch("tram.connectors.snmp.sink.asyncio.run",
+                   side_effect=SinkError("trap send error")):
+            with pytest.raises(SinkError, match="trap send error"):
+                sink.write(b'{"1.3.6.1": "val"}', {})
+
+    def test_write_single_dict_calls_asyncio_run(self):
+        """write() with a single JSON dict calls asyncio.run once."""
+        sink = SNMPTrapSink({"host": "127.0.0.1"})
+        with patch("tram.connectors.snmp.sink.asyncio.run") as mock_run:
+            sink.write(b'{"1.3.6.1": "val"}', {})
+        mock_run.assert_called_once()
+
+    def test_tram_mib_dir_env_var_added_to_mib_dirs(self, monkeypatch, tmp_path):
+        """TRAM_MIB_DIR is auto-prepended to mib_dirs when it exists."""
+        monkeypatch.setenv("TRAM_MIB_DIR", str(tmp_path))
+        sink = SNMPTrapSink({"host": "127.0.0.1"})
+        assert str(tmp_path) in sink.mib_dirs
+
+    def test_mib_dirs_not_duplicated(self, monkeypatch, tmp_path):
+        """TRAM_MIB_DIR is not duplicated if already in mib_dirs config."""
+        monkeypatch.setenv("TRAM_MIB_DIR", str(tmp_path))
+        sink = SNMPTrapSink({"host": "127.0.0.1", "mib_dirs": [str(tmp_path)]})
+        assert sink.mib_dirs.count(str(tmp_path)) == 1
+
+
+class TestSNMPTrapSinkBuildVarBinds:
+    """Tests for _build_var_binds with explicit varbinds config."""
+
+    def test_explicit_varbinds_int_type(self):
+        mock_hlapi = _make_mock_hlapi()
+        sink = SNMPTrapSink({
+            "host": "127.0.0.1",
+            "varbinds": [{"oid": "1.3.6.1.2.1.1.1.0", "value_field": "sysDescr", "type": "Integer32"}],
+        })
+        result = sink._build_var_binds(mock_hlapi, {"sysDescr": 42})
+        assert len(result) == 1
+
+    def test_explicit_varbinds_octet_string_type(self):
+        mock_hlapi = _make_mock_hlapi()
+        sink = SNMPTrapSink({
+            "host": "127.0.0.1",
+            "varbinds": [{"oid": "1.3.6.1.2.1.1.1.0", "value_field": "sysDescr", "type": "OctetString"}],
+        })
+        result = sink._build_var_binds(mock_hlapi, {"sysDescr": "Linux"})
+        assert len(result) == 1
+
+    def test_explicit_varbinds_missing_value_field_skipped(self):
+        mock_hlapi = _make_mock_hlapi()
+        sink = SNMPTrapSink({
+            "host": "127.0.0.1",
+            "varbinds": [{"oid": "1.3.6.1", "value_field": "missing_field", "type": "OctetString"}],
+        })
+        result = sink._build_var_binds(mock_hlapi, {"other_field": "val"})
+        assert result == []
+
+    def test_explicit_varbinds_exception_swallowed(self):
+        mock_hlapi = _make_mock_hlapi()
+        mock_hlapi.ObjectType.side_effect = Exception("bad OID")
+        sink = SNMPTrapSink({
+            "host": "127.0.0.1",
+            "varbinds": [{"oid": "invalid", "value_field": "f", "type": "OctetString"}],
+        })
+        result = sink._build_var_binds(mock_hlapi, {"f": "val"})
+        assert result == []
+
+    def test_auto_type_int_value(self):
+        mock_hlapi = _make_mock_hlapi()
+        sink = SNMPTrapSink({"host": "127.0.0.1"})
+        result = sink._build_var_binds(mock_hlapi, {"1.3.6.1": 100})
+        assert len(result) == 1
+
+    def test_auto_type_string_value(self):
+        mock_hlapi = _make_mock_hlapi()
+        sink = SNMPTrapSink({"host": "127.0.0.1"})
+        result = sink._build_var_binds(mock_hlapi, {"1.3.6.1": "string-val"})
+        assert len(result) == 1
+
+    def test_auto_type_exception_skipped(self):
+        mock_hlapi = _make_mock_hlapi()
+        mock_hlapi.ObjectType.side_effect = Exception("bad")
+        sink = SNMPTrapSink({"host": "127.0.0.1"})
+        result = sink._build_var_binds(mock_hlapi, {"1.3.6.1": "val"})
+        assert result == []
+
+    def test_counter32_type_in_type_map(self):
+        """Counter32 and other dynamic types are added if available."""
+        mock_hlapi = _make_mock_hlapi()
+        sink = SNMPTrapSink({
+            "host": "127.0.0.1",
+            "varbinds": [{"oid": "1.3.6.1", "value_field": "f", "type": "Counter32"}],
+        })
+        result = sink._build_var_binds(mock_hlapi, {"f": 42})
+        assert len(result) == 1
+
+
+class TestSNMPTrapSinkSendTrap:
+    """Tests for _send_trap using asyncio.run."""
+
+    def test_send_trap_v2c(self):
+        """v2c trap: uses CommunityData, calls sendNotification."""
+        mock_hlapi = _make_mock_hlapi()
+        sink = SNMPTrapSink({"host": "127.0.0.1", "version": "2c", "community": "public"})
+        import asyncio
+        asyncio.run(sink._send_trap(mock_hlapi, {"1.3.6.1": "val"}))
+        mock_hlapi.CommunityData.assert_called()
+
+    def test_send_trap_v1(self):
+        """v1 trap: uses CommunityData with mpModel=0."""
+        mock_hlapi = _make_mock_hlapi()
+        sink = SNMPTrapSink({"host": "127.0.0.1", "version": "1"})
+        import asyncio
+        asyncio.run(sink._send_trap(mock_hlapi, {}))
+        _, kwargs = mock_hlapi.CommunityData.call_args
+        assert kwargs.get("mpModel") == 0
+
+    def test_send_trap_v3(self):
+        """v3 trap: uses build_v3_auth for authentication."""
+        mock_hlapi = _make_mock_hlapi()
+        sink = SNMPTrapSink({
+            "host": "127.0.0.1",
+            "version": "3",
+            "security_name": "admin",
+            "auth_key": "authkey1234",
+        })
+        import asyncio
+        with patch("tram.connectors.snmp.mib_utils.build_v3_auth", return_value=MagicMock()):
+            asyncio.run(sink._send_trap(mock_hlapi, {}))
+
+    def test_send_trap_with_context_name(self):
+        """context_name triggers ContextData with contextName."""
+        mock_hlapi = _make_mock_hlapi()
+        sink = SNMPTrapSink({"host": "127.0.0.1", "context_name": "myctx"})
+        import asyncio
+        asyncio.run(sink._send_trap(mock_hlapi, {}))
+        mock_hlapi.ContextData.assert_called_with(contextName="myctx")
+
+    def test_send_trap_error_indication_raises(self):
+        """errInd in sendNotification response raises SinkError."""
+        mock_hlapi = _make_mock_hlapi()
+
+        async def _fake_send_with_err(*a, **kw):
+            return ("timeout error", None, None, [])
+
+        mock_hlapi.sendNotification = _fake_send_with_err
+        sink = SNMPTrapSink({"host": "127.0.0.1"})
+        import asyncio
+        with pytest.raises(SinkError, match="SNMP trap send error"):
+            asyncio.run(sink._send_trap(mock_hlapi, {}))
+
+    def test_send_trap_error_status_raises(self):
+        """errStatus in sendNotification response raises SinkError."""
+        mock_hlapi = _make_mock_hlapi()
+        err_status = MagicMock()
+        err_status.prettyPrint.return_value = "noSuchObject"
+
+        async def _fake_send_with_status(*a, **kw):
+            return (None, err_status, None, [])
+
+        mock_hlapi.sendNotification = _fake_send_with_status
+        sink = SNMPTrapSink({"host": "127.0.0.1"})
+        import asyncio
+        with pytest.raises(SinkError, match="SNMP trap PDU error"):
+            asyncio.run(sink._send_trap(mock_hlapi, {}))

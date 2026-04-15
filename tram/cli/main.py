@@ -149,8 +149,6 @@ def validate(
     except ImportError:
         pass  # linter module not available
 
-    raise typer.Exit(0)
-
 
 @app.command()
 def run(
