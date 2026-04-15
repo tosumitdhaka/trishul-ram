@@ -25,10 +25,10 @@ jobs:
           cache: pip
 
       - name: Bootstrap pip
-        run: pip install --upgrade pip "setuptools>=68" wheel
+        run: pip install --upgrade pip setuptools wheel
 
       - name: Install dependencies
-        run: pip install "setuptools>=68" -e ".[dev,all]"
+        run: pip install -e ".[dev]"
 
       - name: Lint with ruff
         run: ruff check .

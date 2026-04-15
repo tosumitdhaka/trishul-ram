@@ -16,8 +16,54 @@ unconfirmed work lives in the backlog at the bottom.
 
 ---
 
-## v1.3.0 — Operations & Observability
+## v1.2.3 — Connector Fixes: Kafka, SNMP, ASN1
 
+- [ ] Kafka source — test and fix real-behavior edge cases (reconnect, offset commit, consumer group)
+- [ ] Kafka sink — test and fix producer error handling, retry, serializer integration
+- [ ] SNMP poll source — test OID resolution, walk vs get, SNMPv3 USM, yield_rows behavior
+- [ ] SNMP trap source — test trap reception, MIB decoding, v3 encrypted traps
+- [ ] SNMP trap sink — test varbind construction, v1/v2c/v3 send paths
+- [ ] ASN1 serializer — test encode/decode round-trip, error handling on malformed input
+
+---
+
+## v1.2.4 — Connector Fixes: OpenSearch, ClickHouse, InfluxDB
+
+- [ ] OpenSearch sink — test bulk write, index template, auth, retry on 429
+- [ ] ClickHouse source/sink — test query execution, batch insert, type coercion
+- [ ] InfluxDB source/sink — test line protocol, bucket/org resolution, token auth
+
+---
+
+## v1.2.5 — Connector Fixes: REST, Webhook, gNMI
+
+- [ ] REST source/sink — test auth types (basic, bearer, apikey), pagination, retry, SSL verify
+- [ ] Webhook source — test payload parsing, path routing, concurrent requests
+- [ ] gNMI source — test subscription modes (ONCE, POLL, STREAM), path encoding, TLS
+
+---
+
+## v1.2.6 — Connector Fixes: SFTP, FTP, S3
+
+- [ ] SFTP source/sink — test file glob, move-after-read, skip_processed, key auth
+- [ ] FTP source/sink — test passive mode, directory listing, file write
+- [ ] S3 source/sink — test bucket/prefix, multipart upload, credential chain
+
+---
+
+## v1.2.7 — Connector Fixes: MQTT, AMQP, NATS
+
+- [ ] MQTT source/sink — test QoS levels, reconnect, topic wildcards
+- [ ] AMQP source/sink — test exchange/queue binding, ack/nack, prefetch
+- [ ] NATS source/sink — test subject routing, JetStream, reconnect
+
+---
+
+## Backlog (unversioned)
+
+Features and issues not yet assigned to a release:
+
+### Operations & Observability
 - [ ] **Pipeline cloning** — copy a pipeline as a new one with a name prompt in the UI
 - [ ] **Scheduled alert evaluation** — cron-based alert checks independent of pipeline runs
 - [ ] **Dead-letter queue viewer** — browse and replay DLQ records via the UI
@@ -27,35 +73,22 @@ unconfirmed work lives in the backlog at the bottom.
 - [ ] **Live log streaming** — WebSocket tail of log output for running stream pipelines
 - [ ] **Node health detail page** — per-worker pipeline assignments and load in manager mode
 
----
-
-## v1.4.0 — Security & Multi-tenancy
-
+### Security & Multi-tenancy
 - [ ] **Role-based access** — read-only vs admin token scopes (viewer/operator/admin)
 - [ ] **Per-pipeline API key scoping** — restrict a key to specific pipelines
-- [ ] **Key upload API** — `POST /api/keys/upload` / `GET /api/keys` / `DELETE /api/keys/<name>`; stored on shared PVC under `/data/keys/`; UI shows key dropdown in connector forms
+- [ ] **Key upload API** — `POST /api/keys/upload` / `GET /api/keys` / `DELETE /api/keys/<name>`; stored on shared PVC under `/data/keys/`
 - [ ] **Audit log** — record who triggered, modified, or deleted pipelines
 
----
-
-## v1.5.0 — Connectors & Serializers
-
+### New Connectors & Serializers
 - [ ] **SMTP sink** — outbound email delivery (alerts, reports)
 - [ ] **gRPC sink** — generic gRPC unary call sink
 - [ ] **Syslog sink** — forward records to remote syslog (RFC 5424)
 - [ ] **Kafka schema registry** — full Avro + Protobuf with Confluent wire format in both source and sink
-
----
-
-## Backlog (unversioned)
-
-Features and issues not yet assigned to a release:
-
-- [ ] **Manager HA** — standby manager with DB-backed leader election; standby serves read-only API and promotes on leader failure
-- [ ] **Graceful worker drain** — `POST /api/workers/{id}/drain`; Helm pre-stop hook wires drain before pod termination
-- [ ] **Per-connector integration tests** — dedicated test suite for each source/sink (Kafka, OpenSearch, SFTP, S3, ClickHouse, SNMP) run against real services in CI
 - [ ] **PM-XML source** — ingest 3GPP TS 32.435 PM XML files natively (currently serializer-only)
-- [ ] **Dark/light theme toggle** — user-controlled, persisted in `localStorage`
+
+### Infrastructure
+- [ ] **Manager HA** — standby manager with DB-backed leader election; promotes on leader failure
+- [ ] **Graceful worker drain** — `POST /api/workers/{id}/drain`; Helm pre-stop hook wires drain before pod termination
 - [ ] **Coverage target increase** — raise CI coverage threshold from 60% to 75%
 
 ---
