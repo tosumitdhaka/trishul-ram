@@ -1,12 +1,10 @@
 """Tests for stats router DB path and helper functions."""
 from __future__ import annotations
 
-from collections import deque
 from contextlib import contextmanager
 from datetime import UTC, datetime, timedelta
-from unittest.mock import MagicMock, patch
+from unittest.mock import MagicMock
 
-import pytest
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
@@ -22,7 +20,6 @@ from tram.api.routers.stats import (
     router,
 )
 from tram.core.context import RunResult, RunStatus
-
 
 # ── Helpers ────────────────────────────────────────────────────────────────
 

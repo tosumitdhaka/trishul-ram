@@ -5,14 +5,12 @@ import sys
 from datetime import UTC, datetime
 from unittest.mock import MagicMock, patch
 
-import pytest
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
 from tram.api.routers.health import router as health_router
 from tram.api.routers.metrics_router import router as metrics_router
 from tram.api.routers.runs import router as runs_router
-
 
 # ── Helpers ────────────────────────────────────────────────────────────────
 

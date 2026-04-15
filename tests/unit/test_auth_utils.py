@@ -15,9 +15,9 @@ from tram.api.auth import (
 
 
 class TestHashPassword:
-    def test_returns_sha256_prefix(self):
+    def test_returns_scrypt_prefix(self):
         h = hash_password("secret")
-        assert h.startswith("sha256$")
+        assert h.startswith("scrypt$")
 
     def test_three_parts(self):
         h = hash_password("secret")

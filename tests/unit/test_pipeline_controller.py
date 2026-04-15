@@ -771,7 +771,7 @@ class TestUpdateDeleteRestart:
         config = load_pipeline_from_yaml(_MANUAL_YAML)
         ctrl.register(config, yaml_text=_MANUAL_YAML)
         # status is "stopped" (manual pipeline)
-        new_state = ctrl.update("my-manual", _MANUAL_YAML)
+        ctrl.update("my-manual", _MANUAL_YAML)
         assert ctrl.manager.get("my-manual").status == "stopped"
         ctrl.stop()
 

@@ -47,7 +47,7 @@ This checklist ensures consistency across code changes, documentation, and relea
 ### Documentation Updates
 When making changes that affect user-facing behavior, update:
 - [ ] `README.md` — Quick Start, plugin tables, features
-- [ ] `CHANGELOG.md` — add entry under `## [Unreleased]`
+- [ ] `docs/changelog.md` — add entry under `## [Unreleased]`
 - [ ] `docs/architecture.md` — if core flow/component changes
 - [ ] `docs/api.md` — if REST endpoints added/changed
 - [ ] `docs/connectors.md` — if connector behavior changes
@@ -59,14 +59,14 @@ When making changes that affect user-facing behavior, update:
 - [ ] OpenAPI schema updated (FastAPI auto-generates, but verify)
 - [ ] New endpoint added to API table in `README.md`
 - [ ] New endpoint added to `docs/api.md`
-- [ ] Frontend API client updated (`tram-ui/src/api.js`)
+- [ ] Frontend API client updated (`tram/ui/src/api.js`)
 - [ ] Auth/rate-limit middleware applied correctly
 
 ### UI Changes
 - [ ] Test in both light and dark mode
 - [ ] Test responsive layout (mobile/tablet/desktop)
-- [ ] Update relevant page in `tram-ui/src/pages/`
-- [ ] Run `cd tram-ui && npm run build` to verify no build errors
+- [ ] Update relevant page in `tram/ui/src/pages/`
+- [ ] Run `cd tram/ui && npm run build` to verify no build errors
 - [ ] Check for console errors in browser dev tools
 
 ### Docker/Helm Changes
@@ -125,7 +125,7 @@ When making changes that affect user-facing behavior, update:
 #### 7. Git Commit
 - [ ] Stage version bump files:
   ```bash
-  git add pyproject.toml README.md CHANGELOG.md helm/Chart.yaml
+  git add pyproject.toml README.md docs/changelog.md helm/Chart.yaml
   ```
 - [ ] Commit with message: `chore: bump version to X.Y.Z`
 - [ ] **Do NOT push yet** — verify release workflow first
@@ -268,3 +268,32 @@ If a release has critical issues:
 - [ ] `git tag -a v1.2.1 -m "Release version 1.2.1" && git push origin v1.2.1`
 - [ ] GitHub release created from tag
 - [ ] Push images to registry: `ghcr.io/tosumitdhaka/trishul-ram:1.2.1`
+
+---
+
+## v1.2.2 — 2026-04-15
+
+### Fixes
+- `tram/cli/main.py` — `validate` and `run --dry-run` crashed unpacking `(config, raw_yaml)` tuple returned by `load_pipeline()`
+- `tram/watcher/pipeline_watcher.py` — hot-reload raised `PipelineAlreadyExistsError` on changed YAML; fixed by passing `replace=True` to `manager.register()`
+- `docs/api.md` — response shapes for dry-run, connector-test, and change-password corrected to match implementation
+- `docs/connectors.md` — `on_error` valid values corrected (`continue | abort | retry | dlq`; `stop` was never valid)
+- `pyproject.toml` — removed `tram[corba]` from `all` extra; `omniORBpy` is a system package with no PyPI wheel (CI was failing)
+- `tests/unit/test_auth_utils.py` — `test_returns_sha256_prefix` → `test_returns_scrypt_prefix`; password hasher was upgraded to scrypt in v1.2.1 but test was not updated
+
+### Changes
+- `tram/ui/` — web UI source moved from `tram-ui/` to `tram/ui/`; `Dockerfile` updated
+- `docs/changelog.md` — moved from `CHANGELOG.md` (root)
+- `docs/checklist.md` — moved from `CHECKLIST.md` (root)
+- `docs/roadmap.md` — replaces `docs/roadmap_1.2.0.md`; features/issues only, versioned or backlog
+- `README.md` — overhauled: use-case driven (PM, FM, gNMI, syslog, CORBA), concise, links to docs
+- `.gitignore` — added `CLAUDE.md`, `AGENTS.md`, `.codex`
+
+### Tests
+- Coverage raised from ~67% to 78.5% (1,296 passing, 0 failed)
+- 9 new test files covering AI router, CLI, daemon server, pipeline manager/controller/watcher, API middleware, stats, serializers
+- 25 ruff lint errors in test files resolved
+
+### Version bumps
+- `pyproject.toml` → `1.2.2`
+- `helm/Chart.yaml` → `1.2.2`

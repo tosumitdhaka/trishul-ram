@@ -1,7 +1,6 @@
 """Tests for tram CLI commands — direct + daemon-proxy."""
 from __future__ import annotations
 
-from pathlib import Path
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -328,7 +327,7 @@ def test_runs_list_with_data():
 
 
 def test_runs_list_with_pipeline_filter():
-    with _mock_get([]) as m:
+    with _mock_get([]):
         result = runner.invoke(app, ["runs", "list", "--pipeline", "my-pipe"])
     assert result.exit_code == 0
 
@@ -345,14 +344,12 @@ def test_runs_get():
 
 
 def test_api_connect_error_get():
-    import httpx
     with patch("tram.cli.main._api_get", side_effect=SystemExit(1)):
         result = runner.invoke(app, ["pipeline", "list"])
     assert result.exit_code == 1
 
 
 def test_api_connect_error_post():
-    import httpx
     with patch("tram.cli.main._api_post",
                side_effect=SystemExit(1)):
         result = runner.invoke(app, ["pipeline", "start", "my-pipe"])

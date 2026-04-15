@@ -9,6 +9,49 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ---
 
+## [1.2.2] — 2026-04-15
+
+### Fixed
+
+**CLI — `validate` and `run --dry-run` crashing on valid pipelines**
+- `load_pipeline()` returns a `(config, raw_yaml)` tuple; both commands were treating it as a plain object, causing `AttributeError: 'tuple' object has no attribute 'name'`
+- Unpacking corrected in `tram/cli/main.py`
+
+**Watcher — hot-reload raising `PipelineAlreadyExistsError`**
+- `pipeline_watcher.py` now passes `replace=True` and `yaml_text` to `manager.register()` on file change; previously a changed YAML caused an error instead of updating the pipeline
+
+**Docs — API response shapes drifted from implementation**
+- `docs/api.md`: corrected response shape for dry-run (`{valid, issues[]}`), connector test (`{ok, latency_ms, error}`), and change-password (`{ok, username}`)
+- `docs/connectors.md`: `on_error` valid values fixed to `continue | abort | retry | dlq`; `stop` was documented but never accepted by the model
+
+**CI — `omniORBpy` pip install failure**
+- `omniORBpy` is a system-only package (requires omniORB shared libs); it cannot be installed from PyPI as a wheel
+- Removed `tram[corba]` from the `all` pip extra; the `corba` extra itself remains for users who have omniORB installed on their system
+
+**Tests — stale `sha256$` assertion in auth tests**
+- `test_auth_utils.py`: `test_returns_sha256_prefix` updated to `test_returns_scrypt_prefix` — the password hasher was upgraded to scrypt in v1.2.1 but the test was not updated
+
+### Changed
+
+**Repository layout**
+- `tram-ui/` moved to `tram/ui/` for a cleaner project structure; `Dockerfile` paths updated accordingly
+- `CHANGELOG.md` and `CHECKLIST.md` moved into `docs/` as `changelog.md` and `checklist.md`; broken `../CHANGELOG.md` link in `docs/index.md` fixed
+
+**Documentation**
+- `README.md` overhauled: rewritten around concrete telecom use cases (PM collection, SNMP trap mediation, gNMI telemetry, syslog aggregation, CORBA mediation) with YAML examples; version history section replaced with link to changelog
+- `docs/roadmap.md` created: replaces `docs/roadmap_1.2.0.md`; features/issues only, versioned where confirmed, unassigned items in backlog
+- `docs/index.md`: version updated to 1.2.2; roadmap and checklist linked
+- `.gitignore`: `CLAUDE.md`, `AGENTS.md`, `.codex` added (AI assistant context files, local only)
+
+### Tests
+
+- Unit coverage raised from ~67% to 78.5% (1,296 passing tests; threshold: 60%)
+- 9 new test files: `test_api_ai.py`, `test_api_health_runs.py`, `test_api_middleware.py`, `test_api_stats_db.py`, `test_bytes_serializer.py`, `test_cli_main.py`, `test_daemon_server.py`, `test_pipeline_manager.py`, `test_pipeline_watcher.py`
+- Extended: `test_pipeline_controller.py`, `test_loader.py`, `test_protobuf_serializer.py`, `test_snmp_connectors.py`
+- 25 ruff lint errors in test files resolved (unused imports, unsorted blocks, unused variables)
+
+---
+
 ## [1.2.1] — 2026-04-14
 
 ### Fixed
