@@ -8,7 +8,7 @@ TRAM (Trishul Real-time Aggregation & Mediation) is a production-ready Python da
 
 **Tech stack:** Python 3.11+, FastAPI, Pydantic v2, APScheduler, SQLAlchemy Core, Bootstrap 5 UI
 
-**Deployment modes** (v1.2.0):
+**Deployment modes** (v1.2.2):
 - `standalone` — single StatefulSet pod; all-in-one (scheduler + DB + UI). Default.
 - `manager` — Deployment that owns scheduling, DB, and UI; dispatches runs to workers.
 - `worker` — StatefulSet pods that execute pipelines and POST results back to manager. No DB, no UI.
@@ -21,7 +21,7 @@ pip install -e ".[dev,manager]"            # base + manager (apscheduler, sqlalc
 pip install -e ".[dev,manager,snmp,avro,kafka]"   # with specific extras
 
 # Testing
-pytest tests/unit/                        # 651 unit tests, no network
+pytest tests/unit/                        # 1296 unit tests, no network
 pytest tests/integration/                 # 44 integration tests
 pytest tests/ --cov=tram --cov-report=term-missing  # with coverage
 pytest tests/unit/test_foo.py::test_bar  # single test
@@ -110,7 +110,7 @@ Source → bytes → Deserializer → list[dict] → Global Transforms (per-reco
 - `pipeline_versions` — YAML snapshots for rollback
 - `processed_files` — idempotent file tracking when `skip_processed: true`
 - `alert_state` — cooldown tracking for alert rules
-- `user_passwords` — bcrypt hashed passwords for browser auth
+- `user_passwords` — scrypt hashed passwords for browser auth
 
 ## Directory Structure
 
@@ -151,7 +151,7 @@ tram/
 └── cli/
     └── main.py           # Typer CLI (pipeline, mib, validate commands)
 
-tram-ui/                  # Bootstrap 5 SPA (built to /ui, served by FastAPI StaticFiles)
+tram/ui/                  # Bootstrap 5 SPA (built to /ui, served by FastAPI StaticFiles)
 ├── src/
 │   ├── api.js            # REST client wrapper
 │   ├── router.js         # client-side routing (hash-based)
@@ -168,7 +168,7 @@ helm/                     # Helm chart (standalone + manager+worker mode, TLS, U
 └── values.yaml           # default config
 
 tests/
-├── unit/                 # 651 tests, no external services
+├── unit/                 # 1296 tests, no external services
 └── integration/          # 44 tests (SFTP, Kafka, schema registry mocks)
 ```
 
@@ -264,4 +264,4 @@ All runtime config via `TRAM_*` env vars (see `.env.example`). Critical ones:
 - **Single source of truth:** `pyproject.toml` `version` field
 - Release workflow patches version from git tag
 - `tram.__version__` loaded via `importlib.metadata`
-- All references (README, CHANGELOG, Helm chart, UI) must match `pyproject.toml`
+- All references (README, `docs/changelog.md`, Helm chart, `docs/index.md`) must match `pyproject.toml`
