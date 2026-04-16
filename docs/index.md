@@ -9,7 +9,7 @@ title: TRAM Documentation
 
 Lightweight, container-native Python daemon for telecom data pipeline orchestration.
 
-**Version:** 1.2.1 | **Status:** Production-ready | **Python:** 3.11+
+**Version:** 1.2.2 | **Status:** Production-ready | **Python:** 3.11+
 
 ---
 
@@ -37,6 +37,7 @@ Lightweight, container-native Python daemon for telecom data pipeline orchestrat
 ### Design & Roadmap
 
 - **[Pipeline Controller Design](pipeline-controller-design.md)** - PipelineController architecture, state machine, DB schema, cluster ownership (implemented in v1.1.4)
+- **[Roadmap](roadmap.md)** - Planned features and version checklist
 
 ---
 
@@ -172,7 +173,10 @@ docs/
 ├── connectors.md                 # All sources and sinks
 ├── deployment.md                 # Docker, k8s, environment variables
 ├── transforms.md                 # Transform reference
-└── pipeline-controller-design.md # PipelineController design (v1.1.4)
+├── pipeline-controller-design.md # PipelineController design (v1.1.4)
+├── roadmap.md                    # Planned features and version checklist
+├── changelog.md                  # Full release history
+└── checklist.md                  # Development checklist
 ```
 
 ---
@@ -187,7 +191,7 @@ docs/
 
 ## Version History
 
-See [CHANGELOG.md](../CHANGELOG.md) for detailed release notes.
+See [changelog.md](changelog.md) for detailed release notes.
 
 **Current Release:** v1.2.1 (2026-04-14)
 - Per-record `errors` list propagated through worker callback chain; skip reasons visible in run history UI

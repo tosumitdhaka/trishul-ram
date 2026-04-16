@@ -617,3 +617,282 @@ class TestOnWorkerRunComplete:
             error=None,
         )
         ctrl.stop()
+
+    def test_errors_list_propagated(self):
+        ctrl = _started_controller()
+        config = load_pipeline_from_yaml(_MANUAL_YAML)
+        ctrl.register(config, yaml_text=_MANUAL_YAML)
+        ctrl.manager.set_status("my-manual", "running")
+        ctrl.on_worker_run_complete(
+            run_id="r4",
+            pipeline_name="my-manual",
+            status="success",
+            records_in=5,
+            records_out=4,
+            errors=["record skipped — condition filtered"],
+        )
+        # run was recorded — no exception
+        ctrl.stop()
+
+    def test_invalid_status_falls_back_to_failed(self):
+        ctrl = _started_controller()
+        config = load_pipeline_from_yaml(_MANUAL_YAML)
+        ctrl.register(config, yaml_text=_MANUAL_YAML)
+        ctrl.manager.set_status("my-manual", "running")
+        ctrl.on_worker_run_complete(
+            run_id="r5",
+            pipeline_name="my-manual",
+            status="unknown_status_xyz",
+            records_in=0,
+            records_out=0,
+        )
+        assert ctrl.manager.get("my-manual").status == "error"
+        ctrl.stop()
+
+    def test_worker_pool_notified_on_complete(self):
+        """WorkerPool.on_run_complete() must be called when worker_pool is set."""
+        worker_pool = MagicMock()
+        worker_pool.dispatch.return_value = "http://worker-0:8766"
+        ctrl = _started_controller(worker_pool=worker_pool)
+        config = load_pipeline_from_yaml(_MANUAL_YAML)
+        ctrl.register(config, yaml_text=_MANUAL_YAML)
+        ctrl.manager.set_status("my-manual", "running")
+        ctrl.on_worker_run_complete(
+            run_id="r6",
+            pipeline_name="my-manual",
+            status="success",
+            records_in=1,
+            records_out=1,
+        )
+        worker_pool.on_run_complete.assert_called_once_with("r6")
+        ctrl.stop()
+
+
+# ── Worker dispatch path ───────────────────────────────────────────────────
+
+
+class TestWorkerDispatch:
+    def _worker_pool(self, dispatch_return="http://worker-0:8766"):
+        wp = MagicMock()
+        wp.dispatch.return_value = dispatch_return
+        return wp
+
+    def test_run_batch_dispatches_to_worker(self):
+        wp = self._worker_pool()
+        ctrl = _started_controller(worker_pool=wp, manager_url="http://manager:8765")
+        config = load_pipeline_from_yaml(_INTERVAL_YAML)
+        ctrl.register(config, yaml_text=_INTERVAL_YAML)
+        ctrl.manager.set_status("my-interval", "scheduled")
+
+        ctrl._run_batch("my-interval", run_id="r1")
+
+        wp.dispatch.assert_called_once()
+        call_kwargs = wp.dispatch.call_args.kwargs
+        assert call_kwargs["pipeline_name"] == "my-interval"
+        assert "r1" in call_kwargs["run_id"] or call_kwargs["run_id"]
+        ctrl.stop()
+
+    def test_run_batch_no_healthy_workers_sets_error(self):
+        wp = self._worker_pool(dispatch_return=None)
+        ctrl = _started_controller(worker_pool=wp)
+        config = load_pipeline_from_yaml(_INTERVAL_YAML)
+        ctrl.register(config, yaml_text=_INTERVAL_YAML)
+        ctrl.manager.set_status("my-interval", "scheduled")
+
+        ctrl._run_batch("my-interval")
+        assert ctrl.manager.get("my-interval").status == "error"
+        ctrl.stop()
+
+    def test_start_stream_dispatches_to_worker(self):
+        wp = self._worker_pool()
+        ctrl = _started_controller(worker_pool=wp)
+        config = load_pipeline_from_yaml(_STREAM_YAML)
+        ctrl.register(config, yaml_text=_STREAM_YAML)
+
+        ctrl._start_stream(config)
+
+        wp.dispatch.assert_called_once()
+        assert ctrl.manager.get("my-stream").status == "running"
+        ctrl.stop()
+
+    def test_start_stream_no_healthy_workers_sets_error(self):
+        wp = self._worker_pool(dispatch_return=None)
+        ctrl = _started_controller(worker_pool=wp)
+        config = load_pipeline_from_yaml(_STREAM_YAML)
+        ctrl.register(config, yaml_text=_STREAM_YAML)
+
+        ctrl._start_stream(config)
+        assert ctrl.manager.get("my-stream").status == "error"
+        ctrl.stop()
+
+    def test_start_stream_second_call_is_no_op(self):
+        """When stream already dispatched, second call is skipped."""
+        wp = self._worker_pool()
+        ctrl = _started_controller(worker_pool=wp)
+        config = load_pipeline_from_yaml(_STREAM_YAML)
+        ctrl.register(config, yaml_text=_STREAM_YAML)
+
+        ctrl._start_stream(config)
+        ctrl._stream_run_ids["my-stream"] = "existing-run-id"
+        ctrl._start_stream(config)
+        assert wp.dispatch.call_count == 1  # only called once
+        ctrl.stop()
+
+    def test_stop_stream_calls_worker_stop(self):
+        wp = self._worker_pool()
+        ctrl = _started_controller(worker_pool=wp)
+        config = load_pipeline_from_yaml(_STREAM_YAML)
+        ctrl.register(config, yaml_text=_STREAM_YAML)
+        ctrl._stream_run_ids["my-stream"] = "run-abc"
+
+        ctrl._stop_stream("my-stream")
+        wp.stop_run.assert_called_once_with("run-abc", "my-stream")
+        ctrl.stop()
+
+
+# ── update / delete / restart ─────────────────────────────────────────────
+
+
+class TestUpdateDeleteRestart:
+    def test_update_replaces_pipeline_and_restarts(self):
+        ctrl = _started_controller()
+        config = load_pipeline_from_yaml(_INTERVAL_YAML)
+        ctrl.register(config, yaml_text=_INTERVAL_YAML)
+        assert ctrl.manager.get("my-interval").status == "scheduled"
+
+        # Update with same YAML — pipeline should re-register and reschedule
+        new_state = ctrl.update("my-interval", _INTERVAL_YAML)
+        assert new_state is not None
+        assert ctrl.manager.exists("my-interval")
+        ctrl.stop()
+
+    def test_update_stopped_pipeline_stays_stopped(self):
+        ctrl = _started_controller()
+        config = load_pipeline_from_yaml(_MANUAL_YAML)
+        ctrl.register(config, yaml_text=_MANUAL_YAML)
+        # status is "stopped" (manual pipeline)
+        ctrl.update("my-manual", _MANUAL_YAML)
+        assert ctrl.manager.get("my-manual").status == "stopped"
+        ctrl.stop()
+
+    def test_update_saves_to_db(self):
+        db = MagicMock()
+        db.get_stopped_pipeline_names.return_value = []
+        db.get_all_pipelines.return_value = []
+        db.get_runs.return_value = []
+        db.is_pipeline_stopped.return_value = False
+        ctrl = PipelineController(db=db, node_id="n0")
+        ctrl.start()
+        ctrl.manager.register(
+            load_pipeline_from_yaml(_INTERVAL_YAML), yaml_text=_INTERVAL_YAML
+        )
+        ctrl.update("my-interval", _INTERVAL_YAML)
+        db.save_pipeline.assert_called_with("my-interval", _INTERVAL_YAML, source="api")
+        ctrl.stop()
+
+    def test_delete_deregisters_pipeline(self):
+        ctrl = _started_controller()
+        config = load_pipeline_from_yaml(_MANUAL_YAML)
+        ctrl.register(config, yaml_text=_MANUAL_YAML)
+        ctrl.delete("my-manual")
+        assert not ctrl.manager.exists("my-manual")
+        ctrl.stop()
+
+    def test_delete_calls_db(self):
+        db = MagicMock()
+        db.get_stopped_pipeline_names.return_value = []
+        db.get_all_pipelines.return_value = []
+        db.get_runs.return_value = []
+        db.is_pipeline_stopped.return_value = False
+        ctrl = PipelineController(db=db, node_id="n0")
+        ctrl.start()
+        ctrl.manager.register(
+            load_pipeline_from_yaml(_MANUAL_YAML), yaml_text=_MANUAL_YAML
+        )
+        ctrl.delete("my-manual")
+        db.delete_pipeline.assert_called_once_with("my-manual")
+        ctrl.stop()
+
+    def test_restart_interval_pipeline(self):
+        ctrl = _started_controller()
+        config = load_pipeline_from_yaml(_INTERVAL_YAML)
+        ctrl.register(config, yaml_text=_INTERVAL_YAML)
+        ctrl.manager.set_status("my-interval", "scheduled")
+
+        ctrl.restart_pipeline("my-interval")
+        # After restart the pipeline should be rescheduled
+        assert ctrl.manager.get("my-interval").status == "scheduled"
+        ctrl.stop()
+
+    def test_restart_stopped_pipeline_schedules(self):
+        ctrl = _started_controller()
+        config = load_pipeline_from_yaml(_INTERVAL_YAML)
+        ctrl.register(config, yaml_text=_INTERVAL_YAML)
+        ctrl.stop_pipeline("my-interval")
+        assert ctrl.manager.get("my-interval").status == "stopped"
+
+        ctrl.restart_pipeline("my-interval")
+        assert ctrl.manager.get("my-interval").status == "scheduled"
+        ctrl.stop()
+
+
+# ── start_pipeline edge cases ─────────────────────────────────────────────
+
+
+class TestStartPipelineEdgeCases:
+    def test_start_pipeline_already_running_is_noop(self):
+        ctrl = _started_controller()
+        config = load_pipeline_from_yaml(_INTERVAL_YAML)
+        ctrl.register(config, yaml_text=_INTERVAL_YAML)
+        ctrl.manager.set_status("my-interval", "running")
+
+        # Should not raise and should leave status as running
+        ctrl.start_pipeline("my-interval")
+        assert ctrl.manager.get("my-interval").status == "running"
+        ctrl.stop()
+
+    def test_start_pipeline_disabled_sets_stopped(self):
+        yaml = _INTERVAL_YAML + "enabled: false\n"
+        ctrl = _started_controller()
+        config = load_pipeline_from_yaml(yaml)
+        ctrl.manager.register(config, yaml_text=yaml)
+
+        ctrl.start_pipeline("my-interval")
+        assert ctrl.manager.get("my-interval").status == "stopped"
+        ctrl.stop()
+
+    def test_stop_pipeline_persists_to_db(self):
+        db = MagicMock()
+        db.get_stopped_pipeline_names.return_value = []
+        db.get_all_pipelines.return_value = []
+        db.get_runs.return_value = []
+        db.is_pipeline_stopped.return_value = False
+        ctrl = PipelineController(db=db, node_id="n0")
+        ctrl.start()
+        ctrl.manager.register(
+            load_pipeline_from_yaml(_INTERVAL_YAML), yaml_text=_INTERVAL_YAML
+        )
+        ctrl.stop_pipeline("my-interval")
+        db.stop_pipeline.assert_called_once_with("my-interval")
+        ctrl.stop()
+
+
+# ── get_scheduler_status ──────────────────────────────────────────────────
+
+
+class TestGetSchedulerStatus:
+    def test_returns_expected_keys(self):
+        ctrl = _started_controller()
+        status = ctrl.get_scheduler_status()
+        assert "scheduler_running" in status
+        assert "active_streams" in status
+        assert "scheduled_jobs" in status
+        ctrl.stop()
+
+    def test_includes_worker_pool_status_when_set(self):
+        wp = MagicMock()
+        wp.status.return_value = {"workers": []}
+        ctrl = _started_controller(worker_pool=wp)
+        status = ctrl.get_scheduler_status()
+        assert status["workers"] == {"workers": []}
+        ctrl.stop()
