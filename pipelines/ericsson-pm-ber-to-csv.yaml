@@ -1,0 +1,124 @@
+################################################################################
+# Ericsson PM BER (3GPP TS 32.401) → CSV / JSON
+#
+# Decodes Ericsson statsfile BER binaries using the vendor-supplied ASN.1
+# schema (32.401 variant with GraphicString).
+#
+# Source SFTP:  drops .asn1 statsfiles in /pm/ericsson/incoming/
+#   C-files:    C<date>.<time>_NetworkElement=<NE>:1001_statsfile.asn1
+#   G-files:    G<date>.<time>_SubNetwork=...,ManagedElement=<NE>:1001_statsfile.asn1
+#
+# Sinks:
+#   1. Local CSV  — /data/output/ericsson_pm/  (one file per input, for downstream ETL)
+#   2. Local JSON — /data/output/ericsson_pm/  (pretty-printed, for debugging)
+#
+# Prerequisites:
+#   pip install tram[asn1,sftp]
+#
+# Environment variables:
+#   SFTP_HOST / SFTP_USER / SFTP_PASS
+#   SFTP_PM_IN       remote input dir,   e.g. /pm/ericsson/incoming
+#   SFTP_PM_ARCHIVE  remote archive dir, e.g. /pm/ericsson/done
+################################################################################
+
+version: "1"
+
+pipeline:
+  name: ericsson-pm-ber-to-csv
+  description: >
+    Decode Ericsson PM BER statsfiles (3GPP TS 32.401, GraphicString variant)
+    into flat per-counter CSV/JSON records. Runs every 15 minutes.
+    Already-processed files are skipped via DB tracking.
+  enabled: true
+
+  schedule:
+    type: cron
+    cron: "*/15 * * * *"     # every 15 minutes
+
+  source:
+    type: sftp
+    host: ${SFTP_HOST:-sftp.example.com}
+    port: ${SFTP_PORT:-22}
+    username: ${SFTP_USER:-pmuser}
+    password: ${SFTP_PASS:-changeme}
+    remote_path: ${SFTP_PM_IN:-/pm/ericsson/incoming}
+    file_pattern: "*_statsfile.asn1"
+    move_after_read: ${SFTP_PM_ARCHIVE:-/pm/ericsson/done}
+    skip_processed: true      # idempotent: never re-process the same file
+
+  serializer_in:
+    type: asn1
+    schema_file: /data/schemas/ericsson_32401.asn   # vendor-supplied .asn schema
+    message_class: MeasDataCollection               # root type in the schema
+    encoding: ber
+
+  transforms:
+    # --- Flatten nested MeasDataCollection into per-counter rows ---
+    # asn1tools decodes the full structure as one nested dict per file.
+    # explode_path walks measData → measInfo → measValues to emit one
+    # record per (MeasObjInstId, MeasType) pair.
+    - type: explode_path
+      path: "measData[*].measInfo[*].measValues[*]"
+      keep_parent_fields:
+        - measFileHeader.fileFormatVersion   as file_format_version
+        - measFileHeader.senderName          as sender_name
+        - measFileHeader.senderType          as sender_type
+        - measFileHeader.vendorName          as vendor_name
+        - measFileHeader.collectionBeginTime as collection_begin_time
+        - measData[*].nEId.nEUserName        as ne_user_name
+        - measData[*].nEId.nEDistinguishedName as ne_dn
+        - measData[*].measInfo[*].measTimeStamp    as meas_timestamp
+        - measData[*].measInfo[*].granularityPeriod as granularity_period
+        - measData[*].measInfo[*].measTypes         as _meas_types   # parallel list
+
+    # Zip measResults with measTypes to produce one row per counter
+    - type: zip_fields
+      index_field: _result_idx
+      pairs:
+        - [_meas_types, meas_type]
+        - [measResults, meas_result_raw]
+
+    # Unwrap MeasResult CHOICE: {"type": "iValue", "value": 42} → scalar + type label
+    - type: add_field
+      fields:
+        meas_result:      "record['meas_result_raw']['value']"
+        meas_result_type: "record['meas_result_raw']['type']"
+
+    # suspectFlag DEFAULT FALSE — normalize missing to False
+    - type: add_field
+      fields:
+        suspect: "record.get('suspectFlag', False)"
+
+    # Drop intermediary fields
+    - type: drop
+      fields: [meas_result_raw, _meas_types, _result_idx, measResults,
+               measValues, suspectFlag]
+
+    # Normalize null/noValue counters to empty string in CSV
+    - type: add_field
+      fields:
+        meas_result: "'' if record.get('meas_result_type') == 'noValue' else record['meas_result']"
+
+  serializer_out:
+    type: csv
+
+  sinks:
+    # CSV — one file per input statsfile, ready for ETL / database load
+    - type: local
+      path: /data/output/ericsson_pm
+      filename_template: "{source_filename}.csv"
+      serializer_out:
+        type: csv
+
+    # JSON — pretty-printed, useful for debugging individual files
+    - type: local
+      path: /data/output/ericsson_pm
+      filename_template: "{source_filename}.json"
+      serializer_out:
+        type: json
+        indent: 2
+
+  on_error: continue
+  dlq:
+    type: local
+    path: /data/dlq/ericsson_pm

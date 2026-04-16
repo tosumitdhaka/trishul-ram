@@ -41,3 +41,8 @@ state/
 
 # Output
 output/
+
+# AI assistant context files (local only, not for version control)
+CLAUDE.md
+AGENTS.md
+.codex

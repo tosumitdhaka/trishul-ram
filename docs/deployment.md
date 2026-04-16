@@ -33,10 +33,7 @@ All configuration is via environment variables (12-factor).
 | `TRAM_SMTP_PASS` | _(none)_ | SMTP password (optional) |
 | `TRAM_SMTP_TLS` | `true` | Use STARTTLS (`false` for plain SMTP) |
 | `TRAM_SMTP_FROM` | `tram@localhost` | Sender address for alert emails |
-| `TRAM_CLUSTER_ENABLED` | `false` | Enable cluster mode (requires external DB) |
-| `TRAM_HEARTBEAT_SECONDS` | `10` | Seconds between node heartbeats in cluster mode |
-| `TRAM_NODE_TTL_SECONDS` | `30` | Seconds before a silent node is marked dead |
-| `TRAM_PIPELINE_SYNC_INTERVAL` | `10` | Seconds between DB polls for API-registered pipelines (v1.1.2); all cluster pods converge within this interval when a pipeline is added or deleted via the API |
+| `TRAM_PIPELINE_SYNC_INTERVAL` | `10` | Seconds between DB polls for API-registered pipelines (v1.1.2) |
 | `TRAM_API_KEY` | _(empty)_ | API key for request authentication; empty = auth disabled |
 | `TRAM_AUTH_USERS` | _(empty)_ | Comma-separated `user:password` pairs for browser UI login (v1.0.8); issues 8-hour HMAC session tokens; coexists with `TRAM_API_KEY` |
 | `TRAM_AUTH_SECRET` | _(random)_ | Shared HMAC signing secret for session tokens (v1.0.8); **required in cluster mode** — without a shared secret each pod signs tokens independently and cross-pod requests return 401 |
@@ -135,7 +132,7 @@ This creates:
 
 ```dockerfile
 # Build with Dockerfile.worker (no UI assets, no manager deps)
-docker build -f Dockerfile.worker -t trishul-ram-worker:1.2.0 .
+docker build -f Dockerfile.worker -t trishul-ram-worker:1.2.1 .
 ```
 
 The worker image `EXPOSE`s port 8766, sets `ENV TRAM_MODE=worker`, and health-checks `/agent/health`.
@@ -265,7 +262,7 @@ tram mib compile /path/to/vendor-mibs/ --out /mibs
 **Air-gapped environments** — copy pre-compiled MIB `.py` files into the image:
 
 ```dockerfile
-FROM ghcr.io/tosumitdhaka/trishul-ram:1.1.3
+FROM ghcr.io/tosumitdhaka/trishul-ram:1.2.1
 COPY compiled-mibs/*.py /mibs/
 ```
 
@@ -310,7 +307,7 @@ curl -X DELETE http://localhost:8765/api/schemas/cisco/GenericRecord.proto
 **Mount host directory** for development (read-write):
 
 ```bash
-docker run -v ./schemas:/schemas tram:1.1.3
+docker run -v ./schemas:/schemas tram:1.2.1
 ```
 
 ## Schema Registry Integration (v1.0.4)
@@ -433,7 +430,7 @@ Mount a volume at `/data` (or set `TRAM_DB_URL`) to persist run history and pipe
 
 ### Installed extras in the default image
 
-The default `tram:1.1.3` image installs (`clickhouse` added in v1.0.4):
+The default `tram:1.2.1` image installs (`clickhouse` added in v1.0.4):
 
 `kafka`, `opensearch`, `snmp`, `avro`, `protobuf_ser`, `msgpack_ser`, `mqtt`, `amqp`, `nats`,
 `gnmi`, `jmespath`, `sql`, `influxdb`, `redis`, `websocket`, `elasticsearch`, `metrics`,
@@ -453,7 +450,7 @@ The following extras are **excluded by default** to keep the image lean. Extend 
 | `otel` | only needed when `TRAM_OTEL_ENDPOINT` is set; no-op fallback when absent | ~15 MB |
 
 ```dockerfile
-FROM ghcr.io/tosumitdhaka/trishul-ram:1.1.3
+FROM ghcr.io/tosumitdhaka/trishul-ram:1.2.1
 RUN pip install "tram[parquet,s3,gcs,azure,otel]"
 ```
 
@@ -475,7 +472,7 @@ TRAM ships a production-ready Helm chart in `helm/`. Published to GHCR OCI on ev
 # Add chart from OCI registry
 helm install tram oci://ghcr.io/tosumitdhaka/charts/trishul-ram \
   --namespace tram --create-namespace \
-  --set image.tag=1.1.3
+  --set image.tag=1.2.1
 
 # Mount pipelines from local files
 helm upgrade tram oci://ghcr.io/tosumitdhaka/charts/trishul-ram \
@@ -492,9 +489,11 @@ helm upgrade tram oci://ghcr.io/tosumitdhaka/charts/trishul-ram \
 | Value | Default | Description |
 |-------|---------|-------------|
 | `image.repository` | `ghcr.io/tosumitdhaka/trishul-ram` | Docker image repository |
-| `image.tag | "1.1.3"` | Image tag |
-| `replicaCount` | `1` | Replicas — `1` = standalone, `N` = cluster |
-| `clusterMode.enabled` | `false` | Activate cluster mode (sets `TRAM_CLUSTER_ENABLED`, requires external DB) |
+| `image.tag | "1.2.1"` | Image tag |
+| `replicaCount` | `1` | Replicas for the standalone StatefulSet; not used when `manager.enabled=true` |
+| `manager.enabled` | `false` | `true` = manager+worker mode (Deployment + worker StatefulSet); `false` = standalone StatefulSet |
+| `worker.replicas` | `3` | Number of worker StatefulSet replicas (only when `manager.enabled=true`) |
+| `manager.persistence.enabled` | `true` | RWO PVC for manager pod (SQLite DB, schemas, MIBs) — recommended in manager mode |
 | `persistence.enabled` | `true` | Provision a per-pod RWO PVC via `volumeClaimTemplates` mounted at `/data`; auto-sets `TRAM_DB_URL=sqlite:////data/tram.db`, `TRAM_SCHEMA_DIR=/data/schemas`, `TRAM_MIB_DIR=/data/mibs`; disable in cluster mode when using `sharedStorage` |
 | `persistence.size` | `1Gi` | PVC size per pod (standalone mode only) |
 | `persistence.accessMode` | `ReadWriteOnce` | PVC access mode (standalone mode only) |
@@ -524,72 +523,62 @@ helm upgrade tram oci://ghcr.io/tosumitdhaka/charts/trishul-ram \
 ```bash
 helm install tram oci://ghcr.io/tosumitdhaka/charts/trishul-ram \
   --namespace tram --create-namespace \
-  --set image.tag=1.1.3
+  --set image.tag=1.2.1
 ```
 
 A single-replica `StatefulSet` with pod name `tram-0` runs the full daemon. A `PersistentVolumeClaim` (`data-tram-0`) is auto-provisioned via `volumeClaimTemplates` and mounted at `/data`. SQLite run history, API-uploaded schemas (`/data/schemas`), and runtime MIBs (`/data/mibs`) all share this single PVC and survive pod restarts. Standard MIBs baked into the image at `/mibs` remain available alongside any runtime-downloaded ones.
 
-### Cluster mode (v0.8.0)
+### Manager + Worker mode (v1.2.0)
 
-Cluster mode deploys a `StatefulSet` where every pod automatically discovers peers via a shared external database and partitions pipelines via consistent hashing — no external coordinator required.
+Manager+Worker mode replaces the old v0.8.0 consistent-hashing cluster model. A single manager `Deployment` owns scheduling, the SQLite database, and the Web UI. A worker `StatefulSet` (N replicas) receives run requests over HTTP, executes them statelessly, and POSTs results back to the manager.
 
-**Prerequisites**: PostgreSQL (recommended) or MariaDB accessible from the cluster.
+SQLite on a `ReadWriteOnce` PVC is sufficient — only one manager pod ever writes to it.
 
 ```bash
-# Create a Secret for DB credentials
-kubectl create secret generic tram-db \
-  --namespace tram \
-  --from-literal=url='postgresql+psycopg2://tram:secret@postgres:5432/tramdb'
-
 helm install tram oci://ghcr.io/tosumitdhaka/charts/trishul-ram \
   --namespace tram --create-namespace \
-  --set image.tag=1.1.3 \
-  --set clusterMode.enabled=true \
-  --set replicaCount=3 \
-  --set envSecret.TRAM_DB_URL.secretName=tram-db \
-  --set envSecret.TRAM_DB_URL.secretKey=url \
-  --set persistence.enabled=false
+  --set image.tag=1.2.1 \
+  --set manager.enabled=true \
+  --set worker.replicas=3 \
+  --set worker.image.repository=trishul-ram-worker \
+  --set worker.image.tag=1.2.1 \
+  --set apiKey=mysecret
 ```
 
-Each pod (`tram-0`, `tram-1`, `tram-2`) registers in the shared DB, sends heartbeats, and owns pipelines computed by:
-
-```
-sha1(pipeline_name) % live_node_count == my_sorted_position
-```
-
-When a node fails, the remaining nodes detect it (after `TRAM_NODE_TTL_SECONDS`) and absorb its pipelines automatically. No manual intervention required.
+This creates:
+- `tram-manager` Deployment (1 replica, port 8765) — scheduler + DB + UI
+- `tram-worker` StatefulSet (3 replicas, port 8766) — stateless executors
+- `tram-worker` headless Service — stable DNS `tram-worker-N.tram-worker.<ns>.svc.cluster.local`
 
 Check cluster state:
 
 ```bash
-kubectl exec -n tram tram-0 -- curl -s http://localhost:8765/api/cluster/nodes | jq .
+kubectl exec -n tram deploy/tram-manager -- \
+  curl -s -H "X-API-Key: mysecret" http://localhost:8765/api/cluster/nodes | jq .
 ```
 
 ### PostgreSQL subchart (v1.0.8)
 
-For a self-contained cluster deployment on Kubernetes (e.g. kind/minikube) without a separate database server, use the bundled Bitnami PostgreSQL subchart:
+PostgreSQL is **optional** in manager+worker mode — SQLite on the manager's RWO PVC is the recommended default. Enable the PostgreSQL subchart only when you need external tooling to query run history directly, or when planning future manager HA failover:
 
 ```bash
-helm install trishul-ram helm/ \
-  --namespace trishul-ram --create-namespace \
-  --set image.tag=1.1.3 \
-  --set replicaCount=3 \
-  --set clusterMode.enabled=true \
+helm install tram oci://ghcr.io/tosumitdhaka/charts/trishul-ram \
+  --namespace tram --create-namespace \
+  --set image.tag=1.2.1 \
+  --set manager.enabled=true \
+  --set worker.replicas=3 \
   --set postgresql.enabled=true
 ```
 
-This deploys a `trishul-ram-postgresql` StatefulSet alongside TRAM and automatically sets:
+For production with an existing external database, set `TRAM_DB_URL` via `envSecret` instead of the subchart.
 
-```
-TRAM_DB_URL=postgresql+psycopg2://tram:tram@trishul-ram-postgresql/tram
-TRAM_CLUSTER_ENABLED=true
-```
-
-> **Note:** For production, use an external managed PostgreSQL and set `TRAM_DB_URL` via `envSecret` instead.
+> **Note:** For production, use an external managed PostgreSQL and set `TRAM_DB_URL` via `envSecret`.
 
 ### Shared RWX storage for schemas and MIBs (v1.0.9)
 
-In cluster mode, schemas and MIBs uploaded via the UI are stored per-pod by default (each pod has its own `/data` volume). Enable `sharedStorage` to provision a single `ReadWriteMany` PVC (`data-<release>`) that every pod mounts at `/data`, making uploads visible cluster-wide immediately.
+In standalone mode, enable `sharedStorage` to provision a single `ReadWriteMany` PVC that every replica mounts at `/data`, so schemas/MIBs uploaded via the UI are visible to all pods immediately.
+
+In manager+worker mode the manager's RWO PVC already holds schemas and MIBs — workers sync them at run time via `GET /api/schemas` and `GET /api/mibs/{name}`. Only enable `sharedStorage` in manager mode if workers must read schema/MIB files directly at runtime (e.g. Avro/Protobuf pipelines referencing `/data/schemas`).
 
 **For kind clusters** — deploy the bundled NFS Ganesha provisioner first:
 
@@ -608,7 +597,7 @@ Then install/upgrade TRAM with shared storage enabled:
 ```bash
 helm upgrade trishul-ram helm/ \
   --namespace trishul-ram \
-  --set image.tag=1.1.3 \
+  --set image.tag=1.2.1 \
   --set replicaCount=3 \
   --set clusterMode.enabled=true \
   --set postgresql.enabled=true \
@@ -689,7 +678,7 @@ spec:
     spec:
       containers:
       - name: tram
-        image: ghcr.io/tosumitdhaka/trishul-ram:1.1.3
+        image: ghcr.io/tosumitdhaka/trishul-ram:1.2.1
         command: ["tram", "daemon"]
         ports:
         - containerPort: 8765
@@ -829,9 +818,9 @@ remote_write:
 
 ## Scaling
 
-TRAM always deploys as a `StatefulSet` (pod names `tram-0`, `tram-1`, …). Scale is controlled by `replicaCount` and `clusterMode.enabled`:
+TRAM supports two Kubernetes deployment shapes controlled by `manager.enabled`:
 
-- **Standalone** (`replicaCount: 1`, default) — single pod `tram-0` with local SQLite via auto-provisioned PVC `data-tram-0`. Zero configuration overhead.
-- **Cluster** (`replicaCount: N`, `clusterMode.enabled: true`) — N pods sharing an external PostgreSQL or MariaDB database. Pipelines distributed automatically via consistent hashing. No external coordinator required.
+- **Standalone** (`manager.enabled: false`, default) — a single-replica `StatefulSet` (`tram-0`) with local SQLite via auto-provisioned PVC `data-tram-0`. Zero configuration overhead.
+- **Manager + Worker** (`manager.enabled: true`) — a manager `Deployment` (1 replica, port 8765) for scheduling/DB/UI, and a worker `StatefulSet` (N replicas, port 8766) for stateless execution. SQLite on the manager's RWO PVC; no PostgreSQL required.
 
-Using a `StatefulSet` in both modes ensures stable pod identity (`tram-0` always stays `tram-0`), consistent `TRAM_NODE_ID` across restarts, and proper PVC affinity so the data volume follows the pod when it reschedules.
+Using `StatefulSet` for standalone and worker pods ensures stable pod identity, consistent `TRAM_NODE_ID` across restarts, and proper PVC affinity so the data volume follows the pod when it reschedules.

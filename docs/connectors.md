@@ -55,7 +55,7 @@ pipeline:
     - type: <sink-type>
       # ... sink params
 
-  on_error: continue           # continue (skip failed records) | stop (halt pipeline)
+  on_error: continue           # continue | abort | retry | dlq
 
   dlq:                         # dead-letter queue for failed records
     type: local

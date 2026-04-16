@@ -24,8 +24,11 @@ jobs:
           python-version: ${{ matrix.python-version }}
           cache: pip
 
+      - name: Bootstrap pip
+        run: pip install --no-cache-dir --upgrade pip setuptools wheel
+
       - name: Install dependencies
-        run: pip install -e ".[dev,all]"
+        run: pip install --no-cache-dir -e ".[dev]"
 
       - name: Lint with ruff
         run: ruff check .
