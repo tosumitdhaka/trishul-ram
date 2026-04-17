@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import threading
 import time
+from datetime import UTC, datetime
 from unittest.mock import MagicMock, patch
 
 from fastapi.testclient import TestClient
@@ -72,6 +73,8 @@ class TestPostRunComplete:
 
     def test_posts_payload(self, respx_mock=None):
         captured = {}
+        started_at = "2026-04-16T09:00:00+00:00"
+        finished_at = "2026-04-16T09:05:00+00:00"
 
         def _fake_post(url, **kwargs):
             captured["url"] = url
@@ -90,12 +93,16 @@ class TestPostRunComplete:
             _post_run_complete(
                 "http://manager/api/internal/run-complete",
                 "run-42", "my-pipe", "success", 10, 8, None,
+                started_at=started_at,
+                finished_at=finished_at,
             )
 
         assert captured["url"] == "http://manager/api/internal/run-complete"
         assert captured["json"]["run_id"] == "run-42"
         assert captured["json"]["status"] == "success"
         assert captured["json"]["records_in"] == 10
+        assert captured["json"]["started_at"] == started_at
+        assert captured["json"]["finished_at"] == finished_at
 
     def test_swallows_http_error(self):
         with patch("httpx.Client") as mock_client_cls:
@@ -168,8 +175,6 @@ class TestStopEndpoint:
 class TestRunEndpoint:
     def _patch_executor(self, records_in=5, records_out=5, status="success", error=None):
         """Return a context manager that patches PipelineExecutor.batch_run."""
-        from datetime import UTC, datetime
-
         from tram.core.context import RunResult, RunStatus
 
         mock_result = RunResult(
@@ -253,6 +258,8 @@ class TestRunEndpoint:
         assert callback_calls[0]["run_id"] == "r-batch-1"
         assert callback_calls[0]["status"] == "success"
         assert callback_calls[0]["records_in"] == 3
+        assert callback_calls[0]["started_at"]
+        assert callback_calls[0]["finished_at"]
 
     def test_stream_run_accepted_and_stops(self):
         """Stream run: POST /agent/run then POST /agent/stop signals completion."""
@@ -267,8 +274,22 @@ class TestRunEndpoint:
             "tram.pipeline.executor.PipelineExecutor.stream_run",
             side_effect=_fake_stream_run,
         ):
-            with patch("httpx.Client"):  # suppress callback
-                client = _make_client(worker_id="w0", manager_url="")
+            callback_calls = []
+
+            def _fake_callback(url, **kwargs):
+                callback_calls.append(kwargs.get("json", {}))
+                resp = MagicMock()
+                resp.raise_for_status = MagicMock()
+                return resp
+
+            with patch("httpx.Client") as mock_client_cls:
+                mock_client = MagicMock()
+                mock_client.__enter__ = lambda s: mock_client
+                mock_client.__exit__ = MagicMock(return_value=False)
+                mock_client.post.side_effect = _fake_callback
+                mock_client_cls.return_value = mock_client
+
+                client = _make_client(worker_id="w0", manager_url="http://manager")
                 resp = client.post("/agent/run", json={
                     "pipeline_name": "test-pipe",
                     "yaml_text": _MINIMAL_YAML,
@@ -286,6 +307,11 @@ class TestRunEndpoint:
 
                 stopped.wait(timeout=3)
                 assert stopped.is_set()
+                time.sleep(0.2)
+
+        assert len(callback_calls) == 1
+        assert callback_calls[0]["started_at"]
+        assert callback_calls[0]["finished_at"]
 
     def test_explicit_callback_url_takes_precedence(self):
         """callback_url in RunRequest overrides the manager_url-derived URL."""

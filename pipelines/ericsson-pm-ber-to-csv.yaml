@@ -53,51 +53,47 @@ pipeline:
     encoding: ber
 
   transforms:
-    # --- Flatten nested MeasDataCollection into per-counter rows ---
-    # asn1tools decodes the full structure as one nested dict per file.
-    # explode_path walks measData → measInfo → measValues to emit one
-    # record per (MeasObjInstId, MeasType) pair.
-    - type: explode_path
-      path: "measData[*].measInfo[*].measValues[*]"
-      keep_parent_fields:
-        - measFileHeader.fileFormatVersion   as file_format_version
-        - measFileHeader.senderName          as sender_name
-        - measFileHeader.senderType          as sender_type
-        - measFileHeader.vendorName          as vendor_name
-        - measFileHeader.collectionBeginTime as collection_begin_time
-        - measData[*].nEId.nEUserName        as ne_user_name
-        - measData[*].nEId.nEDistinguishedName as ne_dn
-        - measData[*].measInfo[*].measTimeStamp    as meas_timestamp
-        - measData[*].measInfo[*].granularityPeriod as granularity_period
-        - measData[*].measInfo[*].measTypes         as _meas_types   # parallel list
-
-    # Zip measResults with measTypes to produce one row per counter
-    - type: zip_fields
-      index_field: _result_idx
-      pairs:
-        - [_meas_types, meas_type]
-        - [measResults, meas_result_raw]
-
-    # Unwrap MeasResult CHOICE: {"type": "iValue", "value": 42} → scalar + type label
-    - type: add_field
-      fields:
-        meas_result:      "record['meas_result_raw']['value']"
-        meas_result_type: "record['meas_result_raw']['type']"
-
-    # suspectFlag DEFAULT FALSE — normalize missing to False
-    - type: add_field
-      fields:
-        suspect: "record.get('suspectFlag', False)"
-
-    # Drop intermediary fields
+    # Flatten nested MeasDataCollection into per-counter rows using the
+    # current unnest/explode chain supported by the pipeline schema.
+    - type: unnest
+      field: measFileHeader
     - type: drop
-      fields: [meas_result_raw, _meas_types, _result_idx, measResults,
-               measValues, suspectFlag]
-
-    # Normalize null/noValue counters to empty string in CSV
+      fields: [measFileFooter]
+    - type: explode
+      field: measData
+    - type: unnest
+      field: nEId
+    - type: explode
+      field: measInfo
+    - type: explode
+      field: measValues
+    - type: explode
+      field: measResults
+      include_index: true
+      index_field: _result_idx
+    - type: add_field
+      fields:
+        meas_type:        "record['measTypes'][record['_result_idx']]"
+        meas_result:      "record.get('value')"
+        meas_result_type: "record.get('type')"
+        suspect: "record.get('suspectFlag', False)"
+    - type: drop
+      fields: [measTypes, _result_idx, type, value, suspectFlag]
     - type: add_field
       fields:
         meas_result: "'' if record.get('meas_result_type') == 'noValue' else record['meas_result']"
+    - type: rename
+      fields:
+        fileFormatVersion: file_format_version
+        senderName: sender_name
+        senderType: sender_type
+        vendorName: vendor_name
+        collectionBeginTime: collection_begin_time
+        nEUserName: ne_user_name
+        nEDistinguishedName: ne_dn
+        measTimeStamp: meas_timestamp
+        granularityPeriod: granularity_period
+        measObjInstId: meas_obj_inst_id
 
   serializer_out:
     type: csv

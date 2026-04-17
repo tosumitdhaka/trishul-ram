@@ -1,0 +1,59 @@
+version: "1"
+
+pipeline:
+  name: snmp_walk_v3_iftable_to_sftp_json
+  description: Walk IF-MIB ifTable over SNMPv3 and write one JSON row per interface to SFTP
+  enabled: true
+
+  schedule:
+    type: interval
+    interval_seconds: 900
+
+  source:
+    type: snmp_poll
+    host: ${SNMP_V3_HOST:-172.25.242.55}
+    port: 161
+    version: "3"
+    security_name: ${SNMP_V3_USER:-tramv3}
+    auth_protocol: ${SNMP_V3_AUTH_PROTOCOL:-SHA}
+    auth_key: ${SNMP_V3_AUTH_KEY:-tramAuth123!}
+    priv_protocol: ${SNMP_V3_PRIV_PROTOCOL:-AES}
+    priv_key: ${SNMP_V3_PRIV_KEY:-tramPriv123!}
+    operation: walk
+    oids:
+      - "1.3.6.1.2.1.2.2"
+    resolve_oids: true
+    mib_modules:
+      - IF-MIB
+    yield_rows: true
+    index_depth: 1
+    classify: true
+
+  serializer_in:
+    type: json
+
+  transforms:
+    - type: add_field
+      fields:
+        timestamp: "epoch()"
+        source_ip: "pipeline.source.host"
+        snmp_version: "'3'"
+    - type: unnest
+      field: _labels
+      drop_source: true
+    - type: drop
+      fields: [_index_parts]
+
+  sinks:
+    - type: sftp
+      host: 172.25.242.55
+      port: 22
+      username: dhaka
+      password: dhaka
+      remote_path: /home/dhaka/test/pm/snmp_walk_v3/results/
+      filename_template: "{pipeline}_{timestamp}.json"
+      serializer_out:
+        type: json
+        indent: 2
+
+  on_error: continue

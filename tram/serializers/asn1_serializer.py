@@ -9,7 +9,7 @@ Usage in pipeline YAML:
       message_class: FileContent                   # top-level ASN.1 type to decode
       encoding: ber                                # ber | der | per | uper | xer | jer (default: ber)
 
-Deserialize only — encode path (ASN.1 sink output) is not supported.
+Decode only — ASN.1 serializer_out / encode is intentionally not supported.
 Schema file is required; there is no schema-less fallback.
 """
 from __future__ import annotations
@@ -49,7 +49,7 @@ def _to_json_safe(obj):
 
 @register_serializer("asn1")
 class Asn1Serializer(BaseSerializer):
-    """Deserialize ASN.1 BER/DER/PER/XER/JER binary using a .asn schema file.
+    """Decode ASN.1 BER/DER/PER/XER/JER binary using a .asn schema file.
 
     Requires asn1tools>=0.167 — install with: pip install tram[asn1]
     """
@@ -121,6 +121,6 @@ class Asn1Serializer(BaseSerializer):
 
     def serialize(self, records: list[dict]) -> bytes:
         raise SerializerError(
-            "ASN.1 serializer does not support encode (serializer_out). "
+            "ASN.1 serializer is decode-only and does not support encode (serializer_out). "
             "Use a different serializer_out (e.g. type: json) to write ASN.1-decoded records."
         )

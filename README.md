@@ -95,9 +95,12 @@ source:
   type: gnmi
   host: ${ROUTER_HOST}
   port: 57400
-  paths: ["/interfaces/interface/state/counters"]
+  tls: true
   username: ${GNMI_USER}
   password: ${GNMI_PASS}
+  subscriptions:
+    - path: /interfaces/interface/state/counters
+      mode: stream
 
 serializer_in:
   type: protobuf
@@ -106,7 +109,10 @@ serializer_in:
 
 transforms:
   - type: jmespath
-    expression: "update[].{iface: path, rx: val.in_octets, tx: val.out_octets}"
+    fields:
+      iface: path
+      rx: val.in_octets
+      tx: val.out_octets
   - type: cast
     fields: {rx: int, tx: int}
 
@@ -114,7 +120,9 @@ sinks:
   - type: influxdb
     url: ${INFLUX_URL}
     token: ${INFLUX_TOKEN}
+    org: ${INFLUX_ORG}
     bucket: telemetry
+    measurement: interface_counters
 
 schedule:
   type: stream
@@ -137,8 +145,8 @@ transforms:
   - type: mask
     fields: [password, secret, community_string]
   - type: timestamp_normalize
-    field: timestamp
-    output_format: "%Y-%m-%dT%H:%M:%SZ"
+    fields: [timestamp]
+    output_format: iso
 
 sinks:
   - type: opensearch
@@ -244,15 +252,17 @@ curl http://localhost:8765/api/ready
 ```bash
 # Standalone (Helm)
 helm install tram oci://ghcr.io/tosumitdhaka/charts/trishul-ram \
-  --set image.tag=1.2.2
+  --set image.tag=latest
 
 # Manager + Worker (3 workers)
 helm install tram oci://ghcr.io/tosumitdhaka/charts/trishul-ram \
-  --set image.tag=1.2.2 \
+  --set image.tag=latest \
   --set manager.enabled=true \
   --set worker.replicas=3 \
   --set apiKey=mysecret
 ```
+
+Quick-start examples use `latest`. For production deployments, pin a specific release tag in Helm values.
 
 ---
 

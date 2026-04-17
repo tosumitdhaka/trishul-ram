@@ -1,0 +1,131 @@
+################################################################################
+# Ericsson PM BER (3GPP TS 32.104 Ericsson variant) → JSON
+#
+# Decodes Ericsson statsfile BER binaries using the vendor-supplied ASN.1
+# schema (32.104 variant with GraphicString).
+#
+# Source SFTP:  drops .asn1 statsfiles in /pm/ericsson/incoming/
+#   C-files:    C<date>.<time>_NetworkElement=<NE>:1001_statsfile.asn1
+#   G-files:    G<date>.<time>_SubNetwork=...,ManagedElement=<NE>:1001_statsfile.asn1
+#
+# Sink:
+#   Local JSON — /home/dhaka/test/pm/ericsson/completed/
+#
+# Prerequisites:
+#   pip install tram[asn1,sftp]
+#
+# Environment variables:
+#   SFTP_HOST / SFTP_USER / SFTP_PASS
+################################################################################
+
+version: "1"
+
+pipeline:
+  name: ericsson-pm-ber-to-json
+  description: >
+    Decode Ericsson PM BER statsfiles (3GPP TS 32.104, GraphicString variant)
+    into flat per-counter JSON records. Runs every 5 minutes.
+    Already-processed files are skipped via DB tracking.
+  enabled: false
+
+  schedule:
+    type: cron
+    cron: "*/5 * * * *"
+
+  source:
+    type: sftp
+    host: 172.25.242.55
+    port: 22
+    username: dhaka
+    password: dhaka
+    remote_path: /home/dhaka/test/pm/ericsson/incoming
+    file_pattern: "*_statsfile.asn1"
+    move_after_read: /home/dhaka/test/pm/ericsson/done
+    skip_processed: true
+
+  serializer_in:
+    type: asn1
+    schema_file: /data/schemas/asn1/ericsson/3gpp_32104_e.asn
+    message_class: MeasDataCollection
+    encoding: ber
+
+  transforms:
+    # asn1tools returns one dict per file — flatten it into per-counter rows
+    # using unnest (dict→parent) + explode (list→one-record-per-element) chain.
+
+    # 1. Hoist measFileHeader fields into root record
+    - type: unnest
+      field: measFileHeader
+
+    # 2. Drop footer — just a closing timestamp, not needed in output
+    - type: drop
+      fields: [measFileFooter]
+
+    # 3. One record per MeasData — merges nEId + measInfo into the record
+    - type: explode
+      field: measData
+
+    # 4. Hoist nEId (nEUserName, nEDistinguishedName) into root
+    - type: unnest
+      field: nEId
+
+    # 5. One record per MeasInfo — merges measTimeStamp, granularityPeriod,
+    #    measTypes (list), measValues (list) into the record
+    - type: explode
+      field: measInfo
+
+    # 6. One record per MeasValue — merges measObjInstId, measResults, suspectFlag
+    - type: explode
+      field: measValues
+
+    # 7. One record per MeasResult — include index to correlate with measTypes list.
+    #    Each measResult is a CHOICE dict {"type": "iValue", "value": 10} after
+    #    asn1tools decoding, so explode merges "type" and "value" into the record.
+    - type: explode
+      field: measResults
+      include_index: true
+      index_field: _result_idx
+
+    # 8. Zip: look up counter name by index into measTypes, extract result fields
+    - type: add_field
+      fields:
+        meas_type:        "record['measTypes'][record['_result_idx']]"
+        meas_result:      "record.get('value')"
+        meas_result_type: "record.get('type')"
+        suspect:          "record.get('suspectFlag', False)"
+
+    # 9. Null out noValue counters (MeasResult CHOICE noValue arm)
+    - type: add_field
+      fields:
+        meas_result: "None if record.get('meas_result_type') == 'noValue' else record['meas_result']"
+
+    # 10. Drop intermediary and generic-named fields
+    - type: drop
+      fields: [measTypes, _result_idx, type, value, suspectFlag]
+
+    # 11. Rename to clean output field names
+    - type: rename
+      fields:
+        fileFormatVersion:   file_format_version
+        senderName:          sender_name
+        senderType:          sender_type
+        vendorName:          vendor_name
+        collectionBeginTime: collection_begin_time
+        nEUserName:          ne_user_name
+        nEDistinguishedName: ne_dn
+        measTimeStamp:       meas_timestamp
+        granularityPeriod:   granularity_period
+        measObjInstId:       meas_obj_inst_id
+
+  sink:
+    type: local
+    path: /home/dhaka/test/pm/ericsson/completed
+    filename_template: "{source_filename}.json"
+    serializer_out:
+      type: json
+      indent: 2
+
+  on_error: continue
+  dlq:
+    type: local
+    path: /data/dlq/ericsson_pm

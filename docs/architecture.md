@@ -326,7 +326,7 @@ Tables:
 - `pipeline_versions` — every YAML registered; UUID primary key
 - `alert_state` — last-alerted timestamp per `(pipeline_name, rule_name)`
 - `processed_files` — `(pipeline_name, source_key, filepath, processed_at)`; used by `skip_processed` to make file-source runs idempotent
-- `user_passwords` — bcrypt-hashed passwords for browser auth (override `TRAM_AUTH_USERS`)
+- `user_passwords` — scrypt-hashed passwords for browser auth (override `TRAM_AUTH_USERS` bootstrap values)
 
 **Schema migrations**: `_create_tables()` runs `CREATE TABLE IF NOT EXISTS` + `ALTER TABLE ADD COLUMN` guards at startup. Existing databases from v0.6.0 are upgraded automatically.
 

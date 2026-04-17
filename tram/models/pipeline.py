@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from typing import Annotated, Any, Literal
 
-from pydantic import BaseModel, Field, field_validator, model_validator
+from pydantic import AliasChoices, BaseModel, Field, field_validator, model_validator
 
 # ── Schedule ───────────────────────────────────────────────────────────────
 
@@ -455,6 +455,14 @@ class RegexExtractTransformConfig(BaseModel):
     on_no_match: Literal["keep", "null", "drop"] = "keep"
 
 
+class InjectMetaTransformConfig(BaseModel):
+    type: Literal["inject_meta"]
+    fields: dict[str, str] = Field(default_factory=dict)
+    include_all: bool = False
+    prefix: str = ""
+    on_missing: Literal["skip", "null"] = "skip"
+
+
 class TemplateTransformConfig(BaseModel):
     type: Literal["template"]
     fields: dict[str, str]
@@ -500,7 +508,7 @@ class UnnestTransformConfig(BaseModel):
 
 
 TransformConfig = Annotated[
-    RenameTransformConfig | CastTransformConfig | AddFieldTransformConfig | DropTransformConfig | ValueMapTransformConfig | FilterTransformConfig | FlattenTransformConfig | TimestampNormalizeTransformConfig | AggregateTransformConfig | EnrichTransformConfig | ExplodeTransformConfig | DeduplicateTransformConfig | RegexExtractTransformConfig | TemplateTransformConfig | MaskTransformConfig | ValidateTransformConfig | SortTransformConfig | LimitTransformConfig | JmesPathExtractTransformConfig | UnnestTransformConfig,
+    RenameTransformConfig | CastTransformConfig | AddFieldTransformConfig | DropTransformConfig | ValueMapTransformConfig | FilterTransformConfig | FlattenTransformConfig | TimestampNormalizeTransformConfig | AggregateTransformConfig | EnrichTransformConfig | ExplodeTransformConfig | DeduplicateTransformConfig | RegexExtractTransformConfig | InjectMetaTransformConfig | TemplateTransformConfig | MaskTransformConfig | ValidateTransformConfig | SortTransformConfig | LimitTransformConfig | JmesPathExtractTransformConfig | UnnestTransformConfig,
     Field(discriminator="type"),
 ]
 
@@ -677,7 +685,10 @@ class SnmpTrapSinkConfig(BaseModel):
     port: int = 162
     community: str = "public"
     version: str = "2c"
-    enterprise_oid: str = "1.3.6.1.4.1.0"
+    trap_oid: str = Field(
+        default="1.3.6.1.4.1.0",
+        validation_alias=AliasChoices("trap_oid", "enterprise_oid"),
+    )
     mib_dirs: list[str] = Field(default_factory=list)
     mib_modules: list[str] = Field(default_factory=list)
     varbinds: list[VarbindConfig] = Field(default_factory=list)

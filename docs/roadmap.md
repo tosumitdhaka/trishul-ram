@@ -5,63 +5,88 @@ unconfirmed work lives in the backlog at the bottom.
 
 ---
 
-## v1.2.2 — Stability & Polish
+## v1.2.3 — SNMP Poll v3 Validation & ASN.1 Decode Hardening
 
-- [x] Unit coverage raised to 77% (1,250 passing tests)
-- [x] Fix `AttributeError` in `cli/main.py` when unpacking `(config, raw_yaml)` tuple from `load_pipeline()`
-- [x] Fix `PipelineAlreadyExistsError` in `watcher/pipeline_watcher.py` on hot-reload
-- [x] Align `docs/api.md` response shapes (dry-run, connector-test, change-password) with implementation
-- [x] Fix `on_error` valid values in `docs/connectors.md` (`continue | abort | retry | dlq`)
-- [x] Remove `omniORBpy` from the `all` pip extra — it is a system package, not a PyPI wheel (CI was failing)
+- [ ] SNMP poll source — validate SNMPv3 USM on real-device GET and WALK; keep existing walk / yield_rows coverage green
+- [x] ASN.1 serializer — decode-path coverage and wording updated for explicit decode-only behavior
+- [ ] SNMP trap source — deferred; blocked in manager-worker mode by the push-source architecture gap tracked in issue #11
+- [ ] SNMP trap sink — deferred until a reachable real receiver/test target is available
 
 ---
 
-## v1.2.3 — Connector Fixes: Kafka, SNMP, ASN1
+## v1.3.0 — Broadcast Streams & Push-Source Scaling
 
-- [ ] Kafka source — test and fix real-behavior edge cases (reconnect, offset commit, consumer group)
-- [ ] Kafka sink — test and fix producer error handling, retry, serializer integration
-- [ ] SNMP poll source — test OID resolution, walk vs get, SNMPv3 USM, yield_rows behavior
-- [ ] SNMP trap source — test trap reception, MIB decoding, v3 encrypted traps
-- [ ] SNMP trap sink — test varbind construction, v1/v2c/v3 send paths
-- [ ] ASN1 serializer — test encode/decode round-trip, error handling on malformed input
+> Full design: [`docs/design-v1.3.0-broadcast-streams.md`](design-v1.3.0-broadcast-streams.md)
+> Skips v1.2.4–v1.2.7 due to severity of the push-source architecture gap (issue #11).
 
----
+### A — Broadcast Dispatch
+- [ ] `PipelineConfig.dispatch: "single" | "broadcast"` field
+- [ ] Linter rule L006 — reject broadcast on non-push-source types
+- [ ] `WorkerPool.broadcast()` — dispatch same pipeline to all healthy workers
+- [ ] Mount `/webhooks` router on worker FastAPI app
 
-## v1.2.4 — Connector Fixes: OpenSearch, ClickHouse, InfluxDB
+### B — Stream Heartbeat
+- [ ] `StreamMetrics` dataclass — thread-safe per-run counters
+- [ ] Worker heartbeat thread — per-stream-run POST to manager every `TRAM_HEARTBEAT_INTERVAL` (default 30s)
+- [ ] `POST /api/internal/heartbeat` — manager receives and stores live stream metrics
+- [ ] `HeartbeatStore` — in-memory `{(pipeline, worker): heartbeat}` with staleness detection
 
-- [ ] OpenSearch sink — test bulk write, index template, auth, retry on 429
-- [ ] ClickHouse source/sink — test query execution, batch insert, type coercion
-- [ ] InfluxDB source/sink — test line protocol, bucket/org resolution, token auth
+### C — Placement API
+- [ ] `GET /api/pipelines/{name}/placement` — which workers, run IDs, live metrics, ingress URLs
+- [ ] `GET /api/cluster/streams` — flat list of all active stream placements
 
----
+### D — Manager StatefulSet
+- [ ] Replace `manager-deployment.yaml` with `manager-statefulset.yaml` + `volumeClaimTemplates`
+- [ ] Add `manager-headless-service.yaml` for stable pod DNS
+- [ ] Remove separate manager PVC template; add `existingClaim` migration path
 
-## v1.2.5 — Connector Fixes: REST, Webhook, gNMI
+### E — Dynamic K8s Services
+- [ ] `tram/k8s/service_manager.py` — create/delete NodePort Services via K8s API
+- [ ] `kubernetes:` pipeline block (`service_type`, `node_port`, `target_port`)
+- [ ] RBAC Role + RoleBinding for Service CRUD (`helm/templates/rbac.yaml`)
+- [ ] `tram[k8s]` optional extra (`kubernetes>=28.0,<32`)
+- [ ] Manager re-adopts `tram-managed=true` Services on startup
 
-- [ ] REST source/sink — test auth types (basic, bearer, apikey), pagination, retry, SSL verify
-- [ ] Webhook source — test payload parsing, path routing, concurrent requests
-- [ ] gNMI source — test subscription modes (ONCE, POLL, STREAM), path encoding, TLS
+### F — `source_stem` / `source_suffix` filename tokens (issue #9)
+- [ ] Add `{source_stem}` and `{source_suffix}` to `filename_template.format()` in all 6 file-based sinks (`local`, `sftp`, `ftp`, `s3`, `gcs`, `azure_blob`)
+- [ ] Update docstrings and `docs/connectors.md`
+- [ ] Unit tests for both tokens
 
----
+### G — Migrate SNMP from pysnmp-lextudio to pysnmp 7.x (issue #10)
+- [ ] `pyproject.toml`: `snmp` extra → `pysnmp>=7.1,<8`; `mib` extra → `pysmi>=1.1,<2`
+- [ ] Update `pysnmp.hlapi.asyncio` imports to `pysnmp.hlapi.v3arch.asyncio` in snmp source/sink
+- [ ] Remove `pytest-cov<5` workaround (pysnmp-lextudio 6.2.x bug, gone in 7.x)
+- [ ] SNMP unit tests pass against pysnmp 7.x; lab GET/WALK validation
 
-## v1.2.6 — Connector Fixes: SFTP, FTP, S3
+### H — Alert cooldown on confirmed delivery only (issue #3)
+- [ ] `_fire_webhook()` calls `raise_for_status()`; returns `True`/`False`
+- [ ] `_fire_email()` returns `True`/`False`
+- [ ] `_set_cooldown()` called only on `True`
+- [ ] Tests: HTTP 500, connection error, SMTP failure → cooldown not set; HTTP 200 → cooldown set
 
-- [ ] SFTP source/sink — test file glob, move-after-read, skip_processed, key auth
-- [ ] FTP source/sink — test passive mode, directory listing, file write
-- [ ] S3 source/sink — test bucket/prefix, multipart upload, credential chain
-
----
-
-## v1.2.7 — Connector Fixes: MQTT, AMQP, NATS
-
-- [ ] MQTT source/sink — test QoS levels, reconnect, topic wildcards
-- [ ] AMQP source/sink — test exchange/queue binding, ack/nack, prefetch
-- [ ] NATS source/sink — test subject routing, JetStream, reconnect
+### I — Webhook source validation (carried from deferred v1.2.5)
+- [ ] Webhook source — test payload parsing, path routing, concurrent requests (now directly exercised by broadcast integration tests)
 
 ---
 
 ## Backlog (unversioned)
 
 Features and issues not yet assigned to a release:
+
+### Connector Fixes (deferred from v1.2.4–v1.2.7)
+- [ ] **Kafka source** — real-behavior edge cases: reconnect, offset commit, consumer group
+- [ ] **Kafka sink** — producer error handling, retry, serializer integration
+- [ ] **OpenSearch sink** — bulk write, index template, auth, retry on 429
+- [ ] **ClickHouse source/sink** — query execution, batch insert, type coercion
+- [ ] **InfluxDB source/sink** — line protocol, bucket/org resolution, token auth
+- [ ] **REST source/sink** — auth types (basic, bearer, apikey), pagination, retry, SSL verify
+- [ ] **gNMI source** — subscription modes (ONCE, POLL, STREAM), path encoding, TLS
+- [ ] **SFTP source/sink** — file glob, move-after-read, skip_processed, key auth
+- [ ] **FTP source/sink** — passive mode, directory listing, file write
+- [ ] **S3 source/sink** — bucket/prefix, multipart upload, credential chain
+- [ ] **MQTT source/sink** — QoS levels, reconnect, topic wildcards
+- [ ] **AMQP source/sink** — exchange/queue binding, ack/nack, prefetch
+- [ ] **NATS source/sink** — subject routing, JetStream, reconnect
 
 ### Operations & Observability
 - [ ] **Pipeline cloning** — copy a pipeline as a new one with a name prompt in the UI
@@ -97,6 +122,7 @@ Features and issues not yet assigned to a release:
 
 | Version | Theme |
 |---------|-------|
+| v1.2.2 | Stability & polish; CI fixes; docs alignment |
 | v1.2.1 | Worker callback chain; run metrics propagation; dashboard UX |
 | v1.2.0 | Manager + Worker cluster architecture |
 | v1.1.4 | PipelineController; melt transform; SNMP fixes |
