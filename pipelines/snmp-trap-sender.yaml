@@ -40,8 +40,8 @@ pipeline:
     port: 162
     community: public
     version: "2c"
-    # Enterprise OID: private enterprise subtree 1.3.6.1.4.1.99999 (demo)
-    enterprise_oid: "1.3.6.1.4.1.99999.1.0"
+    # Trap OID placed into snmpTrapOID.0 for the outgoing notification.
+    trap_oid: "1.3.6.1.4.1.99999.1.0"
 
     # Explicit varbind mapping: field name in the JSON → OID + SNMP type
     varbinds:

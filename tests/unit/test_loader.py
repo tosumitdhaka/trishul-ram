@@ -224,6 +224,19 @@ def test_load_pipeline_env_substitution(tmp_path, monkeypatch):
     assert config.name == "env-pipe"
 
 
+def test_all_bundled_pipeline_examples_validate():
+    pipeline_dir = Path("pipelines")
+    failures: list[str] = []
+
+    for path in sorted(pipeline_dir.glob("*.yaml")):
+        try:
+            load_pipeline_from_yaml(path.read_text())
+        except Exception as exc:
+            failures.append(f"{path.name}: {type(exc).__name__}: {exc}")
+
+    assert not failures, "Bundled pipeline validation failures:\n" + "\n".join(failures)
+
+
 # ── scan_pipeline_dir ──────────────────────────────────────────────────────
 
 

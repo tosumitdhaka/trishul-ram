@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import socket
+from collections.abc import Awaitable
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -11,6 +12,19 @@ import pytest
 from tram.connectors.snmp.sink import SNMPTrapSink
 from tram.connectors.snmp.source import SNMPPollSource, SNMPTrapSource
 from tram.core.exceptions import SinkError, SourceError
+
+
+def _close_coro(coro: Awaitable[object]) -> None:
+    """Consume a created coroutine in tests when asyncio.run is mocked."""
+    coro.close()
+
+
+def _close_coro_then_raise(exc: Exception):
+    def _raiser(coro: Awaitable[object]) -> None:
+        coro.close()
+        raise exc
+
+    return _raiser
 
 # ── SNMPTrapSource ─────────────────────────────────────────────────────────
 
@@ -157,6 +171,54 @@ class TestSNMPPollSource:
             })
             with pytest.raises((SourceError, Exception)):
                 list(source.read())
+
+    def test_do_walk_stops_when_oid_does_not_advance(self):
+        class MockHlapi:
+            def __init__(self):
+                self.calls = 0
+
+            class SnmpEngine:
+                pass
+
+            class CommunityData:
+                def __init__(self, *args, **kwargs):
+                    pass
+
+            class UdpTransportTarget:
+                def __init__(self, *args, **kwargs):
+                    pass
+
+            class ContextData:
+                def __init__(self, *args, **kwargs):
+                    pass
+
+            class ObjectIdentity:
+                def __init__(self, oid):
+                    self.oid = oid
+
+            class ObjectType:
+                def __init__(self, identity):
+                    self.identity = identity
+
+            async def nextCmd(self, *args, **kwargs):
+                self.calls += 1
+                if self.calls == 1:
+                    return (None, None, None, [("1.3.6.1.2.1.2.2.1.22.247", "1")])
+                return (None, None, None, [("1.3.6.1.2.1.2.2.1.22.247", "1")])
+
+        source = SNMPPollSource({
+            "host": "192.168.1.1",
+            "oids": ["1.3.6.1.2.1.2.2"],
+            "operation": "walk",
+        })
+
+        mock_hlapi = MockHlapi()
+
+        import asyncio
+        result = asyncio.run(source._do_walk(mock_hlapi, typed=False))
+
+        assert result == {"1.3.6.1.2.1.2.2.1.22.247": "1"}
+        assert mock_hlapi.calls == 2
 
 
 # ── SNMPPollSource._group_by_index (pure unit, no SNMP dep) ────────────────
@@ -601,6 +663,10 @@ def _make_mock_hlapi():
 
 
 class TestSNMPTrapSinkExtended:
+    def test_legacy_enterprise_oid_alias_populates_trap_oid(self):
+        sink = SNMPTrapSink({"host": "127.0.0.1", "enterprise_oid": "1.3.6.1.6.3.1.1.5.3"})
+        assert sink.trap_oid == "1.3.6.1.6.3.1.1.5.3"
+
     def test_list_payload_skips_non_dict_records(self):
         """write() skips non-dict items in a list payload (logs warning, no raise)."""
         sink = SNMPTrapSink({"host": "127.0.0.1"})
@@ -611,29 +677,34 @@ class TestSNMPTrapSinkExtended:
     def test_list_payload_processes_dict_records(self):
         """write() calls asyncio.run for each dict in a list."""
         sink = SNMPTrapSink({"host": "127.0.0.1"})
-        with patch("tram.connectors.snmp.sink.asyncio.run") as mock_run:
+        with patch("tram.connectors.snmp.sink.asyncio.run", side_effect=_close_coro) as mock_run:
             sink.write(b'[{"1.3.6.1": "v1"}, {"1.3.6.2": "v2"}]', {})
         assert mock_run.call_count == 2
 
     def test_asyncio_run_general_exception_raises_sink_error(self):
         """Non-SinkError from asyncio.run is wrapped in SinkError."""
         sink = SNMPTrapSink({"host": "127.0.0.1"})
-        with patch("tram.connectors.snmp.sink.asyncio.run", side_effect=RuntimeError("timeout")):
+        with patch(
+            "tram.connectors.snmp.sink.asyncio.run",
+            side_effect=_close_coro_then_raise(RuntimeError("timeout")),
+        ):
             with pytest.raises(SinkError, match="SNMP trap send failed"):
                 sink.write(b'{"1.3.6.1": "val"}', {})
 
     def test_asyncio_run_sink_error_re_raised(self):
         """SinkError from asyncio.run is re-raised directly."""
         sink = SNMPTrapSink({"host": "127.0.0.1"})
-        with patch("tram.connectors.snmp.sink.asyncio.run",
-                   side_effect=SinkError("trap send error")):
+        with patch(
+            "tram.connectors.snmp.sink.asyncio.run",
+            side_effect=_close_coro_then_raise(SinkError("trap send error")),
+        ):
             with pytest.raises(SinkError, match="trap send error"):
                 sink.write(b'{"1.3.6.1": "val"}', {})
 
     def test_write_single_dict_calls_asyncio_run(self):
         """write() with a single JSON dict calls asyncio.run once."""
         sink = SNMPTrapSink({"host": "127.0.0.1"})
-        with patch("tram.connectors.snmp.sink.asyncio.run") as mock_run:
+        with patch("tram.connectors.snmp.sink.asyncio.run", side_effect=_close_coro) as mock_run:
             sink.write(b'{"1.3.6.1": "val"}', {})
         mock_run.assert_called_once()
 
@@ -726,10 +797,16 @@ class TestSNMPTrapSinkSendTrap:
     def test_send_trap_v2c(self):
         """v2c trap: uses CommunityData, calls sendNotification."""
         mock_hlapi = _make_mock_hlapi()
-        sink = SNMPTrapSink({"host": "127.0.0.1", "version": "2c", "community": "public"})
+        sink = SNMPTrapSink({
+            "host": "127.0.0.1",
+            "version": "2c",
+            "community": "public",
+            "trap_oid": "1.3.6.1.6.3.1.1.5.3",
+        })
         import asyncio
         asyncio.run(sink._send_trap(mock_hlapi, {"1.3.6.1": "val"}))
         mock_hlapi.CommunityData.assert_called()
+        mock_hlapi.ObjectIdentifier.assert_called_with("1.3.6.1.6.3.1.1.5.3")
 
     def test_send_trap_v1(self):
         """v1 trap: uses CommunityData with mpModel=0."""

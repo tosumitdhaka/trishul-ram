@@ -1,0 +1,39 @@
+name: snmp_trap_receiver_to_sftp_json
+description: Receive SNMP traps on UDP 1162 and write decoded trap records to SFTP as JSON
+schedule:
+  type: stream
+source:
+  type: snmp_trap
+  host: 0.0.0.0
+  port: 1162
+  community: public
+  version: 2c
+  resolve_oids: true
+  mib_modules:
+    - SNMPv2-MIB
+    - IF-MIB
+serializer_in:
+  type: json
+transforms:
+  - type: inject_meta
+    fields:
+      source_ip: source_ip
+      port: source_port
+      community: snmp_community
+      version: snmp_version
+  - type: add_field
+    fields:
+      timestamp: "epoch()"
+      received_by: "'snmp_trap_receiver_to_sftp_json'"
+sinks:
+  - type: sftp
+    host: 172.25.242.55
+    port: 22
+    username: dhaka
+    password: dhaka
+    remote_path: /home/dhaka/test/pm/snmp_trap/results/
+    filename_template: "{pipeline}_{timestamp}.json"
+    serializer_out:
+      type: json
+      indent: 2
+on_error: continue

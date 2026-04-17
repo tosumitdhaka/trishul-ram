@@ -1,0 +1,38 @@
+name: snmp_get_system_to_sftp_json
+description: Poll scalar SNMP system OIDs every 15 minutes and write the result to SFTP as JSON
+schedule:
+  type: interval
+  interval_seconds: 900
+source:
+  type: snmp_poll
+  host: 172.25.242.55
+  port: 161
+  community: public
+  version: 2c
+  operation: get
+  mib_modules:
+    - SNMPv2-MIB
+  oids:
+    - 1.3.6.1.2.1.1.1.0   # sysDescr.0
+    - 1.3.6.1.2.1.1.3.0   # sysUpTime.0
+    - 1.3.6.1.2.1.1.5.0   # sysName.0
+  resolve_oids: true
+serializer_in:
+  type: json
+transforms:
+  - type: add_field
+    fields:
+      timestamp: "epoch()"
+      source_ip: "pipeline.source.host"
+sinks:
+  - type: sftp
+    host: 172.25.242.55
+    port: 22
+    username: dhaka
+    password: dhaka
+    remote_path: /home/dhaka/test/pm/snmp_get/results/
+    filename_template: "{pipeline}_{timestamp}.json"
+    serializer_out:
+      type: json
+      indent: 2
+on_error: continue
