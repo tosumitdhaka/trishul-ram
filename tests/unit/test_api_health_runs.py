@@ -8,7 +8,9 @@ from unittest.mock import MagicMock, patch
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
+from tram.agent.stats_store import StatsStore
 from tram.api.routers.health import router as health_router
+from tram.api.routers.internal import PipelineStatsPayload
 from tram.api.routers.metrics_router import router as metrics_router
 from tram.api.routers.runs import router as runs_router
 
@@ -32,6 +34,9 @@ def _make_health_app(scheduler_running: bool = True, db=None,
         app.state.worker_pool = worker_pool
     if config is not None:
         app.state.config = config
+    app.state.controller = MagicMock()
+    app.state.controller.get_active_broadcast_placements.return_value = []
+    app.state.stats_store = StatsStore(interval=30)
     return app
 
 
@@ -182,6 +187,107 @@ class TestClusterNodes:
         r = client.get("/api/cluster/nodes")
         assert r.status_code == 200
         assert len(r.json()["workers"]) == 1
+
+
+class TestClusterStreams:
+    def test_returns_broadcast_streams_with_aggregate_counters(self):
+        db = MagicMock()
+        db.get_active_broadcast_placements.return_value = [{
+            "placement_group_id": "pg1",
+            "pipeline_name": "pipe-a",
+            "status": "degraded",
+            "target_count": "all",
+            "started_at": datetime.now(UTC),
+            "slots": [
+                {
+                    "worker_index": 0,
+                    "worker_id": "w0",
+                    "worker_url": "http://w0:8766",
+                    "run_id_prefix": "pg1-w0",
+                    "current_run_id": "pg1-w0-r1",
+                    "status": "running",
+                    "restart_count": 1,
+                },
+                {
+                    "worker_index": 1,
+                    "worker_id": "w1",
+                    "worker_url": "http://w1:8766",
+                    "run_id_prefix": "pg1-w1",
+                    "current_run_id": "pg1-w1-r0",
+                    "status": "stale",
+                    "restart_count": 0,
+                },
+            ],
+        }]
+        config = MagicMock()
+        config.tram_mode = "manager"
+        app = _make_health_app(db=db, config=config)
+        app.state.stats_store.update(PipelineStatsPayload(
+            worker_id="w0",
+            pipeline_name="pipe-a",
+            run_id="pg1-w0-r1",
+            schedule_type="stream",
+            uptime_seconds=5.0,
+            timestamp=datetime.now(UTC),
+            records_in=20,
+            records_out=10,
+            bytes_in=200,
+            bytes_out=100,
+        ))
+        app.state.stats_store.update(PipelineStatsPayload(
+            worker_id="w1",
+            pipeline_name="pipe-a",
+            run_id="pg1-w1-r0",
+            schedule_type="stream",
+            uptime_seconds=5.0,
+            timestamp=datetime(2026, 4, 17, 12, 0, 0, tzinfo=UTC),
+            records_in=99,
+            bytes_in=999,
+        ))
+        client = TestClient(app)
+
+        r = client.get("/api/cluster/streams")
+
+        assert r.status_code == 200
+        data = r.json()
+        assert data["mode"] == "manager"
+        assert len(data["streams"]) == 1
+        stream = data["streams"][0]
+        assert stream["pipeline_name"] == "pipe-a"
+        assert stream["status"] == "degraded"
+        assert stream["slot_count"] == 2
+        assert stream["active_slots"] == 1
+        assert stream["records_in"] == 20
+        assert stream["bytes_in_per_sec"] == 40.0
+        assert stream["slots"][1]["stats"]["stale"] is True
+        assert stream["slots"][1]["stats"]["bytes_in_per_sec"] == 0.0
+
+    def test_includes_non_broadcast_active_streams_from_stats_store(self):
+        config = MagicMock()
+        config.tram_mode = "standalone"
+        app = _make_health_app(config=config)
+        app.state.stats_store.update(PipelineStatsPayload(
+            worker_id="w0",
+            pipeline_name="pipe-b",
+            run_id="run-1",
+            schedule_type="stream",
+            uptime_seconds=4.0,
+            timestamp=datetime.now(UTC),
+            records_in=8,
+            bytes_in=40,
+        ))
+        client = TestClient(app)
+
+        r = client.get("/api/cluster/streams")
+
+        assert r.status_code == 200
+        data = r.json()
+        assert len(data["streams"]) == 1
+        stream = data["streams"][0]
+        assert stream["pipeline_name"] == "pipe-b"
+        assert stream["placement_group_id"] is None
+        assert stream["slot_count"] == 1
+        assert stream["records_in_per_sec"] == 2.0
 
 
 # ── Runs router ────────────────────────────────────────────────────────────

@@ -85,8 +85,8 @@ class TestHealthPolling:
     def test_poll_marks_workers_ok(self):
         pool = _pool("http://w0:8766", "http://w1:8766")
         mock_client = _mock_httpx_client({
-            "http://w0:8766/agent/health": {"ok": True, "active_runs": 2},
-            "http://w1:8766/agent/health": {"ok": True, "active_runs": 0},
+            "http://w0:8766/agent/health": {"ok": True, "active_runs": 2, "worker_id": "w0"},
+            "http://w1:8766/agent/health": {"ok": True, "active_runs": 0, "worker_id": "w1"},
         })
         with patch("httpx.Client", return_value=mock_client):
             pool._poll_all()
@@ -95,6 +95,10 @@ class TestHealthPolling:
         assert pool._health["http://w0:8766"]["active_runs"] == 2
         assert pool._health["http://w1:8766"]["ok"] is True
         assert pool._health["http://w1:8766"]["active_runs"] == 0
+        assert pool._worker_ids["w0"] == "http://w0:8766"
+        assert pool._worker_ids["w1"] == "http://w1:8766"
+        assert pool._url_to_worker_id["http://w0:8766"] == "w0"
+        assert pool._url_to_worker_id["http://w1:8766"] == "w1"
 
     def test_poll_marks_down_worker_on_error(self):
         pool = _pool("http://w0:8766")
@@ -220,6 +224,72 @@ class TestDispatch:
         with patch("httpx.Client", return_value=mock_client):
             result = pool.dispatch("r6", "p", "yaml", "batch")
         assert result is None
+
+    def test_dispatch_to_worker_targets_specific_worker(self):
+        pool = _pool("http://w0:8766", "http://w1:8766")
+        calls = []
+
+        def _post(url, **kwargs):
+            calls.append((url, kwargs.get("json", {})))
+            resp = MagicMock()
+            resp.raise_for_status = MagicMock()
+            return resp
+
+        mock_client = MagicMock()
+        mock_client.__enter__ = lambda s: mock_client
+        mock_client.__exit__ = MagicMock(return_value=False)
+        mock_client.post.side_effect = _post
+
+        with patch("httpx.Client", return_value=mock_client):
+            assert pool.dispatch_to_worker(
+                "http://w1:8766",
+                run_id="slot-r1",
+                pipeline_name="pipe-a",
+                yaml_text="yaml",
+                schedule_type="stream",
+            ) is True
+
+        assert calls == [("http://w1:8766/agent/run", {
+            "pipeline_name": "pipe-a",
+            "yaml_text": "yaml",
+            "run_id": "slot-r1",
+            "schedule_type": "stream",
+            "callback_url": "http://manager/api/internal/run-complete",
+        })]
+
+    def test_multi_dispatch_count_all_tracks_all_workers(self):
+        from tram.models.pipeline import WorkersConfig
+
+        pool = _pool("http://w0:8766", "http://w1:8766")
+        mock_client = MagicMock()
+        mock_client.__enter__ = lambda s: mock_client
+        mock_client.__exit__ = MagicMock(return_value=False)
+        mock_client.post.return_value = MagicMock(raise_for_status=MagicMock())
+
+        with patch("httpx.Client", return_value=mock_client):
+            result = pool.multi_dispatch(
+                placement_group_id="pg1",
+                pipeline_name="p",
+                yaml_text="yaml",
+                workers_cfg=WorkersConfig(count="all"),
+                schedule_type="stream",
+            )
+
+        assert result.status == "running"
+        assert result.accepted == ["http://w0:8766", "http://w1:8766"]
+        assert result.run_ids == ["pg1-w0", "pg1-w1"]
+        assert pool.workers_for_pipeline("p") == ["http://w0:8766", "http://w1:8766"]
+
+    def test_resolve_rejects_unsupported_named_workers(self):
+        from tram.models.pipeline import WorkersConfig
+
+        pool = _pool("http://w0:8766")
+        try:
+            pool.resolve(WorkersConfig(worker_ids=["tram-worker-0"]))
+        except NotImplementedError:
+            pass
+        else:
+            raise AssertionError("Expected NotImplementedError for workers.list")
 
 
 # ── stop_run ───────────────────────────────────────────────────────────────

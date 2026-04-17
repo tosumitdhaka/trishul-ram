@@ -89,6 +89,8 @@ class TestPipelineExecutorBatchRun:
         assert result.records_in == 2
         assert result.records_out == 2
         assert result.records_skipped == 0
+        assert result.bytes_in == len(json.dumps(records).encode())
+        assert result.bytes_out == len(json.dumps(records).encode())
         mock_sink.write.assert_called_once()
 
     def test_batch_run_empty_source(self):

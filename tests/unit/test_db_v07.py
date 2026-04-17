@@ -187,3 +187,59 @@ def test_reopen_existing_db_migrates_cleanly(tmp_path):
     runs = d2.get_runs()
     d2.close()
     assert any(r.run_id == "m1" for r in runs)
+
+
+def test_save_and_get_active_broadcast_placement(db):
+    db.save_broadcast_placement(
+        placement_group_id="pg1",
+        pipeline_name="pipe-a",
+        slots=[{
+            "worker_index": 0,
+            "worker_url": "http://w0:8766",
+            "worker_id": "w0",
+            "run_id_prefix": "pg1-w0",
+            "current_run_id": "pg1-w0",
+            "status": "running",
+        }],
+        target_count="all",
+        status="running",
+    )
+
+    placements = db.get_active_broadcast_placements()
+    assert len(placements) == 1
+    assert placements[0]["placement_group_id"] == "pg1"
+    assert placements[0]["slots"][0]["current_run_id"] == "pg1-w0"
+
+
+def test_update_slot_run_id(db):
+    db.save_broadcast_placement(
+        placement_group_id="pg1",
+        pipeline_name="pipe-a",
+        slots=[{
+            "worker_index": 0,
+            "worker_url": "http://w0:8766",
+            "worker_id": "w0",
+            "run_id_prefix": "pg1-w0",
+            "current_run_id": "pg1-w0",
+            "status": "running",
+        }],
+        target_count="all",
+        status="running",
+    )
+
+    db.update_slot_run_id("pg1", 0, "pg1-w0-r1", restart_count=1)
+    placement = db.get_active_broadcast_placements()[0]
+    assert placement["slots"][0]["current_run_id"] == "pg1-w0-r1"
+    assert placement["slots"][0]["restart_count"] == 1
+
+
+def test_stopped_broadcast_placement_not_returned_as_active(db):
+    db.save_broadcast_placement(
+        placement_group_id="pg1",
+        pipeline_name="pipe-a",
+        slots=[],
+        target_count="all",
+        status="running",
+    )
+    db.update_broadcast_placement_status("pg1", "stopped", slots=[])
+    assert db.get_active_broadcast_placements() == []

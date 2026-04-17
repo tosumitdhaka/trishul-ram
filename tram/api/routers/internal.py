@@ -24,10 +24,30 @@ class RunCompletePayload(BaseModel):
     records_in: int = 0
     records_out: int = 0
     records_skipped: int = 0
+    bytes_in: int = 0
+    bytes_out: int = 0
     error: str | None = None
     errors: list[str] = Field(default_factory=list)
     started_at: datetime | None = None
     finished_at: datetime | None = None
+
+
+class PipelineStatsPayload(BaseModel):
+    worker_id: str
+    pipeline_name: str
+    run_id: str
+    schedule_type: str
+    uptime_seconds: float
+    timestamp: datetime
+    records_in: int = 0
+    records_out: int = 0
+    records_skipped: int = 0
+    dlq_count: int = 0
+    error_count: int = 0
+    bytes_in: int = 0
+    bytes_out: int = 0
+    errors_last_window: list[str] = Field(default_factory=list)
+    is_final: bool = False
 
 
 @router.post("/api/internal/run-complete")
@@ -55,9 +75,23 @@ async def run_complete(payload: RunCompletePayload, request: Request) -> dict:
         records_in=payload.records_in,
         records_out=payload.records_out,
         records_skipped=payload.records_skipped,
+        bytes_in=payload.bytes_in,
+        bytes_out=payload.bytes_out,
         error=payload.error,
         errors=payload.errors,
         started_at=payload.started_at,
         finished_at=payload.finished_at,
     )
+    return {"ok": True}
+
+
+@router.post("/api/internal/pipeline-stats")
+async def pipeline_stats(payload: PipelineStatsPayload, request: Request) -> dict:
+    store = request.app.state.stats_store
+    controller = request.app.state.controller
+    if payload.is_final:
+        store.remove(payload.run_id)
+    else:
+        store.update(payload)
+        controller.on_pipeline_stats(payload)
     return {"ok": True}

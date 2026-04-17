@@ -55,6 +55,7 @@ All configuration is via environment variables (12-factor).
 | `TRAM_WORKER_SERVICE` | `tram-worker` | Headless Service name used to build worker DNS addresses (v1.2.0) |
 | `TRAM_WORKER_NAMESPACE` | `default` | Kubernetes namespace where worker pods run (v1.2.0) |
 | `TRAM_WORKER_PORT` | `8766` | Port that worker pods listen on (v1.2.0) |
+| `TRAM_WORKER_INGRESS_PORT` | `8767` | Public ingress port on worker pods for `/webhooks/*` push traffic (v1.3.0) |
 | `TRAM_MANAGER_URL` | _(empty)_ | Manager base URL used by worker pods for run-complete callbacks (v1.2.0) |
 
 ### Database backends (v0.7.0)
@@ -83,7 +84,7 @@ TRAM supports a split deployment where a single **manager** pod owns all schedul
 |------|-------------|------|
 | Standalone | `standalone` (default) | All-in-one: scheduler + DB + executor + UI on one pod |
 | Manager | `manager` | Owns scheduling, DB writes, UI; dispatches run requests to workers |
-| Worker | `worker` | Stateless executor; no DB, no scheduler, no UI; listens on port 8766 |
+| Worker | `worker` | Stateless executor; no DB, no scheduler, no UI; listens on `:8766` for `/agent/*` and `:8767` for `/webhooks/*` |
 
 ### Manager pod
 
@@ -104,6 +105,8 @@ The manager dispatches `POST /agent/run` to each worker using Kubernetes headles
 ```bash
 TRAM_MODE=worker
 TRAM_MANAGER_URL=http://tram:8765      # manager Service DNS or ClusterIP
+TRAM_WORKER_PORT=8766                  # internal agent API
+TRAM_WORKER_INGRESS_PORT=8767          # public webhook ingress
 ```
 
 Workers only need `tram[worker,kafka,snmp,...]` — the `manager` extra (apscheduler, sqlalchemy) is not installed.
@@ -113,29 +116,35 @@ Workers only need `tram[worker,kafka,snmp,...]` — the `manager` extra (apsched
 ```yaml
 manager:
   enabled: true
-  replicaCount: 1
+  persistence:
+    enabled: true
+    existingClaim: ""
 
 worker:
-  replicaCount: 3
+  replicas: 3
+  ingressPort: 8767
   resources:
     requests: {cpu: 200m, memory: 256Mi}
     limits:   {cpu: 1000m, memory: 1Gi}
 ```
 
 This creates:
-- `manager-deployment.yaml` — Deployment for the manager pod
+- `manager-statefulset.yaml` — single-replica StatefulSet for the manager pod
+- `manager-headless-service.yaml` — headless Service for stable manager DNS / StatefulSet identity
 - `worker-statefulset.yaml` — StatefulSet for worker pods
 - `worker-headless-service.yaml` — headless Service for stable DNS
 - `service-ui.yaml` — optional separate Service for the web UI
+
+If you are upgrading from the older manager `Deployment`, set `manager.persistence.existingClaim` to reuse the current manager PVC instead of provisioning a new one.
 
 ### Worker image
 
 ```dockerfile
 # Build with Dockerfile.worker (no UI assets, no manager deps)
-docker build -f Dockerfile.worker -t trishul-ram-worker:1.2.3 .
+docker build -f Dockerfile.worker -t trishul-ram-worker:1.3.0 .
 ```
 
-The worker image `EXPOSE`s port 8766, sets `ENV TRAM_MODE=worker`, and health-checks `/agent/health`.
+The worker image exposes port `8766` for the internal agent API and port `8767` for ingress-only webhook traffic. Kubernetes liveness/readiness probes stay on `/agent/health` over port `8766`.
 
 ### Worker agent endpoints
 
@@ -145,6 +154,7 @@ The worker image `EXPOSE`s port 8766, sets `ENV TRAM_MODE=worker`, and health-ch
 | `GET` | `/agent/status` | Lists active batch and stream runs |
 | `POST` | `/agent/run` | Start a pipeline run (batch or stream) |
 | `POST` | `/agent/stop` | Signal a stream run to stop |
+| `POST` | `/webhooks/{path}` | Ingress-only webhook receiver on worker port `8767` |
 | `POST` | `/api/internal/run-complete` | _(manager)_ Receive run result callback from worker |
 
 ## API Key Authentication (v1.0.0)
@@ -262,7 +272,7 @@ tram mib compile /path/to/vendor-mibs/ --out /mibs
 **Air-gapped environments** — copy pre-compiled MIB `.py` files into the image:
 
 ```dockerfile
-FROM ghcr.io/tosumitdhaka/trishul-ram:1.2.3
+FROM ghcr.io/tosumitdhaka/trishul-ram:1.3.0
 COPY compiled-mibs/*.py /mibs/
 ```
 
@@ -307,7 +317,7 @@ curl -X DELETE http://localhost:8765/api/schemas/cisco/GenericRecord.proto
 **Mount host directory** for development (read-write):
 
 ```bash
-docker run -v ./schemas:/schemas tram:1.2.3
+docker run -v ./schemas:/schemas tram:1.3.0
 ```
 
 ## Schema Registry Integration (v1.0.4)
@@ -430,7 +440,7 @@ Mount a volume at `/data` (or set `TRAM_DB_URL`) to persist run history and pipe
 
 ### Installed extras in the default image
 
-The default `tram:1.2.3` image installs (`clickhouse` added in v1.0.4):
+The default `tram:1.3.0` image installs (`clickhouse` added in v1.0.4):
 
 `kafka`, `opensearch`, `snmp`, `avro`, `protobuf_ser`, `msgpack_ser`, `mqtt`, `amqp`, `nats`,
 `gnmi`, `jmespath`, `sql`, `influxdb`, `redis`, `websocket`, `elasticsearch`, `metrics`,
@@ -450,7 +460,7 @@ The following extras are **excluded by default** to keep the image lean. Extend 
 | `otel` | only needed when `TRAM_OTEL_ENDPOINT` is set; no-op fallback when absent | ~15 MB |
 
 ```dockerfile
-FROM ghcr.io/tosumitdhaka/trishul-ram:1.2.3
+FROM ghcr.io/tosumitdhaka/trishul-ram:1.3.0
 RUN pip install "tram[parquet,s3,gcs,azure,otel]"
 ```
 
@@ -468,7 +478,7 @@ TRAM ships a production-ready Helm chart in `helm/`. Published to GHCR OCI on ev
 
 ### Install
 
-Quick-start examples below use `latest`. For production, pin `image.tag` and worker image tags to a specific release such as `1.2.3`.
+Quick-start examples below use `latest`. For production, pin `image.tag` and worker image tags to a specific release such as `1.3.0`.
 
 ```bash
 # Add chart from OCI registry
@@ -491,11 +501,13 @@ helm upgrade tram oci://ghcr.io/tosumitdhaka/charts/trishul-ram \
 | Value | Default | Description |
 |-------|---------|-------------|
 | `image.repository` | `ghcr.io/tosumitdhaka/trishul-ram` | Docker image repository |
-| `image.tag | "1.2.3"` | Image tag |
+| `image.tag | "1.3.0"` | Image tag |
 | `replicaCount` | `1` | Replicas for the standalone StatefulSet; not used when `manager.enabled=true` |
-| `manager.enabled` | `false` | `true` = manager+worker mode (Deployment + worker StatefulSet); `false` = standalone StatefulSet |
+| `manager.enabled` | `false` | `true` = manager+worker mode (manager StatefulSet + worker StatefulSet); `false` = standalone StatefulSet |
 | `worker.replicas` | `3` | Number of worker StatefulSet replicas (only when `manager.enabled=true`) |
 | `manager.persistence.enabled` | `true` | RWO PVC for manager pod (SQLite DB, schemas, MIBs) — recommended in manager mode |
+| `manager.persistence.existingClaim` | `""` | Reuse an existing manager PVC during Deployment → StatefulSet upgrades; skips `volumeClaimTemplates` when set |
+| `worker.ingressPort` | `8767` | Worker public ingress port for `/webhooks/*`; `TRAM_WORKER_INGRESS_PORT` is set from this value |
 | `persistence.enabled` | `true` | Provision a per-pod RWO PVC via `volumeClaimTemplates` mounted at `/data`; auto-sets `TRAM_DB_URL=sqlite:////data/tram.db`, `TRAM_SCHEMA_DIR=/data/schemas`, `TRAM_MIB_DIR=/data/mibs`; disable in cluster mode when using `sharedStorage` |
 | `persistence.size` | `1Gi` | PVC size per pod (standalone mode only) |
 | `persistence.accessMode` | `ReadWriteOnce` | PVC access mode (standalone mode only) |
@@ -525,37 +537,47 @@ helm upgrade tram oci://ghcr.io/tosumitdhaka/charts/trishul-ram \
 ```bash
 helm install tram oci://ghcr.io/tosumitdhaka/charts/trishul-ram \
   --namespace tram --create-namespace \
-  --set image.tag=1.2.3
+  --set image.tag=1.3.0
 ```
 
 A single-replica `StatefulSet` with pod name `tram-0` runs the full daemon. A `PersistentVolumeClaim` (`data-tram-0`) is auto-provisioned via `volumeClaimTemplates` and mounted at `/data`. SQLite run history, API-uploaded schemas (`/data/schemas`), and runtime MIBs (`/data/mibs`) all share this single PVC and survive pod restarts. Standard MIBs baked into the image at `/mibs` remain available alongside any runtime-downloaded ones.
 
 ### Manager + Worker mode (v1.2.0)
 
-Manager+Worker mode replaces the old v0.8.0 consistent-hashing cluster model. A single manager `Deployment` owns scheduling, the SQLite database, and the Web UI. A worker `StatefulSet` (N replicas) receives run requests over HTTP, executes them statelessly, and POSTs results back to the manager.
+Manager+Worker mode replaces the old v0.8.0 consistent-hashing cluster model. A single manager `StatefulSet` owns scheduling, the SQLite database, and the Web UI. A worker `StatefulSet` (N replicas) receives run requests over the internal agent API, exposes a separate ingress-only port for push traffic, executes pipelines statelessly, and POSTs results back to the manager.
 
 SQLite on a `ReadWriteOnce` PVC is sufficient — only one manager pod ever writes to it.
 
 ```bash
 helm install tram oci://ghcr.io/tosumitdhaka/charts/trishul-ram \
   --namespace tram --create-namespace \
-  --set image.tag=1.2.3 \
+  --set image.tag=1.3.0 \
   --set manager.enabled=true \
   --set worker.replicas=3 \
   --set worker.image.repository=trishul-ram-worker \
-  --set worker.image.tag=1.2.3 \
+  --set worker.image.tag=1.3.0 \
   --set apiKey=mysecret
 ```
 
 This creates:
-- `tram-manager` Deployment (1 replica, port 8765) — scheduler + DB + UI
-- `tram-worker` StatefulSet (3 replicas, port 8766) — stateless executors
+- `tram-manager` StatefulSet (1 replica, port 8765) — scheduler + DB + UI
+- `tram-manager` headless Service — stable manager pod DNS for the StatefulSet
+- `tram-worker` StatefulSet (3 replicas, agent port 8766, ingress port 8767) — stateless executors
 - `tram-worker` headless Service — stable DNS `tram-worker-N.tram-worker.<ns>.svc.cluster.local`
+
+If you are upgrading an existing release that used a manager `Deployment`, reuse the current PVC:
+
+```bash
+helm upgrade tram oci://ghcr.io/tosumitdhaka/charts/trishul-ram \
+  --namespace tram \
+  --set manager.enabled=true \
+  --set manager.persistence.existingClaim=manager-data-tram
+```
 
 Check cluster state:
 
 ```bash
-kubectl exec -n tram deploy/tram-manager -- \
+kubectl exec -n tram pod/tram-manager-0 -- \
   curl -s -H "X-API-Key: mysecret" http://localhost:8765/api/cluster/nodes | jq .
 ```
 
@@ -566,7 +588,7 @@ PostgreSQL is **optional** in manager+worker mode — SQLite on the manager's RW
 ```bash
 helm install tram oci://ghcr.io/tosumitdhaka/charts/trishul-ram \
   --namespace tram --create-namespace \
-  --set image.tag=1.2.3 \
+  --set image.tag=1.3.0 \
   --set manager.enabled=true \
   --set worker.replicas=3 \
   --set postgresql.enabled=true
@@ -599,16 +621,15 @@ Then install/upgrade TRAM with shared storage enabled:
 ```bash
 helm upgrade trishul-ram helm/ \
   --namespace trishul-ram \
-  --set image.tag=1.2.3 \
-  --set replicaCount=3 \
-  --set clusterMode.enabled=true \
-  --set postgresql.enabled=true \
-  --set persistence.enabled=false \
+  --set image.tag=1.3.0 \
+  --set manager.enabled=true \
+  --set worker.replicas=3 \
+  --set manager.persistence.enabled=true \
   --set sharedStorage.enabled=true \
   --set sharedStorage.storageClass=nfs-rwx
 ```
 
-This creates a single PVC `data-trishul-ram` (2 Gi, RWX) backed by NFS. All pods mount it at `/data`; `TRAM_SCHEMA_DIR=/data/schemas` and `TRAM_MIB_DIR=/data/mibs` are set automatically.
+This creates a single RWX PVC for shared schemas/MIBs backed by NFS. In manager+worker mode the manager still keeps SQLite on its own RWO PVC; the shared RWX volume is only for assets that must be visible across pods.
 
 **For production clouds** — use the platform RWX StorageClass directly:
 
@@ -619,7 +640,7 @@ This creates a single PVC `data-trishul-ram` (2 Gi, RWX) backed by NFS. All pods
 | GKE (Filestore) | `filestore-rwx` |
 | Longhorn | `longhorn-rwx` |
 
-> **Note:** `persistence.enabled` should be `false` in cluster mode when `sharedStorage.enabled=true` — PostgreSQL handles the database and the shared PVC handles schemas/MIBs; per-pod RWO PVCs would be unused overhead.
+> **Note:** `sharedStorage.enabled=true` does not replace manager persistence. In manager+worker mode, keep `manager.persistence.enabled=true` for SQLite and use the RWX volume only when workers must read shared schema/MIB files directly.
 
 ### Scale up / scale down
 
@@ -680,7 +701,7 @@ spec:
     spec:
       containers:
       - name: tram
-        image: ghcr.io/tosumitdhaka/trishul-ram:1.2.3
+        image: ghcr.io/tosumitdhaka/trishul-ram:1.3.0
         command: ["tram", "daemon"]
         ports:
         - containerPort: 8765
@@ -823,6 +844,6 @@ remote_write:
 TRAM supports two Kubernetes deployment shapes controlled by `manager.enabled`:
 
 - **Standalone** (`manager.enabled: false`, default) — a single-replica `StatefulSet` (`tram-0`) with local SQLite via auto-provisioned PVC `data-tram-0`. Zero configuration overhead.
-- **Manager + Worker** (`manager.enabled: true`) — a manager `Deployment` (1 replica, port 8765) for scheduling/DB/UI, and a worker `StatefulSet` (N replicas, port 8766) for stateless execution. SQLite on the manager's RWO PVC; no PostgreSQL required.
+- **Manager + Worker** (`manager.enabled: true`) — a manager `StatefulSet` (1 replica, port 8765) for scheduling/DB/UI, and a worker `StatefulSet` (N replicas, agent port 8766, ingress port 8767) for stateless execution. SQLite on the manager's RWO PVC; no PostgreSQL required.
 
-Using `StatefulSet` for standalone and worker pods ensures stable pod identity, consistent `TRAM_NODE_ID` across restarts, and proper PVC affinity so the data volume follows the pod when it reschedules.
+Using `StatefulSet` for standalone, manager, and worker pods ensures stable pod identity, consistent `TRAM_NODE_ID` across restarts, and proper PVC affinity so the data volume follows the pod when it reschedules.

@@ -1,9 +1,9 @@
 {{- if .Values.manager.enabled }}
-## Manager Deployment (v1.2.0 manager+worker mode)
+## Manager StatefulSet (v1.2.0 manager+worker mode)
 ## Owns all scheduling state. Dispatches pipeline runs to worker pods.
 ## Created only when manager.enabled=true; the standalone StatefulSet is skipped.
 apiVersion: apps/v1
-kind: Deployment
+kind: StatefulSet
 metadata:
   name: {{ include "tram.fullname" . }}-manager
   labels:
@@ -11,11 +11,10 @@ metadata:
     app.kubernetes.io/component: manager
 spec:
   replicas: 1
-  ## Recreate: stop the old pod before starting the new one.
-  ## Required because the manager uses a RWO PVC (only one node can mount it)
-  ## and optionally hostNetwork=true (port conflicts block surge pods).
-  strategy:
-    type: Recreate
+  serviceName: {{ include "tram.fullname" . }}-manager
+  podManagementPolicy: OrderedReady
+  updateStrategy:
+    type: RollingUpdate
   selector:
     matchLabels:
       {{- include "tram.selectorLabels" . | nindent 6 }}
@@ -208,10 +207,10 @@ spec:
           configMap:
             name: {{ include "tram.fullname" . }}-pipelines
         {{- end }}
-        {{- if .Values.manager.persistence.enabled }}
+        {{- if and .Values.manager.persistence.enabled .Values.manager.persistence.existingClaim }}
         - name: manager-data
           persistentVolumeClaim:
-            claimName: manager-data-{{ include "tram.fullname" . }}
+            claimName: {{ .Values.manager.persistence.existingClaim }}
         {{- else if .Values.sharedStorage.enabled }}
         - name: data
           persistentVolumeClaim:
@@ -240,4 +239,20 @@ spec:
       tolerations:
         {{- toYaml . | nindent 8 }}
       {{- end }}
+  {{- if and .Values.manager.persistence.enabled (not .Values.manager.persistence.existingClaim) }}
+  volumeClaimTemplates:
+    - metadata:
+        name: manager-data
+        labels:
+          {{- include "tram.labels" . | nindent 10 }}
+          app.kubernetes.io/component: manager
+      spec:
+        accessModes: ["ReadWriteOnce"]
+        resources:
+          requests:
+            storage: {{ .Values.manager.persistence.size | default "10Gi" }}
+        {{- with .Values.manager.persistence.storageClass }}
+        storageClassName: {{ . | quote }}
+        {{- end }}
+  {{- end }}
 {{- end }}

@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import signal
+from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -9,6 +10,30 @@ import pytest
 from tram.daemon.server import serve
 
 # ── Helpers ────────────────────────────────────────────────────────────────────
+
+
+def _thread_factory(run_targets: list):
+    class FakeThread:
+        def __init__(self, target=None, name=None, daemon=None):
+            self._target = target
+            self.name = name
+            self.daemon = daemon
+            self._alive = False
+
+        def start(self):
+            self._alive = True
+            run_targets.append(self)
+            if self._target is not None:
+                self._target()
+            self._alive = False
+
+        def join(self, timeout=None):
+            return None
+
+        def is_alive(self):
+            return self._alive
+
+    return FakeThread
 
 
 def _make_config(
@@ -61,11 +86,13 @@ def _make_config(
         templates_dir="/tram-templates",
         tram_mode=tram_mode,
         manager_url=manager_url,
+        stats_interval=30,
         worker_urls="",
         worker_replicas=0,
         worker_service="tram-worker",
         worker_namespace="default",
         worker_port=8766,
+        worker_ingress_port=8767,
     )
 
 
@@ -76,109 +103,119 @@ class TestServeWorkerBranch:
     """Tests for the TRAM_MODE=worker path in serve()."""
 
     def test_worker_calls_create_worker_app(self):
-        """serve() instantiates a worker app and passes it to uvicorn.run."""
+        """serve() instantiates both worker apps and wires ingress thread into agent app."""
         config = _make_config(tram_mode="worker", node_id="w1", manager_url="http://mgr:8765")
-        fake_app = MagicMock()
+        fake_agent_app = MagicMock()
+        fake_agent_app.state = SimpleNamespace()
+        fake_ingress_app = MagicMock()
+        created_threads = []
 
         with patch("tram.daemon.server.setup_logging"), \
              patch("uvicorn.run") as mock_run, \
-             patch("tram.agent.server.create_worker_app", return_value=fake_app) as mock_cwa:
+             patch("os.kill") as mock_kill, \
+             patch("tram.agent.server.create_worker_app", return_value=fake_agent_app) as mock_cwa, \
+             patch("tram.agent.server.create_worker_ingress_app", return_value=fake_ingress_app) as mock_cwia, \
+             patch("threading.Thread", side_effect=_thread_factory(created_threads)):
             serve(config)
 
-        mock_cwa.assert_called_once_with(worker_id="w1", manager_url="http://mgr:8765")
-        mock_run.assert_called_once()
-        args, kwargs = mock_run.call_args
-        assert args[0] is fake_app
+        mock_cwa.assert_called_once_with(
+            worker_id="w1",
+            manager_url="http://mgr:8765",
+            stats_interval=30,
+        )
+        mock_cwia.assert_called_once_with(worker_id="w1", api_key="")
+        assert mock_run.call_count == 2
+        assert created_threads[1].name == "tram-worker-ingress"
+        assert fake_agent_app.state.ingress_thread is created_threads[1]
+        mock_kill.assert_called_once()
 
-    def test_worker_default_port_8766(self, monkeypatch):
-        """Worker defaults to port 8766 when TRAM_WORKER_PORT env var is absent."""
-        config = _make_config(tram_mode="worker")
-        monkeypatch.delenv("TRAM_WORKER_PORT", raising=False)
-
-        with patch("tram.daemon.server.setup_logging"), \
-             patch("uvicorn.run") as mock_run, \
-             patch("tram.agent.server.create_worker_app", return_value=MagicMock()):
-            serve(config)
-
-        _, kwargs = mock_run.call_args
-        assert kwargs["port"] == 8766
-
-    def test_worker_custom_port_from_env(self, monkeypatch):
-        """Worker reads port from TRAM_WORKER_PORT environment variable."""
-        config = _make_config(tram_mode="worker")
-        monkeypatch.setenv("TRAM_WORKER_PORT", "9000")
-
-        with patch("tram.daemon.server.setup_logging"), \
-             patch("uvicorn.run") as mock_run, \
-             patch("tram.agent.server.create_worker_app", return_value=MagicMock()):
-            serve(config)
-
-        _, kwargs = mock_run.call_args
-        assert kwargs["port"] == 9000
-
-    def test_worker_uvicorn_kwargs_no_tls(self, monkeypatch):
-        """Worker uvicorn call has expected kwargs when TLS is disabled."""
+    def test_worker_uvicorn_kwargs_no_tls(self):
+        """Worker starts both agent and ingress uvicorn servers without TLS."""
         config = _make_config(tram_mode="worker", host="127.0.0.1")
-        monkeypatch.delenv("TRAM_WORKER_PORT", raising=False)
+        fake_agent_app = MagicMock()
+        fake_agent_app.state = SimpleNamespace()
+        fake_ingress_app = MagicMock()
+        created_threads = []
 
         with patch("tram.daemon.server.setup_logging"), \
              patch("uvicorn.run") as mock_run, \
-             patch("tram.agent.server.create_worker_app", return_value=MagicMock()):
+             patch("os.kill"), \
+             patch("tram.agent.server.create_worker_app", return_value=fake_agent_app), \
+             patch("tram.agent.server.create_worker_ingress_app", return_value=fake_ingress_app), \
+             patch("threading.Thread", side_effect=_thread_factory(created_threads)):
             serve(config)
 
-        _, kwargs = mock_run.call_args
-        assert kwargs["host"] == "127.0.0.1"
-        assert kwargs["workers"] == 1
-        assert kwargs["log_config"] is None
-        assert kwargs["access_log"] is False
-        assert "ssl_certfile" not in kwargs
-        assert "ssl_keyfile" not in kwargs
+        first_call = mock_run.call_args_list[0]
+        second_call = mock_run.call_args_list[1]
+        assert first_call.args[0] is fake_agent_app
+        assert second_call.args[0] is fake_ingress_app
+        assert first_call.kwargs["host"] == "127.0.0.1"
+        assert first_call.kwargs["port"] == 8766
+        assert second_call.kwargs["port"] == 8767
+        assert first_call.kwargs["log_config"] is None
+        assert first_call.kwargs["access_log"] is False
+        assert second_call.kwargs["log_config"] is None
+        assert second_call.kwargs["access_log"] is False
+        assert "ssl_certfile" not in first_call.kwargs
+        assert "ssl_keyfile" not in first_call.kwargs
 
-    def test_worker_tls_kwargs_added(self, monkeypatch):
-        """Worker uvicorn call includes ssl_ kwargs when TLS cert+key are set."""
+    def test_worker_tls_kwargs_added(self):
+        """Worker uvicorn calls include ssl_ kwargs when TLS cert+key are set."""
         config = _make_config(
             tram_mode="worker",
             tls_certfile="/etc/tls/cert.pem",
             tls_keyfile="/etc/tls/key.pem",
         )
-        monkeypatch.delenv("TRAM_WORKER_PORT", raising=False)
-
+        fake_agent_app = MagicMock()
+        fake_agent_app.state = SimpleNamespace()
+        created_threads = []
         with patch("tram.daemon.server.setup_logging"), \
              patch("uvicorn.run") as mock_run, \
-             patch("tram.agent.server.create_worker_app", return_value=MagicMock()):
+             patch("os.kill"), \
+             patch("tram.agent.server.create_worker_app", return_value=fake_agent_app), \
+             patch("tram.agent.server.create_worker_ingress_app", return_value=MagicMock()), \
+             patch("threading.Thread", side_effect=_thread_factory(created_threads)):
             serve(config)
 
-        _, kwargs = mock_run.call_args
-        assert kwargs["ssl_certfile"] == "/etc/tls/cert.pem"
-        assert kwargs["ssl_keyfile"] == "/etc/tls/key.pem"
+        for call in mock_run.call_args_list:
+            assert call.kwargs["ssl_certfile"] == "/etc/tls/cert.pem"
+            assert call.kwargs["ssl_keyfile"] == "/etc/tls/key.pem"
 
-    def test_worker_tls_only_certfile_no_ssl_kwargs(self, monkeypatch):
+    def test_worker_tls_only_certfile_no_ssl_kwargs(self):
         """Only certfile set (no keyfile) → TLS kwargs must NOT be added."""
         config = _make_config(
             tram_mode="worker",
             tls_certfile="/etc/tls/cert.pem",
             tls_keyfile="",  # keyfile missing
         )
-        monkeypatch.delenv("TRAM_WORKER_PORT", raising=False)
-
+        fake_agent_app = MagicMock()
+        fake_agent_app.state = SimpleNamespace()
+        created_threads = []
         with patch("tram.daemon.server.setup_logging"), \
              patch("uvicorn.run") as mock_run, \
-             patch("tram.agent.server.create_worker_app", return_value=MagicMock()):
+             patch("os.kill"), \
+             patch("tram.agent.server.create_worker_app", return_value=fake_agent_app), \
+             patch("tram.agent.server.create_worker_ingress_app", return_value=MagicMock()), \
+             patch("threading.Thread", side_effect=_thread_factory(created_threads)):
             serve(config)
 
-        _, kwargs = mock_run.call_args
-        assert "ssl_certfile" not in kwargs
-        assert "ssl_keyfile" not in kwargs
+        for call in mock_run.call_args_list:
+            assert "ssl_certfile" not in call.kwargs
+            assert "ssl_keyfile" not in call.kwargs
 
-    def test_worker_returns_after_uvicorn(self, monkeypatch):
+    def test_worker_returns_after_threads_exit(self):
         """serve() returns (does not fall through to manager branch) after worker path."""
         config = _make_config(tram_mode="worker")
-        monkeypatch.delenv("TRAM_WORKER_PORT", raising=False)
-
         mock_create_app = MagicMock()
+        fake_agent_app = MagicMock()
+        fake_agent_app.state = SimpleNamespace()
+        created_threads = []
         with patch("tram.daemon.server.setup_logging"), \
              patch("uvicorn.run"), \
-             patch("tram.agent.server.create_worker_app", return_value=MagicMock()):
+             patch("os.kill"), \
+             patch("tram.agent.server.create_worker_app", return_value=fake_agent_app), \
+             patch("tram.agent.server.create_worker_ingress_app", return_value=MagicMock()), \
+             patch("threading.Thread", side_effect=_thread_factory(created_threads)):
             # Patch create_app so we can assert it's never called
             with patch("tram.api.app.create_app", mock_create_app):
                 serve(config)
@@ -332,12 +369,17 @@ class TestServeManagerBranch:
     def test_worker_does_not_install_sigterm(self, monkeypatch):
         """Worker branch must NOT install a SIGTERM handler."""
         config = _make_config(tram_mode="worker")
-        monkeypatch.delenv("TRAM_WORKER_PORT", raising=False)
         mock_signal = MagicMock()
+        fake_agent_app = MagicMock()
+        fake_agent_app.state = SimpleNamespace()
+        created_threads = []
 
         with patch("tram.daemon.server.setup_logging"), \
              patch("uvicorn.run"), \
-             patch("tram.agent.server.create_worker_app", return_value=MagicMock()), \
+             patch("os.kill"), \
+             patch("tram.agent.server.create_worker_app", return_value=fake_agent_app), \
+             patch("tram.agent.server.create_worker_ingress_app", return_value=MagicMock()), \
+             patch("threading.Thread", side_effect=_thread_factory(created_threads)), \
              patch("signal.signal", mock_signal):
             serve(config)
 
@@ -415,11 +457,16 @@ class TestServeLogging:
     def test_setup_logging_called_for_worker_too(self, monkeypatch):
         """setup_logging is called even for the worker branch."""
         config = _make_config(tram_mode="worker")
-        monkeypatch.delenv("TRAM_WORKER_PORT", raising=False)
+        fake_agent_app = MagicMock()
+        fake_agent_app.state = SimpleNamespace()
+        created_threads = []
 
         with patch("tram.daemon.server.setup_logging") as mock_log, \
              patch("uvicorn.run"), \
-             patch("tram.agent.server.create_worker_app", return_value=MagicMock()):
+             patch("os.kill"), \
+             patch("tram.agent.server.create_worker_app", return_value=fake_agent_app), \
+             patch("tram.agent.server.create_worker_ingress_app", return_value=MagicMock()), \
+             patch("threading.Thread", side_effect=_thread_factory(created_threads)):
             serve(config)
 
         mock_log.assert_called_once()

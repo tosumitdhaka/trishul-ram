@@ -37,7 +37,7 @@ Readiness probe. Returns 200 once startup is complete, 503 if DB or scheduler is
 Build and version information.
 
 ```json
-{"version": "1.0.5", "python_version": "3.12.0"}
+{"version": "1.3.0", "build_time": "2026-04-17T15:00:00+00:00", "python_version": "3.12.0"}
 ```
 
 ### GET /api/plugins
@@ -71,6 +71,30 @@ Worker pool status (manager mode) or standalone indicator.
       "active_runs": 0,
       "running_pipelines": [],
       "assigned_pipelines": ["snmp_ifmib_to_sftp"]
+    }
+  ]
+}
+```
+
+### GET /api/cluster/streams
+Active stream placement and throughput summary.
+
+```json
+{
+  "mode": "manager",
+  "streams": [
+    {
+      "pipeline_name": "prom-ingest",
+      "placement_group_id": "prom-ingest-20260417-ab12",
+      "status": "degraded",
+      "slots_total": 3,
+      "slots_running": 2,
+      "slots_stale": 1,
+      "records_in_per_sec": 1420.5,
+      "records_out_per_sec": 1420.5,
+      "bytes_in_per_sec": 901120.0,
+      "bytes_out_per_sec": 901120.0,
+      "slots": []
     }
   ]
 }
@@ -111,6 +135,33 @@ Auto-saves a pipeline version to SQLite and auto-starts if `enabled: true` and s
 
 ### GET /api/pipelines/{name}
 Get pipeline config and live status.
+
+### GET /api/pipelines/{name}/placement
+Per-slot placement view for an active broadcast stream.
+
+Returns `404` when the pipeline exists but has no active broadcast placement.
+
+```json
+{
+  "pipeline_name": "prom-ingest",
+  "placement_group_id": "prom-ingest-20260417-ab12",
+  "status": "running",
+  "slots": [
+    {
+      "slot_id": "prom-ingest-20260417-ab12-w0",
+      "worker_url": "http://trishul-ram-worker-0.trishul-ram-worker.default.svc.cluster.local:8766",
+      "current_run_id": "prom-ingest-20260417-ab12-w0",
+      "status": "running",
+      "stats": {
+        "records_in_per_sec": 710.2,
+        "records_out_per_sec": 710.2,
+        "bytes_in_per_sec": 450560.0,
+        "bytes_out_per_sec": 450560.0
+      }
+    }
+  ]
+}
+```
 
 ### PUT /api/pipelines/{name}
 Update/replace a registered pipeline's YAML config in-place (v1.0.4). Stops the pipeline, re-registers with the new config, and restarts it if `enabled: true`. Body: raw YAML text (`Content-Type: application/yaml` or `text/plain`).

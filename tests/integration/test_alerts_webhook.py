@@ -18,6 +18,15 @@ from tram.pipeline.executor import PipelineExecutor
 from tram.pipeline.loader import load_pipeline_from_yaml
 
 
+def _mock_httpx_client(post_side_effect=None):
+    client = MagicMock()
+    client.__enter__.return_value = client
+    client.__exit__.return_value = False
+    if post_side_effect is not None:
+        client.post.side_effect = post_side_effect
+    return client
+
+
 def _make_pipeline(src: Path, dst: Path, condition: str) -> object:
     return load_pipeline_from_yaml(textwrap.dedent(f"""
         pipeline:
@@ -57,13 +66,16 @@ class TestAlertWebhookIntegration:
 
         mock_resp = MagicMock()
         mock_resp.status_code = 200
+        mock_resp.raise_for_status = MagicMock()
+        client = _mock_httpx_client(post_side_effect=lambda *args, **kwargs: mock_resp)
 
-        with patch("httpx.post", return_value=mock_resp) as mock_post:
+        with patch("httpx.Client", return_value=client) as mock_client_cls:
             evaluator = AlertEvaluator()
             evaluator.check(result, config)
 
-        mock_post.assert_called_once()
-        url = mock_post.call_args[0][0]
+        mock_client_cls.assert_called_once()
+        client.post.assert_called_once()
+        url = client.post.call_args[0][0]
         assert "alerts.example.com" in url
 
     def test_alert_does_not_fire_when_condition_false(self, tmp_path):
@@ -81,11 +93,12 @@ class TestAlertWebhookIntegration:
 
         assert result.records_out == 1
 
-        with patch("httpx.post") as mock_post:
+        client = _mock_httpx_client()
+        with patch("httpx.Client", return_value=client):
             evaluator = AlertEvaluator()
             evaluator.check(result, config)
 
-        mock_post.assert_not_called()
+        client.post.assert_not_called()
 
     def test_alert_fires_on_records_in_condition(self, tmp_path):
         """Alert fires when records_in > 0."""
@@ -101,12 +114,14 @@ class TestAlertWebhookIntegration:
 
         mock_resp = MagicMock()
         mock_resp.status_code = 200
+        mock_resp.raise_for_status = MagicMock()
+        client = _mock_httpx_client(post_side_effect=lambda *args, **kwargs: mock_resp)
 
-        with patch("httpx.post", return_value=mock_resp) as mock_post:
+        with patch("httpx.Client", return_value=client):
             evaluator = AlertEvaluator()
             evaluator.check(result, config)
 
-        mock_post.assert_called_once()
+        client.post.assert_called_once()
 
     def test_webhook_payload_contains_pipeline_name(self, tmp_path):
         """Webhook POST payload includes pipeline name and result metadata."""
@@ -128,7 +143,8 @@ class TestAlertWebhookIntegration:
             resp.status_code = 200
             return resp
 
-        with patch("httpx.post", side_effect=capture_post):
+        client = _mock_httpx_client(post_side_effect=capture_post)
+        with patch("httpx.Client", return_value=client):
             evaluator = AlertEvaluator()
             evaluator.check(result, config)
 
@@ -164,8 +180,9 @@ class TestAlertWebhookIntegration:
         executor = PipelineExecutor()
         result = executor.batch_run(config)
 
-        with patch("httpx.post") as mock_post:
+        client = _mock_httpx_client()
+        with patch("httpx.Client", return_value=client):
             evaluator = AlertEvaluator()
             evaluator.check(result, config)
 
-        mock_post.assert_not_called()
+        client.post.assert_not_called()

@@ -52,6 +52,9 @@ spec:
             - name: agent
               containerPort: {{ .Values.worker.port }}
               protocol: TCP
+            - name: ingress
+              containerPort: {{ .Values.worker.ingressPort | default 8767 }}
+              protocol: TCP
           env:
             - name: TRAM_NODE_ID
               valueFrom:
@@ -65,6 +68,8 @@ spec:
               value: "http://{{ include "tram.fullname" . }}:{{ .Values.service.port }}"
             - name: TRAM_WORKER_PORT
               value: {{ .Values.worker.port | quote }}
+            - name: TRAM_WORKER_INGRESS_PORT
+              value: {{ .Values.worker.ingressPort | default 8767 | quote }}
             {{- range $key, $val := .Values.env }}
             - name: {{ $key }}
               value: {{ $val | quote }}

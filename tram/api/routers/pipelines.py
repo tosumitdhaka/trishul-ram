@@ -7,6 +7,7 @@ import logging
 from fastapi import APIRouter, HTTPException, Query, Request, Response, status
 from pydantic import BaseModel
 
+from tram.api.routers._stream_views import build_placement_view
 from tram.core.exceptions import (
     ConfigError,
     PipelineAlreadyExistsError,
@@ -99,6 +100,25 @@ async def get_pipeline(name: str, request: Request) -> dict:
     except PipelineNotFoundError as exc:
         raise HTTPException(status_code=404, detail=str(exc))
     return state.to_detail_dict()
+
+
+@router.get("/{name}/placement")
+async def get_pipeline_placement(name: str, request: Request) -> dict:
+    controller = request.app.state.controller
+    stats_store = getattr(request.app.state, "stats_store", None)
+
+    try:
+        controller.get(name)
+    except PipelineNotFoundError as exc:
+        raise HTTPException(status_code=404, detail=str(exc))
+
+    placement = next(
+        (item for item in controller.get_active_broadcast_placements() if item["pipeline_name"] == name),
+        None,
+    )
+    if placement is None:
+        raise HTTPException(status_code=404, detail=f"Pipeline '{name}' has no active broadcast placement")
+    return build_placement_view(placement, stats_store)
 
 
 @router.put("/{name}")

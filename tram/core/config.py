@@ -65,12 +65,14 @@ class AppConfig:
     # v1.2.0 manager+worker mode
     tram_mode: str       # "standalone" | "manager" | "worker"
     manager_url: str     # worker → manager callback base URL (also used by manager itself)
+    stats_interval: int  # worker stats reporting interval
     # Worker discovery (TRAM_MODE=manager)
     worker_urls: str     # explicit comma-separated worker agent URLs (TRAM_WORKER_URLS)
     worker_replicas: int # K8s headless DNS replica count (0 = disabled)
     worker_service: str  # K8s headless service name
     worker_namespace: str  # K8s namespace
     worker_port: int     # worker agent port
+    worker_ingress_port: int  # worker public ingress port
 
     @classmethod
     def from_env(cls) -> AppConfig:
@@ -106,9 +108,11 @@ class AppConfig:
             templates_dir=os.environ.get("TRAM_TEMPLATES_DIR", "/tram-templates"),
             tram_mode=os.environ.get("TRAM_MODE", "standalone").lower(),
             manager_url=os.environ.get("TRAM_MANAGER_URL", ""),
+            stats_interval=_env_int("TRAM_STATS_INTERVAL", 30),
             worker_urls=os.environ.get("TRAM_WORKER_URLS", ""),
             worker_replicas=_env_int("TRAM_WORKER_REPLICAS", 0),
             worker_service=os.environ.get("TRAM_WORKER_SERVICE", "tram-worker"),
             worker_namespace=os.environ.get("TRAM_WORKER_NAMESPACE", "default"),
             worker_port=_env_int("TRAM_WORKER_PORT", 8766),
+            worker_ingress_port=_env_int("TRAM_WORKER_INGRESS_PORT", 8767),
         )
