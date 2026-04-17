@@ -1,27 +1,3 @@
-{{- if and .Values.manager.enabled .Values.manager.persistence.enabled }}
-## Manager RWO PVC (v1.2.0).
-## Dedicated ReadWriteOnce volume for the manager Deployment.
-## Holds the SQLite database (/data/tram.db), uploaded schemas (/data/schemas),
-## and downloaded MIBs (/data/mibs). RWO is sufficient because only one manager
-## pod ever mounts this volume — no NFS or shared StorageClass required.
-apiVersion: v1
-kind: PersistentVolumeClaim
-metadata:
-  name: manager-data-{{ include "tram.fullname" . }}
-  labels:
-    {{- include "tram.labels" . | nindent 4 }}
-    app.kubernetes.io/component: manager
-spec:
-  accessModes:
-    - {{ .Values.manager.persistence.accessMode }}
-  resources:
-    requests:
-      storage: {{ .Values.manager.persistence.size }}
-  {{- if .Values.manager.persistence.storageClass }}
-  storageClassName: {{ .Values.manager.persistence.storageClass | quote }}
-  {{- end }}
-{{- end }}
----
 {{- if .Values.sharedStorage.enabled }}
 ## Shared ReadWriteMany PVC.
 ##

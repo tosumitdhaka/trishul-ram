@@ -234,3 +234,151 @@ class TestL005EmailNoSmtp:
         with patch.dict(os.environ, {"TRAM_SMTP_HOST": "smtp.example.com"}):
             findings = lint(config)
         assert not any(f.rule_id == "L005" for f in findings)
+
+
+class TestWorkersDefaultsAndManagerLint:
+    def test_push_source_defaults_to_count_all(self):
+        config = _load("""
+            pipeline:
+              name: push-default
+              schedule:
+                type: stream
+              source:
+                type: webhook
+                path: /test
+              serializer_in:
+                type: json
+              serializer_out:
+                type: json
+              sink:
+                type: local
+                path: /out
+        """)
+        assert config.workers is not None
+        assert config.workers.count == "all"
+
+    def test_non_push_source_defaults_to_count_one(self):
+        config = _load("""
+            pipeline:
+              name: batch-default
+              source:
+                type: local
+                path: /tmp
+              serializer_in:
+                type: json
+              serializer_out:
+                type: json
+              sink:
+                type: local
+                path: /out
+        """)
+        assert config.workers is not None
+        assert config.workers.count == 1
+
+    def test_l006_fires_in_manager_for_push_source_without_all(self):
+        config = _load("""
+            pipeline:
+              name: bad-push-workers
+              schedule:
+                type: stream
+              source:
+                type: webhook
+                path: /test
+              workers:
+                count: 1
+              serializer_in:
+                type: json
+              serializer_out:
+                type: json
+              sink:
+                type: local
+                path: /out
+        """)
+        findings = lint(config, tram_mode="manager")
+        assert any(f.rule_id == "L006" and f.severity == "error" for f in findings)
+
+    def test_l007_fires_for_poll_source_with_count_all(self):
+        config = _load("""
+            pipeline:
+              name: bad-poll-workers
+              source:
+                type: local
+                path: /tmp
+              workers:
+                count: all
+              serializer_in:
+                type: json
+              serializer_out:
+                type: json
+              sink:
+                type: local
+                path: /out
+        """)
+        findings = lint(config, tram_mode="manager")
+        assert any(f.rule_id == "L007" and f.severity == "error" for f in findings)
+
+    def test_l008_blocks_udp_push_in_manager(self):
+        config = _load("""
+            pipeline:
+              name: blocked-syslog
+              schedule:
+                type: stream
+              source:
+                type: syslog
+                host: 0.0.0.0
+                port: 5514
+                protocol: udp
+              serializer_in:
+                type: json
+              serializer_out:
+                type: json
+              sink:
+                type: local
+                path: /out
+        """)
+        findings = lint(config, tram_mode="manager")
+        assert any(f.rule_id == "L008" and f.severity == "error" for f in findings)
+
+    def test_l009_warns_when_queue_count_exceeds_pool(self):
+        config = _load("""
+            pipeline:
+              name: queue-too-large
+              schedule:
+                type: stream
+              source:
+                type: kafka
+                brokers: ["localhost:9092"]
+                topic: demo
+                group_id: g1
+              workers:
+                count: 4
+              serializer_in:
+                type: json
+              serializer_out:
+                type: json
+              sink:
+                type: local
+                path: /out
+        """)
+        findings = lint(config, tram_mode="manager", worker_pool_size=2)
+        assert any(f.rule_id == "L009" and f.severity == "warning" for f in findings)
+
+    def test_lint_rules_suppressed_in_standalone(self):
+        config = _load("""
+            pipeline:
+              name: standalone-workers
+              source:
+                type: local
+                path: /tmp
+              workers:
+                count: all
+              serializer_in:
+                type: json
+              serializer_out:
+                type: json
+              sink:
+                type: local
+                path: /out
+        """)
+        findings = lint(config, tram_mode="standalone")
+        assert not any(f.rule_id in {"L006", "L007", "L008", "L009", "L010"} for f in findings)

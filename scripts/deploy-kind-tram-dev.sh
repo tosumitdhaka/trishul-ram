@@ -113,7 +113,9 @@ fi
 helm "${HELM_ARGS[@]}"
 
 echo "Waiting for rollout in namespace: ${NAMESPACE}"
-if kubectl get "deployment/${RELEASE_NAME}-manager" -n "${NAMESPACE}" >/dev/null 2>&1; then
+if kubectl get "statefulset/${RELEASE_NAME}-manager" -n "${NAMESPACE}" >/dev/null 2>&1; then
+  kubectl rollout status "statefulset/${RELEASE_NAME}-manager" -n "${NAMESPACE}" --timeout=5m
+elif kubectl get "deployment/${RELEASE_NAME}-manager" -n "${NAMESPACE}" >/dev/null 2>&1; then
   kubectl rollout status "deployment/${RELEASE_NAME}-manager" -n "${NAMESPACE}" --timeout=5m
 fi
 

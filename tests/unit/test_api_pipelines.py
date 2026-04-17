@@ -1,11 +1,14 @@
 """Tests for pipeline CRUD + lifecycle API endpoints."""
 from __future__ import annotations
 
+from datetime import UTC, datetime, timedelta
 from unittest.mock import MagicMock
 
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
+from tram.agent.stats_store import StatsStore
+from tram.api.routers.internal import PipelineStatsPayload
 from tram.api.routers.pipelines import router
 from tram.core.exceptions import PipelineAlreadyExistsError, PipelineNotFoundError
 from tram.pipeline.loader import load_pipeline_from_yaml
@@ -63,6 +66,7 @@ def _make_app(db=None):
     app.state.scheduler = mock_controller   # alias for any legacy refs
     app.state.config = mock_config
     app.state.db = db
+    app.state.stats_store = StatsStore(interval=30)
     return app
 
 
@@ -102,6 +106,106 @@ class TestGetPipeline:
         app.state.manager.get.side_effect = PipelineNotFoundError("test-pipe not found")
         client = TestClient(app, raise_server_exceptions=False)
         resp = client.get("/api/pipelines/test-pipe")
+        assert resp.status_code == 404
+
+
+class TestGetPipelinePlacement:
+    def test_returns_enriched_broadcast_placement(self):
+        state = _make_state()
+        app = _make_app()
+        app.state.controller.get.return_value = state
+        app.state.controller.get_active_broadcast_placements.return_value = [{
+            "placement_group_id": "pg1",
+            "pipeline_name": "test-pipe",
+            "status": "running",
+            "target_count": "all",
+            "started_at": datetime.now(UTC),
+            "slots": [{
+                "worker_index": 0,
+                "worker_id": "w0",
+                "worker_url": "http://worker-0:8766",
+                "run_id_prefix": "pg1-w0",
+                "current_run_id": "pg1-w0-r1",
+                "status": "running",
+                "restart_count": 1,
+            }],
+        }]
+        app.state.stats_store.update(PipelineStatsPayload(
+            worker_id="w0",
+            pipeline_name="test-pipe",
+            run_id="pg1-w0-r1",
+            schedule_type="stream",
+            uptime_seconds=10.0,
+            timestamp=datetime.now(UTC),
+            records_in=50,
+            records_out=40,
+            bytes_in=1000,
+            bytes_out=600,
+        ))
+        client = TestClient(app)
+
+        resp = client.get("/api/pipelines/test-pipe/placement")
+
+        assert resp.status_code == 200
+        data = resp.json()
+        assert data["placement_group_id"] == "pg1"
+        assert data["slot_count"] == 1
+        assert data["active_slots"] == 1
+        assert data["records_in"] == 50
+        assert data["slots"][0]["current_run_id"] == "pg1-w0-r1"
+        assert data["slots"][0]["stats"]["stale"] is False
+        assert data["slots"][0]["stats"]["bytes_in_per_sec"] == 100.0
+
+    def test_includes_stale_slot_with_zeroed_per_sec(self):
+        state = _make_state()
+        app = _make_app()
+        app.state.controller.get.return_value = state
+        app.state.controller.get_active_broadcast_placements.return_value = [{
+            "placement_group_id": "pg1",
+            "pipeline_name": "test-pipe",
+            "status": "degraded",
+            "target_count": "all",
+            "started_at": datetime.now(UTC),
+            "slots": [{
+                "worker_index": 0,
+                "worker_id": "w0",
+                "worker_url": "http://worker-0:8766",
+                "run_id_prefix": "pg1-w0",
+                "current_run_id": "pg1-w0-r1",
+                "status": "stale",
+                "restart_count": 1,
+            }],
+        }]
+        app.state.stats_store.update(PipelineStatsPayload(
+            worker_id="w0",
+            pipeline_name="test-pipe",
+            run_id="pg1-w0-r1",
+            schedule_type="stream",
+            uptime_seconds=10.0,
+            timestamp=datetime.now(UTC) - timedelta(seconds=120),
+            records_in=50,
+            bytes_in=1000,
+        ))
+        client = TestClient(app)
+
+        resp = client.get("/api/pipelines/test-pipe/placement")
+
+        assert resp.status_code == 200
+        data = resp.json()
+        assert data["active_slots"] == 0
+        assert data["slots"][0]["stats"]["stale"] is True
+        assert data["slots"][0]["stats"]["records_in"] == 50
+        assert data["slots"][0]["stats"]["bytes_in_per_sec"] == 0.0
+
+    def test_missing_active_placement_returns_404(self):
+        state = _make_state()
+        app = _make_app()
+        app.state.controller.get.return_value = state
+        app.state.controller.get_active_broadcast_placements.return_value = []
+        client = TestClient(app, raise_server_exceptions=False)
+
+        resp = client.get("/api/pipelines/test-pipe/placement")
+
         assert resp.status_code == 404
 
 

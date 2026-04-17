@@ -2,10 +2,12 @@
 
 from __future__ import annotations
 
+import smtplib
 import textwrap
 from datetime import UTC, datetime, timedelta
 from unittest.mock import MagicMock, patch
 
+import httpx
 import pytest
 
 from tram.alerts.evaluator import AlertEvaluator
@@ -155,6 +157,17 @@ def _make_config_with_rule(rule: AlertRuleConfig):
 
 
 class TestAlertEvaluatorCheck:
+    @staticmethod
+    def _mock_httpx_client(response=None, side_effect=None):
+        mock_client = MagicMock()
+        if side_effect is not None:
+            mock_client.post.side_effect = side_effect
+        else:
+            mock_client.post.return_value = response or MagicMock()
+        mock_client.__enter__.return_value = mock_client
+        mock_client.__exit__.return_value = False
+        return mock_client
+
     def test_no_alerts_is_noop(self):
         evaluator = AlertEvaluator()
         result = _make_result()
@@ -189,12 +202,15 @@ class TestAlertEvaluatorCheck:
         result = _make_result(status=RunStatus.FAILED, error="boom")
 
         evaluator = AlertEvaluator()
+        mock_response = MagicMock()
+        mock_client = self._mock_httpx_client(response=mock_response)
 
-        with patch("httpx.post") as mock_post:
+        with patch("httpx.Client", return_value=mock_client):
             evaluator.check(result, config)
 
-        mock_post.assert_called_once()
-        call_kwargs = mock_post.call_args
+        mock_client.post.assert_called_once()
+        mock_response.raise_for_status.assert_called_once()
+        call_kwargs = mock_client.post.call_args
         assert call_kwargs[0][0] == "http://hooks.test/alert"
         payload = call_kwargs[1]["json"]
         assert payload["pipeline"] == "test-pipe"
@@ -211,11 +227,12 @@ class TestAlertEvaluatorCheck:
         result = _make_result(status=RunStatus.SUCCESS)
 
         evaluator = AlertEvaluator()
+        mock_client = self._mock_httpx_client()
 
-        with patch("httpx.post") as mock_post:
+        with patch("httpx.Client", return_value=mock_client):
             evaluator.check(result, config)
 
-        mock_post.assert_not_called()
+        mock_client.post.assert_not_called()
 
     def test_cooldown_prevents_double_fire(self):
         mock_db = MagicMock()
@@ -233,11 +250,12 @@ class TestAlertEvaluatorCheck:
         result = _make_result(status=RunStatus.FAILED)
 
         evaluator = AlertEvaluator(db=mock_db)
+        mock_client = self._mock_httpx_client()
 
-        with patch("httpx.post") as mock_post:
+        with patch("httpx.Client", return_value=mock_client):
             evaluator.check(result, config)
 
-        mock_post.assert_not_called()
+        mock_client.post.assert_not_called()
 
     def test_cooldown_expired_fires_again(self):
         mock_db = MagicMock()
@@ -255,8 +273,9 @@ class TestAlertEvaluatorCheck:
         result = _make_result(status=RunStatus.FAILED)
 
         evaluator = AlertEvaluator(db=mock_db)
+        mock_client = self._mock_httpx_client()
 
-        with patch("httpx.post"):
+        with patch("httpx.Client", return_value=mock_client):
             evaluator.check(result, config)
 
         mock_db.set_alert_cooldown.assert_called_once()
@@ -275,8 +294,9 @@ class TestAlertEvaluatorCheck:
         result = _make_result(status=RunStatus.FAILED)
 
         evaluator = AlertEvaluator()
+        mock_client = self._mock_httpx_client(side_effect=ConnectionError("no route"))
 
-        with patch("httpx.post", side_effect=ConnectionError("no route")):
+        with patch("httpx.Client", return_value=mock_client):
             with caplog.at_level(logging.ERROR):
                 evaluator.check(result, config)
 
@@ -327,6 +347,92 @@ class TestAlertEvaluatorCheck:
 
         assert "Alert email fire failed" in caplog.text
 
+    def test_webhook_http_200_sets_cooldown(self):
+        mock_db = MagicMock()
+        mock_db.get_alert_cooldown.return_value = None
+        rule = AlertRuleConfig(
+            name="ok-hook",
+            condition="failed",
+            action="webhook",
+            webhook_url="http://hooks.test/alert",
+            cooldown_seconds=300,
+        )
+        config = _make_config_with_rule(rule)
+        result = _make_result(status=RunStatus.FAILED)
+        evaluator = AlertEvaluator(db=mock_db)
+        mock_response = MagicMock()
+        mock_client = self._mock_httpx_client(response=mock_response)
+
+        with patch("httpx.Client", return_value=mock_client):
+            evaluator.check(result, config)
+
+        mock_db.set_alert_cooldown.assert_called_once()
+
+    def test_webhook_http_500_does_not_set_cooldown(self):
+        mock_db = MagicMock()
+        mock_db.get_alert_cooldown.return_value = None
+        rule = AlertRuleConfig(
+            name="bad-hook",
+            condition="failed",
+            action="webhook",
+            webhook_url="http://hooks.test/alert",
+            cooldown_seconds=300,
+        )
+        config = _make_config_with_rule(rule)
+        result = _make_result(status=RunStatus.FAILED)
+        evaluator = AlertEvaluator(db=mock_db)
+        request = httpx.Request("POST", "http://hooks.test/alert")
+        response = httpx.Response(500, request=request)
+        error = httpx.HTTPStatusError("server error", request=request, response=response)
+        mock_response = MagicMock()
+        mock_response.raise_for_status.side_effect = error
+        mock_client = self._mock_httpx_client(response=mock_response)
+
+        with patch("httpx.Client", return_value=mock_client):
+            evaluator.check(result, config)
+
+        mock_db.set_alert_cooldown.assert_not_called()
+
+    def test_webhook_connect_error_does_not_set_cooldown(self):
+        mock_db = MagicMock()
+        mock_db.get_alert_cooldown.return_value = None
+        rule = AlertRuleConfig(
+            name="connect-hook",
+            condition="failed",
+            action="webhook",
+            webhook_url="http://hooks.test/alert",
+            cooldown_seconds=300,
+        )
+        config = _make_config_with_rule(rule)
+        result = _make_result(status=RunStatus.FAILED)
+        evaluator = AlertEvaluator(db=mock_db)
+        error = httpx.ConnectError("no route", request=httpx.Request("POST", "http://hooks.test/alert"))
+        mock_client = self._mock_httpx_client(side_effect=error)
+
+        with patch("httpx.Client", return_value=mock_client):
+            evaluator.check(result, config)
+
+        mock_db.set_alert_cooldown.assert_not_called()
+
+    def test_smtp_failure_does_not_set_cooldown(self):
+        mock_db = MagicMock()
+        mock_db.get_alert_cooldown.return_value = None
+        rule = AlertRuleConfig(
+            name="email-rule",
+            condition="failed",
+            action="email",
+            email_to="ops@example.com",
+            cooldown_seconds=300,
+        )
+        config = _make_config_with_rule(rule)
+        result = _make_result(status=RunStatus.FAILED)
+        evaluator = AlertEvaluator(db=mock_db)
+
+        with patch("smtplib.SMTP", side_effect=smtplib.SMTPException("smtp down")):
+            evaluator.check(result, config)
+
+        mock_db.set_alert_cooldown.assert_not_called()
+
     def test_error_rate_condition(self):
         rule = AlertRuleConfig(
             name="high-err",
@@ -340,8 +446,9 @@ class TestAlertEvaluatorCheck:
         result = _make_result(records_in=10, records_out=6, records_skipped=4)
 
         evaluator = AlertEvaluator()
+        mock_client = self._mock_httpx_client()
 
-        with patch("httpx.post") as mock_post:
+        with patch("httpx.Client", return_value=mock_client):
             evaluator.check(result, config)
 
-        mock_post.assert_called_once()
+        mock_client.post.assert_called_once()

@@ -59,4 +59,9 @@ TRAM {{ .Chart.AppVersion }} has been deployed!
    Scale workers:
   kubectl scale statefulset {{ include "tram.fullname" . }}-worker \
     --namespace {{ .Release.Namespace }} --replicas=<N>
+
+   Upgrading from v1.2.x (Deployment → StatefulSet)?
+   If you had an existing manager-data PVC, reuse it:
+  helm upgrade {{ .Release.Name }} tram/tram \
+    --set manager.persistence.existingClaim=manager-data-{{ .Release.Name }}
 {{- end }}

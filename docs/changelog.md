@@ -9,6 +9,56 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ---
 
+## [1.3.0] — 2026-04-17
+
+### Added
+
+**Broadcast streams for HTTP push sources**
+- `workers:` config now supports broadcast placement for `webhook` and `prometheus_rw` in manager mode, defaulting those sources to `count: all`
+- `WorkerPool.multi_dispatch()` and broadcast placement tracking allow a single stream pipeline to run across all healthy workers
+- New placement visibility endpoints:
+  - `GET /api/pipelines/{name}/placement`
+  - `GET /api/cluster/streams`
+
+**Placement persistence and reconciliation**
+- Active broadcast placements are persisted in `broadcast_placements`
+- `PlacementReconciler` detects stale slots, re-dispatches recovered workers, and restores placement state after manager restart
+- Placement slot metadata now persists immutable `run_id_prefix` and mutable `current_run_id`
+
+**Unified pipeline stats and load-aware dispatch**
+- Batch and stream runs now share `PipelineStats` with records, bytes, error counters, and rolling error windows
+- Workers report periodic stats to the manager; final batch totals are persisted through the run-complete path
+- `StatsStore` is now keyed by `run_id` with stale-aware lookups for reconciliation and placement views
+
+### Changed
+
+**Worker ingress split**
+- Worker pods now run two listeners:
+  - internal agent API on `:8766`
+  - ingress-only webhook receiver on `:8767`
+- Worker `/agent/health` now reports composite status and fails when the ingress listener is down
+
+**Manager Helm deployment**
+- Manager changed from `Deployment` to single-replica `StatefulSet`
+- Added manager headless service and `manager.persistence.existingClaim` support for Deployment → StatefulSet upgrades
+- Worker StatefulSet now exposes ingress port `8767`
+
+**Alerts**
+- Alert cooldown is now armed only after confirmed webhook or email delivery succeeds
+
+### Fixed
+
+- Broadcast stream slot completion no longer drives the pipeline state machine while sibling slots are still running
+- Intermediate broadcast slot completion no longer evicts stats too early and trigger re-dispatch storms
+- Stream run completion now persists final counters instead of zero totals in run history
+
+### Tests
+
+- Expanded unit coverage for worker ingress split, placement reconciliation, stats store, worker dispatch, pipeline controller, and placement/streams APIs
+- Release-prep validation completed on 2026-04-17 for lint, unit/integration/coverage, Helm, and local kind deployment
+
+---
+
 ## [1.2.3] — 2026-04-16
 
 ### Fixed
@@ -1191,7 +1241,8 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 ---
 
 <!-- Comparison links -->
-[Unreleased]: https://github.com/tosumitdhaka/trishul-ram/compare/v1.2.3...HEAD
+[Unreleased]: https://github.com/tosumitdhaka/trishul-ram/compare/v1.3.0...HEAD
+[1.3.0]: https://github.com/tosumitdhaka/trishul-ram/compare/v1.2.3...v1.3.0
 [1.2.3]: https://github.com/tosumitdhaka/trishul-ram/compare/v1.2.2...v1.2.3
 [1.2.2]: https://github.com/tosumitdhaka/trishul-ram/compare/v1.2.1...v1.2.2
 [1.2.1]: https://github.com/tosumitdhaka/trishul-ram/compare/v1.2.0...v1.2.1

@@ -48,11 +48,13 @@ class PipelineController:
         # v1.2.0 manager+worker
         worker_pool: WorkerPool | None = None,
         manager_url: str = "",
+        stats_store=None,
     ) -> None:
         self._db = db
         self._node_id = node_id
         self._worker_pool = worker_pool
         self._manager_url = manager_url
+        self._stats_store = stats_store
 
         self.manager = PipelineManager(db=db)
         self.executor = PipelineExecutor(file_tracker=file_tracker)
@@ -61,8 +63,12 @@ class PipelineController:
         self._stream_threads: dict[str, threading.Thread] = {}
         self._stop_events: dict[str, threading.Event] = {}
         self._thread_pool = ThreadPoolExecutor(max_workers=10, thread_name_prefix="tram-batch")
-        # Tracks run_id for dispatched stream pipelines: {pipeline_name: run_id}
-        self._stream_run_ids: dict[str, str] = {}
+        # Tracks dispatched stream run_ids per pipeline: {pipeline_name: [run_id, ...]}
+        self._stream_run_ids: dict[str, list[str]] = {}
+        # {placement_group_id: placement_dict}
+        self._broadcast_placements: dict[str, dict] = {}
+        # {pipeline_name: placement_group_id}
+        self._active_placement_group: dict[str, str] = {}
 
         self._running = False
 
@@ -88,10 +94,11 @@ class PipelineController:
         logger.info("PipelineController stopping",
                     extra={"drain_timeout_seconds": timeout})
 
-        # Signal dispatched streams to stop (manager+worker mode)
-        for name, run_id in list(self._stream_run_ids.items()):
-            if self._worker_pool:
-                self._worker_pool.stop_run(run_id, name)
+        # On manager shutdown, keep worker-side streams alive so placement
+        # reconciliation can restore state after restart. Manual stop/delete paths
+        # still stop workers explicitly.
+        if self._worker_pool is None:
+            pass
         self._stream_run_ids.clear()
 
         for name in list(self._stop_events.keys()):
@@ -118,6 +125,10 @@ class PipelineController:
         from tram.pipeline.loader import load_pipeline_from_yaml
 
         stopped_names = set(self._db.get_stopped_pipeline_names())
+        placements_by_pipeline = {
+            placement["pipeline_name"]: placement
+            for placement in self._db.get_active_broadcast_placements()
+        }
 
         for name, yaml_text in self._db.get_all_pipelines():
             try:
@@ -125,6 +136,11 @@ class PipelineController:
                 self.manager.register(config, yaml_text=yaml_text)
                 if name in stopped_names:
                     self.manager.set_status(name, "stopped")
+                    continue
+                placement = placements_by_pipeline.get(name)
+                if placement is not None:
+                    self._restore_broadcast_placement(placement)
+                    self.manager.set_status(name, "reconciling")
                     continue
                 if config.enabled:
                     self._do_schedule(name)
@@ -457,6 +473,8 @@ class PipelineController:
         records_in: int,
         records_out: int,
         records_skipped: int = 0,
+        bytes_in: int = 0,
+        bytes_out: int = 0,
         error: str | None = None,
         errors: list[str] | None = None,
         started_at: datetime | str | None = None,
@@ -484,6 +502,8 @@ class PipelineController:
             records_in=records_in,
             records_out=records_out,
             records_skipped=records_skipped,
+            bytes_in=bytes_in,
+            bytes_out=bytes_out,
             error=error,
             node_id=self._node_id,
             errors=errors or [],
@@ -491,6 +511,11 @@ class PipelineController:
 
         if self._worker_pool is not None:
             self._worker_pool.on_run_complete(run_id)
+            self._remove_stream_run_id(pipeline_name, run_id)
+            if self._stream_run_ids.get(pipeline_name):
+                return
+            if self._stats_store is not None:
+                self._stats_store.remove(run_id)
 
         if self.manager.exists(pipeline_name):
             self.manager.record_run(pipeline_name, result)
@@ -510,12 +535,41 @@ class PipelineController:
                 logger.debug("Stream already dispatched to worker",
                              extra={"pipeline": config.name})
                 return
-            run_id = str(uuid.uuid4())
+            workers_cfg = config.workers
             state = self.manager.get(config.name)
             callback_url = (
                 f"{self._manager_url}/api/internal/run-complete"
                 if self._manager_url else ""
             )
+            if workers_cfg is not None and workers_cfg.count == "all":
+                placement_group_id = self._make_placement_group_id(config.name)
+                result = self._worker_pool.multi_dispatch(
+                    placement_group_id=placement_group_id,
+                    pipeline_name=config.name,
+                    yaml_text=state.yaml_text,
+                    workers_cfg=workers_cfg,
+                    schedule_type="stream",
+                    callback_url=callback_url,
+                )
+                if not result.accepted:
+                    logger.error("Stream dispatch failed: no healthy workers",
+                                 extra={"pipeline": config.name})
+                    self.manager.set_status(config.name, "error")
+                    return
+                self._record_broadcast_placement(config.name, placement_group_id, result)
+                self.manager.set_status(config.name, result.status)
+                logger.info(
+                    "Dispatched stream to workers",
+                    extra={
+                        "pipeline": config.name,
+                        "workers": result.accepted,
+                        "placement_group_id": placement_group_id,
+                        "run_ids": result.run_ids,
+                    },
+                )
+                return
+
+            run_id = str(uuid.uuid4())
             worker_url = self._worker_pool.dispatch(
                 run_id=run_id,
                 pipeline_name=config.name,
@@ -528,7 +582,7 @@ class PipelineController:
                              extra={"pipeline": config.name})
                 self.manager.set_status(config.name, "error")
                 return
-            self._stream_run_ids[config.name] = run_id
+            self._stream_run_ids[config.name] = [run_id]
             self.manager.set_status(config.name, "running")
             logger.info("Dispatched stream to worker",
                         extra={"pipeline": config.name, "worker": worker_url,
@@ -576,9 +630,18 @@ class PipelineController:
     def _stop_stream(self, name: str, timeout: int = 10) -> None:
         # ── Manager+worker dispatch path ───────────────────────────────────
         if self._worker_pool is not None:
-            run_id = self._stream_run_ids.pop(name, None)
-            if run_id:
+            run_ids = self._stream_run_ids.pop(name, [])
+            for run_id in run_ids:
                 self._worker_pool.stop_run(run_id, name)
+            placement_group_id = self._active_placement_group.pop(name, None)
+            if placement_group_id is not None:
+                placement = self._broadcast_placements.pop(placement_group_id, None)
+                if placement is not None and self._db is not None:
+                    self._db.update_broadcast_placement_status(
+                        placement_group_id,
+                        "stopped",
+                        slots=placement["slots"],
+                    )
             logger.info("Stopped dispatched stream pipeline", extra={"pipeline": name})
             return
         # ── Local execution path ───────────────────────────────────────────
@@ -603,3 +666,175 @@ class PipelineController:
             if self._scheduler and self._scheduler.get_job(job_id):
                 self._scheduler.remove_job(job_id)
         self.manager.set_status(name, "stopped")
+
+    def _remove_stream_run_id(self, pipeline_name: str, run_id: str) -> None:
+        run_ids = self._stream_run_ids.get(pipeline_name)
+        if not run_ids:
+            return
+        remaining = [existing for existing in run_ids if existing != run_id]
+        if remaining:
+            self._stream_run_ids[pipeline_name] = remaining
+        else:
+            self._stream_run_ids.pop(pipeline_name, None)
+
+    def _make_placement_group_id(self, pipeline_name: str) -> str:
+        stamp = datetime.now(UTC).strftime("%Y%m%d%H%M%S")
+        return f"{pipeline_name}-{stamp}-{uuid.uuid4().hex[:6]}"
+
+    def _restore_broadcast_placement(self, placement: dict) -> None:
+        placement_copy = {
+            **placement,
+            "slots": [dict(slot) for slot in placement["slots"]],
+        }
+        placement_copy["status"] = "reconciling"
+        placement_group_id = placement_copy["placement_group_id"]
+        pipeline_name = placement_copy["pipeline_name"]
+        self._broadcast_placements[placement_group_id] = placement_copy
+        self._active_placement_group[pipeline_name] = placement_group_id
+        self._sync_stream_run_ids_from_slots(pipeline_name, placement_copy["slots"])
+        if self._db is not None:
+            self._db.update_broadcast_placement_status(
+                placement_group_id,
+                "reconciling",
+                slots=placement_copy["slots"],
+            )
+
+    def _record_broadcast_placement(self, pipeline_name: str, placement_group_id: str, result) -> None:
+        slots = []
+        for index, (worker_url, run_id) in enumerate(zip(result.accepted, result.run_ids)):
+            slots.append({
+                "worker_index": index,
+                "worker_url": worker_url,
+                "worker_id": self._worker_pool.worker_id_for_url(worker_url) if self._worker_pool else "",
+                "run_id_prefix": run_id,
+                "current_run_id": run_id,
+                "status": "running",
+                "restart_count": 0,
+            })
+        placement = {
+            "placement_group_id": placement_group_id,
+            "pipeline_name": pipeline_name,
+            "slots": slots,
+            "target_count": "all",
+            "started_at": datetime.now(UTC),
+            "status": result.status,
+        }
+        self._broadcast_placements[placement_group_id] = placement
+        self._active_placement_group[pipeline_name] = placement_group_id
+        self._sync_stream_run_ids_from_slots(pipeline_name, slots)
+        if self._db is not None:
+            self._db.save_broadcast_placement(
+                placement_group_id=placement_group_id,
+                pipeline_name=pipeline_name,
+                slots=slots,
+                target_count="all",
+                status=result.status,
+                started_at=placement["started_at"],
+            )
+
+    def _sync_stream_run_ids_from_slots(self, pipeline_name: str, slots: list[dict]) -> None:
+        run_ids = [
+            str(slot["current_run_id"])
+            for slot in slots
+            if slot.get("current_run_id")
+        ]
+        if run_ids:
+            self._stream_run_ids[pipeline_name] = run_ids
+        else:
+            self._stream_run_ids.pop(pipeline_name, None)
+
+    def _update_broadcast_placement_status(self, placement_group_id: str, status: str) -> None:
+        placement = self._broadcast_placements.get(placement_group_id)
+        if placement is None:
+            return
+        placement["status"] = status
+        pipeline_name = placement["pipeline_name"]
+        if self.manager.exists(pipeline_name):
+            self.manager.set_status(pipeline_name, status)
+        if self._db is not None:
+            self._db.update_broadcast_placement_status(
+                placement_group_id,
+                status,
+                slots=placement["slots"],
+            )
+
+    def get_active_broadcast_placements(self) -> list[dict]:
+        return list(self._broadcast_placements.values())
+
+    def on_pipeline_stats(self, payload) -> None:
+        placement_group_id = self._active_placement_group.get(payload.pipeline_name)
+        if placement_group_id is None:
+            return
+        placement = self._broadcast_placements.get(placement_group_id)
+        if placement is None or placement.get("status") != "reconciling":
+            return
+
+        changed = False
+        for slot in placement["slots"]:
+            run_id_prefix = str(slot.get("run_id_prefix", ""))
+            if payload.run_id != slot.get("current_run_id") and not payload.run_id.startswith(run_id_prefix):
+                continue
+            if slot.get("current_run_id") != payload.run_id:
+                slot["current_run_id"] = payload.run_id
+                if self._db is not None:
+                    self._db.update_slot_run_id(
+                        placement_group_id,
+                        int(slot["worker_index"]),
+                        payload.run_id,
+                        status="running",
+                        restart_count=int(slot.get("restart_count", 0)),
+                    )
+            if slot.get("status") != "running":
+                slot["status"] = "running"
+                changed = True
+
+        self._sync_stream_run_ids_from_slots(payload.pipeline_name, placement["slots"])
+        if all(slot.get("status") == "running" for slot in placement["slots"]):
+            self._update_broadcast_placement_status(placement_group_id, "running")
+        elif changed and self._db is not None:
+            self._db.update_broadcast_placement_status(
+                placement_group_id,
+                placement["status"],
+                slots=placement["slots"],
+            )
+
+    def redispatch_broadcast_slot(self, placement_group_id: str, worker_index: int) -> bool:
+        placement = self._broadcast_placements.get(placement_group_id)
+        if placement is None or self._worker_pool is None:
+            return False
+        slot = next(
+            (s for s in placement["slots"] if int(s.get("worker_index", -1)) == worker_index),
+            None,
+        )
+        if slot is None or not self.manager.exists(placement["pipeline_name"]):
+            return False
+        state = self.manager.get(placement["pipeline_name"])
+        restart_count = int(slot.get("restart_count", 0)) + 1
+        new_run_id = f"{slot['run_id_prefix']}-r{restart_count}"
+        callback_url = (
+            f"{self._manager_url}/api/internal/run-complete"
+            if self._manager_url else ""
+        )
+        if not self._worker_pool.dispatch_to_worker(
+            worker_url=slot["worker_url"],
+            run_id=new_run_id,
+            pipeline_name=placement["pipeline_name"],
+            yaml_text=state.yaml_text,
+            schedule_type="stream",
+            callback_url=callback_url,
+        ):
+            return False
+
+        slot["current_run_id"] = new_run_id
+        slot["status"] = "running"
+        slot["restart_count"] = restart_count
+        self._sync_stream_run_ids_from_slots(placement["pipeline_name"], placement["slots"])
+        if self._db is not None:
+            self._db.update_slot_run_id(
+                placement_group_id,
+                worker_index,
+                new_run_id,
+                status="running",
+                restart_count=restart_count,
+            )
+        return True

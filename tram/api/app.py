@@ -40,6 +40,7 @@ async def lifespan(app: FastAPI):
     config: AppConfig = app.state.config
     controller: PipelineController = app.state.controller
     worker_pool = getattr(app.state, "worker_pool", None)
+    reconciler = getattr(app.state, "reconciler", None)
 
     # ── Startup ────────────────────────────────────────────────────────────
     logger.info("TRAM daemon starting",
@@ -83,6 +84,9 @@ async def lifespan(app: FastAPI):
     # Start controller — loads pipelines from DB, schedules them
     controller.start()
 
+    if reconciler is not None:
+        reconciler.start()
+
     watcher = None
     if config.watch_pipelines:
         try:
@@ -105,6 +109,9 @@ async def lifespan(app: FastAPI):
 
     if watcher is not None:
         watcher.stop()
+
+    if reconciler is not None:
+        reconciler.stop()
 
     controller.stop(timeout=config.shutdown_timeout)
 
@@ -166,10 +173,18 @@ def create_app(config: AppConfig | None = None) -> FastAPI:
         file_tracker = ProcessedFileTracker(db=db)
 
     # Build WorkerPool when running as manager (TRAM_MODE=manager)
+    from tram.agent.stats_store import StatsStore
+    stats_store = StatsStore(interval=config.stats_interval)
+
     worker_pool = None
+    reconciler = None
     if config.tram_mode == "manager":
         from tram.agent.worker_pool import WorkerPool
-        worker_pool = WorkerPool.from_env(manager_url=config.manager_url)
+        worker_pool = WorkerPool.from_env(
+            manager_url=config.manager_url,
+            stats_store=stats_store,
+            stats_interval=config.stats_interval,
+        )
         if worker_pool is None:
             logger.warning(
                 "TRAM_MODE=manager but no workers configured — "
@@ -182,9 +197,19 @@ def create_app(config: AppConfig | None = None) -> FastAPI:
         node_id=config.node_id,
         worker_pool=worker_pool,
         manager_url=config.manager_url,
+        stats_store=stats_store,
     )
     # Keep manager reference on controller's alert evaluator
     controller.manager._alert_evaluator = alert_evaluator
+    if config.tram_mode == "manager" and worker_pool is not None and db is not None:
+        from tram.agent.reconciler import PlacementReconciler
+        reconciler = PlacementReconciler(
+            controller=controller,
+            worker_pool=worker_pool,
+            stats_store=stats_store,
+            db=db,
+            stats_interval=config.stats_interval,
+        )
     # Convenience alias — routers that still reference app.state.manager continue to work
     manager = controller.manager
 
@@ -203,6 +228,8 @@ def create_app(config: AppConfig | None = None) -> FastAPI:
     app.state.db = db
     app.state.alert_evaluator = alert_evaluator
     app.state.worker_pool = worker_pool
+    app.state.stats_store = stats_store
+    app.state.reconciler = reconciler
     from datetime import datetime
     app.state.started_at = datetime.now(UTC)
 

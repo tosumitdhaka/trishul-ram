@@ -18,6 +18,7 @@ from tram.core.exceptions import TramError
 from tram.registry.registry import get_serializer, get_sink, get_source, get_transform
 
 if TYPE_CHECKING:
+    from tram.agent.metrics import PipelineStats
     from tram.models.pipeline import PipelineConfig
     from tram.persistence.file_tracker import ProcessedFileTracker
 
@@ -42,6 +43,20 @@ def _make_evaluator():
 
 
 _EvalCls, _EVAL_FUNCS = _make_evaluator()
+
+
+def _payload_size_bytes(payload) -> int:
+    """Best-effort byte size for raw source payloads and serialized sink payloads."""
+    if payload is None:
+        return 0
+    if isinstance(payload, (bytes, bytearray, memoryview)):
+        return len(payload)
+    if isinstance(payload, str):
+        return len(payload.encode("utf-8"))
+    try:
+        return len(json.dumps(payload, default=str).encode("utf-8"))
+    except Exception:
+        return len(str(payload).encode("utf-8"))
 
 
 def _filter_by_condition(records: list[dict], condition: str) -> list[dict]:
@@ -216,6 +231,7 @@ class PipelineExecutor:
         dlq_sink=None,
         parallel_sinks: bool = False,
         sink_cb_keys: list[str] | None = None,
+        stats: PipelineStats | None = None,
     ) -> bool:
         """Process one (raw, meta) chunk. Returns True on success.
 
@@ -238,6 +254,11 @@ class PipelineExecutor:
         t_start = time.monotonic()
 
         try:
+            raw_size = _payload_size_bytes(raw)
+            ctx.inc_bytes_in(raw_size)
+            if stats is not None:
+                stats.increment(bytes_in=raw_size)
+
             # ── Parse ───────────────────────────────────────────────────────────
             try:
                 records = serializer_in.parse(raw)
@@ -249,10 +270,17 @@ class PipelineExecutor:
                     )
                     ctx.record_dlq()
                     DLQ_RECORDS.labels(pipeline=ctx.pipeline_name).inc()
+                if stats is not None:
+                    stats.increment(
+                        dlq=1 if dlq_sink is not None else 0,
+                        errors=[f"Parse error: {exc}"],
+                    )
                 raise TramError(f"Parse error: {exc}") from exc
 
             ctx.inc_records_in(len(records))
             RECORDS_IN.labels(pipeline=ctx.pipeline_name).inc(len(records))
+            if stats is not None:
+                stats.increment(records_in=len(records))
 
             # ── Per-record global transforms ─────────────────────────────────
             surviving_records = []
@@ -272,6 +300,12 @@ class PipelineExecutor:
                         ctx.record_dlq()
                         DLQ_RECORDS.labels(pipeline=ctx.pipeline_name).inc()
                     ctx.record_error(str(exc))
+                    if stats is not None:
+                        stats.increment(
+                            skipped=1,
+                            dlq=1 if dlq_sink is not None else 0,
+                            errors=[str(exc)],
+                        )
             records = surviving_records
 
             # ── Multi-sink routing with per-sink transforms ───────────────────
@@ -316,6 +350,12 @@ class PipelineExecutor:
                             ctx.record_dlq()
                             DLQ_RECORDS.labels(pipeline=ctx.pipeline_name).inc()
                         ctx.record_error(str(exc))
+                        if stats is not None:
+                            stats.increment(
+                                skipped=1,
+                                dlq=1 if dlq_sink is not None else 0,
+                                errors=[str(exc)],
+                            )
                         sink_transform_failed = True
                         break
 
@@ -344,6 +384,8 @@ class PipelineExecutor:
                             extra={"pipeline": ctx.pipeline_name},
                         )
                         ctx.record_error("Circuit breaker open")
+                        if stats is not None:
+                            stats.increment(skipped=1, errors=["Circuit breaker open"])
                         return False
 
                 # Per-sink retry loop
@@ -354,6 +396,13 @@ class PipelineExecutor:
                 for attempt in range(retry_count + 1):
                     try:
                         sink_instance.write(serialized, meta)
+                        # Count total sink egress, not logical record size. If the same
+                        # batch fans out to multiple sinks, bytes_out includes each
+                        # successful sink write because load scoring cares about total I/O.
+                        serialized_size = _payload_size_bytes(serialized)
+                        ctx.inc_bytes_out(serialized_size)
+                        if stats is not None:
+                            stats.increment(bytes_out=serialized_size)
                         # Reset circuit breaker on success
                         if cb_threshold > 0:
                             with self._cb_lock:
@@ -402,6 +451,12 @@ class PipelineExecutor:
                 if on_error == "abort":
                     raise TramError(f"Sink write error: {exc}") from exc
                 ctx.record_error(str(exc))
+                if stats is not None:
+                    stats.increment(
+                        skipped=1,
+                        dlq=1 if dlq_sink is not None else 0,
+                        errors=[str(exc)],
+                    )
                 return False
 
             if parallel_sinks and len(sinks) > 1:
@@ -422,9 +477,13 @@ class PipelineExecutor:
             if wrote_any_event.is_set():
                 ctx.inc_records_out(len(records))
                 RECORDS_OUT.labels(pipeline=ctx.pipeline_name).inc(len(records))
+                if stats is not None:
+                    stats.increment(records_out=len(records))
             else:
                 ctx.inc_records_skipped(len(records))
                 RECORDS_SKIP.labels(pipeline=ctx.pipeline_name).inc(len(records))
+                if stats is not None:
+                    stats.increment(skipped=len(records))
                 skip_msg = (
                     "Records skipped — no sink wrote successfully "
                     "(condition filtered all records or every sink failed/circuit-open)"
@@ -447,11 +506,18 @@ class PipelineExecutor:
             if on_error == "abort":
                 raise
             ctx.record_error(msg)
+            if stats is not None:
+                stats.increment(skipped=1, errors=[msg])
             return False
 
     # ── Batch run ────────────────────────────────────────────────────────────
 
-    def batch_run(self, config: PipelineConfig, run_id: str | None = None) -> RunResult:
+    def batch_run(
+        self,
+        config: PipelineConfig,
+        run_id: str | None = None,
+        stats: PipelineStats | None = None,
+    ) -> RunResult:
         """Execute one discrete batch run."""
         import contextlib
         try:
@@ -462,9 +528,14 @@ class PipelineExecutor:
             span_ctx = contextlib.nullcontext()
 
         with span_ctx:
-            return self._batch_run_inner(config, run_id=run_id)
+            return self._batch_run_inner(config, run_id=run_id, stats=stats)
 
-    def _batch_run_inner(self, config: PipelineConfig, run_id: str | None = None) -> RunResult:
+    def _batch_run_inner(
+        self,
+        config: PipelineConfig,
+        run_id: str | None = None,
+        stats: PipelineStats | None = None,
+    ) -> RunResult:
         kw = {"run_id": run_id} if run_id else {}
         ctx = PipelineRunContext(pipeline_name=config.name, **kw)
         logger.info(
@@ -488,7 +559,7 @@ class PipelineExecutor:
             try:
                 self._run_batch_chunks(
                     config, source, sinks, serializer_in, serializer_out,
-                    transforms, dlq_sink, ctx, sink_cb_keys=sink_cb_keys,
+                    transforms, dlq_sink, ctx, sink_cb_keys=sink_cb_keys, stats=stats,
                 )
 
                 result = RunResult.from_context(ctx, RunStatus.SUCCESS)
@@ -549,6 +620,7 @@ class PipelineExecutor:
         dlq_sink,
         ctx: PipelineRunContext,
         sink_cb_keys: list[str] | None = None,
+        stats: PipelineStats | None = None,
     ) -> None:
         """Inner loop: read source chunks and process with optional thread pool."""
         batch_size = config.batch_size
@@ -566,7 +638,7 @@ class PipelineExecutor:
                         self._process_chunk,
                         raw, meta, serializer_in, transforms,
                         serializer_out, sinks, ctx, on_error,
-                        rate_limit_rps, dlq_sink, parallel_sinks, sink_cb_keys,
+                        rate_limit_rps, dlq_sink, parallel_sinks, sink_cb_keys, stats,
                     )
                     futures.append(fut)
                     # batch_size is checked after ctx.records_in is updated by workers
@@ -588,13 +660,15 @@ class PipelineExecutor:
                                 remaining.cancel()
                             raise
                         ctx.record_error(str(exc))
+                        if stats is not None:
+                            stats.increment(skipped=1, errors=[str(exc)])
         else:
             # Single-threaded
             for raw, meta in source.read():
                 self._process_chunk(
                     raw, meta, serializer_in, transforms,
                     serializer_out, sinks, ctx, on_error,
-                    rate_limit_rps, dlq_sink, parallel_sinks, sink_cb_keys,
+                    rate_limit_rps, dlq_sink, parallel_sinks, sink_cb_keys, stats,
                 )
                 if batch_size and ctx.records_in >= batch_size:
                     logger.info(
@@ -605,7 +679,12 @@ class PipelineExecutor:
 
     # ── Stream run ────────────────────────────────────────────────────────────
 
-    def stream_run(self, config: PipelineConfig, stop_event: threading.Event) -> None:
+    def stream_run(
+        self,
+        config: PipelineConfig,
+        stop_event: threading.Event,
+        stats: PipelineStats | None = None,
+    ) -> None:
         """Run indefinitely until stop_event is set."""
         logger.info("Stream run started", extra={"pipeline": config.name})
 
@@ -636,7 +715,7 @@ class PipelineExecutor:
             if config.thread_workers > 1:
                 self._stream_run_threaded(
                     config, source, sinks, serializer_in, serializer_out,
-                    transforms, dlq_sink, ctx, stop_event,
+                    transforms, dlq_sink, ctx, stop_event, stats,
                     sink_cb_keys=sink_cb_keys,
                 )
             else:
@@ -650,6 +729,7 @@ class PipelineExecutor:
                         config.rate_limit_rps, dlq_sink,
                         getattr(config, "parallel_sinks", False),
                         sink_cb_keys,
+                        stats,
                     )
         except Exception as exc:
             logger.error(
@@ -680,6 +760,7 @@ class PipelineExecutor:
         dlq_sink,
         ctx: PipelineRunContext,
         stop_event: threading.Event,
+        stats: PipelineStats | None = None,
         sink_cb_keys: list[str] | None = None,
     ) -> None:
         """Stream mode with N worker threads. Producer reads; workers process."""
@@ -700,6 +781,7 @@ class PipelineExecutor:
                         config.rate_limit_rps, dlq_sink,
                         getattr(config, "parallel_sinks", False),
                         sink_cb_keys,
+                        stats,
                     )
                 except Exception as exc:
                     logger.error(

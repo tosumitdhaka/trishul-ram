@@ -40,3 +40,27 @@ def test_shutdown_timeout_from_env(monkeypatch):
     monkeypatch.setenv("TRAM_SHUTDOWN_TIMEOUT_SECONDS", "60")
     config = cfg_mod.AppConfig.from_env()
     assert config.shutdown_timeout == 60
+
+
+def test_stats_interval_default(monkeypatch):
+    monkeypatch.delenv("TRAM_STATS_INTERVAL", raising=False)
+    config = cfg_mod.AppConfig.from_env()
+    assert config.stats_interval == 30
+
+
+def test_stats_interval_from_env(monkeypatch):
+    monkeypatch.setenv("TRAM_STATS_INTERVAL", "15")
+    config = cfg_mod.AppConfig.from_env()
+    assert config.stats_interval == 15
+
+
+def test_worker_ingress_port_default(monkeypatch):
+    monkeypatch.delenv("TRAM_WORKER_INGRESS_PORT", raising=False)
+    config = cfg_mod.AppConfig.from_env()
+    assert config.worker_ingress_port == 8767
+
+
+def test_worker_ingress_port_from_env(monkeypatch):
+    monkeypatch.setenv("TRAM_WORKER_INGRESS_PORT", "9001")
+    config = cfg_mod.AppConfig.from_env()
+    assert config.worker_ingress_port == 9001

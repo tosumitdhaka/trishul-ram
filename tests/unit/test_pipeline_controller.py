@@ -14,6 +14,7 @@ from __future__ import annotations
 import threading
 import time
 import uuid
+from datetime import UTC, datetime
 from unittest.mock import MagicMock
 
 import pytest
@@ -68,6 +69,20 @@ source:
   brokers:
     - localhost:9092
   group_id: test-group
+serializer_in:
+  type: json
+sinks:
+  - type: local
+    path: /tmp/out
+"""
+
+_WEBHOOK_STREAM_YAML = """\
+name: my-webhook-stream
+schedule:
+  type: stream
+source:
+  type: webhook
+  path: /ingest
 serializer_in:
   type: json
 sinks:
@@ -314,7 +329,7 @@ class TestLocalStreamExecution:
 
         done = threading.Event()
 
-        def _fake_stream_run(cfg, stop_event):
+        def _fake_stream_run(cfg, stop_event, stats=None):
             done.wait(timeout=2)
 
         ctrl.executor = MagicMock()
@@ -337,7 +352,7 @@ class TestLocalStreamExecution:
         received_stop = threading.Event()
         test_done = threading.Event()
 
-        def _fake_stream_run(cfg, stop_event):
+        def _fake_stream_run(cfg, stop_event, stats=None):
             stop_event.wait(timeout=5)
             received_stop.set()
             test_done.wait(timeout=2)
@@ -360,7 +375,7 @@ class TestLocalStreamExecution:
         ctrl.manager.register(config, yaml_text=_STREAM_YAML)
 
         # First thread exits quickly when its stop_event fires
-        def _fake_stream_run(cfg, stop_event):
+        def _fake_stream_run(cfg, stop_event, stats=None):
             stop_event.wait(timeout=5)
 
         ctrl.executor = MagicMock()
@@ -418,6 +433,7 @@ class TestLifecycle:
 
     def test_stop_pipeline_removes_scheduler_job(self):
         ctrl = _started_controller()
+        ctrl._scheduler.pause()
         config = load_pipeline_from_yaml(_INTERVAL_YAML)
         ctrl.register(config, yaml_text=_INTERVAL_YAML)
 
@@ -430,6 +446,7 @@ class TestLifecycle:
 
     def test_start_pipeline_reschedules_stopped_pipeline(self):
         ctrl = _started_controller()
+        ctrl._scheduler.pause()
         config = load_pipeline_from_yaml(_INTERVAL_YAML)
         ctrl.register(config, yaml_text=_INTERVAL_YAML)
         ctrl.stop_pipeline("my-interval")
@@ -702,6 +719,13 @@ class TestWorkerDispatch:
     def _worker_pool(self, dispatch_return="http://worker-0:8766"):
         wp = MagicMock()
         wp.dispatch.return_value = dispatch_return
+        wp.multi_dispatch.return_value = MagicMock(
+            accepted=["http://worker-0:8766"],
+            run_ids=["pg1-w0"],
+            rejected=[],
+            status="running",
+            placement_group_id="pg1",
+        )
         return wp
 
     def test_run_batch_dispatches_to_worker(self):
@@ -709,6 +733,7 @@ class TestWorkerDispatch:
         ctrl = _started_controller(worker_pool=wp, manager_url="http://manager:8765")
         config = load_pipeline_from_yaml(_INTERVAL_YAML)
         ctrl.register(config, yaml_text=_INTERVAL_YAML)
+        wp.dispatch.reset_mock()
         ctrl.manager.set_status("my-interval", "scheduled")
 
         ctrl._run_batch("my-interval", run_id="r1")
@@ -757,6 +782,143 @@ class TestWorkerDispatch:
         assert ctrl.manager.get("my-stream").status == "running"
         ctrl.stop()
 
+    def test_start_stream_http_push_dispatches_to_all_workers(self):
+        wp = self._worker_pool()
+        wp.multi_dispatch.return_value = MagicMock(
+            accepted=["http://worker-0:8766", "http://worker-1:8766"],
+            run_ids=["pg1-w0", "pg1-w1"],
+            rejected=[],
+            status="running",
+            placement_group_id="pg1",
+        )
+        ctrl = _started_controller(worker_pool=wp)
+        config = load_pipeline_from_yaml(_WEBHOOK_STREAM_YAML)
+        ctrl.register(config, yaml_text=_WEBHOOK_STREAM_YAML)
+
+        ctrl._start_stream(config)
+
+        wp.multi_dispatch.assert_called_once()
+        assert wp.dispatch.call_count == 0
+        call_kwargs = wp.multi_dispatch.call_args.kwargs
+        assert call_kwargs["workers_cfg"].count == "all"
+        assert ctrl._stream_run_ids["my-webhook-stream"] == ["pg1-w0", "pg1-w1"]
+        assert ctrl.manager.get("my-webhook-stream").status == "running"
+        ctrl.stop()
+
+    def test_start_stream_http_push_preserves_degraded_status(self):
+        wp = self._worker_pool()
+        wp.multi_dispatch.return_value = MagicMock(
+            accepted=["http://worker-0:8766"],
+            run_ids=["pg1-w0"],
+            rejected=["http://worker-1:8766"],
+            status="degraded",
+            placement_group_id="pg1",
+        )
+        ctrl = _started_controller(worker_pool=wp)
+        config = load_pipeline_from_yaml(_WEBHOOK_STREAM_YAML)
+        ctrl.register(config, yaml_text=_WEBHOOK_STREAM_YAML)
+
+        ctrl._start_stream(config)
+
+        assert ctrl.manager.get("my-webhook-stream").status == "degraded"
+        ctrl.stop()
+
+    def test_start_stream_http_push_persists_broadcast_placement(self, tmp_path):
+        from tram.persistence.db import TramDB
+
+        wp = self._worker_pool()
+        wp.worker_id_for_url.side_effect = lambda url: "w0" if url.endswith("0:8766") else "w1"
+        wp.multi_dispatch.return_value = MagicMock(
+            accepted=["http://worker-0:8766", "http://worker-1:8766"],
+            run_ids=["pg1-w0", "pg1-w1"],
+            rejected=[],
+            status="running",
+            placement_group_id="pg1",
+        )
+        db = TramDB(url=f"sqlite:///{tmp_path}/controller.db")
+        ctrl = _started_controller(worker_pool=wp, db=db)
+        config = load_pipeline_from_yaml(_WEBHOOK_STREAM_YAML)
+        ctrl.register(config, yaml_text=_WEBHOOK_STREAM_YAML)
+
+        ctrl._start_stream(config)
+
+        placements = db.get_active_broadcast_placements()
+        assert len(placements) == 1
+        assert placements[0]["pipeline_name"] == "my-webhook-stream"
+        assert [slot["current_run_id"] for slot in placements[0]["slots"]] == ["pg1-w0", "pg1-w1"]
+        ctrl.stop()
+        db.close()
+
+    def test_boot_load_rehydrates_broadcast_placement_as_reconciling(self, tmp_path):
+        from tram.persistence.db import TramDB
+
+        db = TramDB(url=f"sqlite:///{tmp_path}/boot.db")
+        db.save_pipeline("my-webhook-stream", _WEBHOOK_STREAM_YAML)
+        db.save_broadcast_placement(
+            placement_group_id="pg1",
+            pipeline_name="my-webhook-stream",
+            slots=[{
+                "worker_index": 0,
+                "worker_url": "http://worker-0:8766",
+                "worker_id": "w0",
+                "run_id_prefix": "pg1-w0",
+                "current_run_id": "pg1-w0",
+                "status": "running",
+            }],
+            target_count="all",
+            status="running",
+        )
+
+        wp = self._worker_pool()
+        ctrl = _started_controller(worker_pool=wp, db=db)
+
+        assert ctrl.manager.get("my-webhook-stream").status == "reconciling"
+        assert ctrl._stream_run_ids["my-webhook-stream"] == ["pg1-w0"]
+        placements = db.get_active_broadcast_placements()
+        assert placements[0]["status"] == "reconciling"
+        wp.multi_dispatch.assert_not_called()
+        ctrl.stop()
+        db.close()
+
+    def test_pipeline_stats_reconciles_rehydrated_slot_by_prefix(self, tmp_path):
+        from tram.api.routers.internal import PipelineStatsPayload
+        from tram.persistence.db import TramDB
+
+        db = TramDB(url=f"sqlite:///{tmp_path}/reconcile.db")
+        db.save_pipeline("my-webhook-stream", _WEBHOOK_STREAM_YAML)
+        db.save_broadcast_placement(
+            placement_group_id="pg1",
+            pipeline_name="my-webhook-stream",
+            slots=[{
+                "worker_index": 0,
+                "worker_url": "http://worker-0:8766",
+                "worker_id": "w0",
+                "run_id_prefix": "pg1-w0",
+                "current_run_id": "pg1-w0",
+                "status": "running",
+            }],
+            target_count="all",
+            status="running",
+        )
+
+        ctrl = _started_controller(worker_pool=self._worker_pool(), db=db)
+        payload = PipelineStatsPayload(
+            worker_id="w0",
+            pipeline_name="my-webhook-stream",
+            run_id="pg1-w0-r1",
+            schedule_type="stream",
+            uptime_seconds=5.0,
+            timestamp=datetime.now(UTC),
+        )
+
+        ctrl.on_pipeline_stats(payload)
+
+        assert ctrl.manager.get("my-webhook-stream").status == "running"
+        placements = db.get_active_broadcast_placements()
+        assert placements[0]["slots"][0]["current_run_id"] == "pg1-w0-r1"
+        ctrl.stop()
+        db.close()
+
     def test_start_stream_no_healthy_workers_sets_error(self):
         wp = self._worker_pool(dispatch_return=None)
         ctrl = _started_controller(worker_pool=wp)
@@ -775,7 +937,7 @@ class TestWorkerDispatch:
         ctrl.register(config, yaml_text=_STREAM_YAML)
 
         ctrl._start_stream(config)
-        ctrl._stream_run_ids["my-stream"] = "existing-run-id"
+        ctrl._stream_run_ids["my-stream"] = ["existing-run-id"]
         ctrl._start_stream(config)
         assert wp.dispatch.call_count == 1  # only called once
         ctrl.stop()
@@ -785,10 +947,63 @@ class TestWorkerDispatch:
         ctrl = _started_controller(worker_pool=wp)
         config = load_pipeline_from_yaml(_STREAM_YAML)
         ctrl.register(config, yaml_text=_STREAM_YAML)
-        ctrl._stream_run_ids["my-stream"] = "run-abc"
+        ctrl._stream_run_ids["my-stream"] = ["run-abc"]
 
         ctrl._stop_stream("my-stream")
         wp.stop_run.assert_called_once_with("run-abc", "my-stream")
+        ctrl.stop()
+
+    def test_worker_completion_removes_dispatched_stream_run_id(self):
+        wp = self._worker_pool()
+        ctrl = _started_controller(worker_pool=wp)
+        config = load_pipeline_from_yaml(_STREAM_YAML)
+        ctrl.register(config, yaml_text=_STREAM_YAML)
+        ctrl._stream_run_ids["my-stream"] = ["run-abc"]
+
+        ctrl.on_worker_run_complete(
+            run_id="run-abc",
+            pipeline_name="my-stream",
+            status="success",
+            records_in=1,
+            records_out=1,
+        )
+
+        assert "my-stream" not in ctrl._stream_run_ids
+        ctrl.stop()
+
+    def test_worker_completion_with_remaining_stream_slots_skips_state_transition(self):
+        from tram.agent.stats_store import StatsStore
+        from tram.api.routers.internal import PipelineStatsPayload
+
+        wp = self._worker_pool()
+        ctrl = _started_controller(worker_pool=wp)
+        ctrl._stats_store = StatsStore(interval=30)
+        config = load_pipeline_from_yaml(_WEBHOOK_STREAM_YAML)
+        ctrl.register(config, yaml_text=_WEBHOOK_STREAM_YAML)
+        ctrl._stream_run_ids["my-webhook-stream"] = ["run-a", "run-b"]
+        ctrl.manager.set_status("my-webhook-stream", "running")
+        ctrl.manager.record_run = MagicMock()
+        ctrl._stats_store.update(PipelineStatsPayload(
+            worker_id="w0",
+            pipeline_name="my-webhook-stream",
+            run_id="run-a",
+            schedule_type="stream",
+            uptime_seconds=5.0,
+            timestamp=datetime.now(UTC),
+        ))
+
+        ctrl.on_worker_run_complete(
+            run_id="run-a",
+            pipeline_name="my-webhook-stream",
+            status="success",
+            records_in=1,
+            records_out=1,
+        )
+
+        assert ctrl._stream_run_ids["my-webhook-stream"] == ["run-b"]
+        ctrl.manager.record_run.assert_not_called()
+        assert ctrl.manager.get("my-webhook-stream").status == "running"
+        assert ctrl._stats_store.get_by_run_id("run-a") is not None
         ctrl.stop()
 
 
@@ -859,6 +1074,7 @@ class TestUpdateDeleteRestart:
         ctrl = _started_controller()
         config = load_pipeline_from_yaml(_INTERVAL_YAML)
         ctrl.register(config, yaml_text=_INTERVAL_YAML)
+        ctrl._scheduler.pause()
         ctrl.manager.set_status("my-interval", "scheduled")
 
         ctrl.restart_pipeline("my-interval")
@@ -870,6 +1086,7 @@ class TestUpdateDeleteRestart:
         ctrl = _started_controller()
         config = load_pipeline_from_yaml(_INTERVAL_YAML)
         ctrl.register(config, yaml_text=_INTERVAL_YAML)
+        ctrl._scheduler.pause()
         ctrl.stop_pipeline("my-interval")
         assert ctrl.manager.get("my-interval").status == "stopped"
 

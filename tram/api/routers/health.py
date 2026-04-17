@@ -8,6 +8,7 @@ from datetime import UTC, datetime
 from fastapi import APIRouter, Request
 
 from tram import __version__
+from tram.api.routers._stream_views import build_cluster_streams
 from tram.registry.registry import list_plugins
 
 router = APIRouter()
@@ -114,4 +115,24 @@ async def cluster_nodes(request: Request) -> dict:
     return {
         "mode": mode,
         "workers": worker_pool.status(),
+    }
+
+
+@router.get("/api/cluster/streams")
+async def cluster_streams(request: Request) -> dict:
+    """Active stream placement and throughput view."""
+    db = getattr(request.app.state, "db", None)
+    controller = request.app.state.controller
+    stats_store = getattr(request.app.state, "stats_store", None)
+    config = getattr(request.app.state, "config", None)
+    mode = getattr(config, "tram_mode", "standalone") if config else "standalone"
+
+    if db is not None:
+        placements = db.get_active_broadcast_placements()
+    else:
+        placements = controller.get_active_broadcast_placements()
+
+    return {
+        "mode": mode,
+        "streams": build_cluster_streams(placements, stats_store),
     }

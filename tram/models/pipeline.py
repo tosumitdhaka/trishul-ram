@@ -1044,6 +1044,29 @@ class AlertRuleConfig(BaseModel):
 # ── Pipeline (top-level) ───────────────────────────────────────────────────
 
 
+class WorkersConfig(BaseModel):
+    count: int | Literal["all"] | None = None
+    worker_ids: list[str] | None = Field(
+        default=None,
+        alias="list",
+        validation_alias=AliasChoices("list", "worker_ids"),
+        serialization_alias="list",
+    )
+
+    @model_validator(mode="after")
+    def validate_workers(self) -> WorkersConfig:
+        if self.count is not None and self.worker_ids is not None:
+            raise ValueError("workers.count and workers.list are mutually exclusive")
+        if isinstance(self.count, int) and self.count < 1:
+            raise ValueError("workers.count must be >= 1")
+        if self.worker_ids is not None:
+            if not self.worker_ids:
+                raise ValueError("workers.list must not be empty")
+            if len(self.worker_ids) != len(set(self.worker_ids)):
+                raise ValueError("workers.list must not contain duplicate worker IDs")
+        return self
+
+
 class PipelineConfig(BaseModel):
     version: str = "1"
 
@@ -1072,6 +1095,7 @@ class PipelineConfig(BaseModel):
     # Parallelism
     thread_workers: int = 1   # intra-node worker threads per pipeline run
     parallel_sinks: bool = False   # fan-out sink writes concurrently
+    workers: WorkersConfig | None = None
 
     # Batch size cap (max records to process per batch run; None = unlimited)
     batch_size: int | None = None
@@ -1088,6 +1112,15 @@ class PipelineConfig(BaseModel):
     def check_on_error_dlq(self) -> PipelineConfig:
         if self.on_error == "dlq" and self.dlq is None:
             raise ValueError("on_error='dlq' requires a 'dlq' sink to be configured")
+        return self
+
+    @model_validator(mode="after")
+    def apply_workers_default(self) -> PipelineConfig:
+        if self.workers is None:
+            if self.source.type in ("webhook", "prometheus_rw"):
+                self.workers = WorkersConfig(count="all")
+            else:
+                self.workers = WorkersConfig(count=1)
         return self
 
     @field_validator("name")
