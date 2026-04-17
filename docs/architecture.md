@@ -50,7 +50,7 @@ Every record is a plain Python `dict`. Global transforms apply per-record so a s
 │  │  └────────────────────┘  │   │  /api/pipelines/{name}/rollback          │ │
 │  │  ┌────────────────────┐  │   │  /api/cluster/nodes                      │ │
 │  │  │  ThreadPool        │  │   │  /webhooks/{path}   /metrics             │ │
-│  │  │  (stream)          │  │   └──────────────────────────────────────────┘ │
+│  │  │  (batch runs)      │  │   └──────────────────────────────────────────┘ │
 │  │  └────────────────────┘  │                                               │
 │  └──────────────────────────┘                                               │
 │               │                                                              │
@@ -94,7 +94,7 @@ class KafkaSource(BaseSource): ...
 
 The three `__init__.py` files in `connectors/`, `transforms/`, and `serializers/` import all submodules, firing decorators during package import at startup.
 
-### Plugin Registry Keys (v1.2.1)
+### Plugin Registry Keys (v1.3.0)
 
 | Category | Count | Keys |
 |----------|-------|------|
@@ -206,7 +206,9 @@ When configured, failed records are written as JSON envelopes:
 | `failed` | bool | Shorthand for `status == "failed"` |
 | `duration_seconds` | float | Wall time of the run |
 
-Cooldown is persisted in `alert_state` SQLite table so it survives daemon restarts.
+Cooldown is only started after a confirmed successful delivery: `_fire_webhook()` and `_fire_email()` return `True`/`False`, and `_set_cooldown()` is called only on `True`. An HTTP 5xx, connection error, or SMTP failure does not silence the rule.
+
+Cooldown state is persisted in `alert_state` SQLite table so it survives daemon restarts.
 
 ## Cluster Mode / Manager + Worker (v1.2.0)
 
@@ -216,27 +218,35 @@ TRAM v1.2.0 replaces the previous shared-DB cluster model with a dedicated **man
 
 | `TRAM_MODE` | Role | Runs |
 |-------------|------|------|
-| `standalone` (default) | All-in-one: scheduler + DB + UI + executor | Single pod |
-| `manager` | Scheduler + DB + UI; dispatches runs to workers | Deployment (1 replica) |
+| `standalone` (default) | All-in-one: scheduler + DB + UI + executor | StatefulSet (1 replica) |
+| `manager` | Scheduler + DB + UI; dispatches runs to workers | StatefulSet (1 replica) |
 | `worker` | Stateless executor; no DB, no scheduler, no UI | StatefulSet (N replicas) |
 
 ### Architecture diagram
 
 ```
 ┌───────────────────────────────────────────────────────────────────────┐
-│  Manager pod (Deployment, 1 replica)                                   │
+│  Manager pod (StatefulSet, 1 replica)                                  │
 │                                                                        │
 │  PipelineController ──── APScheduler ──── PipelineManager             │
 │         │                                      │                       │
-│         │  POST /agent/run                   TramDB (SQLite, RWO PVC) │
+│         │  WorkerPool.dispatch()             TramDB (SQLite, RWO PVC) │
+│         │  WorkerPool.multi_dispatch()       broadcast_placements      │
 │         ▼                                                              │
 │  WorkerPool                                                            │
-│  ├── least_loaded() + round-robin tiebreaker                           │
-│  ├── _pipeline_worker: {pipeline → worker_url}                        │
+│  ├── least_loaded() + round-robin tiebreaker (batch/poll sources)      │
+│  ├── multi_dispatch(count:all) → broadcast all push-HTTP sources       │
 │  └── poll /agent/health every 10s → single summary log on change      │
+│                   │                                                    │
+│  PlacementReconciler (background thread)                               │
+│  ├── stale slot detection (age > 3 × TRAM_STATS_INTERVAL)             │
+│  └── re-dispatch + reconciling-window timeout                          │
 │                   │                                                    │
 │  FastAPI REST API + Web UI                                             │
 │  POST /api/internal/run-complete  ← worker callback                   │
+│  POST /api/internal/pipeline-stats ← worker stats                     │
+│  GET  /api/pipelines/{name}/placement                                  │
+│  GET  /api/cluster/streams                                             │
 └──────────────────────────┬────────────────────────────────────────────┘
                            │  HTTP dispatch
            ┌───────────────┼───────────────┐
@@ -244,6 +254,8 @@ TRAM v1.2.0 replaces the previous shared-DB cluster model with a dedicated **man
     ┌─────────────┐ ┌─────────────┐ ┌─────────────┐
     │  worker-0   │ │  worker-1   │ │  worker-2   │
     │  :8766      │ │  :8766      │ │  :8766      │
+    │  :8767      │ │  :8767      │ │  :8767      │
+    │ (ingress)   │ │ (ingress)   │ │ (ingress)   │
     │             │ │             │ │             │
     │ WorkerAgent │ │ WorkerAgent │ │ WorkerAgent │
     │ (FastAPI)   │ │ (FastAPI)   │ │ (FastAPI)   │
@@ -254,22 +266,33 @@ TRAM v1.2.0 replaces the previous shared-DB cluster model with a dedicated **man
     │             │ │             │ │             │
     │ PipelineExe │ │ PipelineExe │ │ PipelineExe │
     │ cutor       │ │ cutor       │ │ cutor       │
+    │ + stats     │ │ + stats     │ │ + stats     │
     └──────┬──────┘ └──────┬──────┘ └──────┬──────┘
            └───────────────┼───────────────┘
                            │ POST /api/internal/run-complete
+                           │ POST /api/internal/pipeline-stats
                            ▼
-                    Manager (callback)
+                    Manager (callbacks)
 ```
 
-### Run lifecycle
+### Run lifecycle — batch/poll
 
 1. APScheduler fires → `PipelineController._run_batch()`
 2. Manager calls `WorkerPool.dispatch()` → picks least-loaded worker (round-robin on ties)
 3. Worker receives `POST /agent/run` with YAML + run_id
 4. Worker syncs schemas/MIBs from manager (`GET /api/schemas`, `GET /api/mibs/{name}`)
-5. Worker executes `PipelineExecutor.batch_run()` in a background thread
-6. Worker POSTs `run-complete` to manager: `records_in/out/skipped`, `error`, `errors[]`
-7. Manager calls `on_worker_run_complete()` → saves to DB, updates pipeline state
+5. Worker executes `PipelineExecutor.batch_run()` in a background thread; tracks `bytes_in`/`bytes_out`
+6. Worker POSTs `run-complete` to manager: `records_in/out/skipped`, `bytes_in/bytes_out`, `error`, `errors[]`
+7. Manager calls `on_worker_run_complete()` → saves to DB (including byte counters), updates pipeline state
+
+### Run lifecycle — broadcast push-HTTP streams (`webhook`, `prometheus_rw`)
+
+1. Pipeline controller calls `WorkerPool.multi_dispatch(count='all')` → sends `POST /agent/run` to every healthy worker
+2. A `BroadcastPlacement` is created with one slot per worker; state saved to `broadcast_placements` DB table
+3. Each worker runs `PipelineExecutor.stream_run()` continuously; posts periodic stats to `POST /api/internal/pipeline-stats`
+4. `StatsStore` holds live per-slot stats; `PlacementReconciler` polls every `min(TRAM_STATS_INTERVAL, 10)s`
+5. Stale slot (age > `3 × TRAM_STATS_INTERVAL`): reconciler re-dispatches to same worker, updates `current_run_id`
+6. Reconciling-window timeout after `2 × TRAM_STATS_INTERVAL`: partial recovery → `degraded`; none → re-dispatch
 
 ### Worker discovery
 
@@ -279,7 +302,16 @@ Workers are resolved from Kubernetes headless DNS:
 http://<release>-worker-N.<release>-worker.<namespace>.svc.cluster.local:8766
 ```
 
-Controlled by `TRAM_WORKER_REPLICAS`, `TRAM_WORKER_SERVICE`, `TRAM_WORKER_NAMESPACE`, `TRAM_WORKER_PORT`. Can also be set explicitly via `TRAM_WORKERS=http://w0:8766,http://w1:8766`.
+Controlled by `TRAM_WORKER_REPLICAS`, `TRAM_WORKER_SERVICE`, `TRAM_WORKER_NAMESPACE`, `TRAM_WORKER_PORT`. Can also be set explicitly via `TRAM_WORKER_URLS=http://w0:8766,http://w1:8766`.
+
+### Worker ports
+
+Workers listen on two ports:
+
+- **`:8766`** — internal agent API (manager-to-worker dispatch, health, status)
+- **`:8767`** — ingress-only webhook receiver (`/webhooks/*`); reachable from outside the cluster
+
+Both threads start together; if either exits the pod sends `SIGTERM` to itself so Kubernetes restarts it. The composite `GET /agent/health` endpoint returns `ok: false` when the ingress thread has died.
 
 ### Worker agent API (`:8766`)
 
@@ -288,7 +320,13 @@ Controlled by `TRAM_WORKER_REPLICAS`, `TRAM_WORKER_SERVICE`, `TRAM_WORKER_NAMESP
 | `POST` | `/agent/run` | Dispatch a pipeline run (YAML + run_id) |
 | `POST` | `/agent/stop` | Signal a running pipeline to stop |
 | `GET` | `/agent/status` | Active batch runs and streams |
-| `GET` | `/agent/health` | Liveness + active_runs + running_pipelines |
+| `GET` | `/agent/health` | Liveness + active_runs + running_pipelines + ingress_up |
+
+### Worker ingress API (`:8767`)
+
+| Method | Path | Description |
+|--------|------|-------------|
+| `POST` | `/webhooks/{path}` | Forward push traffic to the registered `webhook` or `prometheus_rw` source queue |
 
 ### `GET /api/cluster/nodes` (manager)
 
@@ -307,6 +345,8 @@ Controlled by `TRAM_WORKER_REPLICAS`, `TRAM_WORKER_SERVICE`, `TRAM_WORKER_NAMESP
 }
 ```
 
+`ok` is `false` when the worker agent thread is dead or the composite worker health check fails. The manager-facing node view does not expose a separate `ingress_up` field; ingress health is folded into `ok`.
+
 ### Standalone fallback
 
 `TRAM_MODE=standalone` (default): no `WorkerPool` is created; the manager executes pipelines in-process via `PipelineExecutor` directly. SQLite is sufficient.
@@ -322,11 +362,12 @@ Controlled by `TRAM_WORKER_REPLICAS`, `TRAM_WORKER_SERVICE`, `TRAM_WORKER_NAMESP
 | MySQL | `mysql+pymysql://user:pass@host/db` |
 
 Tables:
-- `run_history` — every `RunResult`; includes `node_id`, `dlq_count`, `records_skipped`, `errors_json`
+- `run_history` — every `RunResult`; includes `node_id`, `dlq_count`, `records_skipped`, `errors_json`, `bytes_in`, `bytes_out`
 - `pipeline_versions` — every YAML registered; UUID primary key
 - `alert_state` — last-alerted timestamp per `(pipeline_name, rule_name)`
 - `processed_files` — `(pipeline_name, source_key, filepath, processed_at)`; used by `skip_processed` to make file-source runs idempotent
 - `user_passwords` — scrypt-hashed passwords for browser auth (override `TRAM_AUTH_USERS` bootstrap values)
+- `broadcast_placements` — active broadcast placement groups; persists `slots_json` (including mutable `current_run_id` per slot) so the manager can reconcile after restart
 
 **Schema migrations**: `_create_tables()` runs `CREATE TABLE IF NOT EXISTS` + `ALTER TABLE ADD COLUMN` guards at startup. Existing databases from v0.6.0 are upgraded automatically.
 

@@ -1,5 +1,11 @@
 # Pipeline Controller — Design & Implementation Plan
 
+> Historical design note.
+> This document captures the v1.1.x controller transition plan and is not the
+> source of truth for the current v1.3.0 manager/worker architecture.
+> For shipped behavior, use `docs/architecture.md`, `docs/deployment.md`,
+> `docs/api.md`, and `docs/roadmap.md`.
+
 ## Problem Statement
 
 Pipeline state management is split across three classes (`PipelineManager`,
