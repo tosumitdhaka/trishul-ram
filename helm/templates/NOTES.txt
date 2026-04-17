@@ -52,11 +52,41 @@ TRAM {{ .Chart.AppVersion }} has been deployed!
     -H "Content-Type: application/json" \
     -d '{"names": ["CISCO-ENTITY-FRU-CONTROL-MIB"]}'
 {{- if .Values.manager.enabled }}
+{{- $ingress := .Values.worker.ingressService | default dict }}
+{{- $ingressEnabled := true }}
+{{- $ingressType := "NodePort" }}
+{{- $ingressPort := (.Values.worker.ingressPort | default 8767) }}
+{{- if hasKey $ingress "enabled" }}
+{{- $ingressEnabled = get $ingress "enabled" }}
+{{- end }}
+{{- if hasKey $ingress "type" }}
+{{- $ingressType = get $ingress "type" }}
+{{- end }}
+{{- if hasKey $ingress "port" }}
+{{- $ingressPort = get $ingress "port" }}
+{{- end }}
 
 9. Manager+worker mode is enabled ({{ .Values.worker.replicas }} workers).
    Check worker pool status:
   curl http://127.0.0.1:8765/api/cluster/nodes
+{{- if $ingressEnabled }}
+   Worker ingress service: {{ include "tram.fullname" . }}-worker-ingress
+{{- if contains "NodePort" $ingressType }}
+  export WORKER_INGRESS_PORT=$(kubectl get --namespace {{ .Release.Namespace }} -o jsonpath="{.spec.ports[0].nodePort}" services {{ include "tram.fullname" . }}-worker-ingress)
+  echo "Worker ingress: http://$NODE_IP:$WORKER_INGRESS_PORT/webhooks/<path>"
+{{- else if contains "LoadBalancer" $ingressType }}
+  watch kubectl get --namespace {{ .Release.Namespace }} svc -w {{ include "tram.fullname" . }}-worker-ingress
+{{- else }}
+  kubectl --namespace {{ .Release.Namespace }} port-forward svc/{{ include "tram.fullname" . }}-worker-ingress 8767:{{ $ingressPort }}
+  echo "Worker ingress: http://127.0.0.1:8767/webhooks/<path>"
+{{- end }}
+{{- end }}
    Scale workers:
   kubectl scale statefulset {{ include "tram.fullname" . }}-worker \
     --namespace {{ .Release.Namespace }} --replicas=<N>
+
+   Upgrading from v1.2.x (Deployment → StatefulSet)?
+   If you had an existing manager-data PVC, reuse it:
+  helm upgrade {{ .Release.Name }} tram/tram \
+    --set manager.persistence.existingClaim=manager-data-{{ .Release.Name }}
 {{- end }}

@@ -121,6 +121,7 @@ def plugins():
 @app.command()
 def validate(
     pipeline_file: Path = typer.Argument(..., help="Path to pipeline YAML file"),
+    mode: str = typer.Option("", "--mode", help="Validation mode: standalone, manager, or worker"),
 ):
     """Validate a pipeline YAML file (schema check + lint). Exit 0 on success."""
     from tram.core.exceptions import ConfigError
@@ -137,7 +138,7 @@ def validate(
     # Run linter
     try:
         from tram.pipeline.linter import lint
-        findings = lint(config)
+        findings = lint(config, tram_mode=mode or None)
         has_error = False
         for f in findings:
             color = "red" if f.severity == "error" else "yellow"

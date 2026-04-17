@@ -37,7 +37,7 @@ Readiness probe. Returns 200 once startup is complete, 503 if DB or scheduler is
 Build and version information.
 
 ```json
-{"version": "1.0.5", "python_version": "3.12.0"}
+{"version": "1.3.0", "build_time": "2026-04-17T15:00:00+00:00", "python_version": "3.12.0"}
 ```
 
 ### GET /api/plugins
@@ -71,6 +71,95 @@ Worker pool status (manager mode) or standalone indicator.
       "active_runs": 0,
       "running_pipelines": [],
       "assigned_pipelines": ["snmp_ifmib_to_sftp"]
+    }
+  ]
+}
+```
+
+### GET /api/cluster/streams
+Active stream placement and throughput summary.
+
+```json
+{
+  "mode": "manager",
+  "streams": [
+    {
+      "pipeline_name": "prom-ingest",
+      "placement_group_id": "prom-ingest-20260417-ab12",
+      "status": "degraded",
+      "target_count": "all",
+      "started_at": "2026-04-17T15:00:00+00:00",
+      "slot_count": 3,
+      "active_slots": 2,
+      "records_in": 7102,
+      "records_out": 7102,
+      "records_skipped": 0,
+      "dlq_count": 0,
+      "error_count": 1,
+      "bytes_in": 4505600,
+      "bytes_out": 4505600,
+      "records_in_per_sec": 1420.4,
+      "records_out_per_sec": 1420.4,
+      "bytes_in_per_sec": 901120.0,
+      "bytes_out_per_sec": 901120.0,
+      "slots": [
+        {
+          "worker_index": 0,
+          "worker_id": "tram-worker-0",
+          "worker_url": "http://trishul-ram-worker-0.trishul-ram-worker.default.svc.cluster.local:8766",
+          "run_id_prefix": "prom-ingest-20260417-ab12-w0",
+          "current_run_id": "prom-ingest-20260417-ab12-w0-r1",
+          "status": "running",
+          "restart_count": 1,
+          "stats": {
+            "schedule_type": "stream",
+            "timestamp": "2026-04-17T15:00:05+00:00",
+            "uptime_seconds": 5.0,
+            "records_in": 3551,
+            "records_out": 3551,
+            "records_skipped": 0,
+            "dlq_count": 0,
+            "error_count": 0,
+            "bytes_in": 2252800,
+            "bytes_out": 2252800,
+            "errors_last_window": [],
+            "stale": false,
+            "records_in_per_sec": 710.2,
+            "records_out_per_sec": 710.2,
+            "bytes_in_per_sec": 450560.0,
+            "bytes_out_per_sec": 450560.0
+          }
+        },
+        {
+          "worker_index": 1,
+          "worker_id": "tram-worker-1",
+          "worker_url": "http://trishul-ram-worker-1.trishul-ram-worker.default.svc.cluster.local:8766",
+          "run_id_prefix": "prom-ingest-20260417-ab12-w1",
+          "current_run_id": "prom-ingest-20260417-ab12-w1-r0",
+          "status": "stale",
+          "restart_count": 0,
+          "stats": {
+            "schedule_type": "stream",
+            "timestamp": "2026-04-17T14:58:00+00:00",
+            "uptime_seconds": 5.0,
+            "records_in": 3551,
+            "records_out": 3551,
+            "records_skipped": 0,
+            "dlq_count": 0,
+            "error_count": 1,
+            "bytes_in": 2252800,
+            "bytes_out": 2252800,
+            "errors_last_window": [
+              "timeout talking to sink"
+            ],
+            "stale": true,
+            "records_in_per_sec": 0.0,
+            "records_out_per_sec": 0.0,
+            "bytes_in_per_sec": 0.0,
+            "bytes_out_per_sec": 0.0
+          }
+        }
+      ]
     }
   ]
 }
@@ -111,6 +200,63 @@ Auto-saves a pipeline version to SQLite and auto-starts if `enabled: true` and s
 
 ### GET /api/pipelines/{name}
 Get pipeline config and live status.
+
+### GET /api/pipelines/{name}/placement
+Per-slot placement view for an active broadcast stream.
+
+Returns `404` when the pipeline exists but has no active broadcast placement.
+
+```json
+{
+  "pipeline_name": "prom-ingest",
+  "placement_group_id": "prom-ingest-20260417-ab12",
+  "status": "running",
+  "target_count": "all",
+  "started_at": "2026-04-17T15:00:00+00:00",
+  "slot_count": 1,
+  "active_slots": 1,
+  "records_in": 7102,
+  "records_out": 7102,
+  "records_skipped": 0,
+  "dlq_count": 0,
+  "error_count": 0,
+  "bytes_in": 4505600,
+  "bytes_out": 4505600,
+  "records_in_per_sec": 710.2,
+  "records_out_per_sec": 710.2,
+  "bytes_in_per_sec": 450560.0,
+  "bytes_out_per_sec": 450560.0,
+  "slots": [
+    {
+      "worker_index": 0,
+      "worker_id": "tram-worker-0",
+      "worker_url": "http://trishul-ram-worker-0.trishul-ram-worker.default.svc.cluster.local:8766",
+      "run_id_prefix": "prom-ingest-20260417-ab12-w0",
+      "current_run_id": "prom-ingest-20260417-ab12-w0-r1",
+      "status": "running",
+      "restart_count": 0,
+      "stats": {
+        "schedule_type": "stream",
+        "timestamp": "2026-04-17T15:00:05+00:00",
+        "uptime_seconds": 10.0,
+        "records_in": 7102,
+        "records_out": 7102,
+        "records_skipped": 0,
+        "dlq_count": 0,
+        "error_count": 0,
+        "bytes_in": 4505600,
+        "bytes_out": 4505600,
+        "errors_last_window": [],
+        "stale": false,
+        "records_in_per_sec": 710.2,
+        "records_out_per_sec": 710.2,
+        "bytes_in_per_sec": 450560.0,
+        "bytes_out_per_sec": 450560.0
+      }
+    }
+  ]
+}
+```
 
 ### PUT /api/pipelines/{name}
 Update/replace a registered pipeline's YAML config in-place (v1.0.4). Stops the pipeline, re-registers with the new config, and restarts it if `enabled: true`. Body: raw YAML text (`Content-Type: application/yaml` or `text/plain`).
@@ -282,6 +428,8 @@ With SQLite/DB persistence, run history survives daemon restarts.
     "records_in": 1500,
     "records_out": 1487,
     "records_skipped": 13,
+    "bytes_in": 2359296,
+    "bytes_out": 2341888,
     "dlq_count": 0,
     "error": null,
     "errors": ["Records skipped — no sink wrote successfully (condition filtered all records)"]

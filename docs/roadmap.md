@@ -9,78 +9,100 @@ unconfirmed work lives in the backlog at the bottom.
 
 - [ ] SNMP poll source — validate SNMPv3 USM on real-device GET and WALK; keep existing walk / yield_rows coverage green
 - [x] ASN.1 serializer — decode-path coverage and wording updated for explicit decode-only behavior
-- [ ] SNMP trap source — deferred; blocked in manager-worker mode by the push-source architecture gap tracked in issue #11
+- [ ] SNMP trap source — deferred; blocked by push-source architecture gap (issue #11, resolved in v1.3.0)
 - [ ] SNMP trap sink — deferred until a reachable real receiver/test target is available
 
 ---
 
 ## v1.3.0 — Broadcast Streams & Push-Source Scaling
 
-> Full design: [`docs/design-v1.3.0-broadcast-streams.md`](design-v1.3.0-broadcast-streams.md)
-> Skips v1.2.4–v1.2.7 due to severity of the push-source architecture gap (issue #11).
+> Full design: [`docs/archive/v1.3.0-broadcast-streams-design.md`](archive/v1.3.0-broadcast-streams-design.md)
+> Skips v1.2.4–v1.2.7 due to severity of push-source architecture gap (issue #11).
+> Scope is intentionally limited to HTTP push sources (`webhook`, `prometheus_rw`).
+> UDP sources (`syslog`, `snmp_trap`) and dynamic K8s service provisioning are v1.3.1.
 
-### A — Broadcast Dispatch
-- [ ] `PipelineConfig.dispatch: "single" | "broadcast"` field
-- [ ] Linter rule L006 — reject broadcast on non-push-source types
-- [ ] `WorkerPool.broadcast()` — dispatch same pipeline to all healthy workers
-- [ ] Mount `/webhooks` router on worker FastAPI app
+### A — `workers:` block & multi-dispatch (issue #11)
+- [x] `WorkersConfig` Pydantic model — `count: 1|all` (v1.3.0 runtime) + `count:N` and `list:` forward-compatible in schema; validators: mutual exclusion, `count >= 1`, `list` non-empty + no duplicates; source-type defaults at validation (`count: all` for push HTTP, `count: 1` for all others)
+- [x] `BroadcastResult` dataclass — accepted/rejected worker URLs, `running | degraded | error` status
+- [x] Linter rules L006–L010 — manager mode only; suppressed entirely in standalone; L007 fires on any multi-worker spec (`count > 1`, `count: all`, or `list:`) for poll/batch sources; no double-warning on queue sources (L009 for queue, L010 for non-queue); `tram validate` reads `TRAM_MODE` from env or `--mode`
+- [x] `WorkerPool._worker_ids` — worker_id → URL mapping from health poll
+- [x] `WorkerPool.resolve()` — v1.3.0: `count:1` and `count:all`; `count:N` and `list:` raise `NotImplementedError`
+- [x] `WorkerPool.multi_dispatch()` — v1.3.0: `count:1` and `count:all` paths
+- [x] `WorkerPool.dispatch()` — thin wrapper around `multi_dispatch(count=1)` for backwards compat
+- [x] Controller: `_broadcast_placements`, `_active_placement_group`, `_make_placement_group_id()`; `degraded` pipeline status value
 
-### B — Stream Heartbeat
-- [ ] `StreamMetrics` dataclass — thread-safe per-run counters
-- [ ] Worker heartbeat thread — per-stream-run POST to manager every `TRAM_HEARTBEAT_INTERVAL` (default 30s)
-- [ ] `POST /api/internal/heartbeat` — manager receives and stores live stream metrics
-- [ ] `HeartbeatStore` — in-memory `{(pipeline, worker): heartbeat}` with staleness detection
+### B — Worker Public Ingress Security
+- [x] `create_worker_ingress_app()` — minimal FastAPI on `:8767`; webhooks only, no `/agent/*`
+- [x] Coupled shutdown: either listener thread exits → `SIGTERM` self → K8s restarts pod
+- [x] Composite `GET /agent/health` returns `ok: false` when ingress thread is dead
+- [x] `TRAM_WORKER_INGRESS_PORT` (default `8767`); readiness probe stays on `:8766` (composite)
+- [x] Worker StatefulSet: `ingress` containerPort `8767`
+- [x] `middleware.py` import isolation contract enforced by `test_worker_import_isolation.py`
 
-### C — Placement API
-- [ ] `GET /api/pipelines/{name}/placement` — which workers, run IDs, live metrics, ingress URLs
-- [ ] `GET /api/cluster/streams` — flat list of all active stream placements
+### C — Unified Pipeline Stats & Load-Aware Dispatch
+- [x] `PipelineStats` dataclass (`tram/agent/metrics.py`) — thread-safe; records + bytes (`bytes_in`, `bytes_out`) + rolling error window; covers both stream and batch runs; replaces `StreamMetrics`
+- [x] `ActiveRun.stats: PipelineStats` for all run types
+- [x] `executor.stream_run()` and `executor.batch_run()` — `stats` param; `bytes_in` from source read, `bytes_out` from sink write; batch emits `is_final: true` stats report immediately before `_post_run_complete`
+- [x] `RunCompletePayload` gains `bytes_in: int = 0` and `bytes_out: int = 0`; `on_worker_run_complete` writes them to `run_history` — this is the authoritative final total path
+- [x] Worker stats reporting thread (`_stats_loop`) — periodic reports `is_final: false`; batch completion emits `is_final: true`; posts every `TRAM_STATS_INTERVAL` (default 30s; replaces `TRAM_HEARTBEAT_INTERVAL`)
+- [x] `POST /api/internal/pipeline-stats` — `is_final: true` → `StatsStore.remove(run_id)` (load eviction only, not the bytes persistence path); otherwise `StatsStore.update()`
+- [x] `StatsStore` (`tram/agent/stats_store.py`) — keyed by `run_id`; staleness contract: `get_by_run_id()` stale-aware (reconciler + placement API per-slot); `for_worker()`, `for_pipeline()`, `all_active()` exclude stale (load-scoring and aggregate views); explicit `remove(run_id)`; replaces `HeartbeatStore`
+- [x] `on_worker_run_complete` — writes `bytes_in`/`bytes_out` to `run_history`; calls `StatsStore.remove(run_id)` as fallback for crashed runs
+- [x] `WorkerPool.load_score()` — resolves `worker_url → worker_id` via `_worker_ids` before `StatsStore.for_worker()`; fallback to `active_runs × 1 MB proxy`
 
-### D — Manager StatefulSet
-- [ ] Replace `manager-deployment.yaml` with `manager-statefulset.yaml` + `volumeClaimTemplates`
-- [ ] Add `manager-headless-service.yaml` for stable pod DNS
-- [ ] Remove separate manager PVC template; add `existingClaim` migration path
+### D — PlacementReconciler
+- [x] `PlacementReconciler` background thread (`tram/agent/reconciler.py`) — runs every `min(TRAM_STATS_INTERVAL, 10)s`; owns all stale detection, re-dispatch, and reconciling-window timeout; stats endpoint is write-only
+- [x] Stale slot detection — `StatsStore.get_by_run_id(slot.current_run_id)`; age > `3 × interval` → mark stale → re-dispatch same worker; updates `slot.current_run_id` in slots_json + DB (count:all only in v1.3.0)
+- [x] Reconciling-window timeout — after `2 × interval`: matched → `running`; partial → `degraded`; none → re-dispatch
+- [x] Unit tests: stale → re-dispatch, reconciling timeout, partial recovery → degraded
 
-### E — Dynamic K8s Services
-- [ ] `tram/k8s/service_manager.py` — create/delete NodePort Services via K8s API
-- [ ] `kubernetes:` pipeline block (`service_type`, `node_port`, `target_port`)
-- [ ] RBAC Role + RoleBinding for Service CRUD (`helm/templates/rbac.yaml`)
-- [ ] `tram[k8s]` optional extra (`kubernetes>=28.0,<32`)
-- [ ] Manager re-adopts `tram-managed=true` Services on startup
+### E — Manager Restart Reconciliation
+- [x] DB table `broadcast_placements` — `slots_json` entries carry `run_id_prefix` (immutable) and `current_run_id` (mutable, updated on each re-dispatch)
+- [x] `TramDB`: `save_broadcast_placement()`, `get_active_broadcast_placements()`, `update_broadcast_placement_status()`, `update_slot_run_id()`
+- [x] `_boot_load()` seeds `_broadcast_placements` from DB; sets `reconciling` status
+- [x] Stats receiver matches incoming stats by `run_id_prefix` → resolves reconciling slot; updates `current_run_id`
+- [x] Unit tests: cold restart, partial recovery → degraded, unmatched → re-dispatch; `current_run_id` updated after re-dispatch
 
-### F — `source_stem` / `source_suffix` filename tokens (issue #9)
-- [ ] Add `{source_stem}` and `{source_suffix}` to `filename_template.format()` in all 6 file-based sinks (`local`, `sftp`, `ftp`, `s3`, `gcs`, `azure_blob`)
-- [ ] Update docstrings and `docs/connectors.md`
-- [ ] Unit tests for both tokens
+### F — Placement API
+- [x] `GET /api/pipelines/{name}/placement` — iterates `slots_json` as source of truth; per-slot stats via `StatsStore.get_by_run_id(slot.current_run_id)`; per-sec fields zeroed for stale; stale slots visible
+- [x] `GET /api/cluster/streams` — aggregate totals from `StatsStore.for_pipeline()` (non-stale) + group status/counts from `broadcast_placements`
 
-### G — Migrate SNMP from pysnmp-lextudio to pysnmp 7.x (issue #10)
-- [ ] `pyproject.toml`: `snmp` extra → `pysnmp>=7.1,<8`; `mib` extra → `pysmi>=1.1,<2`
-- [ ] Update `pysnmp.hlapi.asyncio` imports to `pysnmp.hlapi.v3arch.asyncio` in snmp source/sink
-- [ ] Remove `pytest-cov<5` workaround (pysnmp-lextudio 6.2.x bug, gone in 7.x)
-- [ ] SNMP unit tests pass against pysnmp 7.x; lab GET/WALK validation
+### G — Manager StatefulSet
+- [x] Replace `manager-deployment.yaml` with `manager-statefulset.yaml` + `volumeClaimTemplates`
+- [x] `manager-headless-service.yaml` for stable pod DNS
+- [x] Remove separate manager PVC from `pvc.yaml`; `existingClaim` migration path in `values.yaml`
+- [x] `helm/NOTES.txt` upgrade migration note
 
 ### H — Alert cooldown on confirmed delivery only (issue #3)
-- [ ] `_fire_webhook()` calls `raise_for_status()`; returns `True`/`False`
-- [ ] `_fire_email()` returns `True`/`False`
-- [ ] `_set_cooldown()` called only on `True`
-- [ ] Tests: HTTP 500, connection error, SMTP failure → cooldown not set; HTTP 200 → cooldown set
+- [x] `_fire_webhook()` / `_fire_email()` return `True`/`False`
+- [x] `_set_cooldown()` called only on `True`
+- [x] Tests: HTTP 500, connection error, SMTP failure → no cooldown
 
-### I — Webhook source validation (carried from deferred v1.2.5)
-- [ ] Webhook source — test payload parsing, path routing, concurrent requests (now directly exercised by broadcast integration tests)
+---
+
+## v1.3.1 — Broadcast Extension & Dynamic K8s Services
+
+> Depends on v1.3.0 TCP path being validated end-to-end.
+
+- [ ] **`workers.count: N` runtime** — logical slot model (slot number ≠ worker assignment); `PlacementReconciler` spare-worker gap fill; slot reassignment on failover; `WorkerPool.resolve()` + `multi_dispatch()` N-worker paths
+- [ ] **`workers.list: [...]` runtime** — named-worker placement; per-slot pinned re-dispatch on recovery
+- [ ] **UDP broadcast** — `syslog` and `snmp_trap` sources; requires CNI-aware LB validation
+- [ ] **Dynamic K8s Service provisioning** — `kubernetes:` pipeline block; manager creates/deletes NodePort Services via K8s API; RBAC Role + RoleBinding; `tram[k8s]` optional extra
+- [ ] **`source_stem` / `source_suffix` filename tokens** (issue #9) — add to all 6 file-based sinks
+- [ ] **Migrate SNMP from pysnmp-lextudio to pysnmp 7.x** (issue #10) — update import paths; `pysmi` migration
 
 ---
 
 ## Backlog (unversioned)
 
-Features and issues not yet assigned to a release:
-
 ### Connector Fixes (deferred from v1.2.4–v1.2.7)
-- [ ] **Kafka source** — real-behavior edge cases: reconnect, offset commit, consumer group
+- [ ] **Kafka source** — reconnect, offset commit, consumer group edge cases
 - [ ] **Kafka sink** — producer error handling, retry, serializer integration
 - [ ] **OpenSearch sink** — bulk write, index template, auth, retry on 429
 - [ ] **ClickHouse source/sink** — query execution, batch insert, type coercion
 - [ ] **InfluxDB source/sink** — line protocol, bucket/org resolution, token auth
-- [ ] **REST source/sink** — auth types (basic, bearer, apikey), pagination, retry, SSL verify
-- [ ] **gNMI source** — subscription modes (ONCE, POLL, STREAM), path encoding, TLS
+- [ ] **REST source/sink** — auth types, pagination, retry, SSL verify
+- [ ] **gNMI source** — subscription modes, path encoding, TLS
 - [ ] **SFTP source/sink** — file glob, move-after-read, skip_processed, key auth
 - [ ] **FTP source/sink** — passive mode, directory listing, file write
 - [ ] **S3 source/sink** — bucket/prefix, multipart upload, credential chain
@@ -89,32 +111,32 @@ Features and issues not yet assigned to a release:
 - [ ] **NATS source/sink** — subject routing, JetStream, reconnect
 
 ### Operations & Observability
-- [ ] **Pipeline cloning** — copy a pipeline as a new one with a name prompt in the UI
+- [ ] **Pipeline cloning** — copy a pipeline with a name prompt in the UI
 - [ ] **Scheduled alert evaluation** — cron-based alert checks independent of pipeline runs
 - [ ] **Dead-letter queue viewer** — browse and replay DLQ records via the UI
 - [ ] **Per-sink record counts** — run metrics broken down per sink
-- [ ] **Pipeline dependency graph** — visualize pipeline chains when pipeline A feeds pipeline B
-- [ ] **Bulk actions** — start/stop/delete multiple pipelines at once from the list view
+- [ ] **Pipeline dependency graph** — visualize pipeline chains when A feeds B
+- [ ] **Bulk actions** — start/stop/delete multiple pipelines from the list view
 - [ ] **Live log streaming** — WebSocket tail of log output for running stream pipelines
 - [ ] **Node health detail page** — per-worker pipeline assignments and load in manager mode
 
 ### Security & Multi-tenancy
 - [ ] **Role-based access** — read-only vs admin token scopes (viewer/operator/admin)
 - [ ] **Per-pipeline API key scoping** — restrict a key to specific pipelines
-- [ ] **Key upload API** — `POST /api/keys/upload` / `GET /api/keys` / `DELETE /api/keys/<name>`; stored on shared PVC under `/data/keys/`
+- [ ] **Key upload API** — `POST /api/keys/upload` / `GET /api/keys` / `DELETE /api/keys/<name>`
 - [ ] **Audit log** — record who triggered, modified, or deleted pipelines
 
 ### New Connectors & Serializers
 - [ ] **SMTP sink** — outbound email delivery (alerts, reports)
 - [ ] **gRPC sink** — generic gRPC unary call sink
 - [ ] **Syslog sink** — forward records to remote syslog (RFC 5424)
-- [ ] **Kafka schema registry** — full Avro + Protobuf with Confluent wire format in both source and sink
-- [ ] **PM-XML source** — ingest 3GPP TS 32.435 PM XML files natively (currently serializer-only)
+- [ ] **Kafka schema registry** — full Avro + Protobuf with Confluent wire format
+- [ ] **PM-XML source** — ingest 3GPP TS 32.435 PM XML files natively
 
 ### Infrastructure
-- [ ] **Manager HA** — standby manager with DB-backed leader election; promotes on leader failure
-- [ ] **Graceful worker drain** — `POST /api/workers/{id}/drain`; Helm pre-stop hook wires drain before pod termination
-- [ ] **Coverage target increase** — raise CI coverage threshold from 60% to 75%
+- [ ] **Manager HA** — standby manager with DB-backed leader election
+- [ ] **Graceful worker drain** — `POST /api/workers/{id}/drain`; Helm pre-stop hook
+- [ ] **Coverage target increase** — raise CI threshold from 60% to 75%
 
 ---
 
@@ -122,6 +144,8 @@ Features and issues not yet assigned to a release:
 
 | Version | Theme |
 |---------|-------|
+| v1.3.0 | Broadcast streams; push-source scaling; placement reconciliation; manager StatefulSet |
+| v1.2.3 | SNMP Poll v3 validation; ASN.1 decode hardening |
 | v1.2.2 | Stability & polish; CI fixes; docs alignment |
 | v1.2.1 | Worker callback chain; run metrics propagation; dashboard UX |
 | v1.2.0 | Manager + Worker cluster architecture |

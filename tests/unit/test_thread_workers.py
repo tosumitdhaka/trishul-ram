@@ -31,6 +31,13 @@ class TestPipelineRunContextThreadSafety:
         ctx.inc_records_skipped(3)
         assert ctx.records_skipped == 3
 
+    def test_inc_bytes_uses_lock(self):
+        ctx = PipelineRunContext(pipeline_name="test")
+        ctx.inc_bytes_in(10)
+        ctx.inc_bytes_out(20)
+        assert ctx.bytes_in == 10
+        assert ctx.bytes_out == 20
+
     def test_record_error_uses_lock(self):
         ctx = PipelineRunContext(pipeline_name="test")
         ctx.record_error("something went wrong")

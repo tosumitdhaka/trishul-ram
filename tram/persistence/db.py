@@ -10,6 +10,7 @@ Extras:
 
 from __future__ import annotations
 
+import json
 import logging
 import os
 import uuid
@@ -94,6 +95,8 @@ def _create_tables(engine: Engine) -> None:
                 records_in      INTEGER NOT NULL DEFAULT 0,
                 records_out     INTEGER NOT NULL DEFAULT 0,
                 records_skipped INTEGER NOT NULL DEFAULT 0,
+                bytes_in        INTEGER NOT NULL DEFAULT 0,
+                bytes_out       INTEGER NOT NULL DEFAULT 0,
                 error           TEXT,
                 node_id         TEXT NOT NULL DEFAULT '',
                 dlq_count       INTEGER NOT NULL DEFAULT 0
@@ -167,9 +170,26 @@ def _create_tables(engine: Engine) -> None:
             )
         """))
 
+        conn.execute(text("""
+            CREATE TABLE IF NOT EXISTS broadcast_placements (
+                placement_group_id TEXT PRIMARY KEY NOT NULL,
+                pipeline_name      TEXT NOT NULL,
+                slots_json         TEXT NOT NULL,
+                target_count       TEXT NOT NULL,
+                started_at         TEXT NOT NULL,
+                status             TEXT NOT NULL,
+                stopped_at         TEXT
+            )
+        """))
+        conn.execute(text(
+            "CREATE INDEX IF NOT EXISTS idx_bp_pipeline ON broadcast_placements(pipeline_name)"
+        ))
+
         # v0.7.0 column migrations: add new columns to existing databases
         _add_column_if_missing(conn, dialect, "run_history", "node_id", "TEXT NOT NULL DEFAULT ''")
         _add_column_if_missing(conn, dialect, "run_history", "dlq_count", "INTEGER NOT NULL DEFAULT 0")
+        _add_column_if_missing(conn, dialect, "run_history", "bytes_in", "INTEGER NOT NULL DEFAULT 0")
+        _add_column_if_missing(conn, dialect, "run_history", "bytes_out", "INTEGER NOT NULL DEFAULT 0")
         # v1.1.1: per-record error strings
         _add_column_if_missing(conn, dialect, "run_history", "errors_json", "TEXT")
         # v1.1.4: pause/resume support (kept for migration; superseded by 'stopped' in v1.2.0)
@@ -234,12 +254,12 @@ class TramDB:
                     text("""
                         INSERT INTO run_history
                           (run_id, pipeline_name, status, started_at, finished_at,
-                           records_in, records_out, records_skipped, error,
-                           node_id, dlq_count, errors_json)
+                           records_in, records_out, records_skipped, bytes_in, bytes_out,
+                           error, node_id, dlq_count, errors_json)
                         VALUES
                           (:run_id, :pipeline_name, :status, :started_at, :finished_at,
-                           :records_in, :records_out, :records_skipped, :error,
-                           :node_id, :dlq_count, :errors_json)
+                           :records_in, :records_out, :records_skipped, :bytes_in, :bytes_out,
+                           :error, :node_id, :dlq_count, :errors_json)
                     """),
                     {
                         "run_id": result.run_id,
@@ -250,6 +270,8 @@ class TramDB:
                         "records_in": result.records_in,
                         "records_out": result.records_out,
                         "records_skipped": result.records_skipped,
+                        "bytes_in": result.bytes_in,
+                        "bytes_out": result.bytes_out,
                         "error": result.error,
                         "node_id": self._node_id,
                         "dlq_count": result.dlq_count,
@@ -316,6 +338,8 @@ class TramDB:
             records_in=row["records_in"],
             records_out=row["records_out"],
             records_skipped=row["records_skipped"],
+            bytes_in=row.get("bytes_in", 0) or 0,
+            bytes_out=row.get("bytes_out", 0) or 0,
             error=row["error"],
             dlq_count=row.get("dlq_count", 0) or 0,
             node_id=row.get("node_id", "") or "",
@@ -716,6 +740,143 @@ class TramDB:
         """Remove a setting, reverting to env-var / default."""
         with self._engine.begin() as conn:
             conn.execute(text("DELETE FROM settings WHERE key = :k"), {"k": key})
+
+    # ── Broadcast placements (v1.3.0) ────────────────────────────────────
+
+    def save_broadcast_placement(
+        self,
+        placement_group_id: str,
+        pipeline_name: str,
+        slots: list[dict],
+        target_count: str,
+        status: str,
+        started_at: datetime | None = None,
+    ) -> None:
+        now = (started_at or datetime.now(UTC)).isoformat()
+        payload = {
+            "placement_group_id": placement_group_id,
+            "pipeline_name": pipeline_name,
+            "slots_json": json.dumps(slots),
+            "target_count": target_count,
+            "started_at": now,
+            "status": status,
+            "stopped_at": None,
+        }
+        dialect = self._engine.dialect.name
+        with self._engine.begin() as conn:
+            if dialect == "postgresql":
+                conn.execute(text("""
+                    INSERT INTO broadcast_placements
+                      (placement_group_id, pipeline_name, slots_json, target_count, started_at, status, stopped_at)
+                    VALUES
+                      (:placement_group_id, :pipeline_name, :slots_json, :target_count, :started_at, :status, :stopped_at)
+                    ON CONFLICT (placement_group_id) DO UPDATE SET
+                      pipeline_name = EXCLUDED.pipeline_name,
+                      slots_json = EXCLUDED.slots_json,
+                      target_count = EXCLUDED.target_count,
+                      started_at = EXCLUDED.started_at,
+                      status = EXCLUDED.status,
+                      stopped_at = EXCLUDED.stopped_at
+                """), payload)
+            elif dialect == "mysql":
+                conn.execute(text("""
+                    INSERT INTO broadcast_placements
+                      (placement_group_id, pipeline_name, slots_json, target_count, started_at, status, stopped_at)
+                    VALUES
+                      (:placement_group_id, :pipeline_name, :slots_json, :target_count, :started_at, :status, :stopped_at)
+                    ON DUPLICATE KEY UPDATE
+                      pipeline_name = VALUES(pipeline_name),
+                      slots_json = VALUES(slots_json),
+                      target_count = VALUES(target_count),
+                      started_at = VALUES(started_at),
+                      status = VALUES(status),
+                      stopped_at = VALUES(stopped_at)
+                """), payload)
+            else:
+                conn.execute(text("""
+                    INSERT INTO broadcast_placements
+                      (placement_group_id, pipeline_name, slots_json, target_count, started_at, status, stopped_at)
+                    VALUES
+                      (:placement_group_id, :pipeline_name, :slots_json, :target_count, :started_at, :status, :stopped_at)
+                    ON CONFLICT (placement_group_id) DO UPDATE SET
+                      pipeline_name = excluded.pipeline_name,
+                      slots_json = excluded.slots_json,
+                      target_count = excluded.target_count,
+                      started_at = excluded.started_at,
+                      status = excluded.status,
+                      stopped_at = excluded.stopped_at
+                """), payload)
+
+    def get_active_broadcast_placements(self) -> list[dict]:
+        with self._engine.connect() as conn:
+            rows = conn.execute(text("""
+                SELECT placement_group_id, pipeline_name, slots_json, target_count, started_at, status, stopped_at
+                FROM broadcast_placements
+                WHERE stopped_at IS NULL AND status != 'stopped'
+                ORDER BY started_at
+            """)).mappings().fetchall()
+        placements = []
+        for row in rows:
+            placements.append({
+                "placement_group_id": row["placement_group_id"],
+                "pipeline_name": row["pipeline_name"],
+                "slots": json.loads(row["slots_json"]),
+                "target_count": row["target_count"],
+                "started_at": datetime.fromisoformat(row["started_at"]),
+                "status": row["status"],
+                "stopped_at": datetime.fromisoformat(row["stopped_at"]) if row["stopped_at"] else None,
+            })
+        return placements
+
+    def update_broadcast_placement_status(
+        self,
+        placement_group_id: str,
+        status: str,
+        slots: list[dict] | None = None,
+    ) -> None:
+        stopped_at = datetime.now(UTC).isoformat() if status == "stopped" else None
+        sql = """
+            UPDATE broadcast_placements
+            SET status = :status,
+                stopped_at = :stopped_at
+        """
+        params: dict[str, object] = {
+            "placement_group_id": placement_group_id,
+            "status": status,
+            "stopped_at": stopped_at,
+        }
+        if slots is not None:
+            sql += ", slots_json = :slots_json"
+            params["slots_json"] = json.dumps(slots)
+        sql += " WHERE placement_group_id = :placement_group_id"
+        with self._engine.begin() as conn:
+            conn.execute(text(sql), params)
+
+    def update_slot_run_id(
+        self,
+        placement_group_id: str,
+        worker_index: int,
+        current_run_id: str,
+        status: str = "running",
+        restart_count: int | None = None,
+    ) -> None:
+        placements = self.get_active_broadcast_placements()
+        placement = next((p for p in placements if p["placement_group_id"] == placement_group_id), None)
+        if placement is None:
+            return
+        for slot in placement["slots"]:
+            if int(slot.get("worker_index", -1)) != worker_index:
+                continue
+            slot["current_run_id"] = current_run_id
+            slot["status"] = status
+            if restart_count is not None:
+                slot["restart_count"] = restart_count
+            break
+        self.update_broadcast_placement_status(
+            placement_group_id,
+            placement["status"],
+            slots=placement["slots"],
+        )
 
     # ── Lifecycle ──────────────────────────────────────────────────────────
 

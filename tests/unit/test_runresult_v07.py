@@ -41,8 +41,12 @@ def test_from_context_carries_dlq_count():
     ctx = PipelineRunContext(pipeline_name="pipe")
     ctx.record_dlq()
     ctx.record_dlq()
+    ctx.inc_bytes_in(128)
+    ctx.inc_bytes_out(64)
     result = RunResult.from_context(ctx, RunStatus.SUCCESS)
     assert result.dlq_count == 2
+    assert result.bytes_in == 128
+    assert result.bytes_out == 64
 
 
 def test_to_dict_includes_dlq_count():

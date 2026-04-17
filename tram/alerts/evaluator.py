@@ -65,12 +65,14 @@ class AlertEvaluator:
                     )
                     continue
 
+                fired = False
                 if rule.action == "webhook":
-                    self._fire_webhook(rule, result, config)
+                    fired = self._fire_webhook(rule, result, config)
                 elif rule.action == "email":
-                    self._fire_email(rule, result, config)
+                    fired = self._fire_email(rule, result, config)
 
-                self._set_cooldown(config.name, rule)
+                if fired:
+                    self._set_cooldown(config.name, rule)
 
             except Exception as exc:
                 logger.error(
@@ -98,7 +100,7 @@ class AlertEvaluator:
         rule: AlertRuleConfig,
         result: RunResult,
         config: PipelineConfig,
-    ) -> None:
+    ) -> bool:
         try:
             import httpx
 
@@ -113,23 +115,27 @@ class AlertEvaluator:
                 "run_id": result.run_id,
                 "timestamp": datetime.now(UTC).isoformat(),
             }
-            httpx.post(rule.webhook_url, json=payload, timeout=10)
+            with httpx.Client(timeout=10) as client:
+                response = client.post(rule.webhook_url, json=payload)
+                response.raise_for_status()
             logger.info(
                 "Alert webhook fired",
                 extra={"pipeline": config.name, "rule": rule.name, "url": rule.webhook_url},
             )
+            return True
         except Exception as exc:
             logger.error(
                 "Alert webhook fire failed",
                 extra={"pipeline": config.name, "rule": rule.name, "error": str(exc)},
             )
+            return False
 
     def _fire_email(
         self,
         rule: AlertRuleConfig,
         result: RunResult,
         config: PipelineConfig,
-    ) -> None:
+    ) -> bool:
         try:
             smtp_host = os.environ.get("TRAM_SMTP_HOST", "localhost")
             smtp_port = int(os.environ.get("TRAM_SMTP_PORT", "587"))
@@ -167,8 +173,10 @@ class AlertEvaluator:
                 "Alert email fired",
                 extra={"pipeline": config.name, "rule": rule.name, "to": rule.email_to},
             )
+            return True
         except Exception as exc:
             logger.error(
                 "Alert email fire failed",
                 extra={"pipeline": config.name, "rule": rule.name, "error": str(exc)},
             )
+            return False

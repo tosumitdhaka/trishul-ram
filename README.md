@@ -57,6 +57,7 @@ schedule:
 ### Fault Event Mediation (SNMP Traps → Ticketing)
 
 Receive SNMP traps from network elements, enrich them with MIB OID resolution, apply severity mapping, and push to a REST-based ticketing system.
+This works in standalone mode today; in manager mode, `snmp_trap` is intentionally blocked in v1.3.0 until the UDP push-source path lands.
 
 ```yaml
 source:
@@ -131,6 +132,7 @@ schedule:
 ### Log Aggregation (Syslog → OpenSearch)
 
 Collect syslog from network nodes, parse structured fields, mask sensitive data, and index into OpenSearch.
+This works in standalone mode today; in manager mode, `syslog` is intentionally blocked in v1.3.0 until the UDP push-source path lands.
 
 ```yaml
 source:
@@ -247,7 +249,7 @@ curl http://localhost:8765/api/ready
 | Mode | When to use |
 |------|-------------|
 | **Standalone** (default) | Single pod — scheduler + DB + UI + execution. Simplest setup. |
-| **Manager + Worker** | Scale execution horizontally. Manager owns scheduling and DB; workers are stateless executors. Set `TRAM_MODE=manager` / `TRAM_MODE=worker`. |
+| **Manager + Worker** | Scale execution horizontally. Manager runs as a single-replica StatefulSet; workers are stateless executors with internal agent `:8766` and a published ingress service targeting worker `:8767` for `/webhooks/*`. |
 
 ```bash
 # Standalone (Helm)
@@ -288,6 +290,7 @@ pip install tram[all]                      # everything (except corba — system
 ## Key Capabilities
 
 - **Hot-reload** — update pipeline YAML via API or file watcher; no restart needed
+- **Broadcast push streams** — `webhook` and `prometheus_rw` scale across all healthy workers in manager mode
 - **Pipeline versioning** — every update saved; one-command rollback to any previous version
 - **AI-assisted authoring** — `POST /api/ai/suggest` generates or explains pipeline YAML (Anthropic / OpenAI / local LLM)
 - **Dead Letter Queue** — failed records wrapped in a JSON envelope and routed to a configurable DLQ sink

@@ -1,0 +1,19 @@
+{{- if .Values.manager.enabled }}
+## Headless service for manager StatefulSet — provides stable DNS tram-manager-0.<fullname>-manager.<ns>.svc.cluster.local
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "tram.fullname" . }}-manager
+  labels:
+    {{- include "tram.labels" . | nindent 4 }}
+    app.kubernetes.io/component: manager
+spec:
+  clusterIP: None
+  selector:
+    {{- include "tram.selectorLabels" . | nindent 4 }}
+    app.kubernetes.io/component: manager
+  ports:
+    - name: http
+      port: {{ .Values.service.port }}
+      protocol: TCP
+{{- end }}

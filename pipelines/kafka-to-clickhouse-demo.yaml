@@ -8,9 +8,9 @@ schedule:
 source:
   type: kafka
   brokers:
-    - kafka-broker-0.kafka.svc.cluster.local:9092
-    - kafka-broker-1.kafka.svc.cluster.local:9092
-    - kafka-broker-2.kafka.svc.cluster.local:9092
+    - ${KAFKA_BROKER_1:-kafka-1.example.com:9092}
+    - ${KAFKA_BROKER_2:-kafka-2.example.com:9092}
+    - ${KAFKA_BROKER_3:-kafka-3.example.com:9092}
   topic:
     - tram.pm.raw
     - tram.fm.raw
@@ -21,8 +21,8 @@ source:
   session_timeout_ms: 30000
   security_protocol: SASL_SSL        # PLAINTEXT | SSL | SASL_PLAINTEXT | SASL_SSL
   sasl_mechanism: SCRAM-SHA-512      # PLAIN | SCRAM-SHA-256 | SCRAM-SHA-512
-  sasl_username: tram
-  sasl_password: secret
+  sasl_username: ${KAFKA_USER:-example_user}
+  sasl_password: ${KAFKA_PASS:-changeme}
   ssl_cafile: /data/schemas/kafka-ca.pem
   reconnect_delay_seconds: 5.0
   max_reconnect_attempts: 0          # 0 = infinite
@@ -44,11 +44,11 @@ transforms:
 
 sinks:
   - type: clickhouse
-    host: clickhouse.trishul.svc.cluster.local
+    host: ${CLICKHOUSE_HOST:-clickhouse.example.com}
     port: 9000
-    database: tram
-    username: tram
-    password: secret
+    database: ${CLICKHOUSE_DB:-tram}
+    username: ${CLICKHOUSE_USER:-example_user}
+    password: ${CLICKHOUSE_PASS:-changeme}
     table: pm_events
     secure: false
     verify: true

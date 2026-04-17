@@ -4,7 +4,7 @@
 image:
   registry:   ""              # e.g. ghcr.io — empty = no registry prefix (local/kind images)
   repository: trishul-ram      # image name without registry
-  tag: "1.2.3"
+  tag: "1.3.0"
   pullPolicy: IfNotPresent
 
 ## Standalone mode: single-replica StatefulSet (replicaCount=1).
@@ -12,12 +12,13 @@ image:
 replicaCount: 1
 
 ## Manager + Worker mode (v1.2.0)
-## Replaces the old equal-peers cluster model with a dedicated manager Deployment
+## Replaces the old equal-peers cluster model with a dedicated manager StatefulSet
 ## and a worker StatefulSet.  Set manager.enabled=true to switch modes.
 ##
 ## When enabled:
-##   - A Deployment named <fullname>-manager is created (replicas: 1, port: 8765)
+##   - A StatefulSet named <fullname>-manager is created (replicas: 1, port: 8765)
 ##   - A StatefulSet named <fullname>-worker is created (replicas: worker.replicas, port: 8766)
+##   - A headless Service <fullname>-manager is created for stable manager DNS
 ##   - A headless Service <fullname>-worker is created for stable worker DNS
 ##   - The standalone StatefulSet is NOT created
 ##
@@ -27,7 +28,7 @@ manager:
   enabled: false   # true = manager+worker mode; false = standalone StatefulSet
 
   ## Manager-only RWO persistence (v1.2.0).
-  ## Creates a single ReadWriteOnce PVC mounted at /data on the manager Deployment.
+  ## Creates a single ReadWriteOnce PVC mounted at /data on the manager StatefulSet.
   ## Holds the SQLite database, uploaded schemas, and downloaded MIBs.
   ## Because only one manager pod ever writes to this volume, RWO is sufficient —
   ## no NFS or RWX StorageClass required.
@@ -43,11 +44,21 @@ manager:
     size: 10Gi
     storageClass: ""      # leave empty for cluster default StorageClass
     accessMode: ReadWriteOnce
+    ## Upgrading from v1.2.x? Set this to your existing PVC name to reuse it.
+    ## Example: manager-data-trishul-ram
+    ## When set, volumeClaimTemplates is skipped and this PVC is mounted directly.
+    existingClaim: ""
 
 ## Worker configuration (only used when manager.enabled=true)
 worker:
   replicas: 3
   port: 8766
+  ingressPort: 8767
+  ingressService:
+    enabled: true
+    type: NodePort
+    port: 8767
+    nodePort: 30002
   resources: {}
   ## Override the container image for worker pods.
   ## When not set (default), workers use the same image as the manager (.Values.image).
@@ -55,7 +66,7 @@ worker:
   ##   image:
   ##     registry: ghcr.io
   ##     repository: trishul/trishul-ram-worker
-  ##     tag: "1.2.3"
+  ##     tag: "1.3.0"
   image:
     registry: ""
     repository: ""   # empty = fall back to .Values.image.repository

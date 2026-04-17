@@ -3,8 +3,15 @@
 from __future__ import annotations
 
 import logging
-from datetime import UTC, datetime
 
+from tram.connectors.file_sink_common import (
+    FilePartState,
+    ensure_rolling_token,
+    prepare_payload_for_append,
+    render_filename,
+    should_roll,
+    utc_now,
+)
 from tram.core.exceptions import SinkError
 from tram.interfaces.base_sink import BaseSink
 from tram.registry.registry import register_sink
@@ -18,7 +25,10 @@ class SFTPSink(BaseSink):
 
     Filename is generated from a template supporting tokens:
     - ``{pipeline}``        — pipeline name (from meta or config)
-    - ``{timestamp}``       — UTC timestamp (ISO format, : replaced with -)
+    - ``{timestamp}``       — UTC file-open timestamp
+    - ``{epoch}``          — UTC file-open epoch seconds
+    - ``{epoch_m}``        — UTC file-open epoch milliseconds
+    - ``{part}`` / ``{index}`` — rolling file part number
     - ``{source_filename}`` — original source filename (from meta)
     """
 
@@ -33,6 +43,22 @@ class SFTPSink(BaseSink):
         self.filename_template: str = config.get(
             "filename_template", "{pipeline}_{timestamp}.bin"
         )
+        self.file_mode: str = str(config.get("file_mode", "append"))
+        self.max_records: int | None = config.get("max_records")
+        self.max_time: int | None = config.get("max_time")
+        self.max_bytes: int | None = config.get("max_bytes")
+        self.max_index: int = int(config.get("max_index", 99999))
+        if self.file_mode == "append" and any(
+            value is not None for value in (self.max_records, self.max_time, self.max_bytes)
+        ):
+            self.filename_template = ensure_rolling_token(
+                self.filename_template,
+                logger=logger,
+                sink_name="SFTPSink",
+            )
+        self._state: FilePartState | None = None
+        self._current_remote_file: str | None = None
+        self._part_counter: int = 0
 
     def _connect(self):
         try:
@@ -48,17 +74,22 @@ class SFTPSink(BaseSink):
         except Exception as exc:
             raise SinkError(f"SFTP connect failed to {self.host}:{self.port} — {exc}") from exc
 
-    def _render_filename(self, meta: dict) -> str:
-        # {timestamp} — human-readable run start time (consistent within a run)
-        # {run_id}    — short hex run identifier (groups all chunks from one run)
-        ts = meta.get("run_timestamp") or datetime.now(UTC).strftime("%Y%m%dT%H%M%S")
-        run_id = meta.get("run_id") or ts
-        return self.filename_template.format(
-            pipeline=meta.get("pipeline_name", "tram"),
-            timestamp=ts,
-            run_id=run_id,
-            source_filename=meta.get("source_filename", "data"),
+    def _next_remote_file(self, meta: dict, *, now) -> tuple[str, FilePartState]:
+        self._part_counter += 1
+        if self._part_counter > self.max_index:
+            raise SinkError(
+                f"SFTP sink exceeded max_index={self.max_index}; "
+                "increase max_index or adjust rollover thresholds"
+            )
+        state = FilePartState(part_index=self._part_counter, opened_at=now)
+        filename = render_filename(
+            self.filename_template,
+            opened_at=state.opened_at,
+            part_index=state.part_index,
+            max_index=self.max_index,
+            meta=meta,
         )
+        return f"{self.remote_path}/{filename}", state
 
     def write(self, data: bytes, meta: dict) -> None:
         transport, sftp = self._connect()
@@ -69,11 +100,46 @@ class SFTPSink(BaseSink):
             except FileNotFoundError:
                 sftp.mkdir(self.remote_path)
 
-            filename = self._render_filename(meta)
-            remote_file = f"{self.remote_path}/{filename}"
+            serializer_type = str(meta.get("serializer_type", "json"))
+            serializer_config = dict(meta.get("serializer_config", {}))
+            record_count = int(meta.get("output_record_count", 0))
+            now = utc_now()
 
-            with sftp.open(remote_file, "wb") as fh:
-                fh.write(data)
+            if self.file_mode == "append":
+                if should_roll(
+                    self._state,
+                    now=now,
+                    incoming_records=record_count,
+                    incoming_bytes=len(data),
+                    max_records=self.max_records,
+                    max_time=self.max_time,
+                    max_bytes=self.max_bytes,
+                ):
+                    self._state = None
+                    self._current_remote_file = None
+                is_new_file = self._state is None or self._current_remote_file is None
+                if is_new_file:
+                    self._current_remote_file, self._state = self._next_remote_file(meta, now=now)
+                remote_file = self._current_remote_file
+                payload = prepare_payload_for_append(
+                    data,
+                    serializer_type=serializer_type,
+                    serializer_config=serializer_config,
+                    is_new_file=is_new_file,
+                )
+                if not payload:
+                    return
+                with sftp.open(remote_file, "ab") as fh:
+                    fh.write(payload)
+                assert self._state is not None
+                self._state.records_written += record_count
+                self._state.bytes_written += len(payload)
+            else:
+                remote_file, state = self._next_remote_file(meta, now=now)
+                with sftp.open(remote_file, "wb") as fh:
+                    fh.write(data)
+                self._current_remote_file = remote_file
+                self._state = state
 
             logger.info(
                 "Wrote file to SFTP",

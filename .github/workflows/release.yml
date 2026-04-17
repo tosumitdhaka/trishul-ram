@@ -31,7 +31,7 @@ jobs:
           pytest tests/unit/ tests/integration/ -q --tb=short \
             --cov=tram \
             --cov-report=term-missing \
-            --cov-fail-under=60
+            --cov-fail-under=75
 
   docker:
     name: Build & Push Docker image
@@ -50,6 +50,13 @@ jobs:
           VERSION=$(grep -oP '(?<=^version = ").*(?=")' pyproject.toml)
           echo "VERSION=$VERSION" >> $GITHUB_ENV
           echo "Detected version: $VERSION"
+
+      - name: Validate GHCR token
+        run: |
+          if [ -z "${{ secrets.GHCR_TOKEN }}" ]; then
+            echo "GHCR_TOKEN secret is missing or empty."
+            exit 1
+          fi
 
       - name: Log in to GHCR
         uses: docker/login-action@v3
@@ -101,6 +108,13 @@ jobs:
           VERSION=$(grep -oP '(?<=^version = ").*(?=")' pyproject.toml)
           echo "VERSION=$VERSION" >> $GITHUB_ENV
           echo "Detected version: $VERSION"
+
+      - name: Validate GHCR token
+        run: |
+          if [ -z "${{ secrets.GHCR_TOKEN }}" ]; then
+            echo "GHCR_TOKEN secret is missing or empty."
+            exit 1
+          fi
 
       - name: Log in to GHCR
         uses: docker/login-action@v3
@@ -154,10 +168,20 @@ jobs:
           echo "VERSION=$VERSION" >> $GITHUB_ENV
           echo "Using version: $VERSION"
 
+      - name: Validate GHCR token
+        run: |
+          if [ -z "${{ secrets.GHCR_TOKEN }}" ]; then
+            echo "GHCR_TOKEN secret is missing or empty."
+            exit 1
+          fi
+
       - name: Set up Helm
         uses: azure/setup-helm@v4
         with:
           version: v3.14.0
+
+      - name: Update Helm chart dependencies
+        run: helm dependency update helm/
 
       - name: Package Helm chart
         run: helm package helm/

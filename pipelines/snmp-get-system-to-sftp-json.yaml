@@ -5,7 +5,7 @@ schedule:
   interval_seconds: 900
 source:
   type: snmp_poll
-  host: 172.25.242.55
+  host: ${SNMP_HOST:-snmp.example.com}
   port: 161
   community: public
   version: 2c
@@ -26,11 +26,11 @@ transforms:
       source_ip: "pipeline.source.host"
 sinks:
   - type: sftp
-    host: 172.25.242.55
-    port: 22
-    username: dhaka
-    password: dhaka
-    remote_path: /home/dhaka/test/pm/snmp_get/results/
+    host: ${SNMP_GET_SFTP_HOST:-sftp.example.com}
+    port: ${SNMP_GET_SFTP_PORT:-22}
+    username: ${SNMP_GET_SFTP_USER:-example_user}
+    password: ${SNMP_GET_SFTP_PASS:-changeme}
+    remote_path: ${SNMP_GET_SFTP_PATH:-/data/output/snmp_get/results/}
     filename_template: "{pipeline}_{timestamp}.json"
     serializer_out:
       type: json

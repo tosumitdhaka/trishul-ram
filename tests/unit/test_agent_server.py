@@ -8,7 +8,14 @@ from unittest.mock import MagicMock, patch
 
 from fastapi.testclient import TestClient
 
-from tram.agent.server import ActiveRun, WorkerState, _post_run_complete, create_worker_app
+from tram.agent.server import (
+    ActiveRun,
+    WorkerState,
+    _emit_stats_once,
+    _post_run_complete,
+    create_worker_app,
+    create_worker_ingress_app,
+)
 
 # ── YAML fixture ───────────────────────────────────────────────────────────
 
@@ -62,6 +69,10 @@ class TestWorkerState:
         s.remove("a")
         assert len(snap) == 1   # snapshot unaffected by later remove
 
+    def test_stats_stop_event_present(self):
+        s = WorkerState(worker_id="w0", manager_url="")
+        assert s.stats_stop.is_set() is False
+
 
 # ── _post_run_complete unit tests ──────────────────────────────────────────
 
@@ -69,7 +80,7 @@ class TestWorkerState:
 class TestPostRunComplete:
     def test_no_op_when_url_empty(self):
         # Should not raise and should not attempt any HTTP call
-        _post_run_complete("", "r1", "p", "success", 0, 0, None)
+        _post_run_complete("", "r1", "p", "success", 0, 0, 0, 0, None)
 
     def test_posts_payload(self, respx_mock=None):
         captured = {}
@@ -92,7 +103,7 @@ class TestPostRunComplete:
 
             _post_run_complete(
                 "http://manager/api/internal/run-complete",
-                "run-42", "my-pipe", "success", 10, 8, None,
+                "run-42", "my-pipe", "success", 10, 8, 1024, 768, None,
                 started_at=started_at,
                 finished_at=finished_at,
             )
@@ -101,6 +112,7 @@ class TestPostRunComplete:
         assert captured["json"]["run_id"] == "run-42"
         assert captured["json"]["status"] == "success"
         assert captured["json"]["records_in"] == 10
+        assert captured["json"]["bytes_in"] == 1024
         assert captured["json"]["started_at"] == started_at
         assert captured["json"]["finished_at"] == finished_at
 
@@ -113,7 +125,7 @@ class TestPostRunComplete:
             mock_client_cls.return_value = mock_client
 
             # Must not raise
-            _post_run_complete("http://bad-host/run-complete", "r", "p", "error", 0, 0, "boom")
+            _post_run_complete("http://bad-host/run-complete", "r", "p", "error", 0, 0, 0, 0, "boom")
 
 
 # ── FastAPI endpoint tests ─────────────────────────────────────────────────
@@ -133,6 +145,19 @@ class TestHealthEndpoint:
         assert data["ok"] is True
         assert data["worker_id"] == "test-worker"
         assert data["active_runs"] == 0
+        assert data["ingress_up"] is True
+
+    def test_reports_ingress_down_when_thread_dead(self):
+        app = create_worker_app(worker_id="w0", manager_url="")
+        app.state.ingress_thread = MagicMock(is_alive=MagicMock(return_value=False))
+        client = TestClient(app, raise_server_exceptions=True)
+
+        resp = client.get("/agent/health")
+
+        assert resp.status_code == 200
+        data = resp.json()
+        assert data["ok"] is False
+        assert data["ingress_up"] is False
 
 
 class TestStatusEndpoint:
@@ -143,6 +168,17 @@ class TestStatusEndpoint:
         data = resp.json()
         assert data["running"] == []
         assert data["streams"] == []
+
+
+class TestIngressApp:
+    def test_create_worker_ingress_app_has_no_agent_routes(self):
+        app = create_worker_ingress_app(worker_id="w0")
+        route_paths = {route.path for route in app.routes}
+
+        assert "/webhooks/{path:path}" in route_paths
+        assert "/agent/run" not in route_paths
+        assert "/agent/stop" not in route_paths
+        assert "/agent/status" not in route_paths
 
 
 class TestStopEndpoint:
@@ -254,19 +290,23 @@ class TestRunEndpoint:
                 # Give the background thread time to finish
                 time.sleep(0.3)
 
-        assert len(callback_calls) == 1
-        assert callback_calls[0]["run_id"] == "r-batch-1"
-        assert callback_calls[0]["status"] == "success"
-        assert callback_calls[0]["records_in"] == 3
-        assert callback_calls[0]["started_at"]
-        assert callback_calls[0]["finished_at"]
+        stats_calls = [c for c in callback_calls if c.get("is_final") is True]
+        complete_calls = [c for c in callback_calls if c.get("status") == "success"]
+        assert len(stats_calls) == 1
+        assert len(complete_calls) == 1
+        assert complete_calls[0]["run_id"] == "r-batch-1"
+        assert complete_calls[0]["records_in"] == 3
+        assert complete_calls[0]["started_at"]
+        assert complete_calls[0]["finished_at"]
 
     def test_stream_run_accepted_and_stops(self):
         """Stream run: POST /agent/run then POST /agent/stop signals completion."""
         stopped = threading.Event()
 
-        def _fake_stream_run(config, stop_event):
+        def _fake_stream_run(config, stop_event, stats=None):
             # Block until stop is requested (simulates a real stream)
+            if stats is not None:
+                stats.increment(records_in=7, records_out=6, skipped=1, bytes_in=700, bytes_out=600)
             stop_event.wait(timeout=5)
             stopped.set()
 
@@ -312,6 +352,11 @@ class TestRunEndpoint:
         assert len(callback_calls) == 1
         assert callback_calls[0]["started_at"]
         assert callback_calls[0]["finished_at"]
+        assert callback_calls[0]["records_in"] == 7
+        assert callback_calls[0]["records_out"] == 6
+        assert callback_calls[0]["records_skipped"] == 1
+        assert callback_calls[0]["bytes_in"] == 700
+        assert callback_calls[0]["bytes_out"] == 600
 
     def test_explicit_callback_url_takes_precedence(self):
         """callback_url in RunRequest overrides the manager_url-derived URL."""
@@ -342,5 +387,46 @@ class TestRunEndpoint:
                 })
                 time.sleep(0.3)
 
-        assert len(callback_calls) == 1
-        assert callback_calls[0] == "http://custom-host/custom-path"
+        assert "http://custom-host/custom-path" in callback_calls
+        assert "http://custom-host/pipeline-stats" in callback_calls
+
+
+class TestStatsHelpers:
+    def test_emit_stats_once_posts_snapshot(self):
+        state = WorkerState(worker_id="w0", manager_url="http://manager")
+        run = ActiveRun(
+            run_id="run-1",
+            pipeline_name="pipe-a",
+            schedule_type="stream",
+            started_at="2026-04-17T12:00:00+00:00",
+            stats_url="http://manager/api/internal/pipeline-stats",
+        )
+        assert run.stats is None
+        from tram.agent.metrics import PipelineStats
+        run.stats = PipelineStats(run_id="run-1", pipeline_name="pipe-a", schedule_type="stream")
+        run.stats.increment(records_in=5, bytes_in=100, errors=["boom"])
+        state.add(run)
+
+        captured = {}
+
+        def _fake_post(url, **kwargs):
+            captured["url"] = url
+            captured["json"] = kwargs.get("json")
+            resp = MagicMock()
+            resp.raise_for_status = MagicMock()
+            return resp
+
+        with patch("httpx.Client") as mock_client_cls:
+            mock_client = MagicMock()
+            mock_client.__enter__ = lambda s: mock_client
+            mock_client.__exit__ = MagicMock(return_value=False)
+            mock_client.post.side_effect = _fake_post
+            mock_client_cls.return_value = mock_client
+
+            _emit_stats_once(state)
+
+        assert captured["url"] == "http://manager/api/internal/pipeline-stats"
+        assert captured["json"]["run_id"] == "run-1"
+        assert captured["json"]["records_in"] == 5
+        assert captured["json"]["error_count"] == 1
+        assert run.stats.errors_last_window == []

@@ -34,6 +34,8 @@ class PipelineRunContext:
     records_in: int = 0
     records_out: int = 0
     records_skipped: int = 0
+    bytes_in: int = 0
+    bytes_out: int = 0
     dlq_count: int = 0
     errors: list[str] = field(default_factory=list)
 
@@ -54,6 +56,14 @@ class PipelineRunContext:
     def inc_records_skipped(self, n: int) -> None:
         with self._lock:  # type: ignore[attr-defined]
             self.records_skipped += n
+
+    def inc_bytes_in(self, n: int) -> None:
+        with self._lock:  # type: ignore[attr-defined]
+            self.bytes_in += n
+
+    def inc_bytes_out(self, n: int) -> None:
+        with self._lock:  # type: ignore[attr-defined]
+            self.bytes_out += n
 
     def record_error(self, msg: str) -> None:
         """Append an error message and increment records_skipped by 1.
@@ -95,6 +105,8 @@ class RunResult:
     records_in: int
     records_out: int
     records_skipped: int
+    bytes_in: int = 0
+    bytes_out: int = 0
     error: str | None = None
     dlq_count: int = 0
     node_id: str = ""
@@ -116,6 +128,8 @@ class RunResult:
             records_in=ctx.records_in,
             records_out=ctx.records_out,
             records_skipped=ctx.records_skipped,
+            bytes_in=ctx.bytes_in,
+            bytes_out=ctx.bytes_out,
             error=error,
             dlq_count=ctx.dlq_count,
             errors=list(ctx.errors),
@@ -131,6 +145,8 @@ class RunResult:
             "records_in": self.records_in,
             "records_out": self.records_out,
             "records_skipped": self.records_skipped,
+            "bytes_in": self.bytes_in,
+            "bytes_out": self.bytes_out,
             "dlq_count": self.dlq_count,
             "error": self.error,
             "errors": self.errors,

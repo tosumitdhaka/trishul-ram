@@ -516,7 +516,29 @@ TransformConfig = Annotated[
 # ── Sinks ──────────────────────────────────────────────────────────────────
 
 
-class SFTPSinkConfig(BaseModel):
+class FileSinkConfigMixin(BaseModel):
+    file_mode: Literal["append", "single"] = "append"
+    max_records: int | None = None
+    max_time: int | None = None
+    max_bytes: int | None = None
+    max_index: int = 99999
+
+    @model_validator(mode="after")
+    def validate_file_sink_rollover(self):
+        for field_name in ("max_records", "max_time", "max_bytes"):
+            value = getattr(self, field_name)
+            if value is not None and value < 1:
+                raise ValueError(f"{field_name} must be >= 1")
+        if self.max_index < 1:
+            raise ValueError("max_index must be >= 1")
+        if self.file_mode == "single" and any(
+            value is not None for value in (self.max_records, self.max_time, self.max_bytes)
+        ):
+            raise ValueError("max_records/max_time/max_bytes require file_mode=append")
+        return self
+
+
+class SFTPSinkConfig(FileSinkConfigMixin):
     type: Literal["sftp"]
     host: str
     port: int = 22
@@ -539,7 +561,7 @@ class SFTPSinkConfig(BaseModel):
         return self
 
 
-class LocalSinkConfig(BaseModel):
+class LocalSinkConfig(FileSinkConfigMixin):
     type: Literal["local"]
     path: str
     filename_template: str = "{pipeline}_{timestamp}.bin"
@@ -1044,6 +1066,29 @@ class AlertRuleConfig(BaseModel):
 # ── Pipeline (top-level) ───────────────────────────────────────────────────
 
 
+class WorkersConfig(BaseModel):
+    count: int | Literal["all"] | None = None
+    worker_ids: list[str] | None = Field(
+        default=None,
+        alias="list",
+        validation_alias=AliasChoices("list", "worker_ids"),
+        serialization_alias="list",
+    )
+
+    @model_validator(mode="after")
+    def validate_workers(self) -> WorkersConfig:
+        if self.count is not None and self.worker_ids is not None:
+            raise ValueError("workers.count and workers.list are mutually exclusive")
+        if isinstance(self.count, int) and self.count < 1:
+            raise ValueError("workers.count must be >= 1")
+        if self.worker_ids is not None:
+            if not self.worker_ids:
+                raise ValueError("workers.list must not be empty")
+            if len(self.worker_ids) != len(set(self.worker_ids)):
+                raise ValueError("workers.list must not contain duplicate worker IDs")
+        return self
+
+
 class PipelineConfig(BaseModel):
     version: str = "1"
 
@@ -1072,6 +1117,7 @@ class PipelineConfig(BaseModel):
     # Parallelism
     thread_workers: int = 1   # intra-node worker threads per pipeline run
     parallel_sinks: bool = False   # fan-out sink writes concurrently
+    workers: WorkersConfig | None = None
 
     # Batch size cap (max records to process per batch run; None = unlimited)
     batch_size: int | None = None
@@ -1088,6 +1134,15 @@ class PipelineConfig(BaseModel):
     def check_on_error_dlq(self) -> PipelineConfig:
         if self.on_error == "dlq" and self.dlq is None:
             raise ValueError("on_error='dlq' requires a 'dlq' sink to be configured")
+        return self
+
+    @model_validator(mode="after")
+    def apply_workers_default(self) -> PipelineConfig:
+        if self.workers is None:
+            if self.source.type in ("webhook", "prometheus_rw"):
+                self.workers = WorkersConfig(count="all")
+            else:
+                self.workers = WorkersConfig(count=1)
         return self
 
     @field_validator("name")
@@ -1107,6 +1162,21 @@ class PipelineConfig(BaseModel):
             self.sinks = [self.sink]
         if not self.sinks:
             raise ValueError("At least one sink must be configured (use 'sinks:' list or 'sink:')")
+        default_ser = self.serializer_out or JsonSerializerConfig(type="json")
+        for sink in self.sinks:
+            if sink.type not in ("local", "sftp"):
+                continue
+            effective_ser = sink.serializer_out or default_ser
+            if effective_ser.type == "json":
+                if any(
+                    getattr(sink, field_name) is not None
+                    for field_name in ("max_records", "max_time", "max_bytes")
+                ):
+                    raise ValueError(
+                        f"{sink.type} sink with serializer_out=json does not support "
+                        "max_records/max_time/max_bytes; use file_mode=single"
+                    )
+                sink.file_mode = "single"
         return self
 
 

@@ -85,7 +85,7 @@ When making changes that affect user-facing behavior, update:
 
 #### 1. Version Bump
 - [ ] Update `pyproject.toml` `version = "X.Y.Z"`
-- [ ] Update `README.md` `**Version:** X.Y.Z` (line 5)
+- [ ] Update version references in `README.md` / `docs/index.md` for X.Y.Z
 - [ ] Update `helm/Chart.yaml`:
   - [ ] `version: X.Y.Z` (chart version)
   - [ ] `appVersion: "X.Y.Z"` (app version)
@@ -260,8 +260,8 @@ If a release has critical issues:
 - [x] `CHANGELOG.md` — `[1.2.1]` section added, comparison link added
 
 ### Docker / Helm
-- [x] `docker build -t trishul-ram:1.2.4 .` — built successfully
-- [x] `docker build -t trishul-ram-worker:1.2.4 . -f Dockerfile.worker` — built successfully
+- [x] `docker build -t trishul-ram:1.2.1 .` — built successfully
+- [x] `docker build -t trishul-ram-worker:1.2.1 . -f Dockerfile.worker` — built successfully
 - [x] `helm upgrade` — REVISION 10, all 4 pods `1/1 Running`
 - [x] Manager logs clean — single `Worker pool: 3/3 healthy` after startup
 - [x] Settings page shows `manager · 3/3 workers`
@@ -302,6 +302,49 @@ If a release has critical issues:
 - `helm/Chart.yaml` → `1.2.2`
 
 ---
+
+## v1.3.0 — 2026-04-17
+
+### Scope
+- Broadcast streams and push-source scaling for `webhook` / `prometheus_rw`
+- Unified worker stats, placement persistence, and reconciliation
+- Worker public ingress split on `:8767`
+- Manager Deployment → StatefulSet Helm migration
+- Alert cooldown fix on confirmed delivery only
+
+### Verified
+- [x] `ruff check .` — passed after auto-fixing 7 import-order issues with `ruff check --fix .`
+- [x] `pytest tests/unit/ -v -o log_cli=false` — **1323 passed**
+- [x] `pytest tests/integration/ -v -o log_cli=false` — **44 passed**
+- [x] `pytest tests/ --cov=tram --cov-fail-under=60 -o log_cli=false` — **79.57% coverage**
+- [x] `helm lint helm/` — passed
+- [x] `helm install tram-test helm/ --dry-run --debug` — rendered successfully with chart/app version `1.3.0`
+- [x] Bundled pipeline examples validate via `tram validate pipelines/*.yaml`
+- [x] `scripts/deploy-kind-tram-dev.sh --tag local-v130-20260417` rebuilt and rolled out local kind release
+- [x] Kind cluster upgraded to manager StatefulSet + worker StatefulSet
+- [x] Live manager `/api/ready` verified through NodePort `30001`
+- [x] Live manager `/api/meta` verified: `{"version":"1.3.0", ...}`
+- [x] Live `/api/cluster/nodes` verified: `manager · 3/3 workers`
+- [x] Live `/api/cluster/streams` verified: empty stream list with manager mode response
+
+### Fixes included
+- [x] `tram/models/pipeline.py` / `tram/pipeline/linter.py` — `workers:` model defaults and L006–L010
+- [x] `tram/agent/worker_pool.py` — broadcast dispatch, worker ID mapping, load-aware scoring
+- [x] `tram/agent/metrics.py` / `tram/agent/stats_store.py` — unified stats and stale-aware store
+- [x] `tram/agent/reconciler.py` / `tram/pipeline/controller.py` — stale-slot reconcile and restart recovery
+- [x] `tram/api/routers/pipelines.py` / `tram/api/routers/health.py` — placement and cluster streams APIs
+- [x] `tram/agent/server.py` / `tram/daemon/server.py` — ingress split and composite worker health
+- [x] `helm/templates/manager-statefulset.yaml` / `helm/templates/manager-headless-service.yaml` — manager StatefulSet migration
+- [x] `tram/alerts/evaluator.py` — cooldown only on confirmed delivery
+
+### Version bumps
+- [x] `pyproject.toml` → `1.3.0`
+- [x] `helm/Chart.yaml` → `1.3.0`
+- [x] `helm/values.yaml` default image tag → `1.3.0`
+- [x] `docs/index.md` / `docs/deployment.md` / `docs/changelog.md` updated for `1.3.0`
+
+### Pending (post-bump)
+- [x] Tag/push/publish intentionally skipped for this pass — local release-prep and kind validation only
 
 ## v1.2.3 — 2026-04-16
 
