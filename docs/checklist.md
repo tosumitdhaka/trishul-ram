@@ -85,7 +85,7 @@ When making changes that affect user-facing behavior, update:
 
 #### 1. Version Bump
 - [ ] Update `pyproject.toml` `version = "X.Y.Z"`
-- [ ] Update `README.md` `**Version:** X.Y.Z` (line 5)
+- [ ] Update version references in `README.md` / `docs/index.md` for X.Y.Z
 - [ ] Update `helm/Chart.yaml`:
   - [ ] `version: X.Y.Z` (chart version)
   - [ ] `appVersion: "X.Y.Z"` (app version)
@@ -260,8 +260,8 @@ If a release has critical issues:
 - [x] `CHANGELOG.md` — `[1.2.1]` section added, comparison link added
 
 ### Docker / Helm
-- [x] `docker build -t trishul-ram:1.2.4 .` — built successfully
-- [x] `docker build -t trishul-ram-worker:1.2.4 . -f Dockerfile.worker` — built successfully
+- [x] `docker build -t trishul-ram:1.2.1 .` — built successfully
+- [x] `docker build -t trishul-ram-worker:1.2.1 . -f Dockerfile.worker` — built successfully
 - [x] `helm upgrade` — REVISION 10, all 4 pods `1/1 Running`
 - [x] Manager logs clean — single `Worker pool: 3/3 healthy` after startup
 - [x] Settings page shows `manager · 3/3 workers`

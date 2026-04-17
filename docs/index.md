@@ -36,7 +36,7 @@ Lightweight, container-native Python daemon for telecom data pipeline orchestrat
 
 ### Design & Roadmap
 
-- **[Pipeline Controller Design](pipeline-controller-design.md)** - PipelineController architecture, state machine, DB schema, cluster ownership (implemented in v1.1.4)
+- **[Pipeline Controller Design](pipeline-controller-design.md)** - Historical design notes for the v1.1.x controller transition; current manager/worker architecture is documented in `architecture.md`
 - **[Roadmap](roadmap.md)** - Planned features and version checklist
 
 ---
@@ -138,7 +138,7 @@ helm install tram oci://ghcr.io/tosumitdhaka/charts/trishul-ram \
 - Dedicated `Dockerfile.worker` — lighter image without apscheduler/sqlalchemy/UI
 - Least-loaded dispatch plus broadcast placement for HTTP push streams
 - `TRAM_MODE=manager` / `TRAM_MODE=worker` — SQLite on manager PVC is sufficient (single writer)
-- `PipelineController` — unified pipeline lifecycle authority; 4-state machine (`scheduled`, `running`, `stopped`, `error`)
+- `PipelineController` — unified pipeline lifecycle authority; core lifecycle states are `scheduled`, `running`, `stopped`, `error`, with `degraded` / `reconciling` surfaced for broadcast placements in v1.3.0
 
 ### Security
 - API key authentication
@@ -175,7 +175,7 @@ docs/
 ├── connectors.md                 # All sources and sinks
 ├── deployment.md                 # Docker, k8s, environment variables
 ├── transforms.md                 # Transform reference
-├── pipeline-controller-design.md # PipelineController design (v1.1.4)
+├── pipeline-controller-design.md # Historical v1.1.x controller design notes
 ├── roadmap.md                    # Planned features and version checklist
 ├── changelog.md                  # Full release history
 └── checklist.md                  # Development checklist

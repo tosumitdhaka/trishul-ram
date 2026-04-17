@@ -33,7 +33,6 @@ All configuration is via environment variables (12-factor).
 | `TRAM_SMTP_PASS` | _(none)_ | SMTP password (optional) |
 | `TRAM_SMTP_TLS` | `true` | Use STARTTLS (`false` for plain SMTP) |
 | `TRAM_SMTP_FROM` | `tram@localhost` | Sender address for alert emails |
-| `TRAM_PIPELINE_SYNC_INTERVAL` | `10` | Seconds between DB polls for API-registered pipelines (v1.1.2) |
 | `TRAM_API_KEY` | _(empty)_ | API key for request authentication; empty = auth disabled |
 | `TRAM_AUTH_USERS` | _(empty)_ | Comma-separated `user:password` pairs for browser UI login (v1.0.8); issues 8-hour HMAC session tokens; coexists with `TRAM_API_KEY` |
 | `TRAM_AUTH_SECRET` | _(random)_ | Shared HMAC signing secret for session tokens (v1.0.8); **required in cluster mode** — without a shared secret each pod signs tokens independently and cross-pod requests return 401 |
@@ -50,13 +49,16 @@ All configuration is via environment variables (12-factor).
 | `TRAM_SCHEMA_REGISTRY_USERNAME` | _(empty)_ | Basic-auth username for the external schema registry; used as default when not set in pipeline YAML (v1.0.4) |
 | `TRAM_SCHEMA_REGISTRY_PASSWORD` | _(empty)_ | Basic-auth password for the external schema registry; used as default when not set in pipeline YAML (v1.0.4) |
 | `TRAM_UI_DIR` | `/ui` | Directory containing built tram-ui static assets; set to empty string to disable the web UI without rebuilding the image (v1.0.8) |
+| `TRAM_TEMPLATES_DIR` | `/tram-templates` | Directory containing bundled pipeline templates served by `/api/templates` (v1.1.0) |
 | `TRAM_MODE` | `standalone` | Deployment mode: `standalone` \| `manager` \| `worker` (v1.2.0) |
-| `TRAM_WORKER_REPLICAS` | `1` | Number of worker StatefulSet replicas (set on manager pod, v1.2.0) |
+| `TRAM_WORKER_URLS` | _(empty)_ | Explicit comma-separated worker agent URLs; when set, manager uses this list instead of replica-based headless DNS discovery (v1.2.0) |
+| `TRAM_WORKER_REPLICAS` | `0` | Number of worker StatefulSet replicas used for headless-DNS discovery; `0` disables replica-based discovery (set on manager pod, v1.2.0) |
 | `TRAM_WORKER_SERVICE` | `tram-worker` | Headless Service name used to build worker DNS addresses (v1.2.0) |
 | `TRAM_WORKER_NAMESPACE` | `default` | Kubernetes namespace where worker pods run (v1.2.0) |
 | `TRAM_WORKER_PORT` | `8766` | Port that worker pods listen on (v1.2.0) |
 | `TRAM_WORKER_INGRESS_PORT` | `8767` | Public ingress port on worker pods for `/webhooks/*` push traffic (v1.3.0) |
 | `TRAM_MANAGER_URL` | _(empty)_ | Manager base URL used by worker pods for run-complete callbacks (v1.2.0) |
+| `TRAM_STATS_INTERVAL` | `30` | Seconds between worker periodic stats reports; also controls `PlacementReconciler` tick interval (`min(TRAM_STATS_INTERVAL, 10)s`) and stale-slot threshold (`3 × interval`) (v1.3.0) |
 
 ### Database backends (v0.7.0)
 
@@ -99,6 +101,8 @@ TRAM_DB_URL=postgresql+psycopg2://tram:secret@postgres:5432/tramdb
 
 The manager dispatches `POST /agent/run` to each worker using Kubernetes headless DNS:
 `<service>-N.<service>.<namespace>.svc.cluster.local:<port>`
+
+Alternatively, set `TRAM_WORKER_URLS` to an explicit comma-separated list of worker agent URLs and the manager will use that list instead of headless-DNS discovery.
 
 ### Worker pod
 
@@ -148,14 +152,15 @@ The worker image exposes port `8766` for the internal agent API and port `8767` 
 
 ### Worker agent endpoints
 
-| Method | Path | Description |
-|--------|------|-------------|
-| `GET` | `/agent/health` | Worker liveness check |
-| `GET` | `/agent/status` | Lists active batch and stream runs |
-| `POST` | `/agent/run` | Start a pipeline run (batch or stream) |
-| `POST` | `/agent/stop` | Signal a stream run to stop |
-| `POST` | `/webhooks/{path}` | Ingress-only webhook receiver on worker port `8767` |
-| `POST` | `/api/internal/run-complete` | _(manager)_ Receive run result callback from worker |
+| Method | Port | Path | Description |
+|--------|------|------|-------------|
+| `GET` | `8766` | `/agent/health` | Composite liveness check — returns `ok: false` when either agent or ingress thread is dead; includes `ingress_up` field |
+| `GET` | `8766` | `/agent/status` | Lists active batch and stream runs |
+| `POST` | `8766` | `/agent/run` | Start a pipeline run (batch or stream) |
+| `POST` | `8766` | `/agent/stop` | Signal a stream run to stop |
+| `POST` | `8767` | `/webhooks/{path}` | Ingress-only webhook receiver for push-HTTP sources |
+| `POST` | `8765` | `/api/internal/run-complete` | _(manager)_ Receive run result callback from worker |
+| `POST` | `8765` | `/api/internal/pipeline-stats` | _(manager)_ Receive periodic stats from worker; batch completion sends one final report with `is_final: true` before run-complete |
 
 ## API Key Authentication (v1.0.0)
 
@@ -644,12 +649,25 @@ This creates a single RWX PVC for shared schemas/MIBs backed by NFS. In manager+
 
 ### Scale up / scale down
 
-```bash
-# Scale out
-kubectl scale statefulset tram -n tram --replicas=5
+**Standalone** — scaling is not supported; the standalone StatefulSet is always a single replica.
 
-# Scale in — surviving nodes absorb released pipelines within TRAM_NODE_TTL_SECONDS
-kubectl scale statefulset tram -n tram --replicas=2
+**Manager + Worker** — scale the worker StatefulSet:
+
+```bash
+# Scale out workers
+kubectl scale statefulset tram-worker -n tram --replicas=5
+
+# Scale in workers — the manager's WorkerPool health poll detects the change within 10s
+kubectl scale statefulset tram-worker -n tram --replicas=2
+```
+
+Or via Helm (preferred — keeps values.yaml in sync):
+
+```bash
+helm upgrade tram oci://ghcr.io/tosumitdhaka/charts/trishul-ram \
+  --namespace tram \
+  --reuse-values \
+  --set worker.replicas=5
 ```
 
 ### Prometheus scraping

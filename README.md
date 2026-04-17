@@ -57,6 +57,7 @@ schedule:
 ### Fault Event Mediation (SNMP Traps → Ticketing)
 
 Receive SNMP traps from network elements, enrich them with MIB OID resolution, apply severity mapping, and push to a REST-based ticketing system.
+This works in standalone mode today; in manager mode, `snmp_trap` is intentionally blocked in v1.3.0 until the UDP push-source path lands.
 
 ```yaml
 source:
@@ -131,6 +132,7 @@ schedule:
 ### Log Aggregation (Syslog → OpenSearch)
 
 Collect syslog from network nodes, parse structured fields, mask sensitive data, and index into OpenSearch.
+This works in standalone mode today; in manager mode, `syslog` is intentionally blocked in v1.3.0 until the UDP push-source path lands.
 
 ```yaml
 source:
