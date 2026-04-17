@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import warnings
 
 from tram.core.exceptions import SinkError
 from tram.interfaces.base_sink import BaseSink
@@ -28,7 +29,8 @@ class SNMPTrapSink(BaseSink):
         port            (int, default 162)       UDP trap port.
         community       (str, default "public")  SNMP v1/v2c community string.
         version         (str, default "2c")      "1", "2c", or "3".
-        enterprise_oid  (str, default "1.3.6.1.4.1.0")  Enterprise OID.
+        trap_oid        (str, default "1.3.6.1.4.1.0")  Notification OID.
+                        Legacy alias: ``enterprise_oid`` is still accepted.
         timeout         (float, default 1.0)     Request timeout seconds.
         retries         (int, default 5)         Request retries.
         varbinds        (list[dict])             Explicit varbind spec; each entry:
@@ -47,7 +49,7 @@ class SNMPTrapSink(BaseSink):
         self.port: int = int(config.get("port", 162))
         self.community: str = config.get("community", "public")
         self.version: str = str(config.get("version", "2c"))
-        self.enterprise_oid: str = config.get("enterprise_oid", "1.3.6.1.4.1.0")
+        self.trap_oid: str = config.get("trap_oid") or config.get("enterprise_oid", "1.3.6.1.4.1.0")
         self.timeout: float = float(config.get("timeout", 1.0))
         self.retries: int = int(config.get("retries", 5))
         self.mib_dirs: list[str] = list(config.get("mib_dirs", []))
@@ -169,7 +171,7 @@ class SNMPTrapSink(BaseSink):
 
         # SNMPv2c traps require sysUpTime.0 and snmpTrapOID.0 as the first two
         # varbinds in the PDU.  We build these explicitly to avoid MIB lookup
-        # issues that arise when using NotificationType with custom enterprise OIDs.
+        # issues that arise when using NotificationType with custom trap OIDs.
         import time as _time
         uptime_ticks = int(_time.monotonic() * 100)  # centi-seconds since process start
         mandatory_vbs = [
@@ -179,7 +181,7 @@ class SNMPTrapSink(BaseSink):
             ),
             hlapi_mod.ObjectType(
                 hlapi_mod.ObjectIdentity("1.3.6.1.6.3.1.1.4.1.0"),
-                hlapi_mod.ObjectIdentifier(self.enterprise_oid),
+                hlapi_mod.ObjectIdentifier(self.trap_oid),
             ),
         ]
 
@@ -198,7 +200,13 @@ class SNMPTrapSink(BaseSink):
 
     def write(self, data: bytes, meta: dict) -> None:
         try:
-            import pysnmp.hlapi.asyncio as _hlapi
+            with warnings.catch_warnings():
+                warnings.filterwarnings(
+                    "ignore",
+                    message=r".*pysnmp-lextudio.*deprecated.*",
+                    category=RuntimeWarning,
+                )
+                import pysnmp.hlapi.asyncio as _hlapi
         except Exception as exc:
             raise SinkError(
                 "SNMP trap sink requires pysnmp-lextudio — install with: pip install tram[snmp]"
@@ -235,7 +243,7 @@ class SNMPTrapSink(BaseSink):
                 extra={
                     "host": self.host,
                     "port": self.port,
-                    "enterprise_oid": self.enterprise_oid,
+                    "trap_oid": self.trap_oid,
                     "bindings": len(bindings_raw),
                 },
             )

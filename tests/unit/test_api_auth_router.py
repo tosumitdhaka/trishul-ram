@@ -6,7 +6,7 @@ from unittest.mock import MagicMock
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
-from tram.api.auth import create_token
+from tram.api.auth import create_token, hash_password
 from tram.api.routers.auth import router
 
 
@@ -52,7 +52,6 @@ class TestLogin:
         assert resp.status_code == 403
 
     def test_db_password_hash_takes_priority(self):
-        from tram.api.auth import hash_password
         hashed = hash_password("dbpass")
         mock_db = MagicMock()
         mock_db.get_password_hash.return_value = hashed
@@ -60,6 +59,16 @@ class TestLogin:
         app = _make_app("admin:envpass", db=mock_db)
         client = TestClient(app, raise_server_exceptions=False)
         # DB hash matches "dbpass", not the env "envpass"
+        resp = client.post("/api/auth/login", json={"username": "admin", "password": "dbpass"})
+        assert resp.status_code == 200
+
+    def test_db_only_auth_succeeds_without_env_users(self):
+        mock_db = MagicMock()
+        mock_db.get_password_hash.return_value = hash_password("dbpass")
+
+        app = _make_app(auth_users=None, db=mock_db)
+        app.state.config.auth_users = None
+        client = TestClient(app, raise_server_exceptions=False)
         resp = client.post("/api/auth/login", json={"username": "admin", "password": "dbpass"})
         assert resp.status_code == 200
 
@@ -91,6 +100,16 @@ class TestMe:
         client = TestClient(app, raise_server_exceptions=False)
         resp = client.get("/api/auth/me")
         assert resp.status_code == 403
+
+    def test_db_only_auth_allows_me_with_valid_token(self):
+        mock_db = MagicMock()
+        app = _make_app(auth_users=None, db=mock_db)
+        app.state.config.auth_users = None
+        token = create_token("admin")
+        client = TestClient(app, raise_server_exceptions=False)
+        resp = client.get("/api/auth/me", headers={"Authorization": f"Bearer {token}"})
+        assert resp.status_code == 200
+        assert resp.json()["username"] == "admin"
 
 
 class TestChangePassword:
@@ -152,3 +171,18 @@ class TestChangePassword:
             headers={"Authorization": f"Bearer {token}"},
         )
         assert resp.status_code == 503
+
+    def test_db_only_auth_can_change_password(self):
+        mock_db = MagicMock()
+        mock_db.get_password_hash.return_value = hash_password("oldpass99")
+        app = _make_app(auth_users=None, db=mock_db)
+        app.state.config.auth_users = None
+        token = create_token("admin")
+        client = TestClient(app, raise_server_exceptions=False)
+        resp = client.post(
+            "/api/auth/change-password",
+            json={"current_password": "oldpass99", "new_password": "newpass99"},
+            headers={"Authorization": f"Bearer {token}"},
+        )
+        assert resp.status_code == 200
+        mock_db.set_password_hash.assert_called_once()

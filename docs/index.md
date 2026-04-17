@@ -9,7 +9,7 @@ title: TRAM Documentation
 
 Lightweight, container-native Python daemon for telecom data pipeline orchestration.
 
-**Version:** 1.2.2 | **Status:** Production-ready | **Python:** 3.11+
+**Version:** 1.2.3 | **Status:** Production-ready | **Python:** 3.11+
 
 ---
 
@@ -63,25 +63,27 @@ open http://localhost:8765/ui/
 ### Docker
 
 ```bash
-docker pull ghcr.io/tosumitdhaka/trishul-ram:1.2.1
+docker pull ghcr.io/tosumitdhaka/trishul-ram:latest
 docker compose up
 curl http://localhost:8765/api/ready
 ```
 
 ### Kubernetes (Helm)
 
+Quick-start examples below use `latest`. For production, pin `image.tag` to a specific release such as `1.2.3`.
+
 ```bash
 # Standalone mode (SQLite, single pod)
 helm install tram oci://ghcr.io/tosumitdhaka/charts/trishul-ram \
-  --set image.tag=1.2.1
+  --set image.tag=latest
 
 # Manager + Worker mode (3 workers, dedicated worker image)
 helm install tram oci://ghcr.io/tosumitdhaka/charts/trishul-ram \
-  --set image.tag=1.2.1 \
+  --set image.tag=latest \
   --set manager.enabled=true \
   --set worker.replicas=3 \
   --set worker.image.repository=trishul-ram-worker \
-  --set worker.image.tag=1.2.1 \
+  --set worker.image.tag=latest \
   --set apiKey=mysecret
 ```
 
@@ -193,14 +195,11 @@ docs/
 
 See [changelog.md](changelog.md) for detailed release notes.
 
-**Current Release:** v1.2.1 (2026-04-14)
-- Per-record `errors` list propagated through worker callback chain; skip reasons visible in run history UI
-- `PipelineRunContext.note_skip()` — appends skip reason to errors without double-counting `records_skipped`
-- Manager health poll logs silenced: single `Worker pool: N/M healthy` summary line on change only
-- `/api/ready` returns `cluster` field: `"manager · N/M workers"` or `"standalone"`
-- Round-robin + least-loaded worker dispatch; `assigned_pipelines` shown on Workers page
-- Dashboard: Start / Stop / Download buttons; Run Now moved to detail page only
-- Full CSS variable coverage (light/dark mode) across all UI pages
+**Current Release:** v1.2.3 (2026-04-16)
+- SNMPv3 poll validation completed for real `GET` and `WALK` paths
+- SNMP walk loop no longer stalls when an agent repeats the terminal OID at subtree end
+- SNMP trap sink config uses `trap_oid` as the correct field name, with legacy `enterprise_oid` still accepted
+- ASN.1 serializer documentation and tests now explicitly reflect decode-only behavior
 
 **v1.2.0** (2026-04-10)
 - Manager + Worker mode (`TRAM_MODE=manager/worker`) — replaces shared-DB cluster model
@@ -214,4 +213,4 @@ See [changelog.md](changelog.md) for detailed release notes.
 
 ---
 
-*Last updated: 2026-04-14*
+*Last updated: 2026-04-16*

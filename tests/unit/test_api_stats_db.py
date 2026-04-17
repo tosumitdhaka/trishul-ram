@@ -103,7 +103,7 @@ class TestAfterHelper:
 
     def test_naive_datetime_gets_utc(self):
         now = datetime.now(UTC)
-        naive = datetime.utcnow() - timedelta(seconds=30)
+        naive = datetime.now(UTC).replace(tzinfo=None) - timedelta(seconds=30)
         # naive datetime should be treated as UTC
         assert _after(naive, now - timedelta(minutes=1)) is True
 
@@ -204,7 +204,7 @@ class TestBucketSparkline:
 
     def test_naive_ts_handled(self):
         now = datetime.now(UTC)
-        naive_ts = (datetime.utcnow() - timedelta(seconds=30)).isoformat()
+        naive_ts = (datetime.now(UTC).replace(tzinfo=None) - timedelta(seconds=30)).isoformat()
         rows = [(naive_ts, 3)]
         result = _bucket_sparkline(rows, now - timedelta(hours=1), buckets=12, minutes=5)
         # Should not raise, bucket 11 gets the record

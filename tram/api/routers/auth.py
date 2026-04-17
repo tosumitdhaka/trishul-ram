@@ -38,13 +38,16 @@ def _resolve_password(username: str, password: str, config, db) -> bool:
     return verify_password(username, password, parse_users(config.auth_users))
 
 
+def _browser_auth_available(config, db) -> bool:
+    """Return True when browser auth is configured via env users or DB support."""
+    return bool(config.auth_users) or db is not None
+
+
 @router.post("/login")
 async def login(body: LoginRequest, request: Request):
     config = request.app.state.config
     db = getattr(request.app.state, "db", None)
-    if not config.auth_users and db is None:
-        raise HTTPException(403, "User auth not configured (TRAM_AUTH_USERS not set)")
-    if not config.auth_users:
+    if not _browser_auth_available(config, db):
         raise HTTPException(403, "User auth not configured (TRAM_AUTH_USERS not set)")
     if not _resolve_password(body.username, body.password, config, db):
         raise HTTPException(401, "Invalid credentials")
@@ -55,7 +58,8 @@ async def login(body: LoginRequest, request: Request):
 @router.get("/me")
 async def me(request: Request):
     config = request.app.state.config
-    if not config.auth_users:
+    db = getattr(request.app.state, "db", None)
+    if not _browser_auth_available(config, db):
         raise HTTPException(403, "User auth not configured (TRAM_AUTH_USERS not set)")
     token = extract_bearer(request)
     username = verify_token(token) if token else None
@@ -68,7 +72,7 @@ async def me(request: Request):
 async def change_password(body: ChangePasswordRequest, request: Request):
     config = request.app.state.config
     db = getattr(request.app.state, "db", None)
-    if not config.auth_users:
+    if not _browser_auth_available(config, db):
         raise HTTPException(403, "User auth not configured")
     # Require a valid session token
     token = extract_bearer(request)

@@ -199,3 +199,37 @@ class TestPerSinkTransformApplication:
         # transform should receive only filtered records
         t.apply.assert_called_once_with(filtered)
         mock_ser_out.serialize.assert_called_once_with(transformed)
+
+    def test_sink_transforms_receive_runtime_meta_when_supported(self):
+        records = [{"x": 1}]
+
+        class MetaAwareTransform:
+            def __init__(self):
+                self.metas = []
+
+            def set_runtime_meta(self, meta):
+                self.metas.append(dict(meta))
+
+            def apply(self, records):
+                return records
+
+        t = MetaAwareTransform()
+
+        mock_ser_in = MagicMock()
+        mock_ser_in.parse.return_value = records
+        mock_ser_out = MagicMock()
+        mock_ser_out.serialize.return_value = b'[]'
+        mock_sink = MagicMock()
+
+        sinks = [(mock_sink, None, [t])]
+        executor = PipelineExecutor()
+        ctx = PipelineRunContext(pipeline_name="sink-t-test")
+
+        executor._process_chunk(
+            b'[]', {"source_filename": "input.json"}, mock_ser_in, [], mock_ser_out,
+            sinks, ctx, "continue",
+        )
+
+        assert len(t.metas) == 1
+        assert t.metas[0]["source_filename"] == "input.json"
+        assert t.metas[0]["pipeline_name"] == "sink-t-test"

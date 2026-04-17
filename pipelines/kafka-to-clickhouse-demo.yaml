@@ -31,11 +31,11 @@ serializer_in:
   type: json
 
 transforms:
-  - type: field_rename
-    mappings:
+  - type: rename
+    fields:
       ts: timestamp
       src: source_node
-  - type: field_add
+  - type: add_field
     fields:
       pipeline: kafka-to-clickhouse-demo
       env: production
@@ -62,7 +62,7 @@ sinks:
     batch_timeout_seconds: 2.0       # flush every N seconds regardless of buffer size
     batch_flush_on_stop: true        # flush remaining rows when pipeline stops
     transforms:
-      - type: field_drop
+      - type: drop
         fields: [env]                # strip internal field before insert
     serializer_out: null             # null = use global serializer_in (json)
 
@@ -74,5 +74,6 @@ dlq:
 
 alerts:
   - condition: "last_run_status == 'error'"
-    action: log
-    message: "kafka-to-clickhouse-demo hit error"
+    action: webhook
+    webhook_url: "https://hooks.example.com/tram-alerts"
+    subject: "TRAM Alert: kafka-to-clickhouse-demo hit error"

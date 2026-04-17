@@ -185,6 +185,13 @@ class PipelineExecutor:
         return transforms
 
     @staticmethod
+    def _set_transform_runtime_meta(transform, meta: dict) -> None:
+        """Pass per-chunk metadata to transforms that opt into it."""
+        setter = getattr(transform, "set_runtime_meta", None)
+        if callable(setter):
+            setter(meta)
+
+    @staticmethod
     def _make_sink_cb_key(config: PipelineConfig, index: int) -> str:
         """Stable circuit-breaker key that survives object re-creation.
 
@@ -253,6 +260,7 @@ class PipelineExecutor:
                 try:
                     processed = [record]
                     for t in transforms:
+                        self._set_transform_runtime_meta(t, meta)
                         processed = t.apply(processed)
                     surviving_records.extend(processed)
                 except Exception as exc:
@@ -297,6 +305,7 @@ class PipelineExecutor:
                 for t in sink_transforms:
                     pre_transform = sink_records
                     try:
+                        self._set_transform_runtime_meta(t, meta)
                         sink_records = t.apply(sink_records)
                     except Exception as exc:
                         if dlq_sink is not None:

@@ -94,6 +94,8 @@ def _post_run_complete(
     error: str | None,
     records_skipped: int = 0,
     errors: list[str] | None = None,
+    started_at: str | None = None,
+    finished_at: str | None = None,
 ) -> None:
     """POST run-complete to the manager. Errors are logged and swallowed."""
     if not callback_url:
@@ -107,6 +109,8 @@ def _post_run_complete(
         "records_skipped": records_skipped,
         "error": error,
         "errors": errors or [],
+        "started_at": started_at,
+        "finished_at": finished_at,
     }
     try:
         with httpx.Client(timeout=10) as client:
@@ -229,6 +233,8 @@ def create_worker_app(worker_id: str = "", manager_url: str = "") -> FastAPI:
                     _post_run_complete(
                         callback_url, req.run_id, req.pipeline_name,
                         "success", 0, 0, None,
+                        started_at=active_run.started_at,
+                        finished_at=datetime.now(UTC).isoformat(),
                     )
                 except Exception as exc:
                     logger.error(
@@ -242,6 +248,8 @@ def create_worker_app(worker_id: str = "", manager_url: str = "") -> FastAPI:
                     _post_run_complete(
                         callback_url, req.run_id, req.pipeline_name,
                         "error", 0, 0, str(exc),
+                        started_at=active_run.started_at,
+                        finished_at=datetime.now(UTC).isoformat(),
                     )
                 finally:
                     state.remove(req.run_id)
@@ -265,6 +273,8 @@ def create_worker_app(worker_id: str = "", manager_url: str = "") -> FastAPI:
                         result.error,
                         result.records_skipped,
                         result.errors,
+                        result.started_at.isoformat(),
+                        result.finished_at.isoformat(),
                     )
                 except Exception as exc:
                     logger.error(
@@ -278,6 +288,8 @@ def create_worker_app(worker_id: str = "", manager_url: str = "") -> FastAPI:
                     _post_run_complete(
                         callback_url, req.run_id, req.pipeline_name,
                         "error", 0, 0, str(exc),
+                        started_at=active_run.started_at,
+                        finished_at=datetime.now(UTC).isoformat(),
                     )
                 finally:
                     state.remove(req.run_id)

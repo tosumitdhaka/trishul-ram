@@ -7,9 +7,10 @@ They are excluded from the public OpenAPI schema and exempt from API key auth.
 from __future__ import annotations
 
 import logging
+from datetime import datetime
 
 from fastapi import APIRouter, Request
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 logger = logging.getLogger(__name__)
 
@@ -24,7 +25,9 @@ class RunCompletePayload(BaseModel):
     records_out: int = 0
     records_skipped: int = 0
     error: str | None = None
-    errors: list[str] = []
+    errors: list[str] = Field(default_factory=list)
+    started_at: datetime | None = None
+    finished_at: datetime | None = None
 
 
 @router.post("/api/internal/run-complete")
@@ -54,5 +57,7 @@ async def run_complete(payload: RunCompletePayload, request: Request) -> dict:
         records_skipped=payload.records_skipped,
         error=payload.error,
         errors=payload.errors,
+        started_at=payload.started_at,
+        finished_at=payload.finished_at,
     )
     return {"ok": True}

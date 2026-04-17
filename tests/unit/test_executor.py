@@ -183,3 +183,41 @@ class TestTransformChain:
             executor.batch_run(config)
 
         assert call_order == ["t1", "t2", "t3"]
+
+    def test_transforms_receive_runtime_meta_when_supported(self):
+        config = _make_pipeline()
+        executor = PipelineExecutor()
+
+        class MetaAwareTransform:
+            def __init__(self):
+                self.metas = []
+
+            def set_runtime_meta(self, meta):
+                self.metas.append(dict(meta))
+
+            def apply(self, records):
+                return records
+
+        t = MetaAwareTransform()
+
+        mock_source = MagicMock()
+        mock_source.read.return_value = iter([(b'[{"x":1}]', {"source_filename": "test.json"})])
+        mock_sink = MagicMock()
+        mock_ser_in = MagicMock()
+        mock_ser_in.parse.return_value = [{"x": 1}]
+        mock_ser_out = MagicMock()
+        mock_ser_out.serialize.return_value = b'[{"x":1}]'
+
+        with (
+            patch.object(executor, "_build_source", return_value=mock_source),
+            patch.object(executor, "_build_sinks", return_value=[(mock_sink, None, [])]),
+            patch.object(executor, "_build_serializer_in", return_value=mock_ser_in),
+            patch.object(executor, "_build_serializer_out", return_value=mock_ser_out),
+            patch.object(executor, "_build_transforms", return_value=[t]),
+        ):
+            executor.batch_run(config)
+
+        assert len(t.metas) == 1
+        assert t.metas[0]["source_filename"] == "test.json"
+        assert t.metas[0]["pipeline_name"] == "test-exec"
+        assert "run_id" in t.metas[0]
