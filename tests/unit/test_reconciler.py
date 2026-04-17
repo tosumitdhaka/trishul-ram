@@ -50,6 +50,26 @@ def test_reconciler_marks_stale_slot_and_redispatches():
     db.update_broadcast_placement_status.assert_called()
 
 
+def test_reconciler_does_not_redispatch_fresh_slot_before_first_stats():
+    controller = MagicMock()
+    placement = _placement()
+    placement["started_at"] = datetime.now(UTC)
+    placement["slots"][0]["dispatched_at"] = datetime.now(UTC).isoformat()
+    controller.get_active_broadcast_placements.return_value = [placement]
+
+    worker_pool = MagicMock()
+    worker_pool.is_worker_healthy.return_value = True
+
+    stats_store = StatsStore(interval=30)
+    db = MagicMock()
+    reconciler = PlacementReconciler(controller, worker_pool, stats_store, db, stats_interval=30)
+
+    reconciler.run_once()
+
+    controller.redispatch_broadcast_slot.assert_not_called()
+    db.update_broadcast_placement_status.assert_not_called()
+
+
 def test_reconciler_promotes_reconciling_group_after_timeout():
     controller = MagicMock()
     placement = _placement(status="reconciling")

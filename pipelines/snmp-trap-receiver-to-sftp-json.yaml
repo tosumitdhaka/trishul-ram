@@ -27,11 +27,11 @@ transforms:
       received_by: "'snmp_trap_receiver_to_sftp_json'"
 sinks:
   - type: sftp
-    host: 172.25.242.55
-    port: 22
-    username: dhaka
-    password: dhaka
-    remote_path: /home/dhaka/test/pm/snmp_trap/results/
+    host: ${TRAP_SFTP_HOST:-sftp.example.com}
+    port: ${TRAP_SFTP_PORT:-22}
+    username: ${TRAP_SFTP_USER:-example_user}
+    password: ${TRAP_SFTP_PASS:-changeme}
+    remote_path: ${TRAP_SFTP_PATH:-/data/output/snmp_trap/results/}
     filename_template: "{pipeline}_{timestamp}.json"
     serializer_out:
       type: json

@@ -454,6 +454,9 @@ class WorkerPool:
             )
             return False
 
+        return self._stop_run_on_worker(worker_url, run_id, pipeline_name)
+
+    def _stop_run_on_worker(self, worker_url: str, run_id: str, pipeline_name: str) -> bool:
         try:
             with httpx.Client(timeout=5) as client:
                 resp = client.post(
@@ -468,6 +471,51 @@ class WorkerPool:
                 extra={"worker": worker_url, "run_id": run_id, "error": str(exc)},
             )
             return False
+
+    def stop_pipeline_runs(self, pipeline_name: str) -> list[str]:
+        """Stop every active run for a pipeline across all known workers."""
+        stopped: list[str] = []
+        with self._lock:
+            worker_urls = list(self._workers)
+
+        with httpx.Client(timeout=5) as client:
+            for worker_url in worker_urls:
+                try:
+                    resp = client.get(f"{worker_url}/agent/status")
+                    resp.raise_for_status()
+                    data = resp.json()
+                except Exception as exc:
+                    logger.warning(
+                        "stop_pipeline_runs: status probe failed",
+                        extra={"worker": worker_url, "pipeline": pipeline_name, "error": str(exc)},
+                    )
+                    continue
+
+                active = list(data.get("running", [])) + list(data.get("streams", []))
+                run_ids = [
+                    str(item.get("run_id", ""))
+                    for item in active
+                    if item.get("pipeline") == pipeline_name and item.get("run_id")
+                ]
+                for run_id in run_ids:
+                    try:
+                        resp = client.post(
+                            f"{worker_url}/agent/stop",
+                            json={"pipeline_name": pipeline_name, "run_id": run_id},
+                        )
+                        resp.raise_for_status()
+                        stopped.append(run_id)
+                    except Exception as exc:
+                        logger.warning(
+                            "stop_pipeline_runs: stop failed",
+                            extra={
+                                "worker": worker_url,
+                                "pipeline": pipeline_name,
+                                "run_id": run_id,
+                                "error": str(exc),
+                            },
+                        )
+        return stopped
 
     def on_run_complete(self, run_id: str) -> None:
         """Called when the manager receives a run-complete callback.

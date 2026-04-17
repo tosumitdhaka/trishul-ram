@@ -635,6 +635,9 @@ class PipelineController:
                 self._worker_pool.stop_run(run_id, name)
             placement_group_id = self._active_placement_group.pop(name, None)
             if placement_group_id is not None:
+                # Broadcast streams should stop every matching worker-side run,
+                # even if the manager's slot list drifted during reconciliation.
+                self._worker_pool.stop_pipeline_runs(name)
                 placement = self._broadcast_placements.pop(placement_group_id, None)
                 if placement is not None and self._db is not None:
                     self._db.update_broadcast_placement_status(
@@ -682,9 +685,16 @@ class PipelineController:
         return f"{pipeline_name}-{stamp}-{uuid.uuid4().hex[:6]}"
 
     def _restore_broadcast_placement(self, placement: dict) -> None:
+        restored_at = datetime.now(UTC).isoformat()
         placement_copy = {
             **placement,
-            "slots": [dict(slot) for slot in placement["slots"]],
+            "slots": [
+                {
+                    **dict(slot),
+                    "dispatched_at": dict(slot).get("dispatched_at", restored_at),
+                }
+                for slot in placement["slots"]
+            ],
         }
         placement_copy["status"] = "reconciling"
         placement_group_id = placement_copy["placement_group_id"]
@@ -700,6 +710,7 @@ class PipelineController:
             )
 
     def _record_broadcast_placement(self, pipeline_name: str, placement_group_id: str, result) -> None:
+        dispatched_at = datetime.now(UTC).isoformat()
         slots = []
         for index, (worker_url, run_id) in enumerate(zip(result.accepted, result.run_ids)):
             slots.append({
@@ -708,6 +719,7 @@ class PipelineController:
                 "worker_id": self._worker_pool.worker_id_for_url(worker_url) if self._worker_pool else "",
                 "run_id_prefix": run_id,
                 "current_run_id": run_id,
+                "dispatched_at": dispatched_at,
                 "status": "running",
                 "restart_count": 0,
             })
@@ -826,6 +838,7 @@ class PipelineController:
             return False
 
         slot["current_run_id"] = new_run_id
+        slot["dispatched_at"] = datetime.now(UTC).isoformat()
         slot["status"] = "running"
         slot["restart_count"] = restart_count
         self._sync_stream_run_ids_from_slots(placement["pipeline_name"], placement["slots"])

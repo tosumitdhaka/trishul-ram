@@ -324,6 +324,51 @@ class TestStopRun:
         result = pool.stop_run("unknown-run", "p")
         assert result is False
 
+    def test_stop_pipeline_runs_stops_matching_runs_on_all_workers(self):
+        pool = _pool("http://w0:8766", "http://w1:8766")
+        calls = []
+
+        def _get(url, **kwargs):
+            resp = MagicMock()
+            resp.raise_for_status = MagicMock()
+            if url == "http://w0:8766/agent/status":
+                resp.json.return_value = {
+                    "running": [],
+                    "streams": [
+                        {"run_id": "run-a", "pipeline": "pipe-a", "started_at": "now"},
+                        {"run_id": "run-b", "pipeline": "other", "started_at": "now"},
+                    ],
+                }
+            elif url == "http://w1:8766/agent/status":
+                resp.json.return_value = {
+                    "running": [{"run_id": "run-c", "pipeline": "pipe-a", "started_at": "now"}],
+                    "streams": [],
+                }
+            else:
+                raise ConnectionError(url)
+            return resp
+
+        def _post(url, **kwargs):
+            calls.append((url, kwargs.get("json")))
+            resp = MagicMock()
+            resp.raise_for_status = MagicMock()
+            return resp
+
+        mock_client = MagicMock()
+        mock_client.__enter__ = lambda s: mock_client
+        mock_client.__exit__ = MagicMock(return_value=False)
+        mock_client.get.side_effect = _get
+        mock_client.post.side_effect = _post
+
+        with patch("httpx.Client", return_value=mock_client):
+            stopped = pool.stop_pipeline_runs("pipe-a")
+
+        assert stopped == ["run-a", "run-c"]
+        assert calls == [
+            ("http://w0:8766/agent/stop", {"pipeline_name": "pipe-a", "run_id": "run-a"}),
+            ("http://w1:8766/agent/stop", {"pipeline_name": "pipe-a", "run_id": "run-c"}),
+        ]
+
 
 # ── on_run_complete ────────────────────────────────────────────────────────
 

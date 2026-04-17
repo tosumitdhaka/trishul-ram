@@ -1,0 +1,42 @@
+{{- $ingress := .Values.worker.ingressService | default dict }}
+{{- $enabled := true }}
+{{- $type := "NodePort" }}
+{{- $port := (.Values.worker.ingressPort | default 8767) }}
+{{- $nodePort := 30002 }}
+{{- if hasKey $ingress "enabled" }}
+{{- $enabled = get $ingress "enabled" }}
+{{- end }}
+{{- if hasKey $ingress "type" }}
+{{- $type = get $ingress "type" }}
+{{- end }}
+{{- if hasKey $ingress "port" }}
+{{- $port = get $ingress "port" }}
+{{- end }}
+{{- if hasKey $ingress "nodePort" }}
+{{- $nodePort = get $ingress "nodePort" }}
+{{- end }}
+{{- if and .Values.manager.enabled $enabled }}
+## Published Service for worker ingress traffic on :8767.
+## This is separate from the headless worker service used for manager→worker
+## agent calls on :8766. It provides a stable entrypoint for /webhooks/*.
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "tram.fullname" . }}-worker-ingress
+  labels:
+    {{- include "tram.labels" . | nindent 4 }}
+    app.kubernetes.io/component: worker
+spec:
+  type: {{ $type }}
+  ports:
+    - name: ingress
+      port: {{ $port }}
+      targetPort: ingress
+      protocol: TCP
+      {{- if and (eq $type "NodePort") $nodePort }}
+      nodePort: {{ $nodePort }}
+      {{- end }}
+  selector:
+    {{- include "tram.selectorLabels" . | nindent 4 }}
+    app.kubernetes.io/component: worker
+{{- end }}

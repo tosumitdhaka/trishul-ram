@@ -127,6 +127,10 @@ manager:
 worker:
   replicas: 3
   ingressPort: 8767
+  ingressService:
+    enabled: true
+    type: NodePort
+    nodePort: 30002
   resources:
     requests: {cpu: 200m, memory: 256Mi}
     limits:   {cpu: 1000m, memory: 1Gi}
@@ -137,6 +141,7 @@ This creates:
 - `manager-headless-service.yaml` — headless Service for stable manager DNS / StatefulSet identity
 - `worker-statefulset.yaml` — StatefulSet for worker pods
 - `worker-headless-service.yaml` — headless Service for stable DNS
+- `worker-ingress-service.yaml` — published Service for worker `/webhooks/*` ingress on `:8767`
 - `service-ui.yaml` — optional separate Service for the web UI
 
 If you are upgrading from the older manager `Deployment`, set `manager.persistence.existingClaim` to reuse the current manager PVC instead of provisioning a new one.
@@ -513,6 +518,10 @@ helm upgrade tram oci://ghcr.io/tosumitdhaka/charts/trishul-ram \
 | `manager.persistence.enabled` | `true` | RWO PVC for manager pod (SQLite DB, schemas, MIBs) — recommended in manager mode |
 | `manager.persistence.existingClaim` | `""` | Reuse an existing manager PVC during Deployment → StatefulSet upgrades; skips `volumeClaimTemplates` when set |
 | `worker.ingressPort` | `8767` | Worker public ingress port for `/webhooks/*`; `TRAM_WORKER_INGRESS_PORT` is set from this value |
+| `worker.ingressService.enabled` | `true` | Create a separate published Service for worker `/webhooks/*` ingress in manager mode |
+| `worker.ingressService.type` | `NodePort` | Service type for published worker ingress (`NodePort`, `ClusterIP`, or `LoadBalancer`) |
+| `worker.ingressService.port` | `8767` | Service port for worker ingress |
+| `worker.ingressService.nodePort` | `30002` | Fixed NodePort for worker ingress when `type=NodePort`; set null to let Kubernetes assign one |
 | `persistence.enabled` | `true` | Provision a per-pod RWO PVC via `volumeClaimTemplates` mounted at `/data`; auto-sets `TRAM_DB_URL=sqlite:////data/tram.db`, `TRAM_SCHEMA_DIR=/data/schemas`, `TRAM_MIB_DIR=/data/mibs`; disable in cluster mode when using `sharedStorage` |
 | `persistence.size` | `1Gi` | PVC size per pod (standalone mode only) |
 | `persistence.accessMode` | `ReadWriteOnce` | PVC access mode (standalone mode only) |
@@ -569,6 +578,7 @@ This creates:
 - `tram-manager` headless Service — stable manager pod DNS for the StatefulSet
 - `tram-worker` StatefulSet (3 replicas, agent port 8766, ingress port 8767) — stateless executors
 - `tram-worker` headless Service — stable DNS `tram-worker-N.tram-worker.<ns>.svc.cluster.local`
+- `tram-worker-ingress` Service — published ingress entrypoint for worker `/webhooks/*` traffic
 
 If you are upgrading an existing release that used a manager `Deployment`, reuse the current PVC:
 

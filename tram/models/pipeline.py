@@ -516,7 +516,29 @@ TransformConfig = Annotated[
 # ── Sinks ──────────────────────────────────────────────────────────────────
 
 
-class SFTPSinkConfig(BaseModel):
+class FileSinkConfigMixin(BaseModel):
+    file_mode: Literal["append", "single"] = "append"
+    max_records: int | None = None
+    max_time: int | None = None
+    max_bytes: int | None = None
+    max_index: int = 99999
+
+    @model_validator(mode="after")
+    def validate_file_sink_rollover(self):
+        for field_name in ("max_records", "max_time", "max_bytes"):
+            value = getattr(self, field_name)
+            if value is not None and value < 1:
+                raise ValueError(f"{field_name} must be >= 1")
+        if self.max_index < 1:
+            raise ValueError("max_index must be >= 1")
+        if self.file_mode == "single" and any(
+            value is not None for value in (self.max_records, self.max_time, self.max_bytes)
+        ):
+            raise ValueError("max_records/max_time/max_bytes require file_mode=append")
+        return self
+
+
+class SFTPSinkConfig(FileSinkConfigMixin):
     type: Literal["sftp"]
     host: str
     port: int = 22
@@ -539,7 +561,7 @@ class SFTPSinkConfig(BaseModel):
         return self
 
 
-class LocalSinkConfig(BaseModel):
+class LocalSinkConfig(FileSinkConfigMixin):
     type: Literal["local"]
     path: str
     filename_template: str = "{pipeline}_{timestamp}.bin"
@@ -1140,6 +1162,21 @@ class PipelineConfig(BaseModel):
             self.sinks = [self.sink]
         if not self.sinks:
             raise ValueError("At least one sink must be configured (use 'sinks:' list or 'sink:')")
+        default_ser = self.serializer_out or JsonSerializerConfig(type="json")
+        for sink in self.sinks:
+            if sink.type not in ("local", "sftp"):
+                continue
+            effective_ser = sink.serializer_out or default_ser
+            if effective_ser.type == "json":
+                if any(
+                    getattr(sink, field_name) is not None
+                    for field_name in ("max_records", "max_time", "max_bytes")
+                ):
+                    raise ValueError(
+                        f"{sink.type} sink with serializer_out=json does not support "
+                        "max_records/max_time/max_bytes; use file_mode=single"
+                    )
+                sink.file_mode = "single"
         return self
 
 

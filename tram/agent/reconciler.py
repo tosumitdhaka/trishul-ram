@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import logging
 import threading
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 
 logger = logging.getLogger(__name__)
 
@@ -21,6 +21,23 @@ class PlacementReconciler:
         self._interval = min(stats_interval, 10)
         self._stop = threading.Event()
         self._thread: threading.Thread | None = None
+
+    def _slot_dispatch_time(self, placement: dict, slot: dict) -> datetime:
+        raw = slot.get("dispatched_at") or placement.get("started_at") or datetime.now(UTC)
+        if isinstance(raw, datetime):
+            return raw if raw.tzinfo is not None else raw.replace(tzinfo=UTC)
+        if isinstance(raw, str):
+            parsed = datetime.fromisoformat(raw)
+            return parsed if parsed.tzinfo is not None else parsed.replace(tzinfo=UTC)
+        return datetime.now(UTC)
+
+    def _awaiting_first_stats(self, now: datetime, placement: dict, slot: dict, stats) -> bool:
+        if stats is not None:
+            return False
+        # A newly-dispatched or just-restored stream slot has not had a chance to
+        # emit its first periodic stats report yet. Treat it as starting, not stale.
+        grace = timedelta(seconds=self._stats_interval + 5)
+        return now - self._slot_dispatch_time(placement, slot) < grace
 
     def start(self) -> None:
         self._stop.clear()
@@ -52,6 +69,8 @@ class PlacementReconciler:
             for slot in placement["slots"]:
                 current_run_id = str(slot.get("current_run_id", ""))
                 stats = self._stats_store.get_by_run_id(current_run_id) if current_run_id else None
+                if self._awaiting_first_stats(now, placement, slot, stats):
+                    continue
                 is_stale = stats is None or self._stats_store.is_stale(stats)
                 if is_stale:
                     if slot.get("status") != "stale":
