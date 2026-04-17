@@ -335,10 +335,10 @@ Returns `401 Unauthorized` when the key is missing or wrong.
 
 ## Browser Authentication (v1.0.8)
 
-Set `TRAM_AUTH_USERS` (comma-separated `username:password` pairs) to enable UI login. Machine clients continue to use `X-API-Key`; browser users get 8-hour session tokens.
+Set `TRAM_AUTH_USERS` (comma-separated `username:password` pairs) to bootstrap browser login. If `TRAM_DB_URL` is configured, changed passwords are stored in the `user_passwords` table and continue to work even after `TRAM_AUTH_USERS` is removed. Machine clients continue to use `X-API-Key`; browser users get 8-hour session tokens.
 
 ### POST /api/auth/login
-Authenticate with username and password.
+Authenticate with username and password. Verification prefers the DB-stored hash when present; otherwise it falls back to `TRAM_AUTH_USERS`.
 
 ```bash
 curl -X POST http://localhost:8765/api/auth/login \
@@ -354,14 +354,14 @@ Response:
 Use the token as `Authorization: Bearer <token>` on subsequent requests.
 
 ### GET /api/auth/me
-Returns the currently authenticated user from the Bearer token. Returns `401` if unauthenticated.
+Returns the currently authenticated user from the Bearer token. Returns `401` if unauthenticated. Works for both env-bootstrapped and DB-backed browser auth.
 
 ```json
 {"username": "admin"}
 ```
 
 ### POST /api/auth/change-password (v1.1.0)
-Change the password for the currently authenticated user. Stored as sha256+salt hash in the `user_passwords` DB table; persists across restarts (overrides `TRAM_AUTH_USERS` for that user).
+Change the password for the currently authenticated user. Requires `TRAM_DB_URL`. New passwords are stored as `scrypt$<salt>$<digest>` hashes in the `user_passwords` DB table, persist across restarts, and override `TRAM_AUTH_USERS` for that user.
 
 ```bash
 curl -X POST http://localhost:8765/api/auth/change-password \

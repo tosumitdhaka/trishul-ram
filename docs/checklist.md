@@ -98,8 +98,10 @@ When making changes that affect user-facing behavior, update:
 
 #### 3. Documentation Sync
 - [ ] All version references in docs match X.Y.Z
-- [ ] `README.md` Quick Start examples use correct version
-- [ ] Helm install examples use `--set image.tag=X.Y.Z`
+- [ ] `README.md` / `docs/index.md` quick-start examples use `latest`, with production pin guidance for X.Y.Z
+- [ ] Helm install examples use `latest` for quick start or pin `image.tag=X.Y.Z` for release-specific docs
+- [ ] `helm/values.yaml` default image tag matches X.Y.Z
+- [ ] Auth docs match implementation: `TRAM_AUTH_USERS` bootstrap behavior and DB `scrypt` password storage
 - [ ] Feature tables include version tags (e.g., "v1.1.0")
 
 #### 4. Testing (Full Suite)
@@ -134,6 +136,7 @@ When making changes that affect user-facing behavior, update:
 - [ ] Check `.github/workflows/release.yml` is configured
 - [ ] Verify Docker registry credentials are set (GitHub secrets)
 - [ ] Verify Helm chart registry is configured
+- [ ] Verify release workflow publishes both versioned and `latest` tags for manager and worker images
 
 ---
 
@@ -297,3 +300,42 @@ If a release has critical issues:
 ### Version bumps
 - `pyproject.toml` → `1.2.2`
 - `helm/Chart.yaml` → `1.2.2`
+
+---
+
+## v1.2.3 — 2026-04-16
+
+### Scope
+- SNMPv3 poll validation completed for real `GET` and `WALK`
+- ASN.1 decode-path hardening completed
+- SNMP trap source deferred due to push-source architecture gap (`#11`)
+- SNMP trap sink deferred pending a reachable real receiver
+
+### Verified
+- [x] `ruff check .` — passed
+- [x] `pytest tests/unit/ -q -o log_cli=false` — **1278 passed**
+- [x] `pytest tests/unit/test_loader.py -q -o log_cli=false` — **17 passed**
+- [x] `pytest tests/unit/test_snmp_connectors.py -q -o log_cli=false` — **59 passed**
+- [x] `pytest tests/integration/ -q -o log_cli=false` — **44 passed**
+- [x] `pytest tests/ --cov=tram --cov-fail-under=60 -o log_cli=false` — **79.43% coverage**
+- [x] Bundled pipeline examples validate
+- [x] `scripts/deploy-kind-tram-dev.sh` rebuilt and rolled out local kind release
+- [x] Live manager `/api/meta` verified through port-forward: `{"version":"1.2.3", ...}`
+- [x] Real SNMPv3 `GET` pipeline validated against host SNMP agent
+- [x] Real SNMPv3 `WALK` pipeline validated against host SNMP agent
+
+### Fixes included
+- [x] `tram/connectors/snmp/source.py` — walk loop no-progress guard added for repeated terminal OIDs
+- [x] `tram/connectors/snmp/sink.py` / `tram/models/pipeline.py` — `trap_oid` introduced; legacy `enterprise_oid` kept as alias
+- [x] `tram/api/routers/auth.py` — DB-backed browser auth works without `TRAM_AUTH_USERS`
+- [x] `tram/pipeline/controller.py` — full UUID run IDs retained
+- [x] Worker callback timestamps preserved through manager history path
+- [x] ASN.1 serializer docs/tests updated for explicit decode-only behavior
+
+### Version bumps
+- [x] `pyproject.toml` → `1.2.3`
+- [x] `helm/Chart.yaml` → `1.2.3`
+- [x] `docs/index.md` / `docs/deployment.md` / `docs/changelog.md` updated for `1.2.3`
+
+### Pending (post-bump)
+- [ ] Tag and publish `v1.2.3`

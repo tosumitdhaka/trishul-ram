@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import threading
 import time
+import uuid
 from unittest.mock import MagicMock
 
 import pytest
@@ -449,7 +450,7 @@ class TestLifecycle:
         ctrl.executor.batch_run.return_value = result
 
         run_id = ctrl.trigger_run("my-interval")
-        assert isinstance(run_id, str) and len(run_id) > 0
+        assert str(uuid.UUID(run_id)) == run_id
 
         # Give the thread pool a moment to run
         time.sleep(0.1)
@@ -567,6 +568,32 @@ class TestBootLoad:
 
 
 class TestOnWorkerRunComplete:
+    def test_preserves_worker_supplied_timestamps(self):
+        from datetime import datetime
+
+        ctrl = _started_controller()
+        config = load_pipeline_from_yaml(_MANUAL_YAML)
+        ctrl.register(config, yaml_text=_MANUAL_YAML)
+        ctrl.manager.set_status("my-manual", "running")
+
+        started_at = datetime.fromisoformat("2026-04-16T09:00:00+00:00")
+        finished_at = datetime.fromisoformat("2026-04-16T09:07:00+00:00")
+
+        ctrl.on_worker_run_complete(
+            run_id="r0",
+            pipeline_name="my-manual",
+            status="success",
+            records_in=5,
+            records_out=5,
+            started_at=started_at,
+            finished_at=finished_at,
+        )
+
+        last_run = ctrl.manager.get("my-manual").run_history[-1]
+        assert last_run.started_at == started_at
+        assert last_run.finished_at == finished_at
+        ctrl.stop()
+
     def test_success_updates_manager_and_transitions_state(self):
         ctrl = _started_controller()
         config = load_pipeline_from_yaml(_INTERVAL_YAML)
@@ -692,6 +719,19 @@ class TestWorkerDispatch:
         assert "r1" in call_kwargs["run_id"] or call_kwargs["run_id"]
         ctrl.stop()
 
+    def test_run_batch_generates_full_uuid_when_run_id_missing(self):
+        wp = self._worker_pool()
+        ctrl = _started_controller(worker_pool=wp, manager_url="http://manager:8765")
+        config = load_pipeline_from_yaml(_INTERVAL_YAML)
+        ctrl.register(config, yaml_text=_INTERVAL_YAML)
+        ctrl.manager.set_status("my-interval", "scheduled")
+
+        ctrl._run_batch("my-interval")
+
+        generated_run_id = wp.dispatch.call_args.kwargs["run_id"]
+        assert str(uuid.UUID(generated_run_id)) == generated_run_id
+        ctrl.stop()
+
     def test_run_batch_no_healthy_workers_sets_error(self):
         wp = self._worker_pool(dispatch_return=None)
         ctrl = _started_controller(worker_pool=wp)
@@ -712,6 +752,8 @@ class TestWorkerDispatch:
         ctrl._start_stream(config)
 
         wp.dispatch.assert_called_once()
+        generated_run_id = wp.dispatch.call_args.kwargs["run_id"]
+        assert str(uuid.UUID(generated_run_id)) == generated_run_id
         assert ctrl.manager.get("my-stream").status == "running"
         ctrl.stop()
 

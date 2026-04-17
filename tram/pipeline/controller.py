@@ -243,7 +243,7 @@ class PipelineController:
             raise ValueError(f"Pipeline '{name}' is a stream pipeline — cannot trigger manually")
         if state.status == "running":
             raise ValueError(f"Pipeline '{name}' is already running")
-        run_id = str(uuid.uuid4())[:8]
+        run_id = str(uuid.uuid4())
         self._thread_pool.submit(self._run_batch, name, run_id)
         return run_id
 
@@ -391,7 +391,7 @@ class PipelineController:
         # ── Manager+worker dispatch path ───────────────────────────────────
         if self._worker_pool is not None:
             if run_id is None:
-                run_id = str(uuid.uuid4())[:8]
+                run_id = str(uuid.uuid4())
             callback_url = (
                 f"{self._manager_url}/api/internal/run-complete"
                 if self._manager_url else ""
@@ -459,6 +459,8 @@ class PipelineController:
         records_skipped: int = 0,
         error: str | None = None,
         errors: list[str] | None = None,
+        started_at: datetime | str | None = None,
+        finished_at: datetime | str | None = None,
     ) -> None:
         """Callback from a worker agent when a dispatched run finishes."""
         from tram.core.context import RunResult, RunStatus
@@ -468,12 +470,17 @@ class PipelineController:
         except ValueError:
             run_status = RunStatus.FAILED
 
+        if isinstance(started_at, str):
+            started_at = datetime.fromisoformat(started_at)
+        if isinstance(finished_at, str):
+            finished_at = datetime.fromisoformat(finished_at)
+
         result = RunResult(
             run_id=run_id,
             pipeline_name=pipeline_name,
             status=run_status,
-            started_at=datetime.now(UTC),
-            finished_at=datetime.now(UTC),
+            started_at=started_at or datetime.now(UTC),
+            finished_at=finished_at or datetime.now(UTC),
             records_in=records_in,
             records_out=records_out,
             records_skipped=records_skipped,
@@ -503,7 +510,7 @@ class PipelineController:
                 logger.debug("Stream already dispatched to worker",
                              extra={"pipeline": config.name})
                 return
-            run_id = str(uuid.uuid4())[:8]
+            run_id = str(uuid.uuid4())
             state = self.manager.get(config.name)
             callback_url = (
                 f"{self._manager_url}/api/internal/run-complete"

@@ -448,6 +448,7 @@ class SNMPPollSource(BaseSource):
         bindings: dict = {}
         for base_oid in self.oids:
             current_oid = base_oid
+            current_oid_tuple = tuple(int(part) for part in current_oid.strip(".").split("."))
             while True:
                 errInd, errStatus, errIdx, varBinds = await hlapi_mod.nextCmd(
                     engine, auth_data, target, context,
@@ -459,10 +460,17 @@ class SNMPPollSource(BaseSource):
                 # varBinds from nextCmd is list-of-list: [[( oid, val ), ...]]
                 row = varBinds[0] if isinstance(varBinds[0], list) else varBinds
                 stop = False
+                advanced = False
                 for oid_obj, val_obj in row:
                     oid_str = str(oid_obj)
                     # Stop when we leave the subtree (lexicographic boundary)
                     if not oid_str.startswith(base_oid.rstrip(".0")):
+                        stop = True
+                        break
+                    # Some agents/hlapi paths can repeat the terminal OID at the
+                    # subtree boundary. Guard against a no-progress infinite loop.
+                    oid_tuple = tuple(int(part) for part in oid_str.strip(".").split("."))
+                    if oid_tuple <= current_oid_tuple:
                         stop = True
                         break
                     if typed:
@@ -470,7 +478,9 @@ class SNMPPollSource(BaseSource):
                     else:
                         bindings[oid_str] = self._snmp_val_to_str(val_obj)
                     current_oid = oid_str
-                if stop:
+                    current_oid_tuple = oid_tuple
+                    advanced = True
+                if stop or not advanced:
                     break
         return bindings
 

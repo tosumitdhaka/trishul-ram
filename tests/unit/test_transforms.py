@@ -11,6 +11,7 @@ from tram.transforms.add_field import AddFieldTransform
 from tram.transforms.cast import CastTransform
 from tram.transforms.drop import DropTransform
 from tram.transforms.filter_rows import FilterRowsTransform
+from tram.transforms.inject_meta import InjectMetaTransform
 from tram.transforms.rename import RenameTransform
 from tram.transforms.value_map import ValueMapTransform
 
@@ -203,3 +204,32 @@ class TestFilterRowsTransform:
         t = FilterRowsTransform({"condition": "import os"})
         with pytest.raises(TransformError):
             t.apply([{"x": 1}])
+
+
+# ── InjectMetaTransform ────────────────────────────────────────────────────
+
+
+class TestInjectMetaTransform:
+    def test_injects_selected_meta_fields(self):
+        t = InjectMetaTransform({"fields": {"source_filename": "file_name", "run_id": "run_id"}})
+        t.set_runtime_meta({"source_filename": "input.asn1", "run_id": "abc123"})
+        result = t.apply([{"x": 1}])
+        assert result == [{"x": 1, "file_name": "input.asn1", "run_id": "abc123"}]
+
+    def test_include_all_copies_all_meta(self):
+        t = InjectMetaTransform({"include_all": True})
+        t.set_runtime_meta({"source_filename": "input.asn1", "source_host": "sftp1"})
+        result = t.apply([{"x": 1}])
+        assert result == [{"x": 1, "source_filename": "input.asn1", "source_host": "sftp1"}]
+
+    def test_prefix_applies_to_injected_fields(self):
+        t = InjectMetaTransform({"fields": {"source_filename": "filename"}, "prefix": "meta_"})
+        t.set_runtime_meta({"source_filename": "input.asn1"})
+        result = t.apply([{"x": 1}])
+        assert result == [{"x": 1, "meta_filename": "input.asn1"}]
+
+    def test_missing_meta_can_emit_null(self):
+        t = InjectMetaTransform({"fields": {"source_filename": "file_name"}, "on_missing": "null"})
+        t.set_runtime_meta({})
+        result = t.apply([{"x": 1}])
+        assert result == [{"x": 1, "file_name": None}]

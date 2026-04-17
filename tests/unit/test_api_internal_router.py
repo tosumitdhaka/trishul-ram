@@ -1,6 +1,7 @@
 """Unit tests for POST /api/internal/run-complete (tram/api/routers/internal.py)."""
 from __future__ import annotations
 
+from datetime import datetime
 from unittest.mock import MagicMock
 
 from fastapi import FastAPI
@@ -22,6 +23,8 @@ class TestRunCompleteEndpoint:
     def test_calls_on_worker_run_complete(self):
         app, ctrl = _make_app()
         client = TestClient(app)
+        started_at = "2026-04-16T09:00:00+00:00"
+        finished_at = "2026-04-16T09:05:00+00:00"
 
         resp = client.post("/api/internal/run-complete", json={
             "run_id": "abc123",
@@ -30,6 +33,8 @@ class TestRunCompleteEndpoint:
             "records_in": 100,
             "records_out": 95,
             "error": None,
+            "started_at": started_at,
+            "finished_at": finished_at,
         })
 
         assert resp.status_code == 200
@@ -43,6 +48,8 @@ class TestRunCompleteEndpoint:
             records_skipped=0,
             error=None,
             errors=[],
+            started_at=datetime.fromisoformat(started_at),
+            finished_at=datetime.fromisoformat(finished_at),
         )
 
     def test_passes_error_string(self):
@@ -76,6 +83,20 @@ class TestRunCompleteEndpoint:
         _, kwargs = ctrl.on_worker_run_complete.call_args
         assert kwargs["records_in"] == 0
         assert kwargs["records_out"] == 0
+
+    def test_defaults_timestamps_to_none(self):
+        app, ctrl = _make_app()
+        client = TestClient(app)
+
+        client.post("/api/internal/run-complete", json={
+            "run_id": "r4",
+            "pipeline_name": "p",
+            "status": "success",
+        })
+
+        _, kwargs = ctrl.on_worker_run_complete.call_args
+        assert kwargs["started_at"] is None
+        assert kwargs["finished_at"] is None
 
     def test_not_in_openapi_schema(self):
         app, _ = _make_app()

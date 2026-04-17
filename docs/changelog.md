@@ -9,6 +9,50 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ---
 
+## [1.2.3] — 2026-04-16
+
+### Fixed
+
+**SNMP poll — `walk` could stall indefinitely at subtree end**
+- `tram/connectors/snmp/source.py`: `_do_walk()` now stops when returned OIDs fail to advance numerically, preventing an infinite loop when some agents repeat the terminal OID at the subtree boundary
+- Regression test added to `tests/unit/test_snmp_connectors.py`
+
+**Manager + Worker — callback/run metadata correctness**
+- Real worker callback timestamps now propagate to manager run history instead of being overwritten locally
+- Run IDs in `PipelineController` now remain full UUIDs rather than truncated 8-character values
+
+**Browser auth bootstrap**
+- DB-backed browser auth no longer requires `TRAM_AUTH_USERS` once users exist in the database; docs and `.env.example` updated to match implementation
+
+**SNMP trap sink config naming**
+- `trap_oid` is now the documented/configured field for outgoing SNMP trap OID selection
+- Legacy `enterprise_oid` remains accepted as a backward-compatible alias
+
+### Changed
+
+**ASN.1 serializer**
+- Documentation and tests now explicitly describe ASN.1 support as decode-only
+- Added coverage for decode behavior, malformed input handling, and schema compile/cache paths
+
+**Example pipelines and docs**
+- Bundled pipeline examples were brought back in line with the current schema and are validated by test
+- Quick-start/live docs continue to use `latest`, while version-pinned examples were updated to `1.2.3`
+
+**SNMP validation**
+- Added SNMPv3 validation pipelines for real-device `GET` and `WALK`
+- Verified SNMPv3 `GET` and `WALK` against a live host during release preparation
+
+### Tests
+
+- `ruff check .` passes
+- `pytest tests/unit/test_loader.py -q -o log_cli=false` passes
+- `pytest tests/unit/test_snmp_connectors.py -q -o log_cli=false` passes
+- Live SNMPv3 validation completed:
+  - `snmp_get_v3_system_to_sftp_json` — success
+  - `snmp_walk_v3_iftable_to_sftp_json` — success
+
+---
+
 ## [1.2.2] — 2026-04-15
 
 ### Fixed
@@ -1147,7 +1191,9 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 ---
 
 <!-- Comparison links -->
-[Unreleased]: https://github.com/tosumitdhaka/trishul-ram/compare/v1.2.1...HEAD
+[Unreleased]: https://github.com/tosumitdhaka/trishul-ram/compare/v1.2.3...HEAD
+[1.2.3]: https://github.com/tosumitdhaka/trishul-ram/compare/v1.2.2...v1.2.3
+[1.2.2]: https://github.com/tosumitdhaka/trishul-ram/compare/v1.2.1...v1.2.2
 [1.2.1]: https://github.com/tosumitdhaka/trishul-ram/compare/v1.2.0...v1.2.1
 [1.2.0]: https://github.com/tosumitdhaka/trishul-ram/compare/v1.1.4...v1.2.0
 [1.1.4]: https://github.com/tosumitdhaka/trishul-ram/compare/v1.1.3...v1.1.4

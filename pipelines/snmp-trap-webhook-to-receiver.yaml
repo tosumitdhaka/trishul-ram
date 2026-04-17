@@ -1,0 +1,60 @@
+version: "1"
+
+pipeline:
+  name: snmp_trap_webhook_to_receiver
+  description: >
+    Webhook-triggered SNMP v2c linkDown trap sender for validating the
+    snmp_trap receiver pipeline. POST JSON to /webhooks/send-trap-loopback
+    and TRAM sends one standard linkDown notification to the configured
+    receiver endpoint.
+
+    Example payload:
+      {
+        "ifIndex": 1,
+        "ifDescr": "eth0",
+        "ifAdminStatus": 1,
+        "ifOperStatus": 2,
+        "ifAlias": "WAN uplink"
+      }
+
+  enabled: true
+
+  schedule:
+    type: stream
+
+  source:
+    type: webhook
+    path: /send-trap-loopback
+    max_queue_size: 100
+
+  serializer_in:
+    type: json
+
+  serializer_out:
+    type: json
+
+  sink:
+    type: snmp_trap
+    host: ${TRAM_TRAP_TARGET_HOST:-127.0.0.1}
+    port: ${TRAM_TRAP_TARGET_PORT:-1162}
+    community: public
+    version: "2c"
+    trap_oid: "1.3.6.1.6.3.1.1.5.3"
+    varbinds:
+      - oid: "IF-MIB::ifIndex.1"
+        value_field: ifIndex
+        type: Integer32
+      - oid: "IF-MIB::ifDescr.1"
+        value_field: ifDescr
+        type: OctetString
+      - oid: "IF-MIB::ifAdminStatus.1"
+        value_field: ifAdminStatus
+        type: Integer32
+      - oid: "IF-MIB::ifOperStatus.1"
+        value_field: ifOperStatus
+        type: Integer32
+      - oid: "IF-MIB::ifAlias.1"
+        value_field: ifAlias
+        type: OctetString
+
+  on_error: continue

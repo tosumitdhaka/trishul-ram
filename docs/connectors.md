@@ -985,7 +985,7 @@ Sends SNMP v1/v2c/v3 traps. Requires `pip install tram[snmp]`.
 | `port` | `162` | Destination UDP port |
 | `community` | `public` | v1/v2c community |
 | `version` | `2c` | `1` \| `2c` \| `3` |
-| `enterprise_oid` | required | Enterprise OID for the trap |
+| `trap_oid` | required | SNMP notification OID placed in `snmpTrapOID.0` |
 | `varbinds` | `[]` | Explicit varbind list (see below); empty = auto-typed |
 | `mib_modules` | `[]` | MIBs to load for symbolic OID resolution |
 | SNMPv3 fields | — | Same as snmp_trap source: `security_name`, `auth_key`, `priv_key`, etc. |
@@ -995,7 +995,7 @@ sinks:
   - type: snmp_trap
     host: nms.example.com
     community: public
-    enterprise_oid: "1.3.6.1.4.1.99999"
+    trap_oid: "1.3.6.1.4.1.99999"
     varbinds:
       - oid: "IF-MIB::ifOperStatus"
         value_field: status
