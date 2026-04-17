@@ -9,6 +9,7 @@ import pytest
 
 from tram.connectors.local.sink import LocalSink
 from tram.connectors.local.source import LocalSource
+from tram.connectors.sftp.sink import SFTPSink
 from tram.core.exceptions import SinkError, SourceError
 
 # ── LocalSource ────────────────────────────────────────────────────────────
@@ -101,25 +102,208 @@ class TestLocalSink:
         written = list(tmp_path.glob("mypipe_input.csv"))
         assert len(written) == 1
 
-    def test_overwrite_false_raises_on_existing(self, tmp_path):
+    def test_single_mode_overwrite_false_raises_on_existing(self, tmp_path):
         (tmp_path / "out.bin").write_bytes(b"old")
         sink = LocalSink({
             "path": str(tmp_path),
             "filename_template": "out.bin",
+            "file_mode": "single",
             "overwrite": False,
         })
         with pytest.raises(SinkError):
             sink.write(b"new", {})
 
-    def test_overwrite_true_replaces_file(self, tmp_path):
+    def test_single_mode_overwrite_true_replaces_file(self, tmp_path):
         (tmp_path / "out.bin").write_bytes(b"old")
         sink = LocalSink({
             "path": str(tmp_path),
             "filename_template": "out.bin",
+            "file_mode": "single",
             "overwrite": True,
         })
         sink.write(b"new", {})
         assert (tmp_path / "out.bin").read_bytes() == b"new"
+
+    def test_append_mode_is_default(self, tmp_path):
+        (tmp_path / "out.bin").write_bytes(b"old")
+        sink = LocalSink({
+            "path": str(tmp_path),
+            "filename_template": "out.bin",
+        })
+        sink.write(b"new", {})
+        assert (tmp_path / "out.bin").read_bytes() == b"oldnew"
+
+    def test_append_ndjson_rolls_by_max_records(self, tmp_path):
+        sink = LocalSink({
+            "path": str(tmp_path),
+            "filename_template": "events.ndjson",
+            "file_mode": "append",
+            "max_records": 2,
+        })
+
+        for idx in range(3):
+            sink.write(
+                json.dumps({"seq": idx + 1}).encode(),
+                {
+                    "pipeline_name": "mypipe",
+                    "serializer_type": "ndjson",
+                    "serializer_config": {"type": "ndjson"},
+                    "output_record_count": 1,
+                },
+            )
+
+        files = sorted(tmp_path.glob("events_*.ndjson"))
+        assert [path.name for path in files] == ["events_00001.ndjson", "events_00002.ndjson"]
+        assert files[0].read_text() == '{"seq": 1}\n{"seq": 2}\n'
+        assert files[1].read_text() == '{"seq": 3}\n'
+
+    def test_append_csv_strips_header_after_first_write(self, tmp_path):
+        sink = LocalSink({
+            "path": str(tmp_path),
+            "filename_template": "rows.csv",
+            "file_mode": "append",
+        })
+
+        sink.write(
+            b"id,name\r\n1,alpha\r\n",
+            {
+                "serializer_type": "csv",
+                "serializer_config": {"type": "csv", "has_header": True},
+                "output_record_count": 1,
+            },
+        )
+        sink.write(
+            b"id,name\r\n2,beta\r\n",
+            {
+                "serializer_type": "csv",
+                "serializer_config": {"type": "csv", "has_header": True},
+                "output_record_count": 1,
+            },
+        )
+
+        assert (tmp_path / "rows.csv").read_text() == "id,name\n1,alpha\n2,beta\n"
+
+
+# ── SFTPSink ───────────────────────────────────────────────────────────────
+
+
+class _FakeRemoteFile:
+    def __init__(self, files: dict[str, bytes], path: str, mode: str):
+        self._files = files
+        self._path = path
+        self._mode = mode
+
+    def write(self, data: bytes) -> None:
+        if "a" in self._mode:
+            self._files[self._path] = self._files.get(self._path, b"") + data
+        else:
+            self._files[self._path] = data
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, exc_type, exc, tb):
+        return False
+
+
+class _FakeSFTPClient:
+    def __init__(self):
+        self.files: dict[str, bytes] = {}
+        self.directories: set[str] = set()
+
+    def stat(self, path: str) -> None:
+        if path not in self.directories and path not in self.files:
+            raise FileNotFoundError(path)
+
+    def mkdir(self, path: str) -> None:
+        self.directories.add(path)
+
+    def open(self, path: str, mode: str):
+        return _FakeRemoteFile(self.files, path, mode)
+
+    def close(self) -> None:
+        return None
+
+
+class _FakeTransport:
+    def close(self) -> None:
+        return None
+
+
+class TestSFTPSink:
+    def test_append_mode_is_default(self):
+        sftp = _FakeSFTPClient()
+        sink = SFTPSink({
+            "host": "example.com",
+            "username": "user",
+            "password": "pass",
+            "remote_path": "/out",
+            "filename_template": "out.bin",
+        })
+
+        with patch.object(sink, "_connect", return_value=(_FakeTransport(), sftp)):
+            sink.write(b"old", {})
+            sink.write(b"new", {})
+
+        assert sftp.files["/out/out.bin"] == b"oldnew"
+
+    def test_append_ndjson_rolls_by_max_records(self):
+        sftp = _FakeSFTPClient()
+        sink = SFTPSink({
+            "host": "example.com",
+            "username": "user",
+            "password": "pass",
+            "remote_path": "/out",
+            "filename_template": "events.ndjson",
+            "file_mode": "append",
+            "max_records": 2,
+        })
+
+        with patch.object(sink, "_connect", return_value=(_FakeTransport(), sftp)):
+            for idx in range(3):
+                sink.write(
+                    json.dumps({"seq": idx + 1}).encode(),
+                    {
+                        "pipeline_name": "mypipe",
+                        "serializer_type": "ndjson",
+                        "serializer_config": {"type": "ndjson"},
+                        "output_record_count": 1,
+                    },
+                )
+
+        assert sftp.files["/out/events_00001.ndjson"] == b'{"seq": 1}\n{"seq": 2}\n'
+        assert sftp.files["/out/events_00002.ndjson"] == b'{"seq": 3}\n'
+
+    def test_append_csv_strips_header_after_first_write(self):
+        sftp = _FakeSFTPClient()
+        sink = SFTPSink({
+            "host": "example.com",
+            "username": "user",
+            "password": "pass",
+            "remote_path": "/out",
+            "filename_template": "rows.csv",
+            "file_mode": "append",
+        })
+
+        with patch.object(sink, "_connect", return_value=(_FakeTransport(), sftp)):
+            sink.write(
+                b"id,name\r\n1,alpha\r\n",
+                {
+                    "serializer_type": "csv",
+                    "serializer_config": {"type": "csv", "has_header": True},
+                    "output_record_count": 1,
+                },
+            )
+            sink.write(
+                b"id,name\r\n2,beta\r\n",
+                {
+                    "serializer_type": "csv",
+                    "serializer_config": {"type": "csv", "has_header": True},
+                    "output_record_count": 1,
+                },
+            )
+
+        assert sftp.files["/out/rows.csv"] == b"id,name\r\n1,alpha\r\n2,beta\r\n"
 
 
 # ── RestSource ─────────────────────────────────────────────────────────────

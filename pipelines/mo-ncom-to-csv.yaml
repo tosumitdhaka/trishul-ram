@@ -6,7 +6,7 @@ pipeline:
 
   source:
     type: local
-    path: /home/dhaka/test
+    path: ${LOCAL_INPUT_PATH:-/data/input}
     file_pattern: "mo_ncom.txt"
     recursive: false
 
@@ -18,7 +18,7 @@ pipeline:
 
   sinks:
     - type: local
-      path: /home/dhaka/test
+      path: ${LOCAL_OUTPUT_PATH:-/data/output}
       filename_template: "{source_filename}.csv"
       serializer_out:
         type: csv

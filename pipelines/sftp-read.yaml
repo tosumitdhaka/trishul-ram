@@ -14,11 +14,11 @@ pipeline:
 
   source:
     type: sftp
-    host: sftp
-    port: 22
-    username: tram
-    password: tram123
-    remote_path: /upload
+    host: ${SFTP_HOST:-sftp.example.com}
+    port: ${SFTP_PORT:-22}
+    username: ${SFTP_USER:-example_user}
+    password: ${SFTP_PASS:-changeme}
+    remote_path: ${SFTP_SOURCE_PATH:-/upload}
     file_pattern: "*.json"
     delete_after_read: false   # keep originals; file_tracker prevents re-processing
 

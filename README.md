@@ -249,7 +249,7 @@ curl http://localhost:8765/api/ready
 | Mode | When to use |
 |------|-------------|
 | **Standalone** (default) | Single pod — scheduler + DB + UI + execution. Simplest setup. |
-| **Manager + Worker** | Scale execution horizontally. Manager runs as a single-replica StatefulSet; workers are stateless executors with internal agent `:8766` and ingress-only webhook port `:8767`. |
+| **Manager + Worker** | Scale execution horizontally. Manager runs as a single-replica StatefulSet; workers are stateless executors with internal agent `:8766` and a published ingress service targeting worker `:8767` for `/webhooks/*`. |
 
 ```bash
 # Standalone (Helm)

@@ -54,6 +54,11 @@ worker:
   replicas: 3
   port: 8766
   ingressPort: 8767
+  ingressService:
+    enabled: true
+    type: NodePort
+    port: 8767
+    nodePort: 30002
   resources: {}
   ## Override the container image for worker pods.
   ## When not set (default), workers use the same image as the manager (.Values.image).

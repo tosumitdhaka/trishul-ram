@@ -1,7 +1,0 @@
-{
-  "ifIndex": 1,
-  "ifDescr": "eth0",
-  "ifAdminStatus": 1,
-  "ifOperStatus": 2,
-  "ifAlias": "WAN uplink"
-}

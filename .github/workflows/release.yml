@@ -31,7 +31,7 @@ jobs:
           pytest tests/unit/ tests/integration/ -q --tb=short \
             --cov=tram \
             --cov-report=term-missing \
-            --cov-fail-under=60
+            --cov-fail-under=75
 
   docker:
     name: Build & Push Docker image

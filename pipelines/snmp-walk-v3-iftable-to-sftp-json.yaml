@@ -11,14 +11,14 @@ pipeline:
 
   source:
     type: snmp_poll
-    host: ${SNMP_V3_HOST:-172.25.242.55}
+    host: ${SNMP_V3_HOST:-snmp.example.com}
     port: 161
     version: "3"
-    security_name: ${SNMP_V3_USER:-tramv3}
+    security_name: ${SNMP_V3_USER:-snmpv3_user}
     auth_protocol: ${SNMP_V3_AUTH_PROTOCOL:-SHA}
-    auth_key: ${SNMP_V3_AUTH_KEY:-tramAuth123!}
+    auth_key: ${SNMP_V3_AUTH_KEY:-changeme-auth}
     priv_protocol: ${SNMP_V3_PRIV_PROTOCOL:-AES}
-    priv_key: ${SNMP_V3_PRIV_KEY:-tramPriv123!}
+    priv_key: ${SNMP_V3_PRIV_KEY:-changeme-priv}
     operation: walk
     oids:
       - "1.3.6.1.2.1.2.2"
@@ -46,11 +46,11 @@ pipeline:
 
   sinks:
     - type: sftp
-      host: 172.25.242.55
-      port: 22
-      username: dhaka
-      password: dhaka
-      remote_path: /home/dhaka/test/pm/snmp_walk_v3/results/
+      host: ${SNMP_WALK_SFTP_HOST:-sftp.example.com}
+      port: ${SNMP_WALK_SFTP_PORT:-22}
+      username: ${SNMP_WALK_SFTP_USER:-example_user}
+      password: ${SNMP_WALK_SFTP_PASS:-changeme}
+      remote_path: ${SNMP_WALK_SFTP_PATH:-/data/output/snmp_walk_v3/results/}
       filename_template: "{pipeline}_{timestamp}.json"
       serializer_out:
         type: json

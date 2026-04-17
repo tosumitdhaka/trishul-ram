@@ -12,7 +12,7 @@ pipeline:
 
   source:
     type: snmp_poll
-    host: host.docker.internal   # reaches the WSL2 host's snmpd on 127.0.0.1
+    host: ${SNMP_HOST:-snmp.example.com}
     port: 161
     community: public
     version: "2c"
@@ -31,7 +31,7 @@ pipeline:
   transforms:
     - type: add_field
       fields:
-        source_host: "'host.docker.internal'"
+        source_host: "pipeline.source.host"
         collected_by: "'tram-snmp-walk'"
 
   serializer_out:
@@ -44,11 +44,11 @@ pipeline:
       filename_template: "iftable_{pipeline}_{timestamp}.json"
 
     - type: sftp
-      host: sftp
-      port: 22
-      username: tram
-      password: tram123
-      remote_path: /upload
+      host: ${SNMP_WALK_SFTP_HOST:-sftp.example.com}
+      port: ${SNMP_WALK_SFTP_PORT:-22}
+      username: ${SNMP_WALK_SFTP_USER:-example_user}
+      password: ${SNMP_WALK_SFTP_PASS:-changeme}
+      remote_path: ${SNMP_WALK_SFTP_PATH:-/upload}
       filename_template: "iftable_{pipeline}_{timestamp}.json"
       retry_count: 2
       retry_delay_seconds: 3.0

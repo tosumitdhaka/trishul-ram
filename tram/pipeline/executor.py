@@ -364,6 +364,10 @@ class PipelineExecutor:
 
                 active_ser = per_sink_ser if per_sink_ser is not None else serializer_out
                 serialized = active_ser.serialize(sink_records)
+                sink_meta = dict(meta)
+                sink_meta["serializer_type"] = str(active_ser.config.get("type", "json"))
+                sink_meta["serializer_config"] = dict(active_ser.config)
+                sink_meta["output_record_count"] = len(sink_records)
 
                 if rate_limit_rps is not None:
                     self._rate_limit(rate_limit_rps)
@@ -395,7 +399,7 @@ class PipelineExecutor:
                 last_exc = None
                 for attempt in range(retry_count + 1):
                     try:
-                        sink_instance.write(serialized, meta)
+                        sink_instance.write(serialized, sink_meta)
                         # Count total sink egress, not logical record size. If the same
                         # batch fans out to multiple sinks, bytes_out includes each
                         # successful sink write because load scoring cares about total I/O.

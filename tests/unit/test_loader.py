@@ -152,6 +152,45 @@ def test_invalid_pipeline_name_raises():
         load_pipeline_from_yaml(yaml_text)
 
 
+def test_file_sink_json_output_forces_single_mode():
+    yaml_text = textwrap.dedent("""
+        pipeline:
+          name: json-file-mode
+          source:
+            type: local
+            path: /tmp/in
+          serializer_in:
+            type: json
+          serializer_out:
+            type: json
+          sink:
+            type: local
+            path: /tmp/out
+    """)
+    config = load_pipeline_from_yaml(yaml_text)
+    assert config.sinks[0].file_mode == "single"
+
+
+def test_file_sink_json_output_rejects_rolling():
+    yaml_text = textwrap.dedent("""
+        pipeline:
+          name: json-file-roll
+          source:
+            type: local
+            path: /tmp/in
+          serializer_in:
+            type: json
+          serializer_out:
+            type: json
+          sink:
+            type: local
+            path: /tmp/out
+            max_records: 10
+    """)
+    with pytest.raises(ConfigError, match="does not support max_records/max_time/max_bytes"):
+        load_pipeline_from_yaml(yaml_text)
+
+
 # ── load_pipeline (file-based) ─────────────────────────────────────────────
 
 

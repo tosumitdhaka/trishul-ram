@@ -785,7 +785,19 @@ Writes a file to an SFTP server.
 | `username` | required | SSH username |
 | `password` / `private_key_path` | — | Auth |
 | `remote_path` | required | Target directory |
-| `filename_template` | `"{pipeline}_{timestamp}"` | Output filename; tokens: `{pipeline}`, `{timestamp}`, `{source_filename}` |
+| `filename_template` | `"{pipeline}_{timestamp}.bin"` | Output filename; tokens: `{pipeline}`, `{timestamp}`, `{epoch}`, `{epoch_m}`, `{part}` / `{index}`, `{run_id}`, `{source_filename}` |
+| `file_mode` | `append` | `append` keeps writing to the current file part; `single` writes one fresh file per sink call |
+| `max_records` | — | Roll to a new file part when the next write would exceed this record count |
+| `max_time` | — | Roll to a new file part when the current file has been open this many seconds |
+| `max_bytes` | — | Roll to a new file part when the next write would exceed this byte count |
+| `max_index` | `99999` | Highest allowed rolling part number; also defines zero-padding width |
+
+Notes:
+- `append` is the default for `sftp` file sinks.
+- `timestamp`, `epoch`, and `epoch_m` use the current file-open time, not pipeline start time.
+- `csv` and `ndjson` support append/rolling naturally.
+- `json` file sinks are forced to `file_mode=single`; rolling with `max_records`, `max_time`, or `max_bytes` is rejected because plain JSON arrays are not append-safe.
+- When rolling is enabled and the template lacks a strong uniqueness token (`{part}`, `{index}`, or `{epoch_m}`), TRAM auto-appends `_{part}` and logs a warning to avoid filename collisions.
 
 ```yaml
 sinks:
@@ -794,7 +806,13 @@ sinks:
     username: ${SFTP_USER}
     password: ${SFTP_PASS}
     remote_path: /archive/pm
-    filename_template: "pm_{pipeline}_{timestamp}.json"
+    filename_template: "pm_{pipeline}_{timestamp}_{part}.ndjson"
+    file_mode: append
+    max_records: 1000
+    max_time: 60
+    max_bytes: 134217728
+    serializer_out:
+      type: ndjson
 ```
 
 ---
@@ -806,13 +824,29 @@ Writes a file to the local filesystem.
 | Parameter | Default | Description |
 |---|---|---|
 | `path` | required | Target directory |
-| `filename_template` | `"{pipeline}_{timestamp}"` | Output filename |
+| `filename_template` | `"{pipeline}_{timestamp}.bin"` | Output filename; same tokens as `sftp` |
+| `file_mode` | `append` | `append` keeps writing to the current file part; `single` writes one fresh file per sink call |
+| `overwrite` | `true` | In `single` mode, allow replacing an existing file |
+| `max_records` | — | Roll to a new file part when the next write would exceed this record count |
+| `max_time` | — | Roll to a new file part when the current file has been open this many seconds |
+| `max_bytes` | — | Roll to a new file part when the next write would exceed this byte count |
+| `max_index` | `99999` | Highest allowed rolling part number; also defines zero-padding width |
+
+Notes:
+- `append` is the default for `local` file sinks.
+- `csv` append strips repeated headers after the first file write.
+- `ndjson` append preserves newline-delimited framing automatically.
+- `json` file sinks are forced to `file_mode=single`; rolling with `max_records`, `max_time`, or `max_bytes` is rejected.
 
 ```yaml
 sinks:
   - type: local
     path: /data/output
-    filename_template: "out_{pipeline}_{timestamp}.json"
+    filename_template: "out_{pipeline}_{timestamp}_{part}.csv"
+    file_mode: append
+    max_records: 50000
+    serializer_out:
+      type: csv
 ```
 
 ---

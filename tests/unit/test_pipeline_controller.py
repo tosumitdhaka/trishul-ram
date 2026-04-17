@@ -953,6 +953,28 @@ class TestWorkerDispatch:
         wp.stop_run.assert_called_once_with("run-abc", "my-stream")
         ctrl.stop()
 
+    def test_stop_stream_broadcast_stops_all_pipeline_runs(self):
+        wp = self._worker_pool()
+        ctrl = _started_controller(worker_pool=wp)
+        config = load_pipeline_from_yaml(_WEBHOOK_STREAM_YAML)
+        ctrl.register(config, yaml_text=_WEBHOOK_STREAM_YAML)
+        ctrl._stream_run_ids["my-webhook-stream"] = ["pg1-w0", "pg1-w1"]
+        ctrl._active_placement_group["my-webhook-stream"] = "pg1"
+        ctrl._broadcast_placements["pg1"] = {
+            "placement_group_id": "pg1",
+            "pipeline_name": "my-webhook-stream",
+            "slots": [],
+            "target_count": "all",
+            "started_at": datetime.now(UTC),
+            "status": "running",
+        }
+
+        ctrl._stop_stream("my-webhook-stream")
+
+        assert wp.stop_run.call_count == 2
+        wp.stop_pipeline_runs.assert_called_once_with("my-webhook-stream")
+        ctrl.stop()
+
     def test_worker_completion_removes_dispatched_stream_run_id(self):
         wp = self._worker_pool()
         ctrl = _started_controller(worker_pool=wp)

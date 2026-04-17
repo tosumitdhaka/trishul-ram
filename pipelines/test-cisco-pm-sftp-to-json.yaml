@@ -1,11 +1,11 @@
 ################################################################################
 # Test: Cisco EMS PM protobuf binary → JSON  (SFTP source → SFTP sink)
 #
-# Source SFTP:  172.19.0.5:22  user=tram  pass=tram123
-#   incoming:   /upload/incoming/   (pm_message_*.bin)
-#   processed:  /upload/processed/  (moved after read)
+# Source SFTP:  ${TEST_CISCO_SFTP_HOST:-sftp.example.com}:22
+#   incoming:   ${TEST_CISCO_SFTP_IN:-/upload/incoming/}   (pm_message_*.bin)
+#   processed:  ${TEST_CISCO_SFTP_DONE:-/upload/processed/}  (moved after read)
 #
-# Sink SFTP:    same server, /upload/json_output/
+# Sink SFTP:    same server, ${TEST_CISCO_SFTP_OUT:-/upload/json_output/}
 #   output:     pm_message_XXX.bin.json
 ################################################################################
 
@@ -19,13 +19,13 @@ pipeline:
 
   source:
     type: sftp
-    host: "172.19.0.5"
-    port: 22
-    username: tram
-    password: tram123
-    remote_path: /upload/incoming/
+    host: ${TEST_CISCO_SFTP_HOST:-sftp.example.com}
+    port: ${TEST_CISCO_SFTP_PORT:-22}
+    username: ${TEST_CISCO_SFTP_USER:-example_user}
+    password: ${TEST_CISCO_SFTP_PASS:-changeme}
+    remote_path: ${TEST_CISCO_SFTP_IN:-/upload/incoming/}
     file_pattern: "pm_message_*.bin"
-    move_after_read: /upload/processed/
+    move_after_read: ${TEST_CISCO_SFTP_DONE:-/upload/processed/}
     skip_processed: true
 
   serializer_in:
@@ -61,11 +61,11 @@ pipeline:
 
   sink:
     type: sftp
-    host: "172.19.0.5"
-    port: 22
-    username: tram
-    password: tram123
-    remote_path: /upload/json_output/
+    host: ${TEST_CISCO_SFTP_HOST:-sftp.example.com}
+    port: ${TEST_CISCO_SFTP_PORT:-22}
+    username: ${TEST_CISCO_SFTP_USER:-example_user}
+    password: ${TEST_CISCO_SFTP_PASS:-changeme}
+    remote_path: ${TEST_CISCO_SFTP_OUT:-/upload/json_output/}
     filename_template: "{source_filename}.json"
 
   on_error: continue
