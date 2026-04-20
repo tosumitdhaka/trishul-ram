@@ -378,6 +378,28 @@ class SNMPPollSource(BaseSource):
             mib_view = get_mib_view(self.mib_dirs, self.mib_modules)
         return [self._resolve_configured_oid(oid, mib_view) for oid in self.oids]
 
+    def _resolve_binding_keys(self, bindings: dict) -> dict:
+        """Resolve binding OID keys, warning when resolution is effectively a no-op."""
+        from tram.connectors.snmp.mib_utils import get_mib_view, oid_str_to_tuple, resolve_oid
+
+        mib_view = get_mib_view(self.mib_dirs, self.mib_modules)
+        resolved = {
+            resolve_oid(mib_view, oid_str_to_tuple(oid)): val
+            for oid, val in bindings.items()
+        }
+        changed = sum(1 for old_key, new_key in zip(bindings.keys(), resolved.keys(), strict=False) if old_key != new_key)
+        if bindings and changed == 0:
+            logger.warning(
+                "SNMP poll MIB resolution produced no symbolic names; using numeric OIDs",
+                extra={
+                    "host": self.host,
+                    "operation": self.operation,
+                    "mib_modules": self.mib_modules,
+                    "mib_dirs": self.mib_dirs,
+                },
+            )
+        return resolved
+
     # SNMP type names that map to metrics (numeric counters/gauges)
     _METRIC_TYPES = frozenset({
         "Counter32", "Counter64", "Gauge32", "Unsigned32", "TimeTicks",
@@ -576,16 +598,7 @@ class SNMPPollSource(BaseSource):
             # raw is {oid: (str_val, type_name)} — resolve OID keys then classify
             if self.resolve_oids and (self.mib_dirs or self.mib_modules):
                 try:
-                    from tram.connectors.snmp.mib_utils import (
-                        get_mib_view,
-                        oid_str_to_tuple,
-                        resolve_oid,
-                    )
-                    mib_view = get_mib_view(self.mib_dirs, self.mib_modules)
-                    raw = {
-                        resolve_oid(mib_view, oid_str_to_tuple(oid)): type_tuple
-                        for oid, type_tuple in raw.items()
-                    }
+                    raw = self._resolve_binding_keys(raw)
                 except Exception as _exc:
                     logger.warning("MIB OID resolution failed for poll: %s", _exc)
             # For yield_rows mode: group by index preserving type tuples, then classify per row
@@ -607,7 +620,6 @@ class SNMPPollSource(BaseSource):
                 all_rows = []
                 for row in rows:
                     index = row.get("_index", "")
-                    index_parts = row.get("_index_parts", [])
                     # Rebuild typed subset for this row index
                     row_typed = {
                         k: v for k, v in raw.items()
@@ -615,7 +627,6 @@ class SNMPPollSource(BaseSource):
                     }
                     classified = self._classify_bindings(row_typed)
                     classified["_index"] = index
-                    classified["_index_parts"] = index_parts
                     classified["_polled_at"] = polled_at
                     all_rows.append(classified)
                 # Yield all rows as a single payload so the executor processes
@@ -633,16 +644,7 @@ class SNMPPollSource(BaseSource):
         # Optional MIB-based OID resolution
         if self.resolve_oids and (self.mib_dirs or self.mib_modules):
             try:
-                from tram.connectors.snmp.mib_utils import (
-                    get_mib_view,
-                    oid_str_to_tuple,
-                    resolve_oid,
-                )
-                mib_view = get_mib_view(self.mib_dirs, self.mib_modules)
-                bindings = {
-                    resolve_oid(mib_view, oid_str_to_tuple(oid)): val
-                    for oid, val in bindings.items()
-                }
+                bindings = self._resolve_binding_keys(bindings)
             except Exception as _exc:
                 logger.warning("MIB OID resolution failed for poll: %s", _exc)
 
@@ -661,6 +663,7 @@ class SNMPPollSource(BaseSource):
         if self.yield_rows:
             rows = self._group_by_index(bindings, self.index_depth)
             for row in rows:
+                row.pop("_index_parts", None)
                 row["_polled_at"] = polled_at
             # Yield all rows as a single payload → one chunk → one write per sink
             yield json.dumps(rows).encode("utf-8"), meta

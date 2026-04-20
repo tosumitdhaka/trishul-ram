@@ -638,7 +638,7 @@ class TestSNMPPollTimestamp:
                     for row in rows:
                         assert "_polled_at" in row
                         assert "_index" in row
-                        assert "_index_parts" in row
+                        assert "_index_parts" not in row
                 except SourceError as e:
                     assert "pysnmp" in str(e)
 
