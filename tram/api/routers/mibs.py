@@ -18,6 +18,11 @@ def _mib_dir() -> str:
     return os.environ.get("TRAM_MIB_DIR", "/mibs")
 
 
+def _mib_candidates(mib_name: str) -> list[str]:
+    """Return possible compiled filename stems for a MIB name."""
+    return [mib_name, mib_name.replace("-", "_"), mib_name.replace("_", "-")]
+
+
 # ── GET /api/mibs ────────────────────────────────────────────────────────────
 
 
@@ -181,7 +186,7 @@ def get_mib(mib_name: str):
 
     mib_dir = _mib_dir()
     # pysnmp compiles MIB names with dashes replaced by underscores in filenames
-    for candidate in (mib_name, mib_name.replace("-", "_"), mib_name.replace("_", "-")):
+    for candidate in _mib_candidates(mib_name):
         fpath = os.path.join(mib_dir, f"{candidate}.py")
         if os.path.isfile(fpath):
             with open(fpath, "rb") as fh:
@@ -196,9 +201,10 @@ def get_mib(mib_name: str):
 def delete_mib(mib_name: str) -> dict:
     """Delete a compiled MIB module (.py file) from TRAM_MIB_DIR."""
     mib_dir = _mib_dir()
-    mib_file = os.path.join(mib_dir, f"{mib_name}.py")
-    if not os.path.isfile(mib_file):
-        raise HTTPException(status_code=404, detail=f"MIB '{mib_name}' not found in {mib_dir}")
-    os.remove(mib_file)
-    logger.info("MIB deleted", extra={"mib": mib_name})
-    return {"deleted": mib_name, "mib_dir": mib_dir}
+    for candidate in _mib_candidates(mib_name):
+        mib_file = os.path.join(mib_dir, f"{candidate}.py")
+        if os.path.isfile(mib_file):
+            os.remove(mib_file)
+            logger.info("MIB deleted", extra={"mib": mib_name, "file": os.path.basename(mib_file)})
+            return {"deleted": candidate, "mib_dir": mib_dir}
+    raise HTTPException(status_code=404, detail=f"MIB '{mib_name}' not found in {mib_dir}")

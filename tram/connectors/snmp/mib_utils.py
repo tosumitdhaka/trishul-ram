@@ -26,6 +26,30 @@ def _resolve_hlapi_callable(hlapi_mod, *names: str):
     return None
 
 
+def _get_mib_sources(mib_builder):
+    """Return configured MIB sources across pysnmp/pysmi API variants."""
+    getter = getattr(mib_builder, "getMibSources", None) or getattr(
+        mib_builder, "get_mib_sources", None
+    )
+    if callable(getter):
+        return tuple(getter())
+    sources = getattr(mib_builder, "mibSources", None)
+    if sources is not None:
+        return tuple(sources)
+    return ()
+
+
+def _set_mib_sources(mib_builder, *sources) -> None:
+    """Set configured MIB sources across pysnmp/pysmi API variants."""
+    setter = getattr(mib_builder, "setMibSources", None) or getattr(
+        mib_builder, "set_mib_sources", None
+    )
+    if callable(setter):
+        setter(*sources)
+        return
+    mib_builder.mibSources = tuple(sources)
+
+
 # ── SNMPv3 USM auth builder ─────────────────────────────────────────────────
 
 # Maps human-readable protocol strings → pysnmp.hlapi attribute names.
@@ -203,11 +227,11 @@ def build_mib_view(mib_dirs: list[str], mib_modules: list[str]):
 
     # Add custom MIB directories (prepend so they take priority)
     if mib_dirs:
-        existing = mib_builder.getMibSources()
+        existing = _get_mib_sources(mib_builder)
         custom_sources = tuple(
             builder.DirMibSource(d) for d in mib_dirs
         )
-        mib_builder.setMibSources(*custom_sources, *existing)
+        _set_mib_sources(mib_builder, *custom_sources, *existing)
 
     # Load requested MIB modules (plus always-needed base MIBs)
     base_modules = ("SNMPv2-SMI", "SNMPv2-MIB", "SNMPv2-TC", "SNMPv2-CONF")

@@ -204,6 +204,27 @@ class TestMibs:
             assert resp.status_code == 200
             assert not mib_file.exists()
 
+    def test_get_existing_mib_by_dash_name(self):
+        with tempfile.TemporaryDirectory() as d:
+            Path(d, "IF_MIB.py").write_text("# compiled underscore")
+            app = _make_mibs_app()
+            client = TestClient(app)
+            with patch.dict(os.environ, {"TRAM_MIB_DIR": d}):
+                resp = client.get("/api/mibs/IF-MIB")
+        assert resp.status_code == 200
+        assert "# compiled underscore" in resp.text
+
+    def test_delete_existing_mib_normalizes_dash_to_underscore(self):
+        with tempfile.TemporaryDirectory() as d:
+            mib_file = Path(d, "IF_MIB.py")
+            mib_file.write_text("# compiled underscore")
+            app = _make_mibs_app()
+            client = TestClient(app)
+            with patch.dict(os.environ, {"TRAM_MIB_DIR": d}):
+                resp = client.delete("/api/mibs/IF-MIB")
+        assert resp.status_code == 200
+        assert not mib_file.exists()
+
     def test_upload_without_pysmi_returns_501(self):
         import sys
         app = _make_mibs_app()
@@ -237,3 +258,64 @@ class TestMibs:
                 files={"file": ("test.txt", b"MIB CONTENT", "text/plain")},
             )
         assert resp.status_code == 400
+
+    def test_upload_success_returns_compiled_results(self):
+        app = _make_mibs_app()
+        client = TestClient(app, raise_server_exceptions=False)
+
+        mock_codegen = MagicMock()
+        mock_codegen.baseMibs = ("SNMPv2-SMI",)
+        mock_codegen.fakeMibs = ("__FAKE__",)
+        mock_compiler = MagicMock()
+        mock_compiler.compile.return_value = {"TEST-MIB": "compiled"}
+
+        import sys
+        with tempfile.TemporaryDirectory() as d:
+            with patch.dict(sys.modules, {
+                "pysmi": MagicMock(),
+                "pysmi.codegen": MagicMock(),
+                "pysmi.codegen.pysnmp": MagicMock(PySnmpCodeGen=MagicMock(return_value=mock_codegen)),
+                "pysmi.compiler": MagicMock(MibCompiler=MagicMock(return_value=mock_compiler)),
+                "pysmi.parser": MagicMock(),
+                "pysmi.parser.smi": MagicMock(parserFactory=lambda: (lambda: MagicMock())),
+                "pysmi.reader": MagicMock(FileReader=MagicMock()),
+                "pysmi.searcher": MagicMock(PyFileSearcher=MagicMock(), StubSearcher=MagicMock()),
+                "pysmi.writer": MagicMock(PyFileWriter=MagicMock()),
+            }):
+                with patch.dict(os.environ, {"TRAM_MIB_DIR": d}):
+                    resp = client.post(
+                        "/api/mibs/upload",
+                        files={"file": ("TEST-MIB.mib", b"TEST DEFINITIONS ::= BEGIN END", "text/plain")},
+                    )
+
+        assert resp.status_code == 200
+        assert resp.json()["compiled"] == ["TEST-MIB"]
+
+    def test_download_success_returns_compiled_results(self):
+        app = _make_mibs_app()
+        client = TestClient(app, raise_server_exceptions=False)
+
+        mock_codegen = MagicMock()
+        mock_codegen.baseMibs = ("SNMPv2-SMI",)
+        mock_codegen.fakeMibs = ("__FAKE__",)
+        mock_compiler = MagicMock()
+        mock_compiler.compile.return_value = {"IF-MIB": "compiled"}
+
+        import sys
+        with tempfile.TemporaryDirectory() as d:
+            with patch.dict(sys.modules, {
+                "pysmi": MagicMock(),
+                "pysmi.codegen": MagicMock(),
+                "pysmi.codegen.pysnmp": MagicMock(PySnmpCodeGen=MagicMock(return_value=mock_codegen)),
+                "pysmi.compiler": MagicMock(MibCompiler=MagicMock(return_value=mock_compiler)),
+                "pysmi.parser": MagicMock(),
+                "pysmi.parser.smi": MagicMock(parserFactory=lambda: (lambda: MagicMock())),
+                "pysmi.reader": MagicMock(HttpReader=MagicMock()),
+                "pysmi.searcher": MagicMock(PyFileSearcher=MagicMock(), StubSearcher=MagicMock()),
+                "pysmi.writer": MagicMock(PyFileWriter=MagicMock()),
+            }):
+                with patch.dict(os.environ, {"TRAM_MIB_DIR": d}):
+                    resp = client.post("/api/mibs/download", json={"names": ["IF-MIB"]})
+
+        assert resp.status_code == 200
+        assert resp.json()["compiled"] == ["IF-MIB"]
