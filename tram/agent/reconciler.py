@@ -39,6 +39,47 @@ class PlacementReconciler:
         grace = timedelta(seconds=self._stats_interval + 5)
         return now - self._slot_dispatch_time(placement, slot) < grace
 
+    @staticmethod
+    def _target_count(placement: dict) -> int | str:
+        raw = placement.get("target_count", "all")
+        if raw == "all":
+            return "all"
+        if isinstance(raw, int):
+            return raw
+        if isinstance(raw, str) and raw.isdigit():
+            return int(raw)
+        return raw
+
+    def _select_replacement_worker(self, placement: dict, slot: dict) -> str | None:
+        pinned_worker_id = slot.get("pinned_worker_id")
+        if pinned_worker_id:
+            worker_url = self._worker_pool.url_for_worker_id(str(pinned_worker_id))
+            if worker_url and self._worker_pool.is_worker_healthy(worker_url):
+                return worker_url
+            return None
+
+        current_worker_url = slot.get("worker_url")
+        if current_worker_url and self._worker_pool.is_worker_healthy(current_worker_url):
+            return current_worker_url
+
+        if self._target_count(placement) == "all":
+            return None
+
+        excluded = {
+            other.get("worker_url")
+            for other in placement["slots"]
+            if other is not slot and other.get("worker_url")
+        }
+        candidates = [
+            worker_url
+            for worker_url in self._worker_pool.healthy_workers()
+            if worker_url not in excluded
+        ]
+        if not candidates:
+            return None
+        candidates.sort(key=self._worker_pool.load_score)
+        return candidates[0]
+
     def start(self) -> None:
         self._stop.clear()
         self._thread = threading.Thread(
@@ -76,19 +117,24 @@ class PlacementReconciler:
                     if slot.get("status") != "stale":
                         slot["status"] = "stale"
                         placement_changed = True
-                    if self._worker_pool.is_worker_healthy(slot["worker_url"]):
-                        if self._controller.redispatch_broadcast_slot(
-                            placement_group_id,
-                            int(slot["worker_index"]),
-                        ):
-                            placement_changed = True
-                            slot["status"] = "running"
+                    replacement_worker_url = self._select_replacement_worker(placement, slot)
+                    if replacement_worker_url and self._controller.redispatch_broadcast_slot(
+                        placement_group_id,
+                        int(slot["worker_index"]),
+                        replacement_worker_url=replacement_worker_url,
+                    ):
+                        placement_changed = True
+                        slot["status"] = "running"
                 elif slot.get("status") != "running":
                     slot["status"] = "running"
                     placement_changed = True
 
             next_status = placement["status"]
-            all_running = all(slot.get("status") == "running" for slot in placement["slots"])
+            target_count = self._target_count(placement)
+            all_running = all(
+                slot.get("status") == "running" and slot.get("current_run_id")
+                for slot in placement["slots"]
+            )
             if placement["status"] == "reconciling":
                 age_seconds = (now - placement["started_at"]).total_seconds()
                 if age_seconds > self._stats_interval * 2:
@@ -96,11 +142,22 @@ class PlacementReconciler:
             else:
                 next_status = "running" if all_running else "degraded"
 
+            if target_count != "all":
+                running_slots = sum(
+                    1
+                    for slot in placement["slots"]
+                    if slot.get("status") == "running" and slot.get("current_run_id")
+                )
+                if running_slots < int(target_count):
+                    next_status = "degraded"
+
             if placement_changed and self._db is not None:
                 self._db.update_broadcast_placement_status(
                     placement_group_id,
                     placement["status"],
                     slots=placement["slots"],
                 )
+            if placement_changed:
+                self._controller.reconcile_kubernetes_service(placement["pipeline_name"])
             if next_status != placement["status"]:
                 self._controller._update_broadcast_placement_status(placement_group_id, next_status)

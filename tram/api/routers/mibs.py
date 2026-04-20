@@ -50,7 +50,7 @@ async def upload_mib(file: UploadFile = File(...)) -> dict:
     imports that are not already present in TRAM_MIB_DIR must be downloaded
     separately first (see ``POST /api/mibs/download``).
 
-    Requires ``pysmi-lextudio`` (``pip install tram[mib]``).
+    Requires ``tram[mib]``.
     """
     try:
         from pysmi.codegen.pysnmp import PySnmpCodeGen
@@ -63,7 +63,7 @@ async def upload_mib(file: UploadFile = File(...)) -> dict:
         raise HTTPException(
             status_code=501,
             detail=(
-                "MIB compilation requires pysmi-lextudio — "
+                "MIB compilation requires pysmi — "
                 "install with: pip install tram[mib]"
             ),
         )
@@ -115,7 +115,7 @@ def download_mibs(body: MibDownloadRequest) -> dict:
 
     Downloads the named modules plus their dependencies and compiles them to
     Python format in TRAM_MIB_DIR.  Requires internet access at the time of
-    the call and ``pysmi-lextudio`` (``pip install tram[mib]``).
+    the call and ``tram[mib]``.
 
     Example request body::
 
@@ -135,7 +135,7 @@ def download_mibs(body: MibDownloadRequest) -> dict:
         raise HTTPException(
             status_code=501,
             detail=(
-                "MIB download requires pysmi-lextudio — "
+                "MIB download requires pysmi — "
                 "install with: pip install tram[mib]"
             ),
         )

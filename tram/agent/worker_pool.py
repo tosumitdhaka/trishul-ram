@@ -38,6 +38,7 @@ class BroadcastResult:
     run_ids: list[str]
     rejected: list[str]
     status: str
+    slots: list[dict]
 
 
 class WorkerPool:
@@ -247,13 +248,21 @@ class WorkerPool:
     def resolve(self, workers_cfg: WorkersConfig) -> list[str]:
         """Return worker URLs selected by the workers config."""
         if workers_cfg.worker_ids is not None:
-            raise NotImplementedError("workers.list placement is not supported until v1.3.1")
-        if isinstance(workers_cfg.count, int) and workers_cfg.count > 1:
-            raise NotImplementedError("workers.count:N (N>1) placement is not supported until v1.3.1")
+            resolved: list[str] = []
+            with self._lock:
+                worker_urls = {wid: self._worker_ids.get(wid) for wid in workers_cfg.worker_ids}
+                health = dict(self._health)
+            for worker_id in workers_cfg.worker_ids:
+                worker_url = worker_urls.get(worker_id)
+                if worker_url is not None and health.get(worker_url, {}).get("ok"):
+                    resolved.append(worker_url)
+            return resolved
         with self._lock:
             healthy_urls = [url for url, h in self._health.items() if h["ok"]]
         candidates = [(url, self.load_score(url)) for url in healthy_urls]
         candidates.sort(key=lambda item: item[1])
+        if isinstance(workers_cfg.count, int) and workers_cfg.count > 1:
+            return [url for url, _ in candidates[:workers_cfg.count]]
         if workers_cfg.count == "all":
             return [url for url, _ in candidates]
         return [candidates[0][0]] if candidates else []
@@ -265,6 +274,10 @@ class WorkerPool:
     def worker_id_for_url(self, worker_url: str) -> str | None:
         with self._lock:
             return self._url_to_worker_id.get(worker_url)
+
+    def url_for_worker_id(self, worker_id: str) -> str | None:
+        with self._lock:
+            return self._worker_ids.get(worker_id)
 
     def is_worker_healthy(self, worker_url: str) -> bool:
         with self._lock:
@@ -352,7 +365,12 @@ class WorkerPool:
     ) -> BroadcastResult:
         """POST a run to one or more selected workers."""
         worker_urls = self.resolve(workers_cfg)
-        if not worker_urls:
+        target_slots = (
+            len(workers_cfg.worker_ids)
+            if workers_cfg.worker_ids is not None
+            else (len(worker_urls) if workers_cfg.count == "all" else int(workers_cfg.count or 1))
+        )
+        if not worker_urls and workers_cfg.worker_ids is None:
             logger.error(
                 "No healthy workers available for dispatch",
                 extra={"pipeline": pipeline_name, "placement_group_id": placement_group_id},
@@ -363,6 +381,7 @@ class WorkerPool:
                 run_ids=[],
                 rejected=[],
                 status="error",
+                slots=[],
             )
 
         if not callback_url and self._manager_url:
@@ -371,32 +390,55 @@ class WorkerPool:
         accepted: list[str] = []
         run_ids: list[str] = []
         rejected: list[str] = []
-        for index, worker_url in enumerate(worker_urls):
-            run_id = placement_group_id if workers_cfg.count != "all" else f"{placement_group_id}-w{index}"
-            if self._dispatch_to_worker(
+        slots: list[dict] = []
+        for index in range(target_slots):
+            pinned_worker_id = None
+            if workers_cfg.worker_ids is not None:
+                pinned_worker_id = workers_cfg.worker_ids[index]
+                worker_url = self.url_for_worker_id(pinned_worker_id)
+                if worker_url is not None and not self.is_worker_healthy(worker_url):
+                    worker_url = None
+            else:
+                worker_url = worker_urls[index] if index < len(worker_urls) else None
+            slot_run_id = placement_group_id if target_slots == 1 else f"{placement_group_id}-w{index}"
+            current_run_id = None
+            slot_status = "stale"
+            if worker_url is not None and self._dispatch_to_worker(
                 worker_url=worker_url,
-                run_id=run_id,
+                run_id=slot_run_id,
                 pipeline_name=pipeline_name,
                 yaml_text=yaml_text,
                 schedule_type=schedule_type,
                 callback_url=callback_url,
             ):
                 accepted.append(worker_url)
-                run_ids.append(run_id)
-            else:
+                run_ids.append(slot_run_id)
+                current_run_id = slot_run_id
+                slot_status = "running"
+            elif worker_url is not None:
                 rejected.append(worker_url)
 
+            slots.append({
+                "worker_index": index,
+                "worker_url": worker_url,
+                "worker_id": pinned_worker_id or (self.worker_id_for_url(worker_url) if worker_url else None),
+                "pinned_worker_id": pinned_worker_id,
+                "run_id_prefix": slot_run_id,
+                "current_run_id": current_run_id,
+                "status": slot_status,
+                "restart_count": 0,
+            })
+
         status = "error"
-        if accepted and rejected:
-            status = "degraded"
-        elif accepted:
-            status = "running"
+        if accepted:
+            status = "running" if len(accepted) == target_slots and not rejected else "degraded"
         return BroadcastResult(
             placement_group_id=placement_group_id,
             accepted=accepted,
             run_ids=run_ids,
             rejected=rejected,
             status=status,
+            slots=slots,
         )
 
     def dispatch(

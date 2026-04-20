@@ -102,3 +102,18 @@ class TestGcsSink:
             sink = GcsSink({"bucket": "my-bucket", "blob_template": "{pipeline}/{source_filename}"})
             sink.write(b"data", {"pipeline_name": "mypipe", "source_filename": "input.csv"})
         mock_bucket.blob.assert_called_once_with("mypipe/input.csv")
+
+    def test_blob_template_supports_source_stem_and_suffix(self):
+        mock_blob = MagicMock()
+        mock_bucket = MagicMock()
+        mock_bucket.blob.return_value = mock_blob
+        mock_client = MagicMock()
+        mock_client.bucket.return_value = mock_bucket
+        mock_storage = MagicMock()
+        mock_storage.Client.return_value = mock_client
+        mock_gcs = MagicMock()
+        mock_gcs.storage = mock_storage
+        with patch.dict(sys.modules, {"google.cloud": mock_gcs, "google.cloud.storage": mock_gcs.storage}):
+            sink = GcsSink({"bucket": "my-bucket", "blob_template": "{source_stem}{source_suffix}"})
+            sink.write(b"data", {"source_filename": "input.csv"})
+        mock_bucket.blob.assert_called_once_with("input.csv")

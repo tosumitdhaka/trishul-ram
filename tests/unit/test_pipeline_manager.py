@@ -89,6 +89,16 @@ class TestPipelineState:
         assert d["name"] == "my-pipe"
         assert d["status"] == "stopped"
         assert d["schedule_type"] == "manual"
+        assert d["interval_seconds"] is None
+        assert d["cron_expr"] is None
+
+    def test_to_dict_includes_schedule_fields(self):
+        config = _config(_INTERVAL_YAML)
+        state = PipelineState(config)
+        d = state.to_dict()
+        assert d["schedule_type"] == "interval"
+        assert d["interval_seconds"] == 60
+        assert d["cron_expr"] is None
 
     def test_to_detail_dict(self):
         config = _config()

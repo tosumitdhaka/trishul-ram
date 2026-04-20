@@ -102,6 +102,15 @@ class TestLocalSink:
         written = list(tmp_path.glob("mypipe_input.csv"))
         assert len(written) == 1
 
+    def test_filename_template_supports_source_stem_and_suffix(self, tmp_path):
+        sink = LocalSink({
+            "path": str(tmp_path),
+            "filename_template": "{source_stem}{source_suffix}",
+        })
+        sink.write(b"data", {"source_filename": "input.csv"})
+        written = list(tmp_path.glob("input.csv"))
+        assert len(written) == 1
+
     def test_single_mode_overwrite_false_raises_on_existing(self, tmp_path):
         (tmp_path / "out.bin").write_bytes(b"old")
         sink = LocalSink({
@@ -231,6 +240,21 @@ class _FakeTransport:
 
 
 class TestSFTPSink:
+    def test_filename_template_supports_source_stem_and_suffix(self):
+        sftp = _FakeSFTPClient()
+        sink = SFTPSink({
+            "host": "example.com",
+            "username": "user",
+            "password": "pass",
+            "remote_path": "/out",
+            "filename_template": "{source_stem}{source_suffix}",
+        })
+
+        with patch.object(sink, "_connect", return_value=(_FakeTransport(), sftp)):
+            sink.write(b"data", {"source_filename": "input.csv"})
+
+        assert sftp.files["/out/input.csv"] == b"data"
+
     def test_append_mode_is_default(self):
         sftp = _FakeSFTPClient()
         sink = SFTPSink({
@@ -304,6 +328,53 @@ class TestSFTPSink:
             )
 
         assert sftp.files["/out/rows.csv"] == b"id,name\r\n1,alpha\r\n2,beta\r\n"
+
+    def test_append_mode_tracks_partition_state_per_field_value(self):
+        sftp = _FakeSFTPClient()
+        sink = SFTPSink({
+            "host": "example.com",
+            "username": "user",
+            "password": "pass",
+            "remote_path": "/out",
+            "filename_template": "{field.nf_name}_{part}.ndjson",
+            "file_mode": "append",
+            "max_records": 2,
+        })
+
+        with patch.object(sink, "_connect", return_value=(_FakeTransport(), sftp)):
+            sink.write(
+                b'{"nf_name": "MSC", "value": 1}\n{"nf_name": "MSC", "value": 2}\n',
+                {
+                    "field_values": {"nf_name": "MSC"},
+                    "serializer_type": "ndjson",
+                    "serializer_config": {"type": "ndjson"},
+                    "output_record_count": 2,
+                },
+            )
+            sink.write(
+                b'{"nf_name": "SMSC", "value": 10}\n',
+                {
+                    "field_values": {"nf_name": "SMSC"},
+                    "serializer_type": "ndjson",
+                    "serializer_config": {"type": "ndjson"},
+                    "output_record_count": 1,
+                },
+            )
+            sink.write(
+                b'{"nf_name": "MSC", "value": 3}\n',
+                {
+                    "field_values": {"nf_name": "MSC"},
+                    "serializer_type": "ndjson",
+                    "serializer_config": {"type": "ndjson"},
+                    "output_record_count": 1,
+                },
+            )
+
+        assert sftp.files["/out/MSC_00001.ndjson"] == (
+            b'{"nf_name": "MSC", "value": 1}\n{"nf_name": "MSC", "value": 2}\n'
+        )
+        assert sftp.files["/out/MSC_00002.ndjson"] == b'{"nf_name": "MSC", "value": 3}\n'
+        assert sftp.files["/out/SMSC_00001.ndjson"] == b'{"nf_name": "SMSC", "value": 10}\n'
 
 
 # ── RestSource ─────────────────────────────────────────────────────────────

@@ -21,8 +21,7 @@ class SNMPTrapSink(BaseSink):
     Expects the input ``data`` to be a JSON-encoded dict of OID → value bindings.
     Each key-value pair becomes a VarBind in the outgoing trap PDU.
 
-    Requires ``pysnmp-lextudio>=6.2,<6.3`` with ``pyasn1>=0.4.8,<0.6``
-    (``pip install tram[snmp]``).
+    Requires the ``tram[snmp]`` optional extra.
 
     Config keys:
         host            (str, required)         Target NMS hostname or IP.
@@ -140,76 +139,83 @@ class SNMPTrapSink(BaseSink):
         return var_binds
 
     async def _send_trap(self, hlapi_mod, bindings_raw: dict) -> None:
+        from tram.connectors.snmp.mib_utils import (
+            build_v3_auth,
+            close_snmp_engine,
+            create_udp_transport_target,
+            hlapi_send_notification,
+        )
         engine = hlapi_mod.SnmpEngine()
+        try:
+            if self.version == "3":
+                auth_data = build_v3_auth(
+                    hlapi_mod,
+                    security_name=self.security_name,
+                    auth_protocol=self.auth_protocol,
+                    auth_key=self.auth_key,
+                    priv_protocol=self.priv_protocol,
+                    priv_key=self.priv_key,
+                )
+            else:
+                mp_model = 0 if self.version == "1" else 1
+                auth_data = hlapi_mod.CommunityData(self.community, mpModel=mp_model)
 
-        if self.version == "3":
-            from tram.connectors.snmp.mib_utils import build_v3_auth
-            auth_data = build_v3_auth(
+            target = await create_udp_transport_target(
                 hlapi_mod,
-                security_name=self.security_name,
-                auth_protocol=self.auth_protocol,
-                auth_key=self.auth_key,
-                priv_protocol=self.priv_protocol,
-                priv_key=self.priv_key,
+                host=self.host,
+                port=self.port,
+                timeout=self.timeout,
+                retries=self.retries,
             )
-        else:
-            mp_model = 0 if self.version == "1" else 1
-            auth_data = hlapi_mod.CommunityData(self.community, mpModel=mp_model)
+            context = (
+                hlapi_mod.ContextData(contextName=self.context_name)
+                if self.context_name
+                else hlapi_mod.ContextData()
+            )
 
-        target = hlapi_mod.UdpTransportTarget(
-            (self.host, self.port),
-            timeout=self.timeout,
-            retries=self.retries,
-        )
-        context = (
-            hlapi_mod.ContextData(contextName=self.context_name)
-            if self.context_name
-            else hlapi_mod.ContextData()
-        )
+            var_binds = self._build_var_binds(hlapi_mod, bindings_raw)
 
-        var_binds = self._build_var_binds(hlapi_mod, bindings_raw)
+            # SNMPv2c traps require sysUpTime.0 and snmpTrapOID.0 as the first two
+            # varbinds in the PDU. Build these explicitly instead of relying on
+            # NotificationType so custom trap OIDs work without MIB lookup.
+            import time as _time
+            uptime_ticks = int(_time.monotonic() * 100)  # centi-seconds since process start
+            mandatory_vbs = [
+                hlapi_mod.ObjectType(
+                    hlapi_mod.ObjectIdentity("1.3.6.1.2.1.1.3.0"),
+                    hlapi_mod.TimeTicks(uptime_ticks),
+                ),
+                hlapi_mod.ObjectType(
+                    hlapi_mod.ObjectIdentity("1.3.6.1.6.3.1.1.4.1.0"),
+                    hlapi_mod.ObjectIdentifier(self.trap_oid),
+                ),
+            ]
 
-        # SNMPv2c traps require sysUpTime.0 and snmpTrapOID.0 as the first two
-        # varbinds in the PDU.  We build these explicitly to avoid MIB lookup
-        # issues that arise when using NotificationType with custom trap OIDs.
-        import time as _time
-        uptime_ticks = int(_time.monotonic() * 100)  # centi-seconds since process start
-        mandatory_vbs = [
-            hlapi_mod.ObjectType(
-                hlapi_mod.ObjectIdentity("1.3.6.1.2.1.1.3.0"),
-                hlapi_mod.TimeTicks(uptime_ticks),
-            ),
-            hlapi_mod.ObjectType(
-                hlapi_mod.ObjectIdentity("1.3.6.1.6.3.1.1.4.1.0"),
-                hlapi_mod.ObjectIdentifier(self.trap_oid),
-            ),
-        ]
-
-        errInd, errStatus, errIdx, _ = await hlapi_mod.sendNotification(
-            engine,
-            auth_data,
-            target,
-            context,
-            "trap",
-            mandatory_vbs + var_binds,
-        )
-        if errInd:
-            raise SinkError(f"SNMP trap send error: {errInd}")
-        if errStatus:
-            raise SinkError(f"SNMP trap PDU error: {errStatus.prettyPrint()}")
+            errInd, errStatus, errIdx, _ = await hlapi_send_notification(
+                hlapi_mod,
+                engine,
+                auth_data,
+                target,
+                context,
+                "trap",
+                mandatory_vbs + var_binds,
+            )
+            if errInd:
+                raise SinkError(f"SNMP trap send error: {errInd}")
+            if errStatus:
+                raise SinkError(f"SNMP trap PDU error: {errStatus.prettyPrint()}")
+        finally:
+            close_snmp_engine(engine)
 
     def write(self, data: bytes, meta: dict) -> None:
         try:
+            from tram.connectors.snmp.mib_utils import get_hlapi_asyncio
             with warnings.catch_warnings():
-                warnings.filterwarnings(
-                    "ignore",
-                    message=r".*pysnmp-lextudio.*deprecated.*",
-                    category=RuntimeWarning,
-                )
-                import pysnmp.hlapi.asyncio as _hlapi
+                warnings.filterwarnings("ignore", category=RuntimeWarning)
+                _hlapi = get_hlapi_asyncio()
         except Exception as exc:
             raise SinkError(
-                "SNMP trap sink requires pysnmp-lextudio — install with: pip install tram[snmp]"
+                "SNMP trap sink requires pysnmp — install with: pip install tram[snmp]"
             ) from exc
 
         try:

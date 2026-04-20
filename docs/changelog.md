@@ -9,6 +9,44 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ---
 
+## [1.3.1] — 2026-04-20
+
+### Added
+
+**Placement and K8s exposure for push streams**
+- `workers.count: N` and `workers.list` placement behavior is now implemented for broadcast-capable push streams in manager mode
+- Dedicated per-pipeline Kubernetes Service provisioning is now available for active `webhook` and `prometheus_rw` stream pipelines
+- `workers.list` dedicated Services use explicit `Endpoints` targeting only the selected worker pods
+
+**File sink naming and partitioning**
+- File sinks now support shared filename variables derived from source context, including `source_stem`, `source_suffix`, and `source_path`
+- Executor-side record partitioning is now available for file sinks via dotted `{field.*}` filename variables
+- Rolling file output now supports `max_records`, `max_time`, and `max_bytes` in append mode across local, SFTP, FTP, S3, GCS, and Azure Blob sinks
+
+### Changed
+
+**SNMP dependencies**
+- SNMP connectors now target `pysnmp>=7,<8` with compatibility helpers for the 7.x HLAPI surface
+- Legacy lextudio-specific runtime package references were removed from the implementation path
+
+**Helm / K8s defaults**
+- Manager resource settings are now resolved from `manager.resources` before falling back to top-level defaults
+- Kind/dev chart values continue to live in `helm/values.yaml`; generic release-oriented defaults live in `helm/values-template.yaml`
+
+### Fixed
+
+- `workers.list` dedicated pipeline Services now repatch manual `Endpoints` when placement changes, including worker disappearance during scale-down
+- Dedicated `workers.list` services no longer retain stale pod IPs after a pinned worker becomes unavailable
+- Alert cooldown logic, placement reconciliation, and ingress split behavior were revalidated against the `1.3.1` release build on a live kind cluster
+
+### Tests
+
+- Full local release validation completed for `1.3.1`: lint, unit, integration, and coverage
+- Helm validation completed, including dependency update and chart lint
+- Live kind validation completed for manager/worker rollout, push ingress, placement APIs, dedicated Services, and scale-down stale-slot recovery
+
+---
+
 ## [1.3.0] — 2026-04-17
 
 ### Added
@@ -1241,7 +1279,8 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 ---
 
 <!-- Comparison links -->
-[Unreleased]: https://github.com/tosumitdhaka/trishul-ram/compare/v1.3.0...HEAD
+[Unreleased]: https://github.com/tosumitdhaka/trishul-ram/compare/v1.3.1...HEAD
+[1.3.1]: https://github.com/tosumitdhaka/trishul-ram/compare/v1.3.0...v1.3.1
 [1.3.0]: https://github.com/tosumitdhaka/trishul-ram/compare/v1.2.3...v1.3.0
 [1.2.3]: https://github.com/tosumitdhaka/trishul-ram/compare/v1.2.2...v1.2.3
 [1.2.2]: https://github.com/tosumitdhaka/trishul-ram/compare/v1.2.1...v1.2.2

@@ -1,151 +1,114 @@
-## TRAM Helm chart values — clean defaults template
+## TRAM Helm chart values — generic template
 ## Copy this file to values.yaml (or pass with -f) and adjust for your environment.
 ## Ref: https://github.com/trishul/tram
 
 image:
-  registry:   ""              # e.g. ghcr.io — empty = no registry prefix (local/kind images)
-  repository: OWNER/tram      # image name; replace OWNER with your registry namespace
-  tag: "1.2.0"
+  registry: ""               # e.g. ghcr.io
+  repository: OWNER/tram     # replace OWNER with your registry namespace
+  tag: "1.3.1"
   pullPolicy: IfNotPresent
 
-## TRAM always deploys as a StatefulSet (stable pod names: tram-0, tram-1, …).
-## replicaCount=1 → standalone daemon.
-## replicaCount>1 + clusterMode.enabled=true → self-organizing cluster.
+## Standalone mode: single-replica StatefulSet (replicaCount=1).
+## Manager+worker mode: set manager.enabled=true — standalone StatefulSet is skipped.
 replicaCount: 1
 
-## Cluster mode (v0.8.0)
-## Activates consistent-hashing pipeline ownership across replicas.
-## Requires an external DB (TRAM_DB_URL) — PostgreSQL recommended, MariaDB supported.
-## SQLite is not supported for cluster mode (single-writer limitation).
-clusterMode:
+## Manager + Worker mode.
+## When enabled:
+##   - A StatefulSet named <fullname>-manager is created (replicas: 1, port: 8765)
+##   - A StatefulSet named <fullname>-worker is created (replicas: worker.replicas, port: 8766/8767)
+##   - The standalone StatefulSet is skipped
+manager:
   enabled: false
+  persistence:
+    enabled: true
+    size: 10Gi
+    storageClass: ""
+    accessMode: ReadWriteOnce
+    existingClaim: ""
+  resources: {}
+    # requests:
+    #   cpu: 250m
+    #   memory: 512Mi
+    # limits:
+    #   cpu: "1"
+    #   memory: 1Gi
 
-## App name prefix for all K8s resource names.
-## Defaults to the chart name (trishul-ram).
-## Override to shorten or rename — e.g. nameOverride: "tram" gives back short names like tram-0.
+## Worker configuration (only used when manager.enabled=true)
+worker:
+  replicas: 3
+  port: 8766
+  ingressPort: 8767
+  ingressService:
+    enabled: true
+    type: NodePort
+    port: 8767
+    nodePort: 30002
+  resources: {}
+    # requests:
+    #   cpu: 250m
+    #   memory: 512Mi
+    # limits:
+    #   cpu: "1"
+    #   memory: 1Gi
+  image:
+    registry: ""
+    repository: ""   # empty = fall back to .Values.image.repository
+    tag: ""          # empty = fall back to .Values.image.tag
+
 nameOverride: ""
 fullnameOverride: ""
 
-## Share the host (kind-node) network namespace with pods.
-## Required when pods need to reach services on the host via UDP (e.g. SNMP trap/poll via socat
-## on the WSL2/Docker host), because the CNI overlay NAT silently drops UDP return packets.
-## With hostNetwork=true pods bypass CNI and reach 127.0.0.1 / host IP directly.
-## Caveat: all pod ports occupy the host port space — only one TRAM replica per k8s node.
-## Keep false in production multi-node clusters.
+## Share the host network namespace with pods.
+## Leave false for normal multi-replica clusters.
 hostNetwork: false
 
 service:
   type: ClusterIP
   port: 8765
-  nodePort: null   # set to a port number (e.g. 30001) when type=NodePort
-  ## List of UDP ports to expose for snmp_trap source connectors.
-  ## Each entry creates one UDP Service port and one containerPort.
-  ## Must match the port: values in your snmp_trap pipeline YAMLs.
-  ## Each port addition requires a `helm upgrade` to take effect.
-  ## Example: [1162, 1163, 1164]
+  nodePort: null
   snmpTrapPorts: []
 
-## Per-pod SQLite persistence (standalone / single-replica mode only).
-## When enabled, a PVC is created per pod via volumeClaimTemplates and mounted at /data.
-## TRAM_DB_URL (sqlite:////data/tram.db) is auto-set when postgresql.enabled=false.
-## Disable this in cluster mode — PostgreSQL handles the DB and sharedStorage handles
-## schemas/MIBs; per-pod /data PVCs are unnecessary overhead.
+## Per-pod SQLite persistence (standalone mode only).
 persistence:
   enabled: true
   size: 1Gi
   storageClass: ""
   accessMode: ReadWriteOnce
 
-## Shared ReadWriteMany storage for schemas and MIBs (v1.0.9).
-## A single PVC is created (not via volumeClaimTemplates) and mounted on every pod.
-## Schemas/MIBs uploaded via the UI are written once and instantly visible to all replicas.
-## Requires a StorageClass that supports ReadWriteMany:
-##   kind:       storageClass: "nfs-rwx"  (deploy helm/kind/nfs-provisioner.yaml first)
-##   AWS EKS:    storageClass: "efs-sc"
-##   Azure AKS:  storageClass: "azurefile"
-##   GKE:        storageClass: "filestore-rwx"
-##   Longhorn:   storageClass: "longhorn-rwx"
-## When disabled, schemas/MIBs fall back to the per-pod /data PVC (standalone mode only).
+## Shared ReadWriteMany storage for schemas and MIBs.
 sharedStorage:
   enabled: false
   size: 2Gi
-  storageClass: ""    # set to your RWX StorageClass name (e.g. nfs-rwx, efs-sc, azurefile)
+  storageClass: ""
 
-## Environment variables (plain key/value)
 env:
   TRAM_LOG_LEVEL: INFO
   TRAM_LOG_FORMAT: json
-  # TRAM_NODE_ID: ""            # defaults to hostname (auto-set from pod name in StatefulSet)
-  # TRAM_SHUTDOWN_TIMEOUT_SECONDS: "30"  # drain timeout before forced stop
-  # --- Cluster (v0.8.0) ---
-  # TRAM_CLUSTER_ENABLED: "true"         # enable when clusterMode.enabled=true
-  # TRAM_HEARTBEAT_SECONDS: "10"
-  # TRAM_NODE_TTL_SECONDS: "30"
-  # --- Database (v0.7.0) ---
-  # TRAM_DB_URL: ""             # Required for cluster mode (PostgreSQL or MariaDB)
-  #                             # SQLite:     sqlite:////data/tram.db
-  #                             # PostgreSQL: postgresql+psycopg2://user:pass@host/db
-  #                             # MySQL:      mysql+pymysql://user:pass@host/db
-  # --- SMTP (for alert email actions) ---
+  # TRAM_NODE_ID: ""
+  # TRAM_SHUTDOWN_TIMEOUT_SECONDS: "30"
+  # TRAM_DB_URL: ""
   # TRAM_SMTP_HOST: localhost
   # TRAM_SMTP_PORT: "587"
   # TRAM_SMTP_TLS: "true"
   # TRAM_SMTP_FROM: tram@localhost
-  # --- Security (v1.0.0) ---
-  # Note: API key is preferably set via .Values.apiKey (injected as TRAM_API_KEY automatically)
-  # or via envSecret to avoid storing secrets in values.yaml.
-  # TRAM_RATE_LIMIT: "0"          # requests/minute per client IP; 0 = disabled
-  # --- Browser auth (v1.0.8) ---
-  # TRAM_AUTH_SECRET: ""          # Shared HMAC signing secret for session tokens.
-  #                               # REQUIRED in cluster mode — without it each pod
-  #                               # uses its own random secret and tokens from one
-  #                               # pod are rejected by others.
-  #                               # Generate: python3 -c "import secrets; print(secrets.token_hex(32))"
-  #                               # Prefer envSecret.TRAM_AUTH_SECRET for production.
-  # TRAM_RATE_LIMIT_WINDOW: "60"  # sliding window in seconds
-  # --- Observability (v1.0.0) ---
-  # TRAM_OTEL_ENDPOINT: ""        # OTLP gRPC endpoint, e.g. http://otel-collector:4317
-  # TRAM_OTEL_SERVICE: tram       # OpenTelemetry service.name attribute
-  # --- Operations (v1.0.0) ---
-  # TRAM_WATCH_PIPELINES: "false" # hot-reload pipelines on YAML change (requires tram[watch])
-  # --- SNMP MIBs / Schemas (v1.0.3) ---
-  # TRAM_MIB_DIR and TRAM_SCHEMA_DIR are auto-set to /data/mibs and /data/schemas when
-  # persistence.enabled=true. Override here only if you need a custom location.
-  # --- Schema Registry (v1.0.4) ---
-  # Prefer using .Values.schemaRegistry below — it injects these vars automatically.
+  # TRAM_RATE_LIMIT: "0"
+  # TRAM_RATE_LIMIT_WINDOW: "60"
+  # TRAM_AUTH_SECRET: ""
+  # TRAM_OTEL_ENDPOINT: ""
+  # TRAM_OTEL_SERVICE: tram
+  # TRAM_WATCH_PIPELINES: "false"
+  # TRAM_PIPELINE_SYNC_INTERVAL: "30"
 
-## Environment variables sourced from a Kubernetes Secret
-## Use this for sensitive values (API keys, passwords) instead of plain env above.
-## Example:
-##   envSecret:
-##     TRAM_API_KEY:
-##       secretName: tram-secrets
-##       secretKey: apiKey
-##     TRAM_SMTP_USER:
-##       secretName: tram-smtp
-##       secretKey: username
-##     TRAM_SMTP_PASS:
-##       secretName: tram-smtp
-##       secretKey: password
 envSecret:
   TRAM_AUTH_SECRET:
     secretName: tram-auth
     secretKey: authSecret
 
-## External schema registry (v1.0.4)
-## When url is set, TRAM_SCHEMA_REGISTRY_URL is injected automatically, enabling:
-##   - /api/schemas/registry/* reverse proxy (for UI tools using a single origin)
-##   - Avro and Protobuf serializers use this URL as the default registry client
-##     (no need to repeat schema_registry_url: in every pipeline YAML)
-## For sensitive credentials prefer envSecret instead of setting username/password here.
 schemaRegistry:
-  url: ""          # e.g. http://schema-registry:8081
-  username: ""     # optional basic-auth username
-  password: ""     # optional basic-auth password (use envSecret for production)
+  url: ""
+  username: ""
+  password: ""
 
-## Pipeline YAML files to mount as a ConfigMap at /pipelines
-## Add your own pipeline YAMLs here or via --set-file during helm install/upgrade.
-## The sample pipeline below runs every 60 s and writes a health record to /tmp — safe to delete.
 pipelines:
   sample-health.yaml: |
     version: "1"
@@ -153,7 +116,7 @@ pipelines:
       name: sample-health
       schedule:
         type: interval
-        interval_seconds: 60
+        interval_seconds: 600
       source:
         type: local
         path: /dev/null
@@ -169,21 +132,19 @@ pipelines:
         type: local
         path: /tmp/tram-sample
 
+## Standalone pod resources.
 resources: {}
-  # limits:
-  #   cpu: 500m
-  #   memory: 512Mi
   # requests:
   #   cpu: 100m
   #   memory: 128Mi
+  # limits:
+  #   cpu: 500m
+  #   memory: 512Mi
 
 nodeSelector: {}
-
 tolerations: []
-
 affinity: {}
 
-## Pod annotations (e.g., for Prometheus scraping)
 podAnnotations: {}
   # prometheus.io/scrape: "true"
   # prometheus.io/port: "8765"
@@ -191,43 +152,28 @@ podAnnotations: {}
 
 serviceAccount:
   create: true
-  ## If not set, a name is generated using the fullname template
   name: ""
 
-## Web UI (v1.0.7)
-## The tram-ui static assets are baked into the image at /ui and served at /ui
-## by the main service on port 8765.  Set ui.enabled=false to disable static
-## serving without rebuilding the image (sets TRAM_UI_DIR="" in the pod).
 ui:
   enabled: true
 
-## API key authentication (v1.0.0)
-## Set apiKey to enable X-API-Key authentication on /api/* endpoints.
-## Health probes (/api/health, /api/ready), webhooks (/webhooks/), and the
-## web UI (/ui) are always exempt from API key checks.
-apiKey: ""   # Also configurable via TRAM_API_KEY env var
-
-## Browser user authentication (v1.0.8)
-## Comma-separated list of username:password pairs for UI login.
-## When set, the UI shows a login screen and issues 8-hour session tokens.
-## Coexists with apiKey — machine clients use X-API-Key, browser users log in.
-## Use envSecret.TRAM_AUTH_USERS for production to avoid plaintext passwords.
-## Example: authUsers: "admin:secret,viewer:readonly"
+apiKey: ""
 authUsers: ""
 
-## TLS configuration (v1.0.0)
-## Mount a Kubernetes TLS secret and enable TLS for the uvicorn server.
-## Create the secret with: kubectl create secret tls tram-tls --cert=tls.crt --key=tls.key
+securityContext:
+  fsGroup: 1000
+  # runAsUser: 1000
+  # runAsGroup: 1000
+
+keys:
+  secretName: ""
+  mountPath: /secrets
+
 tls:
   enabled: false
-  secretName: ""           # Name of a Kubernetes TLS secret (tls.crt / tls.key)
-  certManagerIssuer: ""    # Optional: cert-manager ClusterIssuer name for automatic issuance
+  secretName: ""
+  certManagerIssuer: ""
 
-## PostgreSQL subchart (v1.0.8)
-## When enabled, deploys a Bitnami PostgreSQL instance and automatically
-## wires TRAM_DB_URL and TRAM_CLUSTER_ENABLED into the TRAM pod.
-## Requires clusterMode.enabled=true for multi-replica cluster use.
-## For production, use an external PostgreSQL and set TRAM_DB_URL via envSecret.
 postgresql:
   enabled: false
   auth:
@@ -239,5 +185,4 @@ postgresql:
       enabled: true
       size: 5Gi
 
-## Extra labels to add to all resources
 extraLabels: {}

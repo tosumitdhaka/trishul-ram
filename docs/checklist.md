@@ -1,384 +1,213 @@
 # Development & Release Checklist
 
-This checklist ensures consistency across code changes, documentation, and releases.
+This checklist is the current source of truth for local validation, version bumps,
+and release execution. Historical release notes belong in `docs/changelog.md`,
+not here.
 
-## Pre-Commit Checklist (All Changes)
+## Pre-Commit Checklist
 
 ### Code Quality
-- [ ] Run `ruff check .` — no new lint errors
-- [ ] Run `ruff check --fix .` — auto-fix formatting issues
-- [ ] Run unit tests: `pytest tests/unit/ -q`
-- [ ] Run integration tests: `pytest tests/integration/ -q`
-- [ ] Coverage check: `pytest tests/ --cov=tram --cov-report=term-missing --cov-fail-under=60`
-- [ ] No secrets in code (API keys, passwords, tokens)
-- [ ] No hardcoded paths (use environment variables)
+- [ ] Run `ruff check --fix .`
+- [ ] Run `ruff check .`
+- [ ] Run `pytest tests/unit/ -q`
+- [ ] Run `pytest tests/integration/ -q`
+- [ ] Run `pytest tests/ --cov=tram --cov-report=term-missing --cov-fail-under=75`
+- [ ] No secrets in code, example pipelines, docs, or Helm values
+- [ ] No new hardcoded host paths without config or env override
 
-### New Connector Checklist
-- [ ] Config model added to `tram/models/pipeline.py`
-- [ ] Class decorated with `@register_source()` or `@register_sink()`
-- [ ] Import added to `tram/connectors/__init__.py`
-- [ ] Optional dependency added to `pyproject.toml` (if needed)
-- [ ] Entry added to plugin table in `README.md`
-- [ ] Test file created in `tests/unit/connectors/`
-- [ ] Example pipeline added to `pipelines/` (optional)
-- [ ] Documented in `docs/connectors.md`
+### When Adding a Connector
+- [ ] Add config model in `tram/models/pipeline.py`
+- [ ] Decorate implementation with `@register_source()` or `@register_sink()`
+- [ ] Add import in `tram/connectors/__init__.py`
+- [ ] Add optional dependency in `pyproject.toml` if required
+- [ ] Add tests under `tests/unit/connectors/`
+- [ ] Update `README.md` plugin table if user-facing
+- [ ] Update `docs/connectors.md`
+- [ ] Add or refresh a sample pipeline in `pipelines/` when useful
 
-### New Transform Checklist
-- [ ] Class decorated with `@register_transform()`
-- [ ] Import added to `tram/transforms/__init__.py`
-- [ ] Optional dependency added to `pyproject.toml` (if needed)
-- [ ] Entry added to plugin table in `README.md`
-- [ ] Test file created in `tests/unit/transforms/`
-- [ ] Documented in `docs/transforms.md`
+### When Adding a Transform
+- [ ] Decorate implementation with `@register_transform()`
+- [ ] Add import in `tram/transforms/__init__.py`
+- [ ] Add optional dependency in `pyproject.toml` if required
+- [ ] Add tests under `tests/unit/transforms/`
+- [ ] Update `README.md` if user-facing
+- [ ] Update `docs/transforms.md`
 
-### New Serializer Checklist
-- [ ] Class decorated with `@register_serializer()`
-- [ ] Import added to `tram/serializers/__init__.py`
-- [ ] Optional dependency added to `pyproject.toml` (if needed)
-- [ ] Entry added to plugin table in `README.md`
-- [ ] Test file created in `tests/unit/serializers/`
+### When Adding a Serializer
+- [ ] Decorate implementation with `@register_serializer()`
+- [ ] Add import in `tram/serializers/__init__.py`
+- [ ] Add optional dependency in `pyproject.toml` if required
+- [ ] Add tests under `tests/unit/serializers/`
+- [ ] Update `README.md` if user-facing
 
-### Environment Variables
-- [ ] New env var added to `.env.example` with description
-- [ ] Documented in `docs/deployment.md` (Environment Variables section)
-- [ ] Added to Helm `values.yaml` (if applicable)
-- [ ] Added to Docker Compose `environment` section (if applicable)
+### Environment / Config Surface
+- [ ] Add new env vars to `.env.example`
+- [ ] Document new env vars in `docs/deployment.md`
+- [ ] Update `helm/values.yaml` if the setting is chart-managed
+- [ ] Update `helm/values-template.yaml` if the setting should appear in the generic template
+- [ ] Update `docker-compose.yml` if applicable
 
-### Documentation Updates
-When making changes that affect user-facing behavior, update:
-- [ ] `README.md` — Quick Start, plugin tables, features
-- [ ] `docs/changelog.md` — add entry under `## [Unreleased]`
-- [ ] `docs/architecture.md` — if core flow/component changes
-- [ ] `docs/api.md` — if REST endpoints added/changed
-- [ ] `docs/connectors.md` — if connector behavior changes
-- [ ] `docs/transforms.md` — if transform behavior changes
-- [ ] `docs/deployment.md` — if deployment config changes
-- [ ] `CLAUDE.md` — if architecture patterns change
+### Documentation
+Update only the docs affected by the change:
+- [ ] `README.md` for user-visible features or install flow
+- [ ] `docs/changelog.md` under `## [Unreleased]`
+- [ ] `docs/api.md` for REST contract changes
+- [ ] `docs/connectors.md` for connector behavior
+- [ ] `docs/transforms.md` for transform behavior
+- [ ] `docs/deployment.md` for env, Docker, Helm, or runtime behavior
+- [ ] `docs/architecture.md` for core execution/control-plane changes
+- [ ] `docs/index.md` for landing-page level version or quick-start references
+- [ ] `CLAUDE.md` / `AGENTS.md` only if repo instructions actually changed
 
-### API Changes
-- [ ] OpenAPI schema updated (FastAPI auto-generates, but verify)
-- [ ] New endpoint added to API table in `README.md`
-- [ ] New endpoint added to `docs/api.md`
-- [ ] Frontend API client updated (`tram/ui/src/api.js`)
-- [ ] Auth/rate-limit middleware applied correctly
+### API / UI Changes
+- [ ] Verify OpenAPI still renders correctly
+- [ ] Update `README.md` API table for new public endpoints
+- [ ] Update `docs/api.md` for new or changed endpoints
+- [ ] Update frontend client code in `tram/ui/src/api.js` if backend contracts changed
+- [ ] Update affected UI pages in `tram/ui/src/pages/`
+- [ ] Run `cd tram/ui && npm run build`
+- [ ] Check responsive behavior if the change is UI-visible
 
-### UI Changes
-- [ ] Test in both light and dark mode
-- [ ] Test responsive layout (mobile/tablet/desktop)
-- [ ] Update relevant page in `tram/ui/src/pages/`
-- [ ] Run `cd tram/ui && npm run build` to verify no build errors
-- [ ] Check for console errors in browser dev tools
-
-### Docker/Helm Changes
-- [ ] `Dockerfile` — test build: `docker build -t tram:test .`
-- [ ] `docker-compose.yml` — test: `docker compose up`
-- [ ] `helm/values.yaml` — bump `image.tag` if needed
-- [ ] `helm/Chart.yaml` — bump `version` and `appVersion` if needed
-- [ ] Helm lint: `helm lint helm/`
-- [ ] Test Helm install: `helm install tram-test helm/ --dry-run --debug`
-
----
+### Docker / Helm Changes
+- [ ] Test manager image build: `docker build -t tram:test .`
+- [ ] Test worker image build: `docker build -t tram-worker:test -f Dockerfile.worker .`
+- [ ] Test `docker compose up` if Compose behavior changed
+- [ ] Run `helm dependency update helm/` if chart dependencies or `Chart.yaml` changed
+- [ ] Run `helm lint helm/`
+- [ ] Run `helm install tram-test helm/ --dry-run --debug`
+- [ ] Update `helm/values.yaml` image tags only when intentionally changing the deployed default
 
 ## Version Release Checklist
 
-### Pre-Release (Version X.Y.Z)
-
-#### 1. Version Bump
-- [ ] Update `pyproject.toml` `version = "X.Y.Z"`
-- [ ] Update version references in `README.md` / `docs/index.md` for X.Y.Z
+### 1. Version Bump
+- [ ] Update `pyproject.toml` version to `X.Y.Z`
 - [ ] Update `helm/Chart.yaml`:
-  - [ ] `version: X.Y.Z` (chart version)
-  - [ ] `appVersion: "X.Y.Z"` (app version)
-- [ ] Verify `tram/__init__.py` reads version from `importlib.metadata` (no hardcoded version)
+  - [ ] `version: X.Y.Z`
+  - [ ] `appVersion: "X.Y.Z"`
+- [ ] Update version references in `README.md`, `docs/index.md`, `docs/deployment.md`, and any release-specific docs
+- [ ] Verify `tram/__init__.py` still reads version from `importlib.metadata`
 
-#### 2. CHANGELOG Update
-- [ ] Move `## [Unreleased]` items to `## [X.Y.Z] - YYYY-MM-DD`
-- [ ] Add comparison link at bottom: `[X.Y.Z]: https://github.com/tosumitdhaka/tram/compare/vX.Y.(Z-1)...vX.Y.Z`
-- [ ] Create new empty `## [Unreleased]` section
+### 2. Changelog
+- [ ] Move `## [Unreleased]` items in `docs/changelog.md` to `## [X.Y.Z] - YYYY-MM-DD`
+- [ ] Add or update the comparison link for `X.Y.Z`
+- [ ] Create a new empty `## [Unreleased]` section
 
-#### 3. Documentation Sync
-- [ ] All version references in docs match X.Y.Z
-- [ ] `README.md` / `docs/index.md` quick-start examples use `latest`, with production pin guidance for X.Y.Z
-- [ ] Helm install examples use `latest` for quick start or pin `image.tag=X.Y.Z` for release-specific docs
-- [ ] `helm/values.yaml` default image tag matches X.Y.Z
-- [ ] Auth docs match implementation: `TRAM_AUTH_USERS` bootstrap behavior and DB `scrypt` password storage
-- [ ] Feature tables include version tags (e.g., "v1.1.0")
+### 3. Documentation Sync
+- [ ] `README.md` and `docs/index.md` quick-start examples still use `latest`
+- [ ] Production examples pin a concrete release tag where appropriate
+- [ ] `helm/values.yaml` default `image.tag` matches `X.Y.Z`
+- [ ] `helm/values.yaml` default `worker.image.tag` matches `X.Y.Z` when worker image is set explicitly
+- [ ] Auth docs still match implementation (`TRAM_AUTH_USERS`, bootstrap behavior, DB password storage)
+- [ ] Feature/version tables still match actual release history
 
-#### 4. Testing (Full Suite)
-- [ ] `pytest tests/unit/ -v` — all pass
-- [ ] `pytest tests/integration/ -v` — all pass
-- [ ] `pytest tests/ --cov=tram --cov-fail-under=60` — coverage OK
-- [ ] `ruff check .` — no errors
-- [ ] Test docker build: `docker build -t tram:X.Y.Z .`
-- [ ] Test docker run: `docker run -p 8765:8765 tram:X.Y.Z`
-- [ ] Verify `curl http://localhost:8765/api/meta` returns correct version
-- [ ] Test UI: open `http://localhost:8765/ui/` — no console errors
+### 4. Validation Before Push
+- [ ] `ruff check .`
+- [ ] `pytest tests/unit/ -v -o log_cli=false`
+- [ ] `pytest tests/integration/ -v -o log_cli=false`
+- [ ] `pytest tests/ --cov=tram --cov-fail-under=75 -o log_cli=false`
+- [ ] `docker build -t tram:X.Y.Z .`
+- [ ] `docker build -t tram-worker:X.Y.Z -f Dockerfile.worker .`
+- [ ] Verify `curl http://localhost:8765/api/meta` returns `X.Y.Z` from a local run or container
+- [ ] Run `cd tram/ui && npm run build`
+- [ ] Run `helm dependency update helm/`
+- [ ] Run `helm lint helm/`
+- [ ] Run `helm install tram-test helm/ --dry-run --debug`
 
-#### 5. Example Pipelines
-- [ ] All pipelines in `pipelines/` validate: `tram validate pipelines/*.yaml`
-- [ ] Test dry-run on at least 3 example pipelines
-- [ ] Test template download endpoint: `curl http://localhost:8765/api/templates`
+### 5. Example Pipelines
+- [ ] Validate bundled examples: `tram validate pipelines/*.yaml`
+- [ ] Dry-run at least 3 representative examples
+- [ ] Verify template listing endpoint: `curl http://localhost:8765/api/templates`
 
-#### 6. CI/CD Check
-- [ ] `.github/workflows/ci.yml` runs successfully on main branch
-- [ ] Coverage upload artifact generated
-- [ ] No flaky tests
+### 6. Kind / Local Cluster Validation
+Recommended for releases that touch scheduling, placement, stats, K8s behavior, or ingress.
+- [ ] Deploy with `./scripts/deploy-kind-tram-dev.sh --tag <tag>`
+- [ ] Verify `/api/meta`, `/api/ready`, `/api/cluster/nodes`
+- [ ] Verify any changed placement, stats, or ingress behavior live
+- [ ] Return the dev cluster to a clean baseline after testing
 
-#### 7. Git Commit
-- [ ] Stage version bump files:
-  ```bash
-  git add pyproject.toml README.md docs/changelog.md helm/Chart.yaml
-  ```
-- [ ] Commit with message: `chore: bump version to X.Y.Z`
-- [ ] **Do NOT push yet** — verify release workflow first
+### 7. CI / Release Workflow Alignment
+- [ ] Verify `.github/workflows/ci.yml` still matches the local validation bar
+- [ ] Verify `.github/workflows/release.yml` still matches the intended release process
+- [ ] Confirm `release.yml` reads the version from `pyproject.toml`
+- [ ] Confirm `release.yml` runs `helm dependency update helm/` before packaging
+- [ ] Confirm `release.yml` publishes both versioned and `latest` tags for manager and worker images
+- [ ] Confirm `GHCR_TOKEN` is still the required registry secret
 
-#### 8. Release Workflow Verification
-- [ ] Check `.github/workflows/release.yml` is configured
-- [ ] Verify Docker registry credentials are set (GitHub secrets)
-- [ ] Verify Helm chart registry is configured
-- [ ] Verify release workflow publishes both versioned and `latest` tags for manager and worker images
+### 8. Commit and Push
+- [ ] Stage version bump and release-doc files
+- [ ] Commit with `chore: bump version to X.Y.Z`
+- [ ] Push `main` to trigger `.github/workflows/release.yml`
 
----
+### 9. Post-Push Verification
+- [ ] Monitor the `CI` workflow on `main`
+- [ ] Monitor the `Release` workflow on `main`
+- [ ] Verify pushed images:
+  - [ ] `ghcr.io/<owner>/trishul-ram:X.Y.Z`
+  - [ ] `ghcr.io/<owner>/trishul-ram-worker:X.Y.Z`
+  - [ ] `ghcr.io/<owner>/trishul-ram:latest`
+  - [ ] `ghcr.io/<owner>/trishul-ram-worker:latest`
+- [ ] Verify pushed Helm chart: `oci://ghcr.io/<owner>/charts/trishul-ram:X.Y.Z`
 
-### Release (Create Tag)
-
-- [ ] Push version commit: `git push origin main`
-- [ ] Create and push tag:
-  ```bash
-  git tag -a vX.Y.Z -m "Release version X.Y.Z"
-  git push origin vX.Y.Z
-  ```
-- [ ] Monitor release workflow in GitHub Actions
-- [ ] Verify Docker image pushed: `ghcr.io/tosumitdhaka/trishul-ram:X.Y.Z`
-- [ ] Verify Helm chart pushed: `oci://ghcr.io/tosumitdhaka/charts/trishul-ram:X.Y.Z`
-
----
-
-### Post-Release
-
-#### 1. GitHub Release
+### 10. Tag / GitHub Release
+Git tagging is optional from a publishing perspective because the current release
+workflow is push-to-main based. Do it when you want Git history and GitHub
+Releases to track the shipped version explicitly.
+- [ ] Create and push annotated tag: `git tag -a vX.Y.Z -m "Release version X.Y.Z" && git push origin vX.Y.Z`
 - [ ] Create GitHub release from tag `vX.Y.Z`
-- [ ] Copy CHANGELOG entry for X.Y.Z into release notes
-- [ ] Attach any relevant artifacts (if applicable)
-- [ ] Mark as "Latest release"
+- [ ] Copy the `docs/changelog.md` entry into release notes
 
-#### 2. Verification
-- [ ] Test pull image: `docker pull ghcr.io/tosumitdhaka/trishul-ram:X.Y.Z`
-- [ ] Test Helm install:
-  ```bash
-  helm install tram oci://ghcr.io/tosumitdhaka/charts/trishul-ram --version X.Y.Z --dry-run
-  ```
-- [ ] Verify version endpoint: `curl http://localhost:8765/api/meta`
+## Hotfix Checklist
 
-#### 3. Update `latest` Tag (Optional)
-- [ ] Tag as latest:
-  ```bash
-  git tag -f latest
-  git push origin latest --force
-  ```
-
-#### 4. Announce
-- [ ] Update any external documentation
-- [ ] Notify users/team of new release
-- [ ] Post release notes to relevant channels
-
----
-
-## Hotfix Release Checklist
-
-For urgent fixes (X.Y.Z+1):
-
-- [ ] Create hotfix branch: `git checkout -b hotfix/X.Y.(Z+1) vX.Y.Z`
-- [ ] Apply minimal fix (no new features)
-- [ ] Follow **Pre-Release** checklist (version X.Y.Z+1)
-- [ ] Test thoroughly (unit + integration)
-- [ ] Merge to main: `git checkout main && git merge hotfix/X.Y.(Z+1)`
-- [ ] Follow **Release** checklist
-- [ ] Delete hotfix branch: `git branch -d hotfix/X.Y.(Z+1)`
-
----
+- [ ] Keep scope minimal
+- [ ] Repeat the full validation steps above
+- [ ] Update `docs/changelog.md`
+- [ ] Push `main` and verify the same workflows
+- [ ] Tag only if you want a GitHub release entry for the hotfix
 
 ## Rollback Checklist
 
-If a release has critical issues:
-
-- [ ] Identify last known good version (X.Y.Z-1)
-- [ ] Tag rollback release: `vX.Y.Z-rollback` pointing to `vX.Y.Z-1`
-- [ ] Update Helm deployments:
-  ```bash
-  helm upgrade tram oci://ghcr.io/tosumitdhaka/charts/trishul-ram --version X.Y.Z-1
-  ```
-- [ ] Update CHANGELOG with rollback note
-- [ ] Communicate issue and rollback to users
-- [ ] Create issue to track fix for next release
-
----
+- [ ] Identify the last known good release
+- [ ] Roll back Docker image tags and Helm chart version to that release
+- [ ] Update `docs/changelog.md` with rollback context if the bad release was published
+- [ ] Communicate the rollback and open a follow-up issue
 
 ## Notes
 
-- **Always test locally before pushing** — CI catches most issues, but local verification is faster
-- **Never skip tests** — coverage regression means something important is untested
-- **Version bumps are atomic** — all version references must change together
-- **CHANGELOG is user-facing** — write clear, concise entries with examples
-- **Tag format is strict** — always `vX.Y.Z` (lowercase 'v' prefix)
+- CI and release workflows currently trigger on pushes to `main`; tag creation is not required to publish artifacts.
+- `release.yml` already publishes `latest`; do not use a separate Git tag named `latest`.
+- Keep this file procedural. Release history belongs in `docs/changelog.md`.
 
----
+## v1.3.1 Status — 2026-04-20
 
-## v1.2.1 Release Status — 2026-04-14
+This section records the current known status of the `1.3.1` release pass.
 
-### Code Quality
-- [x] `ruff check .` — 5 fixable issues auto-corrected, 0 remaining
-- [x] `ruff check --fix .` — applied
-- [x] Unit tests: `pytest tests/unit/ -q` — **911 passed**
-- [ ] Integration tests — not run (no live SFTP/Kafka in CI)
-- [ ] Coverage check — not run separately (unit suite passes)
-- [x] No secrets in code
-- [x] No hardcoded paths
+### Completed
+- [x] `pyproject.toml` version bumped to `1.3.1`
+- [x] `helm/Chart.yaml` `version` and `appVersion` bumped to `1.3.1`
+- [x] Full Python validation completed earlier in the release pass:
+  - [x] `ruff check .`
+  - [x] `pytest tests/unit/ -q`
+  - [x] `pytest tests/integration/ -q`
+  - [x] `pytest tests/ --cov=tram --cov-fail-under=75`
+- [x] Helm validation completed in the release pass:
+  - [x] `helm lint helm/`
+  - [x] chart dependency handling verified in `.github/workflows/release.yml`
+- [x] Live kind deployment validation completed
+- [x] Real manager/worker ingress and placement tests completed on kind
+- [x] Scale-down / stale-slot / degraded placement behavior validated on kind
+- [x] `workers.list` dedicated service endpoint reconciliation bug fixed and revalidated live
+- [x] Release workflow checked:
+  - [x] reads version from `pyproject.toml`
+  - [x] runs `helm dependency update helm/`
+  - [x] publishes versioned and `latest` manager/worker images
+  - [x] uses `GHCR_TOKEN`
+- [x] Helm values split is intentional:
+  - [x] `helm/values.yaml` tracks the active kind/dev deployment profile
+  - [x] `helm/values-template.yaml` is the generic release baseline
 
-### Changes in this release
-- [x] `tram/core/context.py` — `note_skip()` method added
-- [x] `tram/pipeline/executor.py` — skip logs WARNING + `note_skip()` call
-- [x] `tram/agent/server.py` — `errors` list propagated in worker callback
-- [x] `tram/api/routers/internal.py` — `RunCompletePayload.errors` field added
-- [x] `tram/pipeline/controller.py` — `on_worker_run_complete` accepts + stores `errors`
-- [x] `tram/core/log_config.py` — `httpx` logger silenced to WARNING
-- [x] `tram/agent/worker_pool.py` — single summary health log on count change
-- [x] `tram/api/routers/health.py` — `/api/ready` returns `cluster` field
-- [x] `tram-ui/src/pages/settings.js` — Daemon Status cluster field fixed
-- [x] `tram-ui/src/pages/dashboard.js` — Start / Stop / Download buttons
-- [x] `tram-ui/src/pages/detail.html` — Run Now trigger button
-- [x] `tram-ui/src/pages/detail.js` — `_detailTrigger` (one-shot) vs `_detailRun` (schedule)
-- [x] `tram-ui/src/pages/cluster.js` — per-worker assigned/running pipelines
-- [x] CSS vars applied across editor, wizard, cluster, plugins, settings, templates
-- [x] `aria-label` on all unlabelled form controls
-- [x] `tests/unit/test_api_internal_router.py` — updated for `errors` field
-
-### Version Bump
-- [x] `pyproject.toml` → `1.2.1`
-- [x] `README.md` → `1.2.1`
-- [x] `helm/Chart.yaml` → `1.2.1`
-- [x] `CHANGELOG.md` — `[1.2.1]` section added, comparison link added
-
-### Docker / Helm
-- [x] `docker build -t trishul-ram:1.2.1 .` — built successfully
-- [x] `docker build -t trishul-ram-worker:1.2.1 . -f Dockerfile.worker` — built successfully
-- [x] `helm upgrade` — REVISION 10, all 4 pods `1/1 Running`
-- [x] Manager logs clean — single `Worker pool: 3/3 healthy` after startup
-- [x] Settings page shows `manager · 3/3 workers`
-- [x] Worker 401s resolved — `TRAM_API_KEY` set on all pods
-
-### Pending (post-release)
-- [ ] `git tag -a v1.2.1 -m "Release version 1.2.1" && git push origin v1.2.1`
-- [ ] GitHub release created from tag
-- [ ] Push images to registry: `ghcr.io/tosumitdhaka/trishul-ram:1.2.1`
-
----
-
-## v1.2.2 — 2026-04-15
-
-### Fixes
-- `tram/cli/main.py` — `validate` and `run --dry-run` crashed unpacking `(config, raw_yaml)` tuple returned by `load_pipeline()`
-- `tram/watcher/pipeline_watcher.py` — hot-reload raised `PipelineAlreadyExistsError` on changed YAML; fixed by passing `replace=True` to `manager.register()`
-- `docs/api.md` — response shapes for dry-run, connector-test, and change-password corrected to match implementation
-- `docs/connectors.md` — `on_error` valid values corrected (`continue | abort | retry | dlq`; `stop` was never valid)
-- `pyproject.toml` — removed `tram[corba]` from `all` extra; `omniORBpy` is a system package with no PyPI wheel (CI was failing)
-- `tests/unit/test_auth_utils.py` — `test_returns_sha256_prefix` → `test_returns_scrypt_prefix`; password hasher was upgraded to scrypt in v1.2.1 but test was not updated
-
-### Changes
-- `tram/ui/` — web UI source moved from `tram-ui/` to `tram/ui/`; `Dockerfile` updated
-- `docs/changelog.md` — moved from `CHANGELOG.md` (root)
-- `docs/checklist.md` — moved from `CHECKLIST.md` (root)
-- `docs/roadmap.md` — replaces `docs/roadmap_1.2.0.md`; features/issues only, versioned or backlog
-- `README.md` — overhauled: use-case driven (PM, FM, gNMI, syslog, CORBA), concise, links to docs
-- `.gitignore` — added `CLAUDE.md`, `AGENTS.md`, `.codex`
-
-### Tests
-- Coverage raised from ~67% to 78.5% (1,296 passing, 0 failed)
-- 9 new test files covering AI router, CLI, daemon server, pipeline manager/controller/watcher, API middleware, stats, serializers
-- 25 ruff lint errors in test files resolved
-
-### Version bumps
-- `pyproject.toml` → `1.2.2`
-- `helm/Chart.yaml` → `1.2.2`
-
----
-
-## v1.3.0 — 2026-04-17
-
-### Scope
-- Broadcast streams and push-source scaling for `webhook` / `prometheus_rw`
-- Unified worker stats, placement persistence, and reconciliation
-- Worker public ingress split on `:8767`
-- Manager Deployment → StatefulSet Helm migration
-- Alert cooldown fix on confirmed delivery only
-
-### Verified
-- [x] `ruff check .` — passed after auto-fixing 7 import-order issues with `ruff check --fix .`
-- [x] `pytest tests/unit/ -v -o log_cli=false` — **1323 passed**
-- [x] `pytest tests/integration/ -v -o log_cli=false` — **44 passed**
-- [x] `pytest tests/ --cov=tram --cov-fail-under=60 -o log_cli=false` — **79.57% coverage**
-- [x] `helm lint helm/` — passed
-- [x] `helm install tram-test helm/ --dry-run --debug` — rendered successfully with chart/app version `1.3.0`
-- [x] Bundled pipeline examples validate via `tram validate pipelines/*.yaml`
-- [x] `scripts/deploy-kind-tram-dev.sh --tag local-v130-20260417` rebuilt and rolled out local kind release
-- [x] Kind cluster upgraded to manager StatefulSet + worker StatefulSet
-- [x] Live manager `/api/ready` verified through NodePort `30001`
-- [x] Live manager `/api/meta` verified: `{"version":"1.3.0", ...}`
-- [x] Live `/api/cluster/nodes` verified: `manager · 3/3 workers`
-- [x] Live `/api/cluster/streams` verified: empty stream list with manager mode response
-
-### Fixes included
-- [x] `tram/models/pipeline.py` / `tram/pipeline/linter.py` — `workers:` model defaults and L006–L010
-- [x] `tram/agent/worker_pool.py` — broadcast dispatch, worker ID mapping, load-aware scoring
-- [x] `tram/agent/metrics.py` / `tram/agent/stats_store.py` — unified stats and stale-aware store
-- [x] `tram/agent/reconciler.py` / `tram/pipeline/controller.py` — stale-slot reconcile and restart recovery
-- [x] `tram/api/routers/pipelines.py` / `tram/api/routers/health.py` — placement and cluster streams APIs
-- [x] `tram/agent/server.py` / `tram/daemon/server.py` — ingress split and composite worker health
-- [x] `helm/templates/manager-statefulset.yaml` / `helm/templates/manager-headless-service.yaml` — manager StatefulSet migration
-- [x] `tram/alerts/evaluator.py` — cooldown only on confirmed delivery
-
-### Version bumps
-- [x] `pyproject.toml` → `1.3.0`
-- [x] `helm/Chart.yaml` → `1.3.0`
-- [x] `helm/values.yaml` default image tag → `1.3.0`
-- [x] `docs/index.md` / `docs/deployment.md` / `docs/changelog.md` updated for `1.3.0`
-
-### Pending (post-bump)
-- [x] Tag/push/publish intentionally skipped for this pass — local release-prep and kind validation only
-
-## v1.2.3 — 2026-04-16
-
-### Scope
-- SNMPv3 poll validation completed for real `GET` and `WALK`
-- ASN.1 decode-path hardening completed
-- SNMP trap source deferred due to push-source architecture gap (`#11`)
-- SNMP trap sink deferred pending a reachable real receiver
-
-### Verified
-- [x] `ruff check .` — passed
-- [x] `pytest tests/unit/ -q -o log_cli=false` — **1278 passed**
-- [x] `pytest tests/unit/test_loader.py -q -o log_cli=false` — **17 passed**
-- [x] `pytest tests/unit/test_snmp_connectors.py -q -o log_cli=false` — **59 passed**
-- [x] `pytest tests/integration/ -q -o log_cli=false` — **44 passed**
-- [x] `pytest tests/ --cov=tram --cov-fail-under=60 -o log_cli=false` — **79.43% coverage**
-- [x] Bundled pipeline examples validate
-- [x] `scripts/deploy-kind-tram-dev.sh` rebuilt and rolled out local kind release
-- [x] Live manager `/api/meta` verified through port-forward: `{"version":"1.2.3", ...}`
-- [x] Real SNMPv3 `GET` pipeline validated against host SNMP agent
-- [x] Real SNMPv3 `WALK` pipeline validated against host SNMP agent
-
-### Fixes included
-- [x] `tram/connectors/snmp/source.py` — walk loop no-progress guard added for repeated terminal OIDs
-- [x] `tram/connectors/snmp/sink.py` / `tram/models/pipeline.py` — `trap_oid` introduced; legacy `enterprise_oid` kept as alias
-- [x] `tram/api/routers/auth.py` — DB-backed browser auth works without `TRAM_AUTH_USERS`
-- [x] `tram/pipeline/controller.py` — full UUID run IDs retained
-- [x] Worker callback timestamps preserved through manager history path
-- [x] ASN.1 serializer docs/tests updated for explicit decode-only behavior
-
-### Version bumps
-- [x] `pyproject.toml` → `1.2.3`
-- [x] `helm/Chart.yaml` → `1.2.3`
-- [x] `docs/index.md` / `docs/deployment.md` / `docs/changelog.md` updated for `1.2.3`
-
-### Pending (post-bump)
-- [ ] Tag and publish `v1.2.3`
+### Still Open
+- [ ] Post-push artifact verification is not recorded here yet:
+  - [ ] GHCR manager image verification
+  - [ ] GHCR worker image verification
+  - [ ] OCI Helm chart verification
+- [ ] Optional Git tag / GitHub Release status is not recorded here yet

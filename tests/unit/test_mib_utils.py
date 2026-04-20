@@ -70,10 +70,13 @@ class TestMibUtilsWithMocks:
     def test_symbolic_to_oid_returns_none_on_failure(self):
         from tram.connectors.snmp.mib_utils import symbolic_to_oid
         mock_view = MagicMock()
-        mock_view.getNodeName.side_effect = Exception("not found")
+        mock_oid = MagicMock()
+        mock_oid.resolveWithMib.side_effect = Exception("not found")
+        mock_rfc1902 = MagicMock()
+        mock_rfc1902.ObjectIdentity.return_value = mock_oid
 
         with patch.dict(sys.modules, {
-            "pysnmp.smi.rfc1902": MagicMock(),
+            "pysnmp.smi.rfc1902": mock_rfc1902,
             "pyasn1.type.univ": MagicMock(),
         }):
             result = symbolic_to_oid(mock_view, "IF-MIB::ifOperStatus.1")

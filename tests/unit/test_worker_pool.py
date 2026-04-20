@@ -280,16 +280,120 @@ class TestDispatch:
         assert result.run_ids == ["pg1-w0", "pg1-w1"]
         assert pool.workers_for_pipeline("p") == ["http://w0:8766", "http://w1:8766"]
 
-    def test_resolve_rejects_unsupported_named_workers(self):
+    def test_resolve_count_n_returns_top_n_workers(self):
         from tram.models.pipeline import WorkersConfig
 
-        pool = _pool("http://w0:8766")
-        try:
-            pool.resolve(WorkersConfig(worker_ids=["tram-worker-0"]))
-        except NotImplementedError:
-            pass
-        else:
-            raise AssertionError("Expected NotImplementedError for workers.list")
+        pool = _pool("http://w0:8766", "http://w1:8766", "http://w2:8766")
+        pool._health["http://w0:8766"] = {"ok": True, "active_runs": 5}
+        pool._health["http://w1:8766"] = {"ok": True, "active_runs": 1}
+        pool._health["http://w2:8766"] = {"ok": True, "active_runs": 3}
+
+        resolved = pool.resolve(WorkersConfig(count=2))
+
+        assert resolved == ["http://w1:8766", "http://w2:8766"]
+
+    def test_multi_dispatch_count_n_tracks_missing_slots_as_degraded(self):
+        from tram.models.pipeline import WorkersConfig
+
+        pool = _pool("http://w0:8766", "http://w1:8766")
+        pool._health["http://w1:8766"]["ok"] = False
+        mock_client = MagicMock()
+        mock_client.__enter__ = lambda s: mock_client
+        mock_client.__exit__ = MagicMock(return_value=False)
+        mock_client.post.return_value = MagicMock(raise_for_status=MagicMock())
+
+        with patch("httpx.Client", return_value=mock_client):
+            result = pool.multi_dispatch(
+                placement_group_id="pg1",
+                pipeline_name="p",
+                yaml_text="yaml",
+                workers_cfg=WorkersConfig(count=2),
+                schedule_type="stream",
+            )
+
+        assert result.status == "degraded"
+        assert result.accepted == ["http://w0:8766"]
+        assert result.run_ids == ["pg1-w0"]
+        assert result.slots == [
+            {
+                "worker_index": 0,
+                "worker_url": "http://w0:8766",
+                "worker_id": None,
+                "pinned_worker_id": None,
+                "run_id_prefix": "pg1-w0",
+                "current_run_id": "pg1-w0",
+                "status": "running",
+                "restart_count": 0,
+            },
+            {
+                "worker_index": 1,
+                "worker_url": None,
+                "worker_id": None,
+                "pinned_worker_id": None,
+                "run_id_prefix": "pg1-w1",
+                "current_run_id": None,
+                "status": "stale",
+                "restart_count": 0,
+            },
+        ]
+
+    def test_resolve_named_workers_returns_only_healthy_listed_urls(self):
+        from tram.models.pipeline import WorkersConfig
+
+        pool = _pool("http://w0:8766", "http://w1:8766")
+        pool._worker_ids["tram-worker-0"] = "http://w0:8766"
+        pool._worker_ids["tram-worker-1"] = "http://w1:8766"
+        pool._health["http://w1:8766"]["ok"] = False
+
+        resolved = pool.resolve(WorkersConfig(worker_ids=["tram-worker-0", "tram-worker-1"]))
+
+        assert resolved == ["http://w0:8766"]
+
+    def test_multi_dispatch_named_workers_tracks_pinned_slots(self):
+        from tram.models.pipeline import WorkersConfig
+
+        pool = _pool("http://w0:8766", "http://w1:8766")
+        pool._worker_ids["tram-worker-0"] = "http://w0:8766"
+        pool._worker_ids["tram-worker-1"] = "http://w1:8766"
+        pool._health["http://w1:8766"]["ok"] = False
+        mock_client = MagicMock()
+        mock_client.__enter__ = lambda s: mock_client
+        mock_client.__exit__ = MagicMock(return_value=False)
+        mock_client.post.return_value = MagicMock(raise_for_status=MagicMock())
+
+        with patch("httpx.Client", return_value=mock_client):
+            result = pool.multi_dispatch(
+                placement_group_id="pg-list",
+                pipeline_name="p",
+                yaml_text="yaml",
+                workers_cfg=WorkersConfig(worker_ids=["tram-worker-0", "tram-worker-1"]),
+                schedule_type="stream",
+            )
+
+        assert result.status == "degraded"
+        assert result.accepted == ["http://w0:8766"]
+        assert result.slots == [
+            {
+                "worker_index": 0,
+                "worker_url": "http://w0:8766",
+                "worker_id": "tram-worker-0",
+                "pinned_worker_id": "tram-worker-0",
+                "run_id_prefix": "pg-list-w0",
+                "current_run_id": "pg-list-w0",
+                "status": "running",
+                "restart_count": 0,
+            },
+            {
+                "worker_index": 1,
+                "worker_url": None,
+                "worker_id": "tram-worker-1",
+                "pinned_worker_id": "tram-worker-1",
+                "run_id_prefix": "pg-list-w1",
+                "current_run_id": None,
+                "status": "stale",
+                "restart_count": 0,
+            },
+        ]
 
 
 # ── stop_run ───────────────────────────────────────────────────────────────

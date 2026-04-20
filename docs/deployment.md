@@ -150,7 +150,7 @@ If you are upgrading from the older manager `Deployment`, set `manager.persisten
 
 ```dockerfile
 # Build with Dockerfile.worker (no UI assets, no manager deps)
-docker build -f Dockerfile.worker -t trishul-ram-worker:1.3.0 .
+docker build -f Dockerfile.worker -t trishul-ram-worker:1.3.1 .
 ```
 
 The worker image exposes port `8766` for the internal agent API and port `8767` for ingress-only webhook traffic. Kubernetes liveness/readiness probes stay on `/agent/health` over port `8766`.
@@ -282,7 +282,7 @@ tram mib compile /path/to/vendor-mibs/ --out /mibs
 **Air-gapped environments** — copy pre-compiled MIB `.py` files into the image:
 
 ```dockerfile
-FROM ghcr.io/tosumitdhaka/trishul-ram:1.3.0
+FROM ghcr.io/tosumitdhaka/trishul-ram:1.3.1
 COPY compiled-mibs/*.py /mibs/
 ```
 
@@ -327,7 +327,7 @@ curl -X DELETE http://localhost:8765/api/schemas/cisco/GenericRecord.proto
 **Mount host directory** for development (read-write):
 
 ```bash
-docker run -v ./schemas:/schemas tram:1.3.0
+docker run -v ./schemas:/schemas tram:1.3.1
 ```
 
 ## Schema Registry Integration (v1.0.4)
@@ -450,7 +450,7 @@ Mount a volume at `/data` (or set `TRAM_DB_URL`) to persist run history and pipe
 
 ### Installed extras in the default image
 
-The default `tram:1.3.0` image installs (`clickhouse` added in v1.0.4):
+The default `tram:1.3.1` image installs (`clickhouse` added in v1.0.4):
 
 `kafka`, `opensearch`, `snmp`, `avro`, `protobuf_ser`, `msgpack_ser`, `mqtt`, `amqp`, `nats`,
 `gnmi`, `jmespath`, `sql`, `influxdb`, `redis`, `websocket`, `elasticsearch`, `metrics`,
@@ -470,7 +470,7 @@ The following extras are **excluded by default** to keep the image lean. Extend 
 | `otel` | only needed when `TRAM_OTEL_ENDPOINT` is set; no-op fallback when absent | ~15 MB |
 
 ```dockerfile
-FROM ghcr.io/tosumitdhaka/trishul-ram:1.3.0
+FROM ghcr.io/tosumitdhaka/trishul-ram:1.3.1
 RUN pip install "tram[parquet,s3,gcs,azure,otel]"
 ```
 
@@ -488,7 +488,7 @@ TRAM ships a production-ready Helm chart in `helm/`. Published to GHCR OCI on ev
 
 ### Install
 
-Quick-start examples below use `latest`. For production, pin `image.tag` and worker image tags to a specific release such as `1.3.0`.
+Quick-start examples below use `latest`. For production, pin `image.tag` and worker image tags to a specific release such as `1.3.1`.
 
 ```bash
 # Add chart from OCI registry
@@ -511,7 +511,7 @@ helm upgrade tram oci://ghcr.io/tosumitdhaka/charts/trishul-ram \
 | Value | Default | Description |
 |-------|---------|-------------|
 | `image.repository` | `ghcr.io/tosumitdhaka/trishul-ram` | Docker image repository |
-| `image.tag | "1.3.0"` | Image tag |
+| `image.tag | "1.3.1"` | Image tag |
 | `replicaCount` | `1` | Replicas for the standalone StatefulSet; not used when `manager.enabled=true` |
 | `manager.enabled` | `false` | `true` = manager+worker mode (manager StatefulSet + worker StatefulSet); `false` = standalone StatefulSet |
 | `worker.replicas` | `3` | Number of worker StatefulSet replicas (only when `manager.enabled=true`) |
@@ -522,6 +522,7 @@ helm upgrade tram oci://ghcr.io/tosumitdhaka/charts/trishul-ram \
 | `worker.ingressService.type` | `NodePort` | Service type for published worker ingress (`NodePort`, `ClusterIP`, or `LoadBalancer`) |
 | `worker.ingressService.port` | `8767` | Service port for worker ingress |
 | `worker.ingressService.nodePort` | `30002` | Fixed NodePort for worker ingress when `type=NodePort`; set null to let Kubernetes assign one |
+| Pipeline `kubernetes.service_type` | `NodePort` | Per-pipeline dedicated Service exposure for active `webhook` / `prometheus_rw` streams; requires image built with `tram[k8s]` |
 | `persistence.enabled` | `true` | Provision a per-pod RWO PVC via `volumeClaimTemplates` mounted at `/data`; auto-sets `TRAM_DB_URL=sqlite:////data/tram.db`, `TRAM_SCHEMA_DIR=/data/schemas`, `TRAM_MIB_DIR=/data/mibs`; disable in cluster mode when using `sharedStorage` |
 | `persistence.size` | `1Gi` | PVC size per pod (standalone mode only) |
 | `persistence.accessMode` | `ReadWriteOnce` | PVC access mode (standalone mode only) |
@@ -551,7 +552,7 @@ helm upgrade tram oci://ghcr.io/tosumitdhaka/charts/trishul-ram \
 ```bash
 helm install tram oci://ghcr.io/tosumitdhaka/charts/trishul-ram \
   --namespace tram --create-namespace \
-  --set image.tag=1.3.0
+  --set image.tag=1.3.1
 ```
 
 A single-replica `StatefulSet` with pod name `tram-0` runs the full daemon. A `PersistentVolumeClaim` (`data-tram-0`) is auto-provisioned via `volumeClaimTemplates` and mounted at `/data`. SQLite run history, API-uploaded schemas (`/data/schemas`), and runtime MIBs (`/data/mibs`) all share this single PVC and survive pod restarts. Standard MIBs baked into the image at `/mibs` remain available alongside any runtime-downloaded ones.
@@ -565,11 +566,11 @@ SQLite on a `ReadWriteOnce` PVC is sufficient — only one manager pod ever writ
 ```bash
 helm install tram oci://ghcr.io/tosumitdhaka/charts/trishul-ram \
   --namespace tram --create-namespace \
-  --set image.tag=1.3.0 \
+  --set image.tag=1.3.1 \
   --set manager.enabled=true \
   --set worker.replicas=3 \
   --set worker.image.repository=trishul-ram-worker \
-  --set worker.image.tag=1.3.0 \
+  --set worker.image.tag=1.3.1 \
   --set apiKey=mysecret
 ```
 
@@ -603,7 +604,7 @@ PostgreSQL is **optional** in manager+worker mode — SQLite on the manager's RW
 ```bash
 helm install tram oci://ghcr.io/tosumitdhaka/charts/trishul-ram \
   --namespace tram --create-namespace \
-  --set image.tag=1.3.0 \
+  --set image.tag=1.3.1 \
   --set manager.enabled=true \
   --set worker.replicas=3 \
   --set postgresql.enabled=true
@@ -636,7 +637,7 @@ Then install/upgrade TRAM with shared storage enabled:
 ```bash
 helm upgrade trishul-ram helm/ \
   --namespace trishul-ram \
-  --set image.tag=1.3.0 \
+  --set image.tag=1.3.1 \
   --set manager.enabled=true \
   --set worker.replicas=3 \
   --set manager.persistence.enabled=true \
@@ -729,7 +730,7 @@ spec:
     spec:
       containers:
       - name: tram
-        image: ghcr.io/tosumitdhaka/trishul-ram:1.3.0
+        image: ghcr.io/tosumitdhaka/trishul-ram:1.3.1
         command: ["tram", "daemon"]
         ports:
         - containerPort: 8765

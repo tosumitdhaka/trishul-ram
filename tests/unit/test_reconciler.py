@@ -31,6 +31,36 @@ def _placement(status="running"):
     }
 
 
+def _count_n_placement(status="running"):
+    return {
+        "placement_group_id": "pg2",
+        "pipeline_name": "pipe-n",
+        "target_count": 2,
+        "started_at": datetime.now(UTC) - timedelta(seconds=120),
+        "status": status,
+        "slots": [
+            {
+                "worker_index": 0,
+                "worker_url": "http://w0:8766",
+                "worker_id": "w0",
+                "run_id_prefix": "pg2-w0",
+                "current_run_id": "pg2-w0",
+                "status": "running",
+                "restart_count": 0,
+            },
+            {
+                "worker_index": 1,
+                "worker_url": "http://w1:8766",
+                "worker_id": "w1",
+                "run_id_prefix": "pg2-w1",
+                "current_run_id": "pg2-w1",
+                "status": "running",
+                "restart_count": 0,
+            },
+        ],
+    }
+
+
 def test_reconciler_marks_stale_slot_and_redispatches():
     controller = MagicMock()
     placement = _placement()
@@ -46,7 +76,11 @@ def test_reconciler_marks_stale_slot_and_redispatches():
 
     reconciler.run_once()
 
-    controller.redispatch_broadcast_slot.assert_called_once_with("pg1", 0)
+    controller.redispatch_broadcast_slot.assert_called_once_with(
+        "pg1",
+        0,
+        replacement_worker_url="http://w0:8766",
+    )
     db.update_broadcast_placement_status.assert_called()
 
 
@@ -91,3 +125,134 @@ def test_reconciler_promotes_reconciling_group_after_timeout():
     reconciler.run_once()
 
     controller._update_broadcast_placement_status.assert_called_once_with("pg1", "running")
+
+
+def test_reconciler_reassigns_count_n_stale_slot_to_spare_worker():
+    controller = MagicMock()
+    placement = _count_n_placement()
+    controller.get_active_broadcast_placements.return_value = [placement]
+    controller.redispatch_broadcast_slot.return_value = True
+
+    worker_pool = MagicMock()
+    worker_pool.is_worker_healthy.side_effect = lambda url: url != "http://w1:8766"
+    worker_pool.healthy_workers.return_value = ["http://w0:8766", "http://w2:8766"]
+    worker_pool.load_score.side_effect = lambda url: {"http://w0:8766": 10.0, "http://w2:8766": 1.0}[url]
+
+    stats_store = StatsStore(interval=10)
+    stats_store.update(PipelineStatsPayload(
+        worker_id="w0",
+        pipeline_name="pipe-n",
+        run_id="pg2-w0",
+        schedule_type="stream",
+        uptime_seconds=10.0,
+        timestamp=datetime.now(UTC),
+    ))
+    db = MagicMock()
+    reconciler = PlacementReconciler(controller, worker_pool, stats_store, db, stats_interval=10)
+
+    reconciler.run_once()
+
+    controller.redispatch_broadcast_slot.assert_called_once_with(
+        "pg2",
+        1,
+        replacement_worker_url="http://w2:8766",
+    )
+
+
+def test_reconciler_retries_named_worker_only_when_it_returns():
+    controller = MagicMock()
+    placement = {
+        "placement_group_id": "pg-list",
+        "pipeline_name": "pipe-list",
+        "target_count": 2,
+        "started_at": datetime.now(UTC) - timedelta(seconds=120),
+        "status": "running",
+        "slots": [
+            {
+                "worker_index": 0,
+                "worker_url": "http://w0:8766",
+                "worker_id": "tram-worker-0",
+                "pinned_worker_id": "tram-worker-0",
+                "run_id_prefix": "pg-list-w0",
+                "current_run_id": "pg-list-w0",
+                "status": "running",
+                "restart_count": 0,
+            },
+            {
+                "worker_index": 1,
+                "worker_url": "http://w1-old:8766",
+                "worker_id": "tram-worker-1",
+                "pinned_worker_id": "tram-worker-1",
+                "run_id_prefix": "pg-list-w1",
+                "current_run_id": "pg-list-w1",
+                "status": "running",
+                "restart_count": 0,
+            },
+        ],
+    }
+    controller.get_active_broadcast_placements.return_value = [placement]
+    controller.redispatch_broadcast_slot.return_value = True
+
+    worker_pool = MagicMock()
+    worker_pool.url_for_worker_id.side_effect = lambda worker_id: {
+        "tram-worker-0": "http://w0:8766",
+        "tram-worker-1": "http://w1-new:8766",
+    }.get(worker_id)
+    worker_pool.is_worker_healthy.side_effect = lambda url: url in {"http://w0:8766", "http://w1-new:8766"}
+
+    stats_store = StatsStore(interval=10)
+    stats_store.update(PipelineStatsPayload(
+        worker_id="tram-worker-0",
+        pipeline_name="pipe-list",
+        run_id="pg-list-w0",
+        schedule_type="stream",
+        uptime_seconds=10.0,
+        timestamp=datetime.now(UTC),
+    ))
+    db = MagicMock()
+    reconciler = PlacementReconciler(controller, worker_pool, stats_store, db, stats_interval=10)
+
+    reconciler.run_once()
+
+    controller.redispatch_broadcast_slot.assert_called_once_with(
+        "pg-list",
+        1,
+        replacement_worker_url="http://w1-new:8766",
+    )
+
+
+def test_reconciler_refreshes_k8s_service_for_named_worker_stale_slot():
+    controller = MagicMock()
+    placement = {
+        "placement_group_id": "pg-list",
+        "pipeline_name": "pipe-list",
+        "target_count": 1,
+        "started_at": datetime.now(UTC) - timedelta(seconds=120),
+        "status": "running",
+        "slots": [
+            {
+                "worker_index": 0,
+                "worker_url": "http://w3:8766",
+                "worker_id": "tram-worker-3",
+                "pinned_worker_id": "tram-worker-3",
+                "run_id_prefix": "pg-list-w0",
+                "current_run_id": "pg-list-w0",
+                "status": "running",
+                "restart_count": 0,
+            },
+        ],
+    }
+    controller.get_active_broadcast_placements.return_value = [placement]
+    controller.redispatch_broadcast_slot.return_value = False
+
+    worker_pool = MagicMock()
+    worker_pool.url_for_worker_id.return_value = None
+
+    stats_store = StatsStore(interval=10)
+    db = MagicMock()
+    reconciler = PlacementReconciler(controller, worker_pool, stats_store, db, stats_interval=10)
+
+    reconciler.run_once()
+
+    controller.reconcile_kubernetes_service.assert_called_once_with("pipe-list")
+    controller._update_broadcast_placement_status.assert_called_once_with("pg-list", "degraded")

@@ -1,16 +1,29 @@
-"""SNMP MIB utilities — build MIB view, resolve OIDs, symbolic name lookup,
-and SNMPv3 USM authentication builder.
-
-Requires ``pysnmp-lextudio`` (``pip install tram[snmp]``).
-Raw .mib compilation requires ``pysmi-lextudio`` (``pip install tram[mib]``).
-"""
+"""SNMP MIB utilities — build MIB view, resolve OIDs, symbolic lookup,
+SNMPv3 auth builders, and PySNMP HLAPI compatibility helpers."""
 
 from __future__ import annotations
 
+import inspect
 import logging
+import sys
+from collections.abc import Iterator
 from functools import lru_cache
 
 logger = logging.getLogger(__name__)
+
+
+def _resolve_hlapi_callable(hlapi_mod, *names: str):
+    namespace = vars(hlapi_mod) if hasattr(hlapi_mod, "__dict__") else {}
+    for name in names:
+        if name in namespace:
+            candidate = namespace[name]
+            if callable(candidate):
+                return candidate
+    for name in names:
+        candidate = getattr(hlapi_mod, name, None)
+        if callable(candidate):
+            return candidate
+    return None
 
 
 # ── SNMPv3 USM auth builder ─────────────────────────────────────────────────
@@ -55,7 +68,7 @@ def build_v3_auth(
     * ``auth_key`` + ``priv_key``  → **authPriv**
 
     Args:
-        hlapi:          The ``pysnmp.hlapi`` module (passed in to avoid a
+        hlapi:          The PySNMP HLAPI module (passed in to avoid a
                         top-level import; allows this module to stay importable
                         when pysnmp is not installed).
         security_name:  USM username.
@@ -90,6 +103,84 @@ def build_v3_auth(
                 kwargs["privProtocol"] = priv_proto
 
     return hlapi.UsmUserData(**kwargs)
+
+
+def get_hlapi_asyncio():
+    """Import the asyncio HLAPI module across PySNMP 6.x and 7.x layouts."""
+    try:
+        import pysnmp.hlapi.v3arch.asyncio as hlapi
+        return hlapi
+    except Exception:
+        try:
+            import pysnmp.hlapi.asyncio as hlapi
+            return hlapi
+        except Exception:
+            fallback = (
+                sys.modules.get("pysnmp.hlapi.v3arch.asyncio")
+                or sys.modules.get("pysnmp.hlapi.asyncio")
+                or sys.modules.get("pysnmp.hlapi")
+            )
+            if fallback is not None:
+                return fallback
+            import pysnmp
+            hlapi = getattr(pysnmp, "hlapi", None)
+            if hlapi is not None:
+                return (
+                    getattr(getattr(hlapi, "v3arch", None), "asyncio", None)
+                    or getattr(hlapi, "asyncio", None)
+                    or hlapi
+                )
+            raise
+
+
+async def create_udp_transport_target(hlapi_mod, host: str, port: int, timeout: float, retries: int):
+    """Create a UDP target across PySNMP 6.x and 7.x APIs."""
+    target_cls = hlapi_mod.UdpTransportTarget
+    create = getattr(target_cls, "create", None)
+    if callable(create):
+        candidate = create((host, port), timeout=timeout, retries=retries)
+        if inspect.isawaitable(candidate):
+            return await candidate
+    return target_cls((host, port), timeout=timeout, retries=retries)
+
+
+async def hlapi_get_cmd(hlapi_mod, *args, **kwargs):
+    fn = _resolve_hlapi_callable(hlapi_mod, "get_cmd", "getCmd")
+    result = fn(*args, **kwargs)
+    if inspect.isawaitable(result):
+        result = await result
+    if isinstance(result, Iterator):
+        return next(result)
+    return result
+
+
+async def hlapi_next_cmd(hlapi_mod, *args, **kwargs):
+    fn = _resolve_hlapi_callable(hlapi_mod, "next_cmd", "nextCmd")
+    result = fn(*args, **kwargs)
+    if inspect.isawaitable(result):
+        result = await result
+    if isinstance(result, Iterator):
+        return next(result)
+    return result
+
+
+async def hlapi_send_notification(hlapi_mod, *args, **kwargs):
+    fn = _resolve_hlapi_callable(hlapi_mod, "send_notification", "sendNotification")
+    result = fn(*args, **kwargs)
+    if inspect.isawaitable(result):
+        result = await result
+    if isinstance(result, Iterator):
+        return next(result)
+    return result
+
+
+def close_snmp_engine(snmp_engine) -> None:
+    """Close dispatcher across PySNMP 6.x/7.x naming."""
+    closer = getattr(snmp_engine, "close_dispatcher", None) or getattr(
+        snmp_engine, "closeDispatcher", None
+    )
+    if callable(closer):
+        closer()
 
 
 def build_mib_view(mib_dirs: list[str], mib_modules: list[str]):
@@ -194,16 +285,17 @@ def symbolic_to_oid(mib_view, symbolic: str) -> tuple[int, ...] | None:
             parts = rest.split(".")
             sym_name = parts[0]
             indices = [int(x) for x in parts[1:]] if len(parts) > 1 else []
-            # getNodeName((sym_name,), moduleName) in pysnmp-lextudio 6.x
-            oid_obj, _, _ = mib_view.getNodeName((sym_name,), module)
+            from pysnmp.smi.rfc1902 import ObjectIdentity
+
+            oid_obj = ObjectIdentity(module, sym_name, *indices)
+            oid_obj.resolveWithMib(mib_view)
+            return tuple(oid_obj.getOid())
         else:
             parts = symbolic.split(".")
             sym_name = parts[0]
             indices = [int(x) for x in parts[1:]] if len(parts) > 1 else []
             oid_obj, _, _ = mib_view.getNodeName((sym_name,))
-
-        result = tuple(oid_obj) + tuple(indices)
-        return result
+            return tuple(oid_obj) + tuple(indices)
     except Exception as exc:
         logger.debug("Could not resolve symbolic OID %r: %s", symbolic, exc)
         return None

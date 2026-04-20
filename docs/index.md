@@ -9,7 +9,7 @@ title: TRAM Documentation
 
 Lightweight, container-native Python daemon for telecom data pipeline orchestration.
 
-**Version:** 1.3.0 | **Status:** Production-ready | **Python:** 3.11+
+**Version:** 1.3.1 | **Status:** Production-ready | **Python:** 3.11+
 
 ---
 
@@ -38,6 +38,9 @@ Lightweight, container-native Python daemon for telecom data pipeline orchestrat
 
 - **[Pipeline Controller Design](pipeline-controller-design.md)** - Historical design notes for the v1.1.x controller transition; current manager/worker architecture is documented in `architecture.md`
 - **[Roadmap](roadmap.md)** - Planned features and version checklist
+- **Archive**
+  - **[v1.3.1 Plan](archive/v1.3.1-plan.md)** - Archived planning document for the `1.3.1` implementation slice set
+  - **[v1.3.0 Broadcast Streams Design](archive/v1.3.0-broadcast-streams-design.md)** - Archived design document for the `1.3.0` broadcast-streams rollout
 
 ---
 
@@ -70,7 +73,7 @@ curl http://localhost:8765/api/ready
 
 ### Kubernetes (Helm)
 
-Quick-start examples below use `latest`. For production, pin `image.tag` to a specific release such as `1.3.0`.
+Quick-start examples below use `latest`. For production, pin `image.tag` to a specific release such as `1.3.1`.
 
 ```bash
 # Standalone mode (SQLite, single pod)
@@ -178,7 +181,8 @@ docs/
 ├── pipeline-controller-design.md # Historical v1.1.x controller design notes
 ├── roadmap.md                    # Planned features and version checklist
 ├── changelog.md                  # Full release history
-└── checklist.md                  # Development checklist
+├── checklist.md                  # Development checklist
+└── archive/                      # Archived version-specific design and planning docs
 ```
 
 ---
@@ -195,11 +199,11 @@ docs/
 
 See [changelog.md](changelog.md) for detailed release notes.
 
-**Current Release:** v1.3.0 (2026-04-17)
-- HTTP push streams (`webhook`, `prometheus_rw`) now broadcast across all healthy workers in manager mode
-- Placement tracking, stale-slot reconciliation, and placement APIs are available for active broadcast streams
-- Worker stats are unified across batch and stream runs, including byte counters and load-aware dispatch inputs
-- Manager runs as a StatefulSet with PVC reuse support during Deployment → StatefulSet upgrades
+**Current Release:** v1.3.1 (2026-04-20)
+- `workers.count: N` and `workers.list` placement behavior are now implemented for broadcast-capable push streams in manager mode
+- Dedicated per-pipeline Kubernetes Services are available for active `webhook` and `prometheus_rw` streams, including pinned-worker `workers.list` endpoints
+- File sinks support shared source filename variables, executor-side `{field.*}` partitioning, and append-mode rolling via `max_records`, `max_time`, and `max_bytes`
+- SNMP connectors now target `pysnmp>=7,<8`, and the `1.3.1` pass was revalidated on a live kind cluster for placement, ingress, and scale-down recovery
 
 **v1.2.0** (2026-04-10)
 - Manager + Worker mode (`TRAM_MODE=manager/worker`) — replaces shared-DB cluster model
@@ -213,4 +217,4 @@ See [changelog.md](changelog.md) for detailed release notes.
 
 ---
 
-*Last updated: 2026-04-17*
+*Last updated: 2026-04-20*

@@ -183,3 +183,19 @@ class TestFTPSink:
 
         cmd = mock_ftp.storbinary.call_args[0][0]
         assert "mypipe_input.csv" in cmd
+
+    def test_filename_template_supports_source_stem_and_suffix(self):
+        mock_ftp = MagicMock()
+
+        with patch("ftplib.FTP", return_value=mock_ftp):
+            sink = FTPSink({
+                "host": "ftp.example.com",
+                "username": "user",
+                "password": "pass",
+                "remote_path": "/out",
+                "filename_template": "{source_stem}{source_suffix}",
+            })
+            sink.write(b"data", {"source_filename": "input.csv"})
+
+        cmd = mock_ftp.storbinary.call_args[0][0]
+        assert cmd == "STOR /out/input.csv"

@@ -4,8 +4,8 @@ from __future__ import annotations
 
 import io
 import logging
-from datetime import UTC, datetime
 
+from tram.connectors.file_sink_common import render_filename, utc_now
 from tram.core.exceptions import SinkError
 from tram.interfaces.base_sink import BaseSink
 from tram.registry.registry import register_sink
@@ -19,8 +19,12 @@ class FTPSink(BaseSink):
 
     Filename is generated from a template supporting tokens:
     - ``{pipeline}``        — pipeline name (from meta or config)
-    - ``{timestamp}``       — UTC timestamp (ISO format, : replaced with -)
-    - ``{source_filename}`` — original source filename (from meta)
+    - ``{timestamp}``       — UTC file-open timestamp
+    - ``{epoch}`` / ``{epoch_m}`` — UTC file-open epoch seconds / millis
+    - ``{part}`` / ``{index}`` — file part number
+    - ``{source_filename}`` — original source filename
+    - ``{source_stem}`` / ``{source_suffix}`` — derived from source filename
+    - ``{source_path}``     — original source path when available
 
     Uses ftplib (stdlib) — no extra dependencies required.
     """
@@ -51,11 +55,12 @@ class FTPSink(BaseSink):
             raise SinkError(f"FTP connect failed to {self.host}:{self.port} — {exc}") from exc
 
     def _render_filename(self, meta: dict) -> str:
-        ts = datetime.now(UTC).isoformat().replace(":", "-")
-        return self.filename_template.format(
-            pipeline=meta.get("pipeline_name", "tram"),
-            timestamp=ts,
-            source_filename=meta.get("source_filename", "data"),
+        return render_filename(
+            self.filename_template,
+            opened_at=utc_now(),
+            part_index=1,
+            max_index=1,
+            meta=meta,
         )
 
     def write(self, data: bytes, meta: dict) -> None:
