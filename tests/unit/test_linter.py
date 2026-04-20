@@ -297,6 +297,56 @@ class TestWorkersDefaultsAndManagerLint:
         findings = lint(config, tram_mode="manager")
         assert any(f.rule_id == "L006" and f.severity == "error" for f in findings)
 
+    def test_l006_allows_workers_list_with_pipeline_service(self):
+        config = _load("""
+            pipeline:
+              name: list-push-service
+              schedule:
+                type: stream
+              source:
+                type: webhook
+                path: /test
+              workers:
+                list:
+                  - tram-worker-0
+                  - tram-worker-1
+              kubernetes:
+                enabled: true
+              serializer_in:
+                type: json
+              serializer_out:
+                type: json
+              sink:
+                type: local
+                path: /out
+        """)
+        findings = lint(config, tram_mode="manager")
+        assert not any(f.rule_id == "L006" for f in findings)
+
+    def test_l006_fires_for_pipeline_service_with_count_n(self):
+        config = _load("""
+            pipeline:
+              name: count-n-push-service
+              schedule:
+                type: stream
+              source:
+                type: webhook
+                path: /test
+              workers:
+                count: 2
+              kubernetes:
+                enabled: true
+              serializer_in:
+                type: json
+              serializer_out:
+                type: json
+              sink:
+                type: local
+                path: /out
+        """)
+        findings = lint(config, tram_mode="manager")
+        assert any(f.rule_id == "L006" and f.severity == "error" for f in findings)
+
     def test_l007_fires_for_poll_source_with_count_all(self):
         config = _load("""
             pipeline:
@@ -338,6 +388,44 @@ class TestWorkersDefaultsAndManagerLint:
         """)
         findings = lint(config, tram_mode="manager")
         assert any(f.rule_id == "L008" and f.severity == "error" for f in findings)
+
+    def test_l011_warns_for_risky_filename_partition_field(self):
+        config = _load("""
+            pipeline:
+              name: risky-filename-field
+              source:
+                type: local
+                path: /tmp
+              serializer_in:
+                type: json
+              serializer_out:
+                type: ndjson
+              sink:
+                type: local
+                path: /out
+                filename_template: "{field.timestamp}_{part}.ndjson"
+        """)
+        findings = lint(config)
+        assert any(f.rule_id == "L011" and f.severity == "warning" for f in findings)
+
+    def test_l011_not_triggered_for_safe_filename_partition_field(self):
+        config = _load("""
+            pipeline:
+              name: safe-filename-field
+              source:
+                type: local
+                path: /tmp
+              serializer_in:
+                type: json
+              serializer_out:
+                type: ndjson
+              sink:
+                type: local
+                path: /out
+                filename_template: "{field.nf_name}_{part}.ndjson"
+        """)
+        findings = lint(config)
+        assert not any(f.rule_id == "L011" for f in findings)
 
     def test_l009_warns_when_queue_count_exceeds_pool(self):
         config = _load("""

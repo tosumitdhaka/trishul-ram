@@ -1089,6 +1089,37 @@ class WorkersConfig(BaseModel):
         return self
 
 
+class KubernetesServiceConfig(BaseModel):
+    enabled: bool = True
+    service_type: Literal["NodePort", "LoadBalancer"] = "NodePort"
+    node_port: int | None = None
+    service_name: str = ""
+
+    @field_validator("service_name")
+    @classmethod
+    def validate_service_name(cls, value: str) -> str:
+        import re
+
+        if not value:
+            return value
+        if len(value) > 63:
+            raise ValueError("kubernetes.service_name must be 63 characters or fewer")
+        if not re.match(r"^[a-z0-9]([-a-z0-9]*[a-z0-9])?$", value):
+            raise ValueError(
+                "kubernetes.service_name must be a valid DNS-1123 label "
+                "(lowercase alphanumeric or '-', start/end alphanumeric)"
+            )
+        return value
+
+    @model_validator(mode="after")
+    def validate_node_port(self) -> KubernetesServiceConfig:
+        if self.service_type != "NodePort" and self.node_port is not None:
+            raise ValueError("kubernetes.node_port is only valid when service_type=NodePort")
+        if self.node_port is not None and not (30000 <= self.node_port <= 32767):
+            raise ValueError("kubernetes.node_port must be between 30000 and 32767")
+        return self
+
+
 class PipelineConfig(BaseModel):
     version: str = "1"
 
@@ -1118,6 +1149,7 @@ class PipelineConfig(BaseModel):
     thread_workers: int = 1   # intra-node worker threads per pipeline run
     parallel_sinks: bool = False   # fan-out sink writes concurrently
     workers: WorkersConfig | None = None
+    kubernetes: KubernetesServiceConfig | None = None
 
     # Batch size cap (max records to process per batch run; None = unlimited)
     batch_size: int | None = None
@@ -1134,6 +1166,16 @@ class PipelineConfig(BaseModel):
     def check_on_error_dlq(self) -> PipelineConfig:
         if self.on_error == "dlq" and self.dlq is None:
             raise ValueError("on_error='dlq' requires a 'dlq' sink to be configured")
+        if self.kubernetes is not None and self.kubernetes.enabled:
+            if self.source.type not in ("webhook", "prometheus_rw"):
+                raise ValueError(
+                    "kubernetes service provisioning is only supported for "
+                    "webhook and prometheus_rw sources"
+                )
+            if self.schedule.type != "stream":
+                raise ValueError(
+                    "kubernetes service provisioning is only supported for stream pipelines"
+                )
         return self
 
     @model_validator(mode="after")

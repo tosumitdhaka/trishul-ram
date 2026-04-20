@@ -178,6 +178,7 @@ def create_app(config: AppConfig | None = None) -> FastAPI:
 
     worker_pool = None
     reconciler = None
+    kubernetes_service_manager = None
     if config.tram_mode == "manager":
         from tram.agent.worker_pool import WorkerPool
         worker_pool = WorkerPool.from_env(
@@ -190,6 +191,15 @@ def create_app(config: AppConfig | None = None) -> FastAPI:
                 "TRAM_MODE=manager but no workers configured — "
                 "set TRAM_WORKER_URLS or TRAM_WORKER_REPLICAS"
             )
+    if config.tram_mode in {"standalone", "manager"}:
+        from tram.pipeline.k8s_service_manager import KubernetesServiceManager
+
+        kubernetes_service_manager = KubernetesServiceManager(
+            mode=config.tram_mode,
+            node_id=config.node_id,
+            standalone_port=config.port,
+            worker_ingress_port=config.worker_ingress_port,
+        )
 
     controller = PipelineController(
         db=db,
@@ -198,6 +208,7 @@ def create_app(config: AppConfig | None = None) -> FastAPI:
         worker_pool=worker_pool,
         manager_url=config.manager_url,
         stats_store=stats_store,
+        kubernetes_service_manager=kubernetes_service_manager,
     )
     # Keep manager reference on controller's alert evaluator
     controller.manager._alert_evaluator = alert_evaluator
@@ -230,6 +241,7 @@ def create_app(config: AppConfig | None = None) -> FastAPI:
     app.state.worker_pool = worker_pool
     app.state.stats_store = stats_store
     app.state.reconciler = reconciler
+    app.state.kubernetes_service_manager = kubernetes_service_manager
     from datetime import datetime
     app.state.started_at = datetime.now(UTC)
 

@@ -70,10 +70,13 @@ class TestMibUtilsWithMocks:
     def test_symbolic_to_oid_returns_none_on_failure(self):
         from tram.connectors.snmp.mib_utils import symbolic_to_oid
         mock_view = MagicMock()
-        mock_view.getNodeName.side_effect = Exception("not found")
+        mock_oid = MagicMock()
+        mock_oid.resolveWithMib.side_effect = Exception("not found")
+        mock_rfc1902 = MagicMock()
+        mock_rfc1902.ObjectIdentity.return_value = mock_oid
 
         with patch.dict(sys.modules, {
-            "pysnmp.smi.rfc1902": MagicMock(),
+            "pysnmp.smi.rfc1902": mock_rfc1902,
             "pyasn1.type.univ": MagicMock(),
         }):
             result = symbolic_to_oid(mock_view, "IF-MIB::ifOperStatus.1")
@@ -92,6 +95,50 @@ class TestMibUtilsWithMocks:
 
         assert v1 is v2
         assert mock_build.call_count == 1
+
+    def test_build_mib_view_uses_snake_case_mib_source_methods(self):
+        """Falls back to snake_case MIB source accessors when camelCase is absent."""
+        from tram.connectors.snmp.mib_utils import build_mib_view
+
+        class SnakeCaseBuilder:
+            def __init__(self):
+                self.sources = ("default-source",)
+                self.loaded = []
+
+            def get_mib_sources(self):
+                return self.sources
+
+            def set_mib_sources(self, *sources):
+                self.sources = sources
+
+            def loadModules(self, module):
+                self.loaded.append(module)
+
+        mock_builder = SnakeCaseBuilder()
+        mock_view = MagicMock()
+        mock_builder_cls = MagicMock(return_value=mock_builder)
+        mock_dir_source = MagicMock(side_effect=lambda path: f"dir:{path}")
+        mock_view_cls = MagicMock(return_value=mock_view)
+
+        with patch.dict(
+            sys.modules,
+            {
+                "pysnmp.smi": MagicMock(),
+                "pysnmp.smi.builder": MagicMock(),
+                "pysnmp.smi.view": MagicMock(),
+            },
+        ):
+            from pysnmp.smi import builder, view
+
+            builder.MibBuilder = mock_builder_cls
+            builder.DirMibSource = mock_dir_source
+            view.MibViewController = mock_view_cls
+
+            result = build_mib_view(["/custom/mibs"], ["IF-MIB"])
+
+        assert result is mock_view
+        assert mock_builder.sources == ("dir:/custom/mibs", "default-source")
+        assert "IF-MIB" in mock_builder.loaded
 
     def test_resolve_oid_success_with_mock_view(self):
         """Successful resolution returns symbolic name."""

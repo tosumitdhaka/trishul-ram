@@ -748,7 +748,7 @@ class TramDB:
         placement_group_id: str,
         pipeline_name: str,
         slots: list[dict],
-        target_count: str,
+        target_count: str | int,
         status: str,
         started_at: datetime | None = None,
     ) -> None:

@@ -469,7 +469,7 @@ def mib_compile(
     all .mib files found directly inside it are compiled in one pass so that
     cross-file imports resolve correctly.
 
-    Requires the tram[mib] optional extra (pysmi-lextudio).
+    Requires the tram[mib] optional extra.
     """
     try:
         from pysmi.codegen.pysnmp import PySnmpCodeGen
@@ -480,7 +480,7 @@ def mib_compile(
         from pysmi.writer import PyFileWriter
     except ImportError:
         err_console.print(
-            "[red]pysmi-lextudio is required for MIB compilation.[/red]\n"
+            "[red]pysmi is required for MIB compilation.[/red]\n"
             "  Install with: [bold]pip install tram[mib][/bold]"
         )
         raise typer.Exit(1)
@@ -533,7 +533,7 @@ def mib_download(
     Downloads the named MIB modules (plus any dependencies) from the public
     mibs.pysnmp.com repository and compiles them to Python format.
 
-    Requires the tram[mib] optional extra (pysmi-lextudio) and internet access.
+    Requires the tram[mib] optional extra and internet access.
 
     Example:
         tram mib download IF-MIB ENTITY-MIB HOST-RESOURCES-MIB --out /mibs
@@ -547,7 +547,7 @@ def mib_download(
         from pysmi.writer import PyFileWriter
     except ImportError:
         err_console.print(
-            "[red]pysmi-lextudio is required for MIB download.[/red]\n"
+            "[red]pysmi is required for MIB download.[/red]\n"
             "  Install with: [bold]pip install tram[mib][/bold]"
         )
         raise typer.Exit(1)

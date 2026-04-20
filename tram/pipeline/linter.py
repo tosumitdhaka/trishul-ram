@@ -9,6 +9,8 @@ import os
 from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
+from tram.connectors.file_sink_common import extract_field_paths
+
 if TYPE_CHECKING:
     from tram.models.pipeline import PipelineConfig
 
@@ -27,6 +29,8 @@ POLL_BATCH_SOURCES = {
     "sftp", "s3", "rest", "sql", "local", "ftp", "gcs", "azure_blob",
     "gnmi", "redis", "influxdb", "websocket", "corba", "elasticsearch", "clickhouse",
 }
+FILE_TEMPLATE_ATTRS = ("filename_template", "key_template", "blob_template")
+RISKY_FILENAME_FIELDS = {"timestamp", "ts", "event_time", "value", "counter", "bytes", "latency"}
 
 
 def lint(
@@ -49,6 +53,7 @@ def lint(
     findings.extend(_l008_udp_blocked_in_manager(config, resolved_mode))
     findings.extend(_l009_queue_count_exceeds_pool(config, resolved_mode, resolved_pool_size))
     findings.extend(_l010_count_exceeds_pool(config, resolved_mode, resolved_pool_size))
+    findings.extend(_l011_risky_filename_partition_fields(config))
 
     return findings
 
@@ -158,6 +163,19 @@ def _l006_http_push_requires_all(config: PipelineConfig, tram_mode: str) -> list
     if tram_mode != "manager" or config.source.type not in HTTP_PUSH_SOURCES:
         return []
     workers = config.workers
+    has_pipeline_service = config.kubernetes is not None and config.kubernetes.enabled
+    if has_pipeline_service:
+        if workers and (workers.count == "all" or workers.worker_ids is not None):
+            return []
+        return [LintResult(
+            rule_id="L006",
+            severity="error",
+            message=(
+                f"Pipeline '{config.name}': push-source pipeline Services in manager mode support "
+                "only workers.count='all' or workers.list. workers.count=N cannot constrain "
+                "Service endpoints safely."
+            ),
+        )]
     if workers and workers.count == "all":
         return []
     return [LintResult(
@@ -165,7 +183,8 @@ def _l006_http_push_requires_all(config: PipelineConfig, tram_mode: str) -> list
         severity="error",
         message=(
             f"Pipeline '{config.name}': source '{config.source.type}' requires workers.count='all' "
-            "in manager mode — any narrower placement loses HTTP push traffic."
+            "on the shared worker ingress in manager mode. Use kubernetes.enabled with "
+            "workers.list for pinned worker subsets."
         ),
     )]
 
@@ -236,3 +255,32 @@ def _l010_count_exceeds_pool(
             f"{worker_pool_size}."
         ),
     )]
+
+
+def _l011_risky_filename_partition_fields(config: PipelineConfig) -> list[LintResult]:
+    findings: list[LintResult] = []
+    for sink in config.sinks:
+        template = None
+        for attr in FILE_TEMPLATE_ATTRS:
+            value = getattr(sink, attr, None)
+            if isinstance(value, str):
+                template = value
+                break
+        if not template:
+            continue
+        risky = [
+            path for path in extract_field_paths(template)
+            if path.rsplit(".", 1)[-1] in RISKY_FILENAME_FIELDS
+        ]
+        if not risky:
+            continue
+        findings.append(LintResult(
+            rule_id="L011",
+            severity="warning",
+            message=(
+                f"Pipeline '{config.name}': sink '{sink.type}' filename template uses "
+                f"high-cardinality or low-signal field(s) {', '.join(sorted(risky))} — "
+                "this may create runaway file counts or unstable file naming."
+            ),
+        ))
+    return findings

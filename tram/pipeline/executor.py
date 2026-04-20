@@ -9,10 +9,12 @@ import queue as _queue
 import random
 import threading
 import time
+from collections import OrderedDict
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import UTC, datetime
 from typing import TYPE_CHECKING
 
+from tram.connectors.file_sink_common import extract_field_paths
 from tram.core.context import PipelineRunContext, RunResult, RunStatus
 from tram.core.exceptions import TramError
 from tram.registry.registry import get_serializer, get_sink, get_source, get_transform
@@ -72,6 +74,51 @@ def _filter_by_condition(records: list[dict], condition: str) -> list[dict]:
         except Exception as exc:
             raise TramError(f"Condition eval error: {condition!r} — {exc}") from exc
     return result
+
+
+_FILE_TEMPLATE_ATTRS = ("filename_template", "key_template", "blob_template")
+
+
+def _lookup_record_field(record: dict, path: str) -> str:
+    current: object = record
+    for segment in path.split("."):
+        if not isinstance(current, dict) or segment not in current:
+            return "unknown"
+        current = current[segment]
+    if current in (None, ""):
+        return "unknown"
+    return str(current)
+
+
+def _sink_filename_template(sink_cfg, sink_instance) -> str | None:
+    for attr in _FILE_TEMPLATE_ATTRS:
+        value = getattr(sink_cfg, attr, None) if sink_cfg is not None else None
+        if isinstance(value, str):
+            return value
+        value = getattr(sink_instance, attr, None)
+        if isinstance(value, str):
+            return value
+    return None
+
+
+def _partition_records_for_template(
+    records: list[dict],
+    template: str | None,
+) -> list[tuple[dict[str, str], list[dict]]]:
+    if not template:
+        return [({}, records)]
+    field_paths = extract_field_paths(template)
+    if not field_paths:
+        return [({}, records)]
+
+    grouped: OrderedDict[tuple[tuple[str, str], ...], dict[str, object]] = OrderedDict()
+    for record in records:
+        field_values = {path: _lookup_record_field(record, path) for path in field_paths}
+        key = tuple((path, field_values[path]) for path in field_paths)
+        if key not in grouped:
+            grouped[key] = {"field_values": field_values, "records": []}
+        grouped[key]["records"].append(record)
+    return [(entry["field_values"], entry["records"]) for entry in grouped.values()]
 
 
 def _write_dlq_envelope(
@@ -363,11 +410,6 @@ class PipelineExecutor:
                     return False
 
                 active_ser = per_sink_ser if per_sink_ser is not None else serializer_out
-                serialized = active_ser.serialize(sink_records)
-                sink_meta = dict(meta)
-                sink_meta["serializer_type"] = str(active_ser.config.get("type", "json"))
-                sink_meta["serializer_config"] = dict(active_ser.config)
-                sink_meta["output_record_count"] = len(sink_records)
 
                 if rate_limit_rps is not None:
                     self._rate_limit(rate_limit_rps)
@@ -395,73 +437,92 @@ class PipelineExecutor:
                 # Per-sink retry loop
                 retry_count = getattr(sink_cfg, "retry_count", 0)
                 retry_delay = getattr(sink_cfg, "retry_delay_seconds", 1.0)
+                wrote_partition = False
+                partitions = _partition_records_for_template(
+                    sink_records,
+                    _sink_filename_template(sink_cfg, sink_instance),
+                )
+                for field_values, partition_records in partitions:
+                    serialized = active_ser.serialize(partition_records)
+                    sink_meta = dict(meta)
+                    if field_values:
+                        sink_meta["field_values"] = dict(field_values)
+                    sink_meta["serializer_type"] = str(active_ser.config.get("type", "json"))
+                    sink_meta["serializer_config"] = dict(active_ser.config)
+                    sink_meta["output_record_count"] = len(partition_records)
 
-                last_exc = None
-                for attempt in range(retry_count + 1):
-                    try:
-                        sink_instance.write(serialized, sink_meta)
-                        # Count total sink egress, not logical record size. If the same
-                        # batch fans out to multiple sinks, bytes_out includes each
-                        # successful sink write because load scoring cares about total I/O.
-                        serialized_size = _payload_size_bytes(serialized)
-                        ctx.inc_bytes_out(serialized_size)
-                        if stats is not None:
-                            stats.increment(bytes_out=serialized_size)
-                        # Reset circuit breaker on success
-                        if cb_threshold > 0:
-                            with self._cb_lock:
-                                self._cb_state[sink_key] = (0, 0.0)
-                        wrote_any_event.set()
-                        return True
-                    except Exception as exc:
-                        last_exc = exc
-                        if attempt < retry_count:
-                            delay = retry_delay * (2 ** attempt) + random.uniform(0, 0.5)
-                            logger.warning(
-                                "Sink write failed, retrying",
-                                extra={
-                                    "pipeline": ctx.pipeline_name,
-                                    "attempt": attempt + 1,
-                                    "retry_count": retry_count,
-                                    "delay": delay,
-                                },
-                            )
-                            time.sleep(delay)
+                    last_exc = None
+                    partition_succeeded = False
+                    for attempt in range(retry_count + 1):
+                        try:
+                            sink_instance.write(serialized, sink_meta)
+                            # Count total sink egress, not logical record size. If the same
+                            # batch fans out to multiple sinks, bytes_out includes each
+                            # successful sink write because load scoring cares about total I/O.
+                            serialized_size = _payload_size_bytes(serialized)
+                            ctx.inc_bytes_out(serialized_size)
+                            if stats is not None:
+                                stats.increment(bytes_out=serialized_size)
+                            # Reset circuit breaker on success
+                            if cb_threshold > 0:
+                                with self._cb_lock:
+                                    self._cb_state[sink_key] = (0, 0.0)
+                            wrote_any_event.set()
+                            wrote_partition = True
+                            partition_succeeded = True
+                            break
+                        except Exception as exc:
+                            last_exc = exc
+                            if attempt < retry_count:
+                                delay = retry_delay * (2 ** attempt) + random.uniform(0, 0.5)
+                                logger.warning(
+                                    "Sink write failed, retrying",
+                                    extra={
+                                        "pipeline": ctx.pipeline_name,
+                                        "attempt": attempt + 1,
+                                        "retry_count": retry_count,
+                                        "delay": delay,
+                                    },
+                                )
+                                time.sleep(delay)
 
-                # All retries exhausted
-                exc = last_exc
-                # Update circuit breaker state
-                if cb_threshold > 0:
-                    with self._cb_lock:
-                        failures, _ = self._cb_state.get(sink_key, (0, 0.0))
-                        failures += 1
-                        if failures >= cb_threshold:
-                            open_until = time.monotonic() + 60.0
-                            logger.warning(
-                                "Circuit breaker tripped — disabling sink for 60s",
-                                extra={"pipeline": ctx.pipeline_name, "failures": failures},
-                            )
-                        else:
-                            open_until = 0.0
-                        self._cb_state[sink_key] = (failures, open_until)
+                    if partition_succeeded:
+                        continue
 
-                if dlq_sink is not None:
-                    _write_dlq_envelope(
-                        dlq_sink, ctx,
-                        stage="sink", error=str(exc), record=sink_records,
-                    )
-                    ctx.record_dlq()
-                    DLQ_RECORDS.labels(pipeline=ctx.pipeline_name).inc()
-                if on_error == "abort":
-                    raise TramError(f"Sink write error: {exc}") from exc
-                ctx.record_error(str(exc))
-                if stats is not None:
-                    stats.increment(
-                        skipped=1,
-                        dlq=1 if dlq_sink is not None else 0,
-                        errors=[str(exc)],
-                    )
-                return False
+                    # All retries exhausted for this partition
+                    if cb_threshold > 0:
+                        with self._cb_lock:
+                            failures, _ = self._cb_state.get(sink_key, (0, 0.0))
+                            failures += 1
+                            if failures >= cb_threshold:
+                                open_until = time.monotonic() + 60.0
+                                logger.warning(
+                                    "Circuit breaker tripped — disabling sink for 60s",
+                                    extra={"pipeline": ctx.pipeline_name, "failures": failures},
+                                )
+                            else:
+                                open_until = 0.0
+                            self._cb_state[sink_key] = (failures, open_until)
+
+                    if dlq_sink is not None:
+                        _write_dlq_envelope(
+                            dlq_sink, ctx,
+                            stage="sink", error=str(last_exc), record=partition_records,
+                        )
+                        ctx.record_dlq()
+                        DLQ_RECORDS.labels(pipeline=ctx.pipeline_name).inc()
+                    if on_error == "abort":
+                        raise TramError(f"Sink write error: {last_exc}") from last_exc
+                    ctx.record_error(str(last_exc))
+                    if stats is not None:
+                        stats.increment(
+                            skipped=1,
+                            dlq=1 if dlq_sink is not None else 0,
+                            errors=[str(last_exc)],
+                        )
+                    return False
+
+                return wrote_partition
 
             if parallel_sinks and len(sinks) > 1:
                 with ThreadPoolExecutor(max_workers=len(sinks)) as pool:

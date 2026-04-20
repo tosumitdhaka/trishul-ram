@@ -147,3 +147,16 @@ class TestAzureBlobSink:
             })
             sink.write(b"data", {"pipeline_name": "mypipe", "source_filename": "input.csv"})
         mock_service.get_blob_client.assert_called_with(container="c", blob="mypipe/input.csv")
+
+    def test_blob_template_supports_source_stem_and_suffix(self):
+        mock_azure, mock_module, mock_service, mock_blob_client = self._make_sink_mock()
+        with patch.dict(sys.modules, {
+            "azure": mock_azure, "azure.storage": mock_azure.storage, "azure.storage.blob": mock_module,
+        }):
+            sink = AzureBlobSink({
+                "connection_string": "cs",
+                "container": "c",
+                "blob_template": "{source_stem}{source_suffix}",
+            })
+            sink.write(b"data", {"source_filename": "input.csv"})
+        mock_service.get_blob_client.assert_called_with(container="c", blob="input.csv")

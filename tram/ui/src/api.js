@@ -64,6 +64,7 @@ export const api = {
   pipelines: {
     list:     ()           => req('/api/pipelines'),
     get:      (name)       => req(`/api/pipelines/${name}`),
+    placement:(name)       => req(`/api/pipelines/${name}/placement`),
     create:   (yaml)       => req('/api/pipelines', { method: 'POST', headers: { 'Content-Type': 'text/plain' }, body: yaml }),
     update:   (name, yaml) => req(`/api/pipelines/${name}`, { method: 'PUT', headers: { 'Content-Type': 'application/yaml' }, body: yaml }),
     delete:   (name)       => req(`/api/pipelines/${name}`, { method: 'DELETE' }),
@@ -115,6 +116,7 @@ export const api = {
   // ── Cluster ────────────────────────────────────────────────────────────────
   cluster: {
     nodes: () => req('/api/cluster/nodes'),
+    streams: () => req('/api/cluster/streams'),
   },
 
   // ── Connectors ─────────────────────────────────────────────────────────────

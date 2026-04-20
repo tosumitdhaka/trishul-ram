@@ -80,16 +80,38 @@ unconfirmed work lives in the backlog at the bottom.
 
 ---
 
-## v1.3.1 — Broadcast Extension & Dynamic K8s Services
+## v1.3.1 — Placement Completion & Targeted Backend Follow-ups
 
 > Depends on v1.3.0 TCP path being validated end-to-end.
 
 - [ ] **`workers.count: N` runtime** — logical slot model (slot number ≠ worker assignment); `PlacementReconciler` spare-worker gap fill; slot reassignment on failover; `WorkerPool.resolve()` + `multi_dispatch()` N-worker paths
 - [ ] **`workers.list: [...]` runtime** — named-worker placement; per-slot pinned re-dispatch on recovery
-- [ ] **UDP broadcast** — `syslog` and `snmp_trap` sources; requires CNI-aware LB validation
 - [ ] **Dynamic K8s Service provisioning** — `kubernetes:` pipeline block; manager creates/deletes NodePort Services via K8s API; RBAC Role + RoleBinding; `tram[k8s]` optional extra
-- [ ] **`source_stem` / `source_suffix` filename tokens** (issue #9) — add to all 6 file-based sinks
-- [ ] **Migrate SNMP from pysnmp-lextudio to pysnmp 7.x** (issue #10) — update import paths; `pysmi` migration
+- [x] **`source_stem` / `source_suffix` filename tokens** (issue #9) — added to all 6 file-based sinks
+- [ ] **Migrate SNMP to pysnmp 7.x** (issue #10) — update import paths; `pysmi` migration
+
+---
+
+## v1.3.2 — Metrics/Stats Parity & UDP Broadcast
+
+> Follows v1.3.1 runtime stabilization. Scope is observability model cleanup plus UDP push-source validation.
+
+- [ ] **Standalone live stats parity** — feed local active runs into `StatsStore` so standalone exposes the same live stream/placement-style stats model as manager mode instead of only history + process-local Prometheus metrics
+- [ ] **Manager operational metrics** — add manager-side Prometheus series for dispatch/re-dispatch attempts, placement status counts, reconcile actions, worker health, and callback failures; document that `/metrics` is process-local and worker scraping is still required for cluster-wide execution metrics
+- [ ] **UDP broadcast** — `syslog` and `snmp_trap` sources; requires CNI-aware LB validation
+
+---
+
+## v1.3.3 — UI Revalidation & Backend Contract Sync
+
+> Follows v1.3.2 backend work. Scope is intentionally UI-heavy: revalidate every page against the shipped API and remove contract drift.
+
+- [ ] **Full UI/backend contract audit** — verify every page, action, filter, export, and status badge against current API fields and route behavior
+- [ ] **Cluster and placement UX** — finalize stream placement, slot health, stale/degraded/reconciling states, and manager-vs-standalone presentation
+- [ ] **Metrics/stats UX sync** — align dashboard, cluster streams, run history, and Prometheus guidance with the actual manager/worker vs standalone stats model
+- [ ] **Pipeline detail completeness** — schedule, alert, run-history, versioning, placement, and error-policy views all reflect current backend fields without fallback mismatches
+- [ ] **Plugin/templates/settings pages revalidation** — remove stale assumptions, ensure live API-backed rendering, and verify empty/error states
+- [ ] **Responsive/browser pass** — light/dark mode, mobile/tablet layout, console-clean build, and page-level smoke checks
 
 ---
 
@@ -136,7 +158,7 @@ unconfirmed work lives in the backlog at the bottom.
 ### Infrastructure
 - [ ] **Manager HA** — standby manager with DB-backed leader election
 - [ ] **Graceful worker drain** — `POST /api/workers/{id}/drain`; Helm pre-stop hook
-- [ ] **Coverage target increase** — raise CI threshold from 60% to 75%
+- [x] **Coverage target increase** — CI threshold raised to 75%; current coverage ~80%
 
 ---
 

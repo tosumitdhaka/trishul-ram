@@ -31,11 +31,15 @@ export function statusBadge(status) {
     running:   'badge-running has-dot running',
     scheduled: 'badge-scheduled has-dot scheduled',
     stopped:   'badge-stopped has-dot stopped',
-    error:    'badge-error has-dot error',
-    success:  'badge-success has-dot success',
-    failed:   'badge-failed has-dot failed',
-    partial:  'badge-partial has-dot',
-    disabled: 'badge-disabled',
+    degraded:  'badge-partial has-dot scheduled',
+    stale:     'badge-partial has-dot scheduled',
+    reconciling:'badge-paused has-dot paused',
+    error:     'badge-error has-dot error',
+    success:   'badge-success has-dot success',
+    failed:    'badge-failed has-dot failed',
+    aborted:   'badge-failed has-dot failed',
+    partial:   'badge-partial has-dot',
+    disabled:  'badge-disabled',
   }[status] || 'badge-stopped'
   return `<span class="tram-badge ${cls}">${status ?? '—'}</span>`
 }
