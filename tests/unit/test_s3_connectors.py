@@ -158,3 +158,18 @@ class TestS3Sink:
 
         key = mock_client.put_object.call_args[1]["Key"]
         assert key == "mypipe/input.csv"
+
+    def test_key_template_supports_source_stem_and_suffix(self):
+        mock_client = MagicMock()
+        mock_boto3 = MagicMock()
+        mock_boto3.client.return_value = mock_client
+
+        with patch.dict(sys.modules, {"boto3": mock_boto3}):
+            sink = S3Sink({
+                "bucket": "my-bucket",
+                "key_template": "{source_stem}{source_suffix}",
+            })
+            sink.write(b"data", {"source_filename": "input.csv"})
+
+        key = mock_client.put_object.call_args[1]["Key"]
+        assert key == "input.csv"

@@ -1,6 +1,15 @@
 <div class="d-flex align-items-center gap-3 mb-3" id="cluster-header">
   <span class="text-secondary" id="cluster-status-text">Loading cluster info…</span>
 </div>
+<div class="detail-card mb-3">
+  <div class="d-flex align-items-center gap-2 mb-2">
+    <div class="detail-label mb-0">Active Streams</div>
+    <span class="count-pill" id="cluster-stream-count"></span>
+  </div>
+  <div id="cluster-streams">
+    <div class="text-secondary text-center py-3">Loading…</div>
+  </div>
+</div>
 <div class="accordion accordion-flush" id="clusterAcc"
      style="border:1px solid var(--border);border-radius:8px;overflow:hidden;">
   <div id="cluster-nodes">

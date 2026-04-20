@@ -45,6 +45,8 @@ class PipelineState:
             "enabled": c.enabled,
             "status": self.status,
             "schedule_type": c.schedule.type,
+            "interval_seconds": c.schedule.interval_seconds,
+            "cron_expr": getattr(c.schedule, "cron_expr", None),
             "registered_at": self.registered_at.isoformat(),
             "last_run": self.last_run.isoformat() if self.last_run else None,
             "last_run_status": self.last_run_status,

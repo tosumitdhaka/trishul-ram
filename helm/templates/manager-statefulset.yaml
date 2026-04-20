@@ -197,9 +197,14 @@ spec:
               port: http
             initialDelaySeconds: 5
             periodSeconds: 10
+          {{- with .Values.manager.resources }}
+          resources:
+            {{- toYaml . | nindent 12 }}
+          {{- else }}
           {{- with .Values.resources }}
           resources:
             {{- toYaml . | nindent 12 }}
+          {{- end }}
           {{- end }}
       volumes:
         {{- if gt (len .Values.pipelines) 0 }}

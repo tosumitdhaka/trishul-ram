@@ -125,7 +125,7 @@ class TestSNMPPollSource:
                 "host": "192.168.1.1",
                 "oids": ["1.3.6.1.2.1.1.1.0"],
             })
-            with pytest.raises(SourceError, match="pysnmp-lextudio"):
+            with pytest.raises(SourceError, match="pysnmp"):
                 list(source.read())
 
     def test_get_operation_yields_bindings(self):
@@ -159,7 +159,7 @@ class TestSNMPPollSource:
                         assert isinstance(data, dict)
                     except SourceError as e:
                         # Acceptable — pysnmp not installed in test env
-                        assert "pysnmp-lextudio" in str(e)
+                        assert "pysnmp" in str(e)
 
     def test_invalid_operation_raises_source_error(self):
         mock_pysnmp = MagicMock()
@@ -219,6 +219,61 @@ class TestSNMPPollSource:
 
         assert result == {"1.3.6.1.2.1.2.2.1.22.247": "1"}
         assert mock_hlapi.calls == 2
+
+    def test_do_walk_resolves_symbolic_base_oid(self):
+        class MockHlapi:
+            def __init__(self):
+                self.calls = 0
+                self.identities = []
+
+            class SnmpEngine:
+                pass
+
+            class CommunityData:
+                def __init__(self, *args, **kwargs):
+                    pass
+
+            class UdpTransportTarget:
+                def __init__(self, *args, **kwargs):
+                    pass
+
+            class ContextData:
+                def __init__(self, *args, **kwargs):
+                    pass
+
+            def ObjectIdentity(self, oid):
+                self.identities.append(oid)
+                return oid
+
+            class ObjectType:
+                def __init__(self, identity):
+                    self.identity = identity
+
+            async def nextCmd(self, *args, **kwargs):
+                self.calls += 1
+                if self.calls == 1:
+                    return (None, None, None, [[("1.3.6.1.2.1.2.2.1.2.1", "eth0")]])
+                return (None, None, None, [])
+
+        source = SNMPPollSource({
+            "host": "192.168.1.1",
+            "oids": ["IF-MIB::ifTable"],
+            "operation": "walk",
+            "mib_modules": ["IF-MIB"],
+        })
+
+        mock_hlapi = MockHlapi()
+
+        import asyncio
+        with patch("tram.connectors.snmp.mib_utils.get_mib_view", return_value=MagicMock()):
+            with patch(
+                "tram.connectors.snmp.mib_utils.symbolic_to_oid",
+                return_value=(1, 3, 6, 1, 2, 1, 2, 2),
+            ):
+                result = asyncio.run(source._do_walk(mock_hlapi, typed=False))
+
+        assert result == {"1.3.6.1.2.1.2.2.1.2.1": "eth0"}
+        assert mock_hlapi.identities[0] == "1.3.6.1.2.1.2.2"
 
 
 # ── SNMPPollSource._group_by_index (pure unit, no SNMP dep) ────────────────
@@ -527,7 +582,7 @@ class TestSNMPPollTimestamp:
                     # Must be a valid ISO8601 string ending with +00:00
                     assert data["_polled_at"].endswith("+00:00")
                 except SourceError as e:
-                    assert "pysnmp-lextudio" in str(e)
+                    assert "pysnmp" in str(e)
 
     def test_polled_at_in_meta(self):
         """meta dict always contains polled_at regardless of yield_rows."""
@@ -540,15 +595,13 @@ class TestSNMPPollTimestamp:
                     _, meta = results[0]
                     assert "polled_at" in meta
                 except SourceError as e:
-                    assert "pysnmp-lextudio" in str(e)
+                    assert "pysnmp" in str(e)
 
     def test_yield_rows_each_row_has_polled_at(self):
-        """yield_rows=True: every yielded row record has _polled_at."""
+        """yield_rows=True: payload contains per-row records with _polled_at."""
         walk_binds = {
-            "ifDescr.1": "eth0",
-            "ifDescr.2": "lo",
-            "ifOperStatus.1": "1",
-            "ifOperStatus.2": "1",
+            "1.3.6.1.2.1.2.2.1.2.1": "eth0",
+            "1.3.6.1.2.1.2.2.1.2.2": "lo",
         }
         var_binds = list(walk_binds.items())
         mock_result = (None, None, None, var_binds)
@@ -559,23 +612,35 @@ class TestSNMPPollTimestamp:
         mock_hlapi.ContextData.return_value = MagicMock()
         mock_hlapi.ObjectIdentity = MagicMock(side_effect=lambda x: x)
         mock_hlapi.ObjectType = MagicMock(side_effect=lambda x: x)
-        mock_hlapi.nextCmd.return_value = iter([mock_result])
+        mock_hlapi.nextCmd.side_effect = [
+            iter([mock_result]),
+            iter([(None, None, None, [])]),
+        ]
         mock_pysnmp = MagicMock()
         mock_pysnmp.hlapi = mock_hlapi
 
         with patch.dict("sys.modules", {"pysnmp": mock_pysnmp, "pysnmp.hlapi": mock_hlapi}):
-            with patch("pysnmp.hlapi.nextCmd", return_value=iter([mock_result])):
-                src = self._make_source({"operation": "walk", "yield_rows": True})
+            with patch("pysnmp.hlapi.nextCmd", side_effect=[
+                iter([mock_result]),
+                iter([(None, None, None, [])]),
+            ]):
+                src = self._make_source({
+                    "operation": "walk",
+                    "yield_rows": True,
+                    "oids": ["1.3.6.1.2.1.2.2.1.2"],
+                    "index_depth": 1,
+                })
                 try:
                     results = list(src.read())
-                    assert len(results) == 2
-                    for payload, _ in results:
-                        row = json.loads(payload)
+                    assert len(results) == 1
+                    rows = json.loads(results[0][0])
+                    assert len(rows) == 2
+                    for row in rows:
                         assert "_polled_at" in row
                         assert "_index" in row
                         assert "_index_parts" in row
                 except SourceError as e:
-                    assert "pysnmp-lextudio" in str(e)
+                    assert "pysnmp" in str(e)
 
 
 # ── SNMPTrapSink ───────────────────────────────────────────────────────────
@@ -585,7 +650,7 @@ class TestSNMPTrapSink:
     def test_import_error_raises_sink_error(self):
         with patch.dict("sys.modules", {"pysnmp": None, "pysnmp.hlapi": None}):
             sink = SNMPTrapSink({"host": "192.168.1.100"})
-            with pytest.raises(SinkError, match="pysnmp-lextudio"):
+            with pytest.raises(SinkError, match="pysnmp"):
                 sink.write(b'{"1.3.6.1.2.1.1.1.0": "test"}', {})
 
     def test_invalid_json_raises_sink_error(self):
@@ -595,12 +660,13 @@ class TestSNMPTrapSink:
             with pytest.raises((SinkError, Exception)):
                 sink.write(b"not-json", {})
 
-    def test_non_dict_payload_raises_sink_error(self):
+    def test_non_dict_payload_skips_records(self):
         mock_pysnmp = MagicMock()
         with patch.dict("sys.modules", {"pysnmp": mock_pysnmp, "pysnmp.hlapi": mock_pysnmp.hlapi}):
             sink = SNMPTrapSink({"host": "192.168.1.100"})
-            with pytest.raises((SinkError, Exception)):
+            with patch("tram.connectors.snmp.sink.asyncio.run") as mock_run:
                 sink.write(b'["not", "a", "dict"]', {})
+            mock_run.assert_not_called()
 
     def test_sends_trap_with_bindings(self):
         mock_oid = MagicMock()
@@ -793,6 +859,31 @@ class TestSNMPTrapSinkBuildVarBinds:
 
 class TestSNMPTrapSinkSendTrap:
     """Tests for _send_trap using asyncio.run."""
+
+    def test_send_trap_passes_varbinds_as_list(self):
+        """Async HLAPI expects varBinds as one list argument, not variadic args."""
+        captured = {}
+        mock_hlapi = _make_mock_hlapi()
+
+        async def _fake_send(snmpEngine, authData, transportTarget, contextData, notifyType, varBinds, **options):
+            captured["notifyType"] = notifyType
+            captured["varBinds"] = varBinds
+            return (None, None, None, [])
+
+        mock_hlapi.sendNotification = _fake_send
+        sink = SNMPTrapSink({
+            "host": "127.0.0.1",
+            "version": "2c",
+            "community": "public",
+            "trap_oid": "1.3.6.1.6.3.1.1.5.3",
+        })
+
+        import asyncio
+        asyncio.run(sink._send_trap(mock_hlapi, {"1.3.6.1": "val"}))
+
+        assert captured["notifyType"] == "trap"
+        assert isinstance(captured["varBinds"], list)
+        assert len(captured["varBinds"]) >= 2
 
     def test_send_trap_v2c(self):
         """v2c trap: uses CommunityData, calls sendNotification."""

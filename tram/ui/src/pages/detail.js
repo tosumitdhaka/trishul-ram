@@ -1,4 +1,4 @@
-import { api } from '../api.js'
+import { api, getConfig } from '../api.js'
 import { relTime, fmtDur, fmtNum, statusBadge, schedBadge, esc, toast } from '../utils.js'
 import * as bootstrap from 'bootstrap'
 
@@ -13,13 +13,15 @@ export async function init() {
   if (sub) sub.textContent = _name
 
   try {
-    const [pipeline, runs] = await Promise.all([
+    const [pipeline, runs, placement] = await Promise.all([
       api.pipelines.get(_name),
       api.runs.list({ pipeline: _name, limit: 50 }),
+      api.pipelines.placement(_name).catch((e) => (e.status === 404 ? null : Promise.reject(e))),
     ])
     _activeYaml = pipeline.yaml || null
     renderCards(pipeline)
     renderRuns(runs)
+    renderPlacement(placement)
     wireActions(pipeline)
   } catch (e) {
     toast(`Detail error: ${e.message}`, 'error')
@@ -51,13 +53,60 @@ function renderCards(p) {
   set('detail-source',    p.source?.type || '—')
   const sinks = Array.isArray(p.sinks) ? p.sinks.map(s => s.type || s).join(', ') : '—'
   set('detail-sinks',     sinks)
-  set('detail-schedule',  p.schedule_type === 'interval' && p.interval_seconds
-    ? `every ${fmtInterval(p.interval_seconds)}`
-    : p.schedule_type || '—')
-  set('detail-serializers', p.serializer || p.serializer_in || '—')
+  set('detail-schedule', scheduleLabel(p))
+  set('detail-serializers', p.serializer_in || '—')
   const xforms = Array.isArray(p.transforms) ? p.transforms.map(t => t.type || t).join(', ') : '—'
   set('detail-transforms', xforms)
-  set('detail-error',      p.error_policy || p.dlq ? 'DLQ enabled' : 'default')
+  set('detail-error',      p.on_error === 'dlq' && p.dlq ? 'dlq (configured)' : (p.on_error || 'continue'))
+}
+
+function renderPlacement(placement) {
+  const card = document.getElementById('detail-placement-card')
+  const body = document.getElementById('detail-placement-body')
+  const count = document.getElementById('detail-placement-count')
+  if (!card || !body || !count) return
+
+  if (!placement) {
+    card.classList.add('d-none')
+    return
+  }
+
+  card.classList.remove('d-none')
+  count.textContent = `${placement.active_slots}/${placement.slot_count} active`
+  body.innerHTML = `
+    <div class="d-flex align-items-center gap-2 flex-wrap mb-3">
+      ${statusBadge(placement.status)}
+      <span class="text-secondary">group ${esc(placement.placement_group_id || '—')}</span>
+      <span class="text-secondary">started ${placement.started_at ? relTime(placement.started_at) : '—'}</span>
+      <span class="text-secondary">${fmtNum(Math.round(placement.records_out_per_sec || 0))} out/s</span>
+      <span class="text-secondary">${fmtNum(placement.error_count || 0)} errors</span>
+    </div>
+    <div class="table-wrap" style="border:none;background:transparent">
+      <table class="table mb-0">
+        <thead>
+          <tr>
+            <th>Slot</th>
+            <th>Worker</th>
+            <th>Status</th>
+            <th>Run</th>
+            <th>Out/s</th>
+            <th>Restart</th>
+          </tr>
+        </thead>
+        <tbody>
+          ${(placement.slots || []).map(slot => `
+            <tr>
+              <td class="mono">${slot.worker_index ?? '—'}</td>
+              <td class="text-secondary">${esc(slot.worker_id || slot.worker_url || '—')}</td>
+              <td>${statusBadge(slot.status || (slot.stats?.stale ? 'degraded' : 'running'))}</td>
+              <td class="mono text-secondary" style="font-size:11px">${esc(slot.current_run_id || slot.run_id_prefix || '—')}</td>
+              <td class="text-secondary">${fmtNum(Math.round(slot.stats?.records_out_per_sec || 0))}</td>
+              <td class="text-secondary">${fmtNum(slot.restart_count || 0)}</td>
+            </tr>
+          `).join('')}
+        </tbody>
+      </table>
+    </div>`
 }
 
 function renderRuns(runs) {
@@ -221,6 +270,27 @@ function wireActions(pipeline) {
       a.click()
     } catch (e) { toast(e.message, 'error') }
   }
+
+  window._detailExportCsv = async () => {
+    try {
+      const { baseUrl, apiKey } = getConfig()
+      const token = localStorage.getItem('tram_auth_token')
+      const params = new URLSearchParams({ pipeline: _name, format: 'csv', limit: '1000' })
+      const headers = {}
+      if (apiKey) headers['X-API-Key'] = apiKey
+      else if (token) headers['Authorization'] = `Bearer ${token}`
+      const res = await fetch(`${baseUrl}/api/runs?${params.toString()}`, { headers })
+      if (!res.ok) throw new Error(await res.text() || res.statusText)
+      const blob = await res.blob()
+      const a = document.createElement('a')
+      a.href = URL.createObjectURL(blob)
+      a.download = `${_name}-runs.csv`
+      a.click()
+      URL.revokeObjectURL(a.href)
+    } catch (e) {
+      toast(`CSV export error: ${e.message}`, 'error')
+    }
+  }
 }
 
 async function reloadRuns() {
@@ -228,7 +298,7 @@ async function reloadRuns() {
   const from   = document.getElementById('detail-runs-from')?.value   || ''
   const params = { pipeline: _name, limit: 100 }
   if (status) params.status = status
-  if (from)   params.from   = from
+  if (from)   params.from_dt = new Date(`${from}T00:00:00`).toISOString()
   try {
     const runs = await api.runs.list(params)
     renderRuns(runs)
@@ -514,4 +584,14 @@ function fmtInterval(s) {
   if (s < 60)   return `${s}s`
   if (s < 3600) return `${s / 60}m`
   return `${s / 3600}h`
+}
+
+function scheduleLabel(p) {
+  if (p.schedule_type === 'interval' && p.interval_seconds) {
+    return `every ${fmtInterval(p.interval_seconds)}`
+  }
+  if (p.schedule_type === 'cron' && p.cron_expr) {
+    return p.cron_expr
+  }
+  return p.schedule_type || '—'
 }

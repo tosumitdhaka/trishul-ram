@@ -1,10 +1,13 @@
 import { api } from '../api.js'
-import { relTime, esc, toast } from '../utils.js'
+import { esc, fmtNum, relTime, statusBadge, toast } from '../utils.js'
 
 export async function init() {
   try {
-    const status = await api.cluster.nodes()
-    renderCluster(status)
+    const [status, streamsResp] = await Promise.all([
+      api.cluster.nodes(),
+      api.cluster.streams(),
+    ])
+    renderCluster(status, streamsResp?.streams || [])
   } catch (e) {
     const txt = document.getElementById('cluster-status-text')
     if (txt) txt.textContent = 'Cluster info unavailable — daemon offline'
@@ -12,9 +15,10 @@ export async function init() {
   }
 }
 
-function renderCluster(status) {
+function renderCluster(status, streams) {
   const txt  = document.getElementById('cluster-status-text')
   const mode = status?.mode || 'standalone'
+  renderStreams(streams)
 
   // ── Manager+worker mode (v1.2.0) ──────────────────────────────────────────
   if (mode === 'manager') {
@@ -126,4 +130,55 @@ function renderCluster(status) {
       </div>
     </div>`
   }).join('')
+}
+
+function renderStreams(streams) {
+  const count = document.getElementById('cluster-stream-count')
+  const container = document.getElementById('cluster-streams')
+  if (!container) return
+
+  if (count) {
+    count.textContent = `${streams.length} stream${streams.length !== 1 ? 's' : ''}`
+  }
+
+  if (!streams.length) {
+    container.innerHTML = '<div class="text-secondary text-center py-3">No active streams</div>'
+    return
+  }
+
+  container.innerHTML = `
+    <div class="table-wrap" style="border:none;background:transparent">
+      <table class="table mb-0">
+        <thead>
+          <tr>
+            <th>Pipeline</th>
+            <th>Status</th>
+            <th>Slots</th>
+            <th>Out/s</th>
+            <th>Bytes/s</th>
+            <th>Errors</th>
+          </tr>
+        </thead>
+        <tbody>
+          ${streams.map(stream => {
+            const slots = Array.isArray(stream.slots) ? stream.slots : []
+            const healthy = slots.filter(slot => !slot.stats?.stale).length
+            const stale = slots.filter(slot => slot.stats?.stale).length
+            return `<tr style="cursor:pointer" onclick="window._clusterOpenPlacement('${esc(stream.pipeline_name)}')">
+              <td class="fw-semibold">${esc(stream.pipeline_name)}</td>
+              <td>${statusBadge(stream.status)}</td>
+              <td class="text-secondary">${healthy}/${stream.slot_count}${stale ? ` · ${stale} stale` : ''}</td>
+              <td class="text-secondary">${fmtNum(Math.round(stream.records_out_per_sec || 0))}</td>
+              <td class="text-secondary">${fmtNum(Math.round(stream.bytes_out_per_sec || 0))}</td>
+              <td class="text-secondary">${fmtNum(stream.error_count || 0)}</td>
+            </tr>`
+          }).join('')}
+        </tbody>
+      </table>
+    </div>`
+
+  window._clusterOpenPlacement = (pipelineName) => {
+    window._detailPipeline = pipelineName
+    navigate('detail')
+  }
 }

@@ -52,6 +52,7 @@ const inits = {
   schemas:   () => import('./pages/schemas.js').then(m => m.init?.()),
   mibs:      () => import('./pages/mibs.js').then(m => m.init?.()),
   cluster:   () => import('./pages/cluster.js').then(m => m.init?.()),
+  plugins:   () => import('./pages/plugins.js').then(m => m.init?.()),
   settings:  () => import('./pages/settings.js').then(m => m.init?.()),
   templates: () => import('./pages/templates.js').then(m => m.init?.()),
   wizard:    () => import('./pages/wizard.js').then(m => m.init?.()),

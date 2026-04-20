@@ -1,8 +1,7 @@
 """Integration tests for SNMP MIB OID resolution.
 
 Tests OID ↔ symbolic name resolution using standard MIBs (SNMPv2-MIB, IF-MIB)
-that are bundled with pysnmp-lextudio. Falls back gracefully when pysnmp is
-not installed.
+that are bundled with PySNMP. Falls back gracefully when pysnmp is not installed.
 """
 
 from __future__ import annotations
@@ -87,26 +86,24 @@ class TestMibResolveIntegration:
         """symbolic_to_oid resolves IF-MIB::ifOperStatus.1 to a tuple.
 
         The function splits "IF-MIB::ifOperStatus.1" into symbol "ifOperStatus"
-        and index [1], looks up the base OID, then appends the index.
+        and index [1], resolving through ObjectIdentity + resolveWithMib.
         """
         from tram.connectors.snmp.mib_utils import symbolic_to_oid
 
-        # Base OID without the trailing index (getNodeName returns this)
         base_oid = (1, 3, 6, 1, 2, 1, 2, 2, 1, 8)
         mock_view = MagicMock()
-        mock_view.getNodeName.return_value = (base_oid, None, None)
-
+        mock_oid = MagicMock()
+        mock_oid.getOid.return_value = base_oid
         mock_rfc = MagicMock()
-        mock_asn1_univ = MagicMock()
+        mock_rfc.ObjectIdentity.return_value = mock_oid
 
         with patch.dict(sys.modules, {
             "pysnmp.smi.rfc1902": mock_rfc,
-            "pyasn1.type.univ": mock_asn1_univ,
+            "pyasn1.type.univ": MagicMock(),
         }):
             result = symbolic_to_oid(mock_view, "IF-MIB::ifOperStatus.1")
 
-        # base_oid + index [1] appended
-        assert result == base_oid + (1,)
+        assert result == base_oid
 
     @pytest.mark.skipif(not pysnmp_available(), reason="pysnmp not installed")
     def test_build_mib_view_standard_mibs(self):

@@ -2,8 +2,8 @@
 from __future__ import annotations
 
 import logging
-from datetime import UTC, datetime
 
+from tram.connectors.file_sink_common import render_filename, utc_now
 from tram.core.exceptions import SinkError
 from tram.interfaces.base_sink import BaseSink
 from tram.registry.registry import register_sink
@@ -75,11 +75,12 @@ class AzureBlobSink(BaseSink):
             raise SinkError(f"Azure Blob service client creation failed: {exc}") from exc
 
     def _render_blob_name(self, meta: dict) -> str:
-        ts = datetime.now(UTC).isoformat().replace(":", "-")
-        return self.blob_template.format(
-            pipeline=meta.get("pipeline_name", "tram"),
-            timestamp=ts,
-            source_filename=meta.get("source_filename", "data"),
+        return render_filename(
+            self.blob_template,
+            opened_at=utc_now(),
+            part_index=1,
+            max_index=1,
+            meta=meta,
         )
 
     def write(self, data: bytes, meta: dict) -> None:

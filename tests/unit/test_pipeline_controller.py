@@ -90,6 +90,46 @@ sinks:
     path: /tmp/out
 """
 
+_COUNT_N_STREAM_YAML = """\
+name: my-count-n-stream
+schedule:
+  type: stream
+source:
+  type: kafka
+  topic: events
+  brokers:
+    - localhost:9092
+  group_id: test-group
+serializer_in:
+  type: json
+workers:
+  count: 2
+sinks:
+  - type: local
+    path: /tmp/out
+"""
+
+_LIST_STREAM_YAML = """\
+name: my-list-stream
+schedule:
+  type: stream
+source:
+  type: kafka
+  topic: events
+  brokers:
+    - localhost:9092
+  group_id: test-group
+serializer_in:
+  type: json
+workers:
+  list:
+    - tram-worker-0
+    - tram-worker-1
+sinks:
+  - type: local
+    path: /tmp/out
+"""
+
 _MANUAL_YAML = """\
 name: my-manual
 schedule:
@@ -129,6 +169,7 @@ def _make_controller(
     db=None,
     worker_pool=None,
     manager_url="",
+    kubernetes_service_manager=None,
 ) -> PipelineController:
     """Build a controller with a patched BackgroundScheduler that doesn't start."""
     ctrl = PipelineController(
@@ -136,6 +177,7 @@ def _make_controller(
         node_id="test-node",
         worker_pool=worker_pool,
         manager_url=manager_url,
+        kubernetes_service_manager=kubernetes_service_manager,
     )
     return ctrl
 
@@ -178,6 +220,93 @@ class TestInstantiation:
     def test_worker_pool_none_by_default(self):
         ctrl = _make_controller()
         assert ctrl._worker_pool is None
+
+
+class TestKubernetesServiceLifecycle:
+    def test_manager_stream_activation_creates_pipeline_service(self):
+        wp = MagicMock()
+        wp.dispatch.return_value = "http://worker-0:8766"
+        k8s = MagicMock()
+        ctrl = _make_controller(
+            worker_pool=wp,
+            manager_url="http://manager:8765",
+            kubernetes_service_manager=k8s,
+        )
+        config = load_pipeline_from_yaml(
+            """\
+name: my-webhook-stream
+schedule:
+  type: stream
+source:
+  type: webhook
+  path: /ingest
+serializer_in:
+  type: json
+kubernetes:
+  enabled: true
+  service_type: NodePort
+  node_port: 30042
+sinks:
+  - type: local
+    path: /tmp/out
+"""
+        )
+        ctrl.manager.register(config, yaml_text="test")
+        ctrl._start_stream(config)
+        k8s.ensure_service.assert_called_once_with(config)
+
+    def test_stop_execution_deletes_pipeline_service(self):
+        k8s = MagicMock()
+        ctrl = _make_controller(kubernetes_service_manager=k8s)
+        config = load_pipeline_from_yaml(
+            """\
+name: my-webhook-stream
+schedule:
+  type: stream
+source:
+  type: webhook
+  path: /ingest
+serializer_in:
+  type: json
+kubernetes:
+  enabled: true
+sinks:
+  - type: local
+    path: /tmp/out
+"""
+        )
+        ctrl.manager.register(config, yaml_text="test")
+        ctrl._stream_run_ids[config.name] = ["run-1"]
+        ctrl._stop_execution(config.name)
+        k8s.delete_service.assert_called_once_with(config)
+
+    def test_boot_restore_reconciles_pipeline_service(self):
+        db = MagicMock()
+        db.get_stopped_pipeline_names.return_value = []
+        db.get_all_pipelines.return_value = [("my-webhook-stream", _WEBHOOK_STREAM_YAML.replace(
+            "serializer_in:\n  type: json\n",
+            "serializer_in:\n  type: json\nkubernetes:\n  enabled: true\n",
+        ))]
+        db.get_active_broadcast_placements.return_value = [
+            {
+                "placement_group_id": "pg1",
+                "pipeline_name": "my-webhook-stream",
+                "slots": [
+                    {
+                        "worker_index": 0,
+                        "worker_url": "http://worker-0:8766",
+                        "worker_id": "tram-worker-0",
+                        "run_id_prefix": "pg1-w0",
+                        "current_run_id": "pg1-w0",
+                        "status": "running",
+                    }
+                ],
+            }
+        ]
+        k8s = MagicMock()
+        ctrl = _make_controller(db=db, kubernetes_service_manager=k8s)
+        ctrl._boot_load()
+        k8s.ensure_service.assert_called_once()
 
 
 # ── _may_schedule (two guards only) ───────────────────────────────────────
@@ -725,6 +854,14 @@ class TestWorkerDispatch:
             rejected=[],
             status="running",
             placement_group_id="pg1",
+            slots=[{
+                "worker_index": 0,
+                "worker_url": "http://worker-0:8766",
+                "run_id_prefix": "pg1-w0",
+                "current_run_id": "pg1-w0",
+                "status": "running",
+                "restart_count": 0,
+            }],
         )
         return wp
 
@@ -790,6 +927,10 @@ class TestWorkerDispatch:
             rejected=[],
             status="running",
             placement_group_id="pg1",
+            slots=[
+                {"worker_index": 0, "worker_url": "http://worker-0:8766", "run_id_prefix": "pg1-w0", "current_run_id": "pg1-w0", "status": "running", "restart_count": 0},
+                {"worker_index": 1, "worker_url": "http://worker-1:8766", "run_id_prefix": "pg1-w1", "current_run_id": "pg1-w1", "status": "running", "restart_count": 0},
+            ],
         )
         ctrl = _started_controller(worker_pool=wp)
         config = load_pipeline_from_yaml(_WEBHOOK_STREAM_YAML)
@@ -813,6 +954,10 @@ class TestWorkerDispatch:
             rejected=["http://worker-1:8766"],
             status="degraded",
             placement_group_id="pg1",
+            slots=[
+                {"worker_index": 0, "worker_url": "http://worker-0:8766", "run_id_prefix": "pg1-w0", "current_run_id": "pg1-w0", "status": "running", "restart_count": 0},
+                {"worker_index": 1, "worker_url": None, "run_id_prefix": "pg1-w1", "current_run_id": None, "status": "stale", "restart_count": 0},
+            ],
         )
         ctrl = _started_controller(worker_pool=wp)
         config = load_pipeline_from_yaml(_WEBHOOK_STREAM_YAML)
@@ -834,6 +979,10 @@ class TestWorkerDispatch:
             rejected=[],
             status="running",
             placement_group_id="pg1",
+            slots=[
+                {"worker_index": 0, "worker_url": "http://worker-0:8766", "run_id_prefix": "pg1-w0", "current_run_id": "pg1-w0", "status": "running", "restart_count": 0},
+                {"worker_index": 1, "worker_url": "http://worker-1:8766", "run_id_prefix": "pg1-w1", "current_run_id": "pg1-w1", "status": "running", "restart_count": 0},
+            ],
         )
         db = TramDB(url=f"sqlite:///{tmp_path}/controller.db")
         ctrl = _started_controller(worker_pool=wp, db=db)
@@ -846,6 +995,86 @@ class TestWorkerDispatch:
         assert len(placements) == 1
         assert placements[0]["pipeline_name"] == "my-webhook-stream"
         assert [slot["current_run_id"] for slot in placements[0]["slots"]] == ["pg1-w0", "pg1-w1"]
+        ctrl.stop()
+        db.close()
+
+    def test_start_stream_count_n_uses_multi_dispatch_and_persists_target(self, tmp_path):
+        from tram.persistence.db import TramDB
+
+        wp = self._worker_pool()
+        wp.worker_id_for_url.side_effect = lambda url: "w0" if url and url.endswith("0:8766") else "w1"
+        wp.multi_dispatch.return_value = MagicMock(
+            accepted=["http://worker-0:8766"],
+            run_ids=["pg2-w0"],
+            rejected=[],
+            status="degraded",
+            placement_group_id="pg2",
+            slots=[
+                {"worker_index": 0, "worker_url": "http://worker-0:8766", "run_id_prefix": "pg2-w0", "current_run_id": "pg2-w0", "status": "running", "restart_count": 0},
+                {"worker_index": 1, "worker_url": None, "run_id_prefix": "pg2-w1", "current_run_id": None, "status": "stale", "restart_count": 0},
+            ],
+        )
+        db = TramDB(url=f"sqlite:///{tmp_path}/controller-countn.db")
+        ctrl = _started_controller(worker_pool=wp, db=db)
+        config = load_pipeline_from_yaml(_COUNT_N_STREAM_YAML)
+        ctrl.register(config, yaml_text=_COUNT_N_STREAM_YAML)
+
+        ctrl._start_stream(config)
+
+        wp.multi_dispatch.assert_called_once()
+        assert ctrl.manager.get("my-count-n-stream").status == "degraded"
+        placements = db.get_active_broadcast_placements()
+        assert placements[0]["target_count"] == "2"
+        assert placements[0]["slots"][1]["current_run_id"] is None
+        ctrl.stop()
+        db.close()
+
+    def test_start_stream_list_uses_multi_dispatch_and_persists_pinned_workers(self, tmp_path):
+        from tram.persistence.db import TramDB
+
+        wp = self._worker_pool()
+        wp.multi_dispatch.return_value = MagicMock(
+            accepted=["http://worker-0:8766"],
+            run_ids=["pg-list-w0"],
+            rejected=[],
+            status="degraded",
+            placement_group_id="pg-list",
+            slots=[
+                {
+                    "worker_index": 0,
+                    "worker_url": "http://worker-0:8766",
+                    "worker_id": "tram-worker-0",
+                    "pinned_worker_id": "tram-worker-0",
+                    "run_id_prefix": "pg-list-w0",
+                    "current_run_id": "pg-list-w0",
+                    "status": "running",
+                    "restart_count": 0,
+                },
+                {
+                    "worker_index": 1,
+                    "worker_url": None,
+                    "worker_id": "tram-worker-1",
+                    "pinned_worker_id": "tram-worker-1",
+                    "run_id_prefix": "pg-list-w1",
+                    "current_run_id": None,
+                    "status": "stale",
+                    "restart_count": 0,
+                },
+            ],
+        )
+        db = TramDB(url=f"sqlite:///{tmp_path}/controller-list.db")
+        ctrl = _started_controller(worker_pool=wp, db=db)
+        config = load_pipeline_from_yaml(_LIST_STREAM_YAML)
+        ctrl.register(config, yaml_text=_LIST_STREAM_YAML)
+
+        ctrl._start_stream(config)
+
+        wp.multi_dispatch.assert_called_once()
+        assert ctrl.manager.get("my-list-stream").status == "degraded"
+        placements = db.get_active_broadcast_placements()
+        assert placements[0]["target_count"] == "2"
+        assert placements[0]["slots"][0]["pinned_worker_id"] == "tram-worker-0"
+        assert placements[0]["slots"][1]["pinned_worker_id"] == "tram-worker-1"
         ctrl.stop()
         db.close()
 

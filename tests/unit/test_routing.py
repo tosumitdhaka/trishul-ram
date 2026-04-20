@@ -5,8 +5,10 @@ from unittest.mock import MagicMock
 
 import pytest
 
+from tram.connectors.local.sink import LocalSink
 from tram.core.context import PipelineRunContext
 from tram.pipeline.executor import PipelineExecutor, _filter_by_condition
+from tram.serializers.ndjson_serializer import NdjsonSerializer
 
 # ── _filter_by_condition ───────────────────────────────────────────────────
 
@@ -117,6 +119,160 @@ def test_process_chunk_condition_no_match_skips_sink():
 
     sink_special.write.assert_not_called()  # condition failed
     sink_catch_all.write.assert_called_once()  # catch-all gets it
+
+
+def test_process_chunk_condition_routes_to_separate_local_files(tmp_path):
+    executor = PipelineExecutor()
+
+    sink_msc = LocalSink({
+        "path": str(tmp_path),
+        "filename_template": "MSC_{part}.ndjson",
+        "file_mode": "append",
+    })
+    sink_smsc = LocalSink({
+        "path": str(tmp_path),
+        "filename_template": "SMSC_{part}.ndjson",
+        "file_mode": "append",
+    })
+
+    serializer_in = MagicMock()
+    serializer_in.parse.return_value = [
+        {"nf_name": "MSC", "value": 1},
+        {"nf_name": "SMSC", "value": 2},
+    ]
+    serializer_out = NdjsonSerializer({"type": "ndjson"})
+    ctx = PipelineRunContext(pipeline_name="route-test")
+
+    executor._process_chunk(
+        b"raw",
+        {"pipeline_name": "route-test"},
+        serializer_in,
+        [],
+        serializer_out,
+        [(sink_msc, 'nf_name == "MSC"', []), (sink_smsc, 'nf_name == "SMSC"', [])],
+        ctx,
+        "continue",
+    )
+
+    assert (tmp_path / "MSC_00001.ndjson").read_text() == '{"nf_name": "MSC", "value": 1}\n'
+    assert (tmp_path / "SMSC_00001.ndjson").read_text() == '{"nf_name": "SMSC", "value": 2}\n'
+
+
+def test_process_chunk_partitions_single_sink_by_field_template(tmp_path):
+    executor = PipelineExecutor()
+
+    sink = LocalSink({
+        "path": str(tmp_path),
+        "filename_template": "{field.nf_name}_{part}.ndjson",
+        "file_mode": "append",
+    })
+
+    serializer_in = MagicMock()
+    serializer_in.parse.return_value = [
+        {"nf_name": "MSC", "value": 1},
+        {"nf_name": "SMSC", "value": 2},
+        {"nf_name": "MSC", "value": 3},
+    ]
+    serializer_out = NdjsonSerializer({"type": "ndjson"})
+    ctx = PipelineRunContext(pipeline_name="partition-test")
+
+    executor._process_chunk(
+        b"raw",
+        {"pipeline_name": "partition-test"},
+        serializer_in,
+        [],
+        serializer_out,
+        [(sink, None, [])],
+        ctx,
+        "continue",
+    )
+
+    assert (tmp_path / "MSC_00001.ndjson").read_text() == (
+        '{"nf_name": "MSC", "value": 1}\n{"nf_name": "MSC", "value": 3}\n'
+    )
+    assert (tmp_path / "SMSC_00001.ndjson").read_text() == '{"nf_name": "SMSC", "value": 2}\n'
+
+
+def test_process_chunk_partition_missing_field_uses_unknown(tmp_path):
+    executor = PipelineExecutor()
+
+    sink = LocalSink({
+        "path": str(tmp_path),
+        "filename_template": "{field.nf_name}_{part}.ndjson",
+        "file_mode": "append",
+    })
+
+    serializer_in = MagicMock()
+    serializer_in.parse.return_value = [{"value": 1}]
+    serializer_out = NdjsonSerializer({"type": "ndjson"})
+    ctx = PipelineRunContext(pipeline_name="partition-test")
+
+    executor._process_chunk(
+        b"raw",
+        {"pipeline_name": "partition-test"},
+        serializer_in,
+        [],
+        serializer_out,
+        [(sink, None, [])],
+        ctx,
+        "continue",
+    )
+
+    assert (tmp_path / "unknown_00001.ndjson").read_text() == '{"value": 1}\n'
+
+
+def test_process_chunk_partition_rolls_per_field_value(tmp_path):
+    executor = PipelineExecutor()
+
+    sink = LocalSink({
+        "path": str(tmp_path),
+        "filename_template": "{field.nf_name}_{part}.ndjson",
+        "file_mode": "append",
+        "max_records": 2,
+    })
+
+    serializer_in = MagicMock()
+    serializer_in.parse.return_value = [
+        {"nf_name": "MSC", "value": 1},
+        {"nf_name": "MSC", "value": 2},
+        {"nf_name": "SMSC", "value": 10},
+    ]
+    serializer_out = NdjsonSerializer({"type": "ndjson"})
+    ctx = PipelineRunContext(pipeline_name="partition-roll")
+
+    executor._process_chunk(
+        b"raw-1",
+        {"pipeline_name": "partition-roll"},
+        serializer_in,
+        [],
+        serializer_out,
+        [(sink, None, [])],
+        ctx,
+        "continue",
+    )
+
+    serializer_in.parse.return_value = [
+        {"nf_name": "MSC", "value": 3},
+        {"nf_name": "SMSC", "value": 11},
+    ]
+    executor._process_chunk(
+        b"raw-2",
+        {"pipeline_name": "partition-roll"},
+        serializer_in,
+        [],
+        serializer_out,
+        [(sink, None, [])],
+        ctx,
+        "continue",
+    )
+
+    assert (tmp_path / "MSC_00001.ndjson").read_text() == (
+        '{"nf_name": "MSC", "value": 1}\n{"nf_name": "MSC", "value": 2}\n'
+    )
+    assert (tmp_path / "MSC_00002.ndjson").read_text() == '{"nf_name": "MSC", "value": 3}\n'
+    assert (tmp_path / "SMSC_00001.ndjson").read_text() == (
+        '{"nf_name": "SMSC", "value": 10}\n{"nf_name": "SMSC", "value": 11}\n'
+    )
 
 
 def test_pipelineconfig_sinks_list_valid():

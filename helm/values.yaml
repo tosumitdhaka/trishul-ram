@@ -1,10 +1,12 @@
 ## TRAM Helm chart values
+## This file tracks the active kind/dev deployment profile for this repo.
+## Use helm/values-template.yaml as the generic release baseline.
 ## Ref: https://github.com/trishul/tram
 
 image:
   registry:   ""              # e.g. ghcr.io — empty = no registry prefix (local/kind images)
   repository: trishul-ram      # image name without registry
-  tag: "1.3.0"
+  tag: "local-20260420-v131"
   pullPolicy: IfNotPresent
 
 ## Standalone mode: single-replica StatefulSet (replicaCount=1).
@@ -25,7 +27,7 @@ replicaCount: 1
 ## Migration:
 ##   helm upgrade trishul-ram ./helm --set manager.enabled=true --set worker.replicas=3
 manager:
-  enabled: false   # true = manager+worker mode; false = standalone StatefulSet
+  enabled: true   # kind profile runs dedicated manager + workers
 
   ## Manager-only RWO persistence (v1.2.0).
   ## Creates a single ReadWriteOnce PVC mounted at /data on the manager StatefulSet.
@@ -47,11 +49,18 @@ manager:
     ## Upgrading from v1.2.x? Set this to your existing PVC name to reuse it.
     ## Example: manager-data-trishul-ram
     ## When set, volumeClaimTemplates is skipped and this PVC is mounted directly.
-    existingClaim: ""
+    existingClaim: "manager-data-trishul-ram-manager-0"
+  resources:
+    requests:
+      cpu: 250m
+      memory: 512Mi
+    limits:
+      cpu: "1"
+      memory: 1Gi
 
 ## Worker configuration (only used when manager.enabled=true)
 worker:
-  replicas: 3
+  replicas: 5
   port: 8766
   ingressPort: 8767
   ingressService:
@@ -59,18 +68,24 @@ worker:
     type: NodePort
     port: 8767
     nodePort: 30002
-  resources: {}
+  resources:
+    requests:
+      cpu: 250m
+      memory: 512Mi
+    limits:
+      cpu: "1"
+      memory: 1Gi
   ## Override the container image for worker pods.
   ## When not set (default), workers use the same image as the manager (.Values.image).
   ## Set repository to use a dedicated worker image (built from Dockerfile.worker):
   ##   image:
   ##     registry: ghcr.io
   ##     repository: trishul/trishul-ram-worker
-  ##     tag: "1.3.0"
+  ##     tag: "1.3.1"
   image:
     registry: ""
-    repository: ""   # empty = fall back to .Values.image.repository
-    tag: ""          # empty = fall back to .Values.image.tag
+    repository: trishul-ram-worker
+    tag: "local-20260420-v131"
 
 ## App name prefix for all K8s resource names.
 ## Defaults to the chart name (trishul-ram).
@@ -225,7 +240,13 @@ pipelines:
         type: local
         path: /tmp/tram-sample
 
-resources: {}
+resources:
+  requests:
+    cpu: 250m
+    memory: 512Mi
+  limits:
+    cpu: "1"
+    memory: 1Gi
   # limits:
   #   cpu: 500m
   #   memory: 512Mi
@@ -261,7 +282,7 @@ ui:
 ## Set apiKey to enable X-API-Key authentication on /api/* endpoints.
 ## Health probes (/api/health, /api/ready), webhooks (/webhooks/), and the
 ## web UI (/ui) are always exempt from API key checks.
-apiKey: ""   # Also configurable via TRAM_API_KEY env var
+apiKey: "tram-internal-2026"   # Also configurable via TRAM_API_KEY env var
 
 ## Browser user authentication (v1.0.8)
 ## Comma-separated list of username:password pairs for UI login.

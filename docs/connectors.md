@@ -640,6 +640,21 @@ Receives HTTP POSTs on the daemon's built-in HTTP port. Stream mode. Each pipeli
 
 Multiple pipelines can listen on different paths simultaneously.
 
+Optional dedicated Kubernetes Service exposure:
+
+```yaml
+kubernetes:
+  enabled: true
+  service_type: NodePort
+  node_port: 30042   # optional; omit to let Kubernetes assign one
+  service_name: ""   # optional custom Service name
+```
+
+This is control-plane owned:
+- standalone mode creates a Service targeting the local daemon `POST /webhooks/{path}`
+- manager mode creates a Service targeting worker ingress on `:8767`
+- the Service exists only while the pipeline is active and is removed on stop/delete
+
 ```yaml
 # Pipeline A — POST /webhooks/pm-raw
 source:
@@ -721,6 +736,9 @@ source:
   type: prometheus_rw
   path: prom-rw
   secret: ${PROM_SECRET}
+kubernetes:
+  enabled: true
+  service_type: LoadBalancer   # or NodePort
 ```
 
 Prometheus scrape config:
@@ -785,7 +803,7 @@ Writes a file to an SFTP server.
 | `username` | required | SSH username |
 | `password` / `private_key_path` | — | Auth |
 | `remote_path` | required | Target directory |
-| `filename_template` | `"{pipeline}_{timestamp}.bin"` | Output filename; tokens: `{pipeline}`, `{timestamp}`, `{epoch}`, `{epoch_m}`, `{part}` / `{index}`, `{run_id}`, `{source_filename}` |
+| `filename_template` | `"{pipeline}_{timestamp}.bin"` | Output filename; tokens: `{pipeline}`, `{timestamp}`, `{epoch}`, `{epoch_m}`, `{part}` / `{index}`, `{run_id}`, `{source_filename}`, `{source_stem}`, `{source_suffix}`, `{source_path}`, `{field.nf_name}` |
 | `file_mode` | `append` | `append` keeps writing to the current file part; `single` writes one fresh file per sink call |
 | `max_records` | — | Roll to a new file part when the next write would exceed this record count |
 | `max_time` | — | Roll to a new file part when the current file has been open this many seconds |
@@ -795,9 +813,12 @@ Writes a file to an SFTP server.
 Notes:
 - `append` is the default for `sftp` file sinks.
 - `timestamp`, `epoch`, and `epoch_m` use the current file-open time, not pipeline start time.
+- `source_stem` / `source_suffix` are derived from `source_filename`; if source metadata is absent, they fall back to `data` / empty suffix.
+- Field tokens such as `{field.nf_name}` trigger executor-side partitioning before serialization. Each distinct field value gets its own active file/object path; missing values use `unknown`.
 - `csv` and `ndjson` support append/rolling naturally.
 - `json` file sinks are forced to `file_mode=single`; rolling with `max_records`, `max_time`, or `max_bytes` is rejected because plain JSON arrays are not append-safe.
 - When rolling is enabled and the template lacks a strong uniqueness token (`{part}`, `{index}`, or `{epoch_m}`), TRAM auto-appends `_{part}` and logs a warning to avoid filename collisions.
+- Risky field choices like `{field.timestamp}` or `{field.value}` are allowed but produce a lint warning because they may create runaway file counts.
 
 ```yaml
 sinks:
@@ -947,7 +968,7 @@ Writes a file to an FTP server.
 | `host` | required | FTP hostname |
 | `username` / `password` | required | FTP credentials |
 | `remote_path` | `/` | Target directory |
-| `filename_template` | `"{pipeline}_{timestamp}"` | Output filename |
+| `filename_template` | `"{pipeline}_{timestamp}"` | Output filename; same tokens as `sftp` |
 | `passive` | `true` | Passive mode |
 
 ```yaml
@@ -995,7 +1016,7 @@ Writes an object to an S3 bucket. Requires `pip install tram[s3]`.
 | Parameter | Default | Description |
 |---|---|---|
 | `bucket` | required | S3 bucket name |
-| `key_template` | `"{pipeline}/{timestamp}"` | Object key; tokens: `{pipeline}`, `{timestamp}`, `{source_filename}` |
+| `key_template` | `"{pipeline}/{timestamp}"` | Object key; tokens: `{pipeline}`, `{timestamp}`, `{epoch}`, `{epoch_m}`, `{part}` / `{index}`, `{run_id}`, `{source_filename}`, `{source_stem}`, `{source_suffix}`, `{source_path}`, `{field.nf_name}` |
 | `endpoint_url` | — | Override endpoint (MinIO, Ceph) |
 | `aws_access_key_id` / `aws_secret_access_key` | — | AWS credentials |
 | `region_name` | — | AWS region |
@@ -1220,7 +1241,7 @@ Writes an object to Google Cloud Storage. Requires `pip install tram[gcs]`.
 | Parameter | Default | Description |
 |---|---|---|
 | `bucket` | required | GCS bucket name |
-| `blob_template` | `"{pipeline}/{timestamp}"` | Object path; tokens: `{pipeline}`, `{timestamp}`, `{source_filename}` |
+| `blob_template` | `"{pipeline}/{timestamp}"` | Object path; same tokens as `s3` |
 | `service_account_json` | — | Path to service account JSON key |
 | `content_type` | `application/octet-stream` | Object content-type |
 
@@ -1243,7 +1264,7 @@ Writes a blob to Azure Blob Storage. Requires `pip install tram[azure]`.
 | `container` | required | Container name |
 | `connection_string` | — | Storage connection string |
 | `account_name` / `account_key` | — | Alternative auth |
-| `blob_template` | `"{pipeline}/{timestamp}"` | Blob name template |
+| `blob_template` | `"{pipeline}/{timestamp}"` | Blob name template; same tokens as `s3` |
 | `content_type` | `application/octet-stream` | Blob content-type |
 
 ```yaml

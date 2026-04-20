@@ -49,12 +49,14 @@ class PipelineController:
         worker_pool: WorkerPool | None = None,
         manager_url: str = "",
         stats_store=None,
+        kubernetes_service_manager=None,
     ) -> None:
         self._db = db
         self._node_id = node_id
         self._worker_pool = worker_pool
         self._manager_url = manager_url
         self._stats_store = stats_store
+        self._kubernetes_service_manager = kubernetes_service_manager
 
         self.manager = PipelineManager(db=db)
         self.executor = PipelineExecutor(file_tracker=file_tracker)
@@ -141,6 +143,7 @@ class PipelineController:
                 if placement is not None:
                     self._restore_broadcast_placement(placement)
                     self.manager.set_status(name, "reconciling")
+                    self._activate_kubernetes_service(config)
                     continue
                 if config.enabled:
                     self._do_schedule(name)
@@ -520,6 +523,9 @@ class PipelineController:
         if self.manager.exists(pipeline_name):
             self.manager.record_run(pipeline_name, result)
             self._on_run_complete(pipeline_name, result)
+            state = self.manager.get(pipeline_name)
+            if state.status in {"stopped", "error"}:
+                self._deactivate_kubernetes_service(state.config)
         else:
             logger.warning(
                 "on_worker_run_complete: pipeline not found",
@@ -541,7 +547,11 @@ class PipelineController:
                 f"{self._manager_url}/api/internal/run-complete"
                 if self._manager_url else ""
             )
-            if workers_cfg is not None and workers_cfg.count == "all":
+            if workers_cfg is not None and (
+                workers_cfg.count == "all"
+                or (isinstance(workers_cfg.count, int) and workers_cfg.count > 1)
+                or workers_cfg.worker_ids is not None
+            ):
                 placement_group_id = self._make_placement_group_id(config.name)
                 result = self._worker_pool.multi_dispatch(
                     placement_group_id=placement_group_id,
@@ -556,8 +566,9 @@ class PipelineController:
                                  extra={"pipeline": config.name})
                     self.manager.set_status(config.name, "error")
                     return
-                self._record_broadcast_placement(config.name, placement_group_id, result)
+                self._record_broadcast_placement(config.name, placement_group_id, result, workers_cfg)
                 self.manager.set_status(config.name, result.status)
+                self._activate_kubernetes_service(config)
                 logger.info(
                     "Dispatched stream to workers",
                     extra={
@@ -584,6 +595,7 @@ class PipelineController:
                 return
             self._stream_run_ids[config.name] = [run_id]
             self.manager.set_status(config.name, "running")
+            self._activate_kubernetes_service(config)
             logger.info("Dispatched stream to worker",
                         extra={"pipeline": config.name, "worker": worker_url,
                                "run_id": run_id})
@@ -611,6 +623,7 @@ class PipelineController:
         self._stream_threads[config.name] = thread
         self.manager.set_status(config.name, "running")
         thread.start()
+        self._activate_kubernetes_service(config)
         logger.info("Started stream pipeline", extra={"pipeline": config.name})
 
     def _stream_worker(self, config: PipelineConfig, stop_event: threading.Event) -> None:
@@ -626,6 +639,7 @@ class PipelineController:
             if self.manager.exists(config.name):
                 if self.manager.get(config.name).status == "running":
                     self.manager.set_status(config.name, "stopped")
+                self._deactivate_kubernetes_service(config)
 
     def _stop_stream(self, name: str, timeout: int = 10) -> None:
         # ── Manager+worker dispatch path ───────────────────────────────────
@@ -668,6 +682,7 @@ class PipelineController:
             job_id = f"batch-{name}"
             if self._scheduler and self._scheduler.get_job(job_id):
                 self._scheduler.remove_job(job_id)
+        self._deactivate_kubernetes_service(self.manager.get(name).config)
         self.manager.set_status(name, "stopped")
 
     def _remove_stream_run_id(self, pipeline_name: str, run_id: str) -> None:
@@ -709,25 +724,31 @@ class PipelineController:
                 slots=placement_copy["slots"],
             )
 
-    def _record_broadcast_placement(self, pipeline_name: str, placement_group_id: str, result) -> None:
+    def _record_broadcast_placement(self, pipeline_name: str, placement_group_id: str, result, workers_cfg) -> None:
         dispatched_at = datetime.now(UTC).isoformat()
         slots = []
-        for index, (worker_url, run_id) in enumerate(zip(result.accepted, result.run_ids)):
+        for slot in result.slots:
+            worker_url = slot.get("worker_url")
             slots.append({
-                "worker_index": index,
+                "worker_index": int(slot["worker_index"]),
                 "worker_url": worker_url,
-                "worker_id": self._worker_pool.worker_id_for_url(worker_url) if self._worker_pool else "",
-                "run_id_prefix": run_id,
-                "current_run_id": run_id,
+                "worker_id": slot.get("worker_id") or (self._worker_pool.worker_id_for_url(worker_url) if (self._worker_pool and worker_url) else ""),
+                "pinned_worker_id": slot.get("pinned_worker_id"),
+                "run_id_prefix": slot["run_id_prefix"],
+                "current_run_id": slot.get("current_run_id"),
                 "dispatched_at": dispatched_at,
-                "status": "running",
-                "restart_count": 0,
+                "status": slot.get("status", "stale"),
+                "restart_count": int(slot.get("restart_count", 0) or 0),
             })
         placement = {
             "placement_group_id": placement_group_id,
             "pipeline_name": pipeline_name,
             "slots": slots,
-            "target_count": "all",
+            "target_count": (
+                len(workers_cfg.worker_ids)
+                if workers_cfg is not None and workers_cfg.worker_ids is not None
+                else (workers_cfg.count if workers_cfg is not None else 1)
+            ),
             "started_at": datetime.now(UTC),
             "status": result.status,
         }
@@ -739,7 +760,7 @@ class PipelineController:
                 placement_group_id=placement_group_id,
                 pipeline_name=pipeline_name,
                 slots=slots,
-                target_count="all",
+                target_count=placement["target_count"],
                 status=result.status,
                 started_at=placement["started_at"],
             )
@@ -769,6 +790,33 @@ class PipelineController:
                 status,
                 slots=placement["slots"],
             )
+
+    def _activate_kubernetes_service(self, config: PipelineConfig) -> None:
+        if self._kubernetes_service_manager is None:
+            return
+        try:
+            self._kubernetes_service_manager.ensure_service(config)
+        except Exception as exc:
+            logger.warning(
+                "Failed to reconcile pipeline Service on activation",
+                extra={"pipeline": config.name, "error": str(exc)},
+            )
+
+    def _deactivate_kubernetes_service(self, config: PipelineConfig) -> None:
+        if self._kubernetes_service_manager is None:
+            return
+        try:
+            self._kubernetes_service_manager.delete_service(config)
+        except Exception as exc:
+            logger.warning(
+                "Failed to reconcile pipeline Service on deactivation",
+                extra={"pipeline": config.name, "error": str(exc)},
+            )
+
+    def reconcile_kubernetes_service(self, pipeline_name: str) -> None:
+        if not self.manager.exists(pipeline_name):
+            return
+        self._activate_kubernetes_service(self.manager.get(pipeline_name).config)
 
     def get_active_broadcast_placements(self) -> list[dict]:
         return list(self._broadcast_placements.values())
@@ -810,7 +858,12 @@ class PipelineController:
                 slots=placement["slots"],
             )
 
-    def redispatch_broadcast_slot(self, placement_group_id: str, worker_index: int) -> bool:
+    def redispatch_broadcast_slot(
+        self,
+        placement_group_id: str,
+        worker_index: int,
+        replacement_worker_url: str | None = None,
+    ) -> bool:
         placement = self._broadcast_placements.get(placement_group_id)
         if placement is None or self._worker_pool is None:
             return False
@@ -823,12 +876,20 @@ class PipelineController:
         state = self.manager.get(placement["pipeline_name"])
         restart_count = int(slot.get("restart_count", 0)) + 1
         new_run_id = f"{slot['run_id_prefix']}-r{restart_count}"
+        pinned_worker_id = slot.get("pinned_worker_id")
+        worker_url = replacement_worker_url
+        if worker_url is None and pinned_worker_id:
+            worker_url = self._worker_pool.url_for_worker_id(str(pinned_worker_id))
+        if worker_url is None:
+            worker_url = slot.get("worker_url")
+        if not worker_url:
+            return False
         callback_url = (
             f"{self._manager_url}/api/internal/run-complete"
             if self._manager_url else ""
         )
         if not self._worker_pool.dispatch_to_worker(
-            worker_url=slot["worker_url"],
+            worker_url=worker_url,
             run_id=new_run_id,
             pipeline_name=placement["pipeline_name"],
             yaml_text=state.yaml_text,
@@ -838,16 +899,16 @@ class PipelineController:
             return False
 
         slot["current_run_id"] = new_run_id
+        slot["worker_url"] = worker_url
+        slot["worker_id"] = str(pinned_worker_id or self._worker_pool.worker_id_for_url(worker_url) or "")
         slot["dispatched_at"] = datetime.now(UTC).isoformat()
         slot["status"] = "running"
         slot["restart_count"] = restart_count
         self._sync_stream_run_ids_from_slots(placement["pipeline_name"], placement["slots"])
         if self._db is not None:
-            self._db.update_slot_run_id(
+            self._db.update_broadcast_placement_status(
                 placement_group_id,
-                worker_index,
-                new_run_id,
-                status="running",
-                restart_count=restart_count,
+                placement["status"],
+                slots=placement["slots"],
             )
         return True

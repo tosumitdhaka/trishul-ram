@@ -5,10 +5,18 @@ from __future__ import annotations
 import asyncio
 import datetime
 import logging
+import os
 import socket
 import threading
 from collections.abc import Iterator
 
+from tram.connectors.snmp.mib_utils import (
+    close_snmp_engine,
+    create_udp_transport_target,
+    get_hlapi_asyncio,
+    hlapi_get_cmd,
+    hlapi_next_cmd,
+)
 from tram.core.exceptions import SourceError
 from tram.interfaces.base_source import BaseSource
 from tram.registry.registry import register_source
@@ -23,8 +31,7 @@ class SNMPTrapSource(BaseSource):
     Each trap is decoded into a dict of OID → value bindings and yielded as
     ``(json_bytes, meta)``.
 
-    Requires ``pysnmp-lextudio>=6.2,<6.3`` with ``pyasn1>=0.4.8,<0.6``
-    (``pip install tram[snmp]``).
+    Requires the ``tram[snmp]`` optional extra.
 
     Config keys:
         host            (str, default "0.0.0.0")  Bind address.
@@ -52,9 +59,8 @@ class SNMPTrapSource(BaseSource):
         self.mib_modules: list[str] = list(config.get("mib_modules", []))
         self.resolve_oids: bool = bool(config.get("resolve_oids", True))
         # Auto-prepend /mibs and TRAM_MIB_DIR
-        import os as _os
-        for _d in ["/mibs", _os.environ.get("TRAM_MIB_DIR", "")]:
-            if _d and _os.path.isdir(_d) and _d not in self.mib_dirs:
+        for _d in ["/mibs", os.environ.get("TRAM_MIB_DIR", "")]:
+            if _d and os.path.isdir(_d) and _d not in self.mib_dirs:
                 self.mib_dirs.insert(0, _d)
         # SNMPv3 USM
         self.security_name: str = config.get("security_name", "")
@@ -180,8 +186,7 @@ class SNMPPollSource(BaseSource):
     ``(json_bytes, meta)`` tuples.  Every record contains ``_polled_at`` (UTC
     ISO8601).  Set ``yield_rows=True`` to receive one record per table row.
 
-    Requires ``pysnmp-lextudio>=6.2,<6.3`` with ``pyasn1>=0.4.8,<0.6``
-    (``pip install tram[snmp]``).
+    Requires the ``tram[snmp]`` optional extra.
 
     Config keys:
         host            (str, required)        SNMP agent hostname or IP.
@@ -219,9 +224,8 @@ class SNMPPollSource(BaseSource):
         self.index_depth: int = int(config.get("index_depth", 0))
         self.classify: bool = bool(config.get("classify", False))
         # Auto-prepend /mibs and TRAM_MIB_DIR
-        import os as _os
-        for _d in ["/mibs", _os.environ.get("TRAM_MIB_DIR", "")]:
-            if _d and _os.path.isdir(_d) and _d not in self.mib_dirs:
+        for _d in ["/mibs", os.environ.get("TRAM_MIB_DIR", "")]:
+            if _d and os.path.isdir(_d) and _d not in self.mib_dirs:
                 self.mib_dirs.insert(0, _d)
         # SNMPv3 USM
         self.security_name: str = config.get("security_name", "")
@@ -284,7 +288,7 @@ class SNMPPollSource(BaseSource):
         version   = str(self.config.get("version", "2c"))
         t0 = time.monotonic()
         try:
-            import pysnmp.hlapi.asyncio as hlapi
+            hlapi = get_hlapi_asyncio()
         except ImportError:
             return {"ok": False, "latency_ms": None, "error": "pysnmp not installed — pip install tram[snmp]"}
 
@@ -293,17 +297,27 @@ class SNMPPollSource(BaseSource):
 
         async def _probe():
             engine = hlapi.SnmpEngine()
-            target = hlapi.UdpTransportTarget((host, port), timeout=5.0, retries=1)
-            errInd, errStatus, _, varBinds = await hlapi.getCmd(
-                engine, auth_data, target, hlapi.ContextData(),
-                hlapi.ObjectType(hlapi.ObjectIdentity(_SYSDESCR)),
-                lookupMib=False,
-            )
-            if errInd:
-                raise OSError(str(errInd))
-            if errStatus:
-                raise OSError(errStatus.prettyPrint())
-            return str(varBinds[0][1]) if varBinds else ""
+            try:
+                target = await create_udp_transport_target(
+                    hlapi,
+                    host=host,
+                    port=port,
+                    timeout=5.0,
+                    retries=1,
+                )
+                errInd, errStatus, _, varBinds = await hlapi_get_cmd(
+                    hlapi,
+                    engine, auth_data, target, hlapi.ContextData(),
+                    hlapi.ObjectType(hlapi.ObjectIdentity(_SYSDESCR)),
+                    lookupMib=False,
+                )
+                if errInd:
+                    raise OSError(str(errInd))
+                if errStatus:
+                    raise OSError(errStatus.prettyPrint())
+                return str(varBinds[0][1]) if varBinds else ""
+            finally:
+                close_snmp_engine(engine)
 
         try:
             loop = asyncio.new_event_loop()
@@ -334,6 +348,35 @@ class SNMPPollSource(BaseSource):
             )
         mp_model = 0 if self.version == "1" else 1
         return hlapi_mod.CommunityData(self.community, mpModel=mp_model)
+
+    def _resolve_configured_oid(self, oid: str, mib_view) -> str:
+        """Resolve a configured OID to numeric dotted form if it is symbolic."""
+        oid = oid.strip()
+        if not oid:
+            raise SourceError("SNMP poll OID must not be empty")
+        if oid[0].isdigit() or oid[0] == ".":
+            return oid.lstrip(".")
+
+        if mib_view is None:
+            raise SourceError(
+                f"SNMP poll symbolic OID '{oid}' requires mib_modules or mib_dirs for resolution"
+            )
+
+        from tram.connectors.snmp.mib_utils import symbolic_to_oid
+
+        resolved = symbolic_to_oid(mib_view, oid)
+        if not resolved:
+            raise SourceError(f"SNMP poll could not resolve symbolic OID '{oid}'")
+        return ".".join(str(part) for part in resolved)
+
+    def _resolved_source_oids(self) -> list[str]:
+        """Return configured source OIDs in numeric dotted form."""
+        mib_view = None
+        if any(not oid.strip().lstrip(".")[:1].isdigit() for oid in self.oids):
+            from tram.connectors.snmp.mib_utils import get_mib_view
+
+            mib_view = get_mib_view(self.mib_dirs, self.mib_modules)
+        return [self._resolve_configured_oid(oid, mib_view) for oid in self.oids]
 
     # SNMP type names that map to metrics (numeric counters/gauges)
     _METRIC_TYPES = frozenset({
@@ -402,95 +445,109 @@ class SNMPPollSource(BaseSource):
     async def _do_get(self, hlapi_mod, typed: bool = False) -> dict:
         engine = hlapi_mod.SnmpEngine()
         auth_data = self._build_auth(hlapi_mod)
-        target = hlapi_mod.UdpTransportTarget(
-            (self.host, self.port),
-            timeout=self.timeout,
-            retries=self.retries,
-        )
-        context = (
-            hlapi_mod.ContextData(contextName=self.context_name)
-            if self.context_name
-            else hlapi_mod.ContextData()
-        )
-        var_bind_objs = [
-            hlapi_mod.ObjectType(hlapi_mod.ObjectIdentity(oid))
-            for oid in self.oids
-        ]
-        errInd, errStatus, errIdx, varBinds = await hlapi_mod.getCmd(
-            engine, auth_data, target, context,
-            *var_bind_objs,
-            lookupMib=False,
-        )
-        if errInd:
-            raise SourceError(f"SNMP GET error: {errInd}")
-        if errStatus:
-            raise SourceError(
-                f"SNMP GET PDU error: {errStatus.prettyPrint()} "
-                f"at {errIdx and varBinds[int(errIdx) - 1][0] or '?'}"
+        try:
+            resolved_oids = self._resolved_source_oids()
+            target = await create_udp_transport_target(
+                hlapi_mod,
+                host=self.host,
+                port=self.port,
+                timeout=self.timeout,
+                retries=self.retries,
             )
-        if typed:
-            return {str(oid): (self._snmp_val_to_str(val), type(val).__name__) for oid, val in varBinds}
-        return {str(oid): self._snmp_val_to_str(val) for oid, val in varBinds}
+            context = (
+                hlapi_mod.ContextData(contextName=self.context_name)
+                if self.context_name
+                else hlapi_mod.ContextData()
+            )
+            var_bind_objs = [
+                hlapi_mod.ObjectType(hlapi_mod.ObjectIdentity(oid))
+                for oid in resolved_oids
+            ]
+            errInd, errStatus, errIdx, varBinds = await hlapi_get_cmd(
+                hlapi_mod,
+                engine, auth_data, target, context,
+                *var_bind_objs,
+                lookupMib=False,
+            )
+            if errInd:
+                raise SourceError(f"SNMP GET error: {errInd}")
+            if errStatus:
+                raise SourceError(
+                    f"SNMP GET PDU error: {errStatus.prettyPrint()} "
+                    f"at {errIdx and varBinds[int(errIdx) - 1][0] or '?'}"
+                )
+            if typed:
+                return {str(oid): (self._snmp_val_to_str(val), type(val).__name__) for oid, val in varBinds}
+            return {str(oid): self._snmp_val_to_str(val) for oid, val in varBinds}
+        finally:
+            close_snmp_engine(engine)
 
     async def _do_walk(self, hlapi_mod, typed: bool = False) -> dict:
         engine = hlapi_mod.SnmpEngine()
         auth_data = self._build_auth(hlapi_mod)
-        target = hlapi_mod.UdpTransportTarget(
-            (self.host, self.port),
-            timeout=self.timeout,
-            retries=self.retries,
-        )
-        context = (
-            hlapi_mod.ContextData(contextName=self.context_name)
-            if self.context_name
-            else hlapi_mod.ContextData()
-        )
-        bindings: dict = {}
-        for base_oid in self.oids:
-            current_oid = base_oid
-            current_oid_tuple = tuple(int(part) for part in current_oid.strip(".").split("."))
-            while True:
-                errInd, errStatus, errIdx, varBinds = await hlapi_mod.nextCmd(
-                    engine, auth_data, target, context,
-                    hlapi_mod.ObjectType(hlapi_mod.ObjectIdentity(current_oid)),
-                    lookupMib=False,
-                )
-                if errInd or errStatus or not varBinds:
-                    break
-                # varBinds from nextCmd is list-of-list: [[( oid, val ), ...]]
-                row = varBinds[0] if isinstance(varBinds[0], list) else varBinds
-                stop = False
-                advanced = False
-                for oid_obj, val_obj in row:
-                    oid_str = str(oid_obj)
-                    # Stop when we leave the subtree (lexicographic boundary)
-                    if not oid_str.startswith(base_oid.rstrip(".0")):
-                        stop = True
+        try:
+            resolved_oids = self._resolved_source_oids()
+            target = await create_udp_transport_target(
+                hlapi_mod,
+                host=self.host,
+                port=self.port,
+                timeout=self.timeout,
+                retries=self.retries,
+            )
+            context = (
+                hlapi_mod.ContextData(contextName=self.context_name)
+                if self.context_name
+                else hlapi_mod.ContextData()
+            )
+            bindings: dict = {}
+            for base_oid in resolved_oids:
+                current_oid = base_oid
+                current_oid_tuple = tuple(int(part) for part in current_oid.strip(".").split("."))
+                while True:
+                    errInd, errStatus, errIdx, varBinds = await hlapi_next_cmd(
+                        hlapi_mod,
+                        engine, auth_data, target, context,
+                        hlapi_mod.ObjectType(hlapi_mod.ObjectIdentity(current_oid)),
+                        lookupMib=False,
+                    )
+                    if errInd or errStatus or not varBinds:
                         break
-                    # Some agents/hlapi paths can repeat the terminal OID at the
-                    # subtree boundary. Guard against a no-progress infinite loop.
-                    oid_tuple = tuple(int(part) for part in oid_str.strip(".").split("."))
-                    if oid_tuple <= current_oid_tuple:
-                        stop = True
+                    # varBinds from nextCmd/get_next_cmd is list-of-list: [[( oid, val ), ...]]
+                    row = varBinds[0] if isinstance(varBinds[0], list) else varBinds
+                    stop = False
+                    advanced = False
+                    for oid_obj, val_obj in row:
+                        oid_str = str(oid_obj)
+                        # Stop when we leave the subtree (lexicographic boundary)
+                        if not oid_str.startswith(base_oid.rstrip(".0")):
+                            stop = True
+                            break
+                        # Some agents/hlapi paths can repeat the terminal OID at the
+                        # subtree boundary. Guard against a no-progress infinite loop.
+                        oid_tuple = tuple(int(part) for part in oid_str.strip(".").split("."))
+                        if oid_tuple <= current_oid_tuple:
+                            stop = True
+                            break
+                        if typed:
+                            bindings[oid_str] = (self._snmp_val_to_str(val_obj), type(val_obj).__name__)
+                        else:
+                            bindings[oid_str] = self._snmp_val_to_str(val_obj)
+                        current_oid = oid_str
+                        current_oid_tuple = oid_tuple
+                        advanced = True
+                    if stop or not advanced:
                         break
-                    if typed:
-                        bindings[oid_str] = (self._snmp_val_to_str(val_obj), type(val_obj).__name__)
-                    else:
-                        bindings[oid_str] = self._snmp_val_to_str(val_obj)
-                    current_oid = oid_str
-                    current_oid_tuple = oid_tuple
-                    advanced = True
-                if stop or not advanced:
-                    break
-        return bindings
+            return bindings
+        finally:
+            close_snmp_engine(engine)
 
     def read(self) -> Iterator[tuple[bytes, dict]]:
         import json
         try:
-            import pysnmp.hlapi.asyncio as _hlapi
+            _hlapi = get_hlapi_asyncio()
         except Exception as exc:
             raise SourceError(
-                "SNMP poll source requires pysnmp-lextudio — install with: pip install tram[snmp]"
+                "SNMP poll source requires pysnmp — install with: pip install tram[snmp]"
             ) from exc
 
         if self.classify and not self.resolve_oids:
