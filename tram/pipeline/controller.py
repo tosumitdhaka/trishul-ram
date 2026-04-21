@@ -898,7 +898,11 @@ class PipelineController:
     # ── Kubernetes service lifecycle ───────────────────────────────────────
 
     def _get_dispatched_worker_ids(self, pipeline_name: str) -> list[str] | None:
-        """Return worker_id list for the active broadcast placement, or None if count:all / no placement."""
+        """Return worker_id list for count:N placements; None for count:all and workers.list.
+
+        workers.list uses config.workers.worker_ids in _listed_worker_ids, so passing None here
+        lets the service manager fall through to that path naturally.
+        """
         pg_id = self._active_placement_group.get(pipeline_name)
         if pg_id is None:
             return None
@@ -907,6 +911,9 @@ class PipelineController:
             return None
         if placement.get("target_count") == "all":
             return None
+        state = self.manager.get(pipeline_name)
+        if state is not None and state.config.workers and state.config.workers.worker_ids is not None:
+            return None  # workers.list: config path handles Endpoints
         return [s["worker_id"] for s in placement.get("slots", []) if s.get("worker_id")]
 
     def _activate_kubernetes_service(self, config: PipelineConfig) -> None:
