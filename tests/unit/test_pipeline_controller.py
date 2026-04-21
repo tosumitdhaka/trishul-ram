@@ -253,7 +253,7 @@ sinks:
         )
         ctrl.manager.register(config, yaml_text="test")
         ctrl._start_stream(config)
-        k8s.ensure_service.assert_called_once_with(config)
+        k8s.ensure_service.assert_called_once_with(config, dispatched_worker_ids=None)
 
     def test_stop_execution_deletes_pipeline_service(self):
         k8s = MagicMock()
