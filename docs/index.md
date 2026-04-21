@@ -9,7 +9,7 @@ title: TRAM Documentation
 
 Lightweight, container-native Python daemon for telecom data pipeline orchestration.
 
-**Version:** 1.3.1 | **Status:** Production-ready | **Python:** 3.11+
+**Version:** 1.3.2 | **Status:** Production-ready | **Python:** 3.11+
 
 ---
 
@@ -199,7 +199,12 @@ docs/
 
 See [changelog.md](changelog.md) for detailed release notes.
 
-**Current Release:** v1.3.1 (2026-04-20)
+**Current Release:** v1.3.2 (2026-04-21)
+- Standalone live stats: local stream runs now feed `StatsStore` so `/api/pipelines/{name}/placement` returns a live single-slot view in standalone mode
+- Manager operational metrics: 8 new `tram_mgr_*` Prometheus series for dispatch, redispatch, reconcile actions, placement status, worker health, and callback receipt; `/metrics` is process-local
+- UDP multi-worker streams: `syslog` and `snmp_trap` sources work in manager mode with `kubernetes: enabled: true`; per-pipeline NodePort Services; `count: N` uses manual Endpoints pinned to dispatched workers; L012 enforces the kubernetes requirement
+
+**v1.3.1** (2026-04-20)
 - `workers.count: N` and `workers.list` placement behavior are now implemented for multi-worker push streams in manager mode
 - Dedicated per-pipeline Kubernetes Services are available for active `webhook` and `prometheus_rw` streams, including pinned-worker `workers.list` endpoints
 - File sinks support shared source filename variables, executor-side `{field.*}` partitioning, and append-mode rolling via `max_records`, `max_time`, and `max_bytes`
