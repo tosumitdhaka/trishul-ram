@@ -129,7 +129,10 @@ class PlacementReconciler:
                     ):
                         placement_changed = True
                         slot["status"] = "running"
-                        from tram.metrics.registry import MGR_REDISPATCH_TOTAL, MGR_RECONCILE_ACTION_TOTAL
+                        from tram.metrics.registry import (
+                            MGR_RECONCILE_ACTION_TOTAL,
+                            MGR_REDISPATCH_TOTAL,
+                        )
                         MGR_REDISPATCH_TOTAL.labels(pipeline=placement["pipeline_name"]).inc()
                         MGR_RECONCILE_ACTION_TOTAL.labels(
                             pipeline=placement["pipeline_name"], action="redispatch"

@@ -9,6 +9,43 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ---
 
+## [1.3.2] — 2026-04-21
+
+### Added
+
+**Standalone live stats parity**
+- Local stream runs on standalone deployments now create a `PipelineStats` entry in `StatsStore`; `GET /api/pipelines/{name}/placement` returns a synthetic single-slot view instead of 404
+- A background stats loop emits live `uptime_seconds` updates; a lock-guarded race fix prevents a stopped stream from being re-inserted after exit
+- Stats loop is suppressed in manager mode (worker stats flow through the normal stats callback path)
+
+**Manager operational metrics**
+- 8 new `tram_mgr_*` Prometheus series: `tram_mgr_dispatch_total`, `tram_mgr_redispatch_total`, `tram_mgr_reconcile_action_total`, `tram_mgr_placement_status`, `tram_mgr_worker_healthy`, `tram_mgr_worker_total`, `tram_mgr_run_complete_received_total`, `tram_mgr_pipeline_stats_received_total`
+- All series have `_NoOp` fallbacks when `prometheus_client` is not installed; `/metrics` returns 503 with install hint instead of 500
+- `/metrics` docstring clarifies that series are process-local to the manager; worker execution metrics require scraping each worker pod
+
+**UDP multi-worker streams**
+- `syslog` and `snmp_trap` sources now support `kubernetes: enabled: true` in manager mode; `KubernetesServiceManager.is_eligible` extended to all push sources
+- UDP Services use `protocol: UDP`; service/target port derived from `source.port` (fallback: 514 for syslog, 162 for snmp_trap); overridable via `kubernetes.port` / `kubernetes.target_port`
+- `count: N` and `workers.list` use manual `Endpoints` objects targeting only dispatched worker pods; `count: all` uses the broad worker label selector
+- `KubernetesServiceConfig` gains optional `port`, `target_port`, `load_balancer_ip`, `annotations` fields; `ClusterIP` added as valid `service_type`
+- `delete_service()` now cleans up manual `Endpoints` for both `workers.list` and `count: N` pipelines
+
+### Changed
+
+**Linter rules**
+- L008 removed (was blocking all UDP push sources in manager mode)
+- L012 added (error): UDP push sources in manager mode require `kubernetes: enabled: true` — no pre-existing shared UDP ingress exists in the worker chart
+- L006 updated: `kubernetes: enabled: true` now permits `count: N` and `workers.list` in addition to `count: all`; the controller threads `dispatched_worker_ids` into the service manager to avoid over-selection
+
+### Validated
+
+- kind cluster: `snmp_trap → file` with `count: all` — NodePort UDP Service created; ECMP routes each sender consistently to one worker
+- kind cluster: `snmp_trap → file` with `count: 2` — manual Endpoints target exactly the 2 dispatched worker pods
+- kind cluster: `webhook` with `count: 2` + `kubernetes: enabled: true` — no L006; HTTP Endpoints target exactly 2 workers (HTTP regression confirmed)
+- kind cluster: `snmp_trap` without kubernetes block — L012 fires; add block — L012 clears, no L008
+
+---
+
 ## [1.3.1] — 2026-04-20
 
 ### Added
@@ -1279,7 +1316,8 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 ---
 
 <!-- Comparison links -->
-[Unreleased]: https://github.com/tosumitdhaka/trishul-ram/compare/v1.3.1...HEAD
+[Unreleased]: https://github.com/tosumitdhaka/trishul-ram/compare/v1.3.2...HEAD
+[1.3.2]: https://github.com/tosumitdhaka/trishul-ram/compare/v1.3.1...v1.3.2
 [1.3.1]: https://github.com/tosumitdhaka/trishul-ram/compare/v1.3.0...v1.3.1
 [1.3.0]: https://github.com/tosumitdhaka/trishul-ram/compare/v1.2.3...v1.3.0
 [1.2.3]: https://github.com/tosumitdhaka/trishul-ram/compare/v1.2.2...v1.2.3

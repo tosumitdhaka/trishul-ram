@@ -96,9 +96,9 @@ unconfirmed work lives in the backlog at the bottom.
 
 > Follows v1.3.1 runtime stabilization. Scope is observability model cleanup plus UDP push-source validation.
 
-- [ ] **Standalone live stats parity** — feed local active runs into `StatsStore` so standalone exposes the same live stream/placement-style stats model as manager mode instead of only history + process-local Prometheus metrics
-- [ ] **Manager operational metrics** — add manager-side Prometheus series for dispatch/re-dispatch attempts, placement status counts, reconcile actions, worker health, and callback receipt (not direct failure counts — failures are inferred from the dispatch/receipt delta); document that `/metrics` is process-local and worker scraping is still required for cluster-wide execution metrics
-- [ ] **UDP multi-worker streams** — `syslog` and `snmp_trap` sources; per-pipeline NodePort Service via `kubernetes: enabled: true` (shared selector for `count: all`, manual Endpoints for `count: N` / `workers.list`); `kubernetes: enabled: true` required in manager mode
+- [x] **Standalone live stats parity** — feed local active runs into `StatsStore` so standalone exposes the same live stream/placement-style stats model as manager mode instead of only history + process-local Prometheus metrics
+- [x] **Manager operational metrics** — add manager-side Prometheus series for dispatch/re-dispatch attempts, placement status counts, reconcile actions, worker health, and callback receipt (not direct failure counts — failures are inferred from the dispatch/receipt delta); document that `/metrics` is process-local and worker scraping is still required for cluster-wide execution metrics
+- [x] **UDP multi-worker streams** — `syslog` and `snmp_trap` sources; per-pipeline NodePort Service via `kubernetes: enabled: true` (shared selector for `count: all`, manual Endpoints for `count: N` / `workers.list`); `kubernetes: enabled: true` required in manager mode
 
 ---
 
