@@ -108,7 +108,7 @@ async def get_pipeline_placement(name: str, request: Request) -> dict:
     stats_store = getattr(request.app.state, "stats_store", None)
 
     try:
-        controller.get(name)
+        state = controller.get(name)
     except PipelineNotFoundError as exc:
         raise HTTPException(status_code=404, detail=str(exc))
 
@@ -116,9 +116,53 @@ async def get_pipeline_placement(name: str, request: Request) -> dict:
         (item for item in controller.get_active_broadcast_placements() if item["pipeline_name"] == name),
         None,
     )
-    if placement is None:
-        raise HTTPException(status_code=404, detail=f"Pipeline '{name}' has no active broadcast placement")
-    return build_placement_view(placement, stats_store)
+    if placement is not None:
+        return build_placement_view(placement, stats_store)
+
+    # Standalone synthetic view: active stream pipeline with a live stats entry
+    if (
+        stats_store is not None
+        and state.config.schedule.type == "stream"
+        and controller._worker_pool is None
+    ):
+        entries = stats_store.for_pipeline(name)
+        if entries:
+            from tram.api.routers._stream_views import _stats_view_from_entry
+            entry = entries[0]
+            stats_view = _stats_view_from_entry(entry, stale=stats_store.is_stale(entry))
+            slot = {
+                "worker_index": 0,
+                "worker_id": getattr(entry, "worker_id", None),
+                "worker_url": None,
+                "run_id_prefix": getattr(entry, "run_id", None),
+                "current_run_id": getattr(entry, "run_id", None),
+                "status": "running",
+                "restart_count": 0,
+                "stats": stats_view,
+            }
+            return {
+                "pipeline_name": name,
+                "placement_group_id": None,
+                "status": "running",
+                "target_count": 1,
+                "started_at": None,
+                "slot_count": 1,
+                "active_slots": 1,
+                "records_in": stats_view["records_in"],
+                "records_out": stats_view["records_out"],
+                "records_skipped": stats_view["records_skipped"],
+                "dlq_count": stats_view["dlq_count"],
+                "error_count": stats_view["error_count"],
+                "bytes_in": stats_view["bytes_in"],
+                "bytes_out": stats_view["bytes_out"],
+                "records_in_per_sec": stats_view["records_in_per_sec"],
+                "records_out_per_sec": stats_view["records_out_per_sec"],
+                "bytes_in_per_sec": stats_view["bytes_in_per_sec"],
+                "bytes_out_per_sec": stats_view["bytes_out_per_sec"],
+                "slots": [slot],
+            }
+
+    raise HTTPException(status_code=404, detail=f"Pipeline '{name}' has no active broadcast placement")
 
 
 @router.put("/{name}")
