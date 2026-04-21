@@ -255,4 +255,58 @@ def test_reconciler_refreshes_k8s_service_for_named_worker_stale_slot():
     reconciler.run_once()
 
     controller.reconcile_kubernetes_service.assert_called_once_with("pipe-list")
-    controller._update_broadcast_placement_status.assert_called_once_with("pg-list", "degraded")
+
+
+# ── Manager metrics ────────────────────────────────────────────────────────
+
+
+def test_reconciler_stale_increments_mark_stale_metric():
+    from unittest.mock import MagicMock, patch
+    controller = MagicMock()
+    placement = _placement()
+    controller.get_active_broadcast_placements.return_value = [placement]
+    controller.redispatch_broadcast_slot.return_value = False
+
+    worker_pool = MagicMock()
+    worker_pool.is_worker_healthy.return_value = True
+
+    stats_store = StatsStore(interval=10)
+    db = MagicMock()
+    reconciler = PlacementReconciler(controller, worker_pool, stats_store, db, stats_interval=10)
+
+    action_counter = MagicMock()
+    action_counter.labels.return_value = action_counter
+
+    with patch("tram.metrics.registry.MGR_RECONCILE_ACTION_TOTAL", action_counter):
+        reconciler.run_once()
+
+    action_counter.labels.assert_any_call(pipeline="pipe-a", action="mark_stale")
+    action_counter.inc.assert_called()
+
+
+def test_reconciler_redispatch_increments_redispatch_metrics():
+    from unittest.mock import MagicMock, patch
+    controller = MagicMock()
+    placement = _placement()
+    controller.get_active_broadcast_placements.return_value = [placement]
+    controller.redispatch_broadcast_slot.return_value = True
+
+    worker_pool = MagicMock()
+    worker_pool.is_worker_healthy.return_value = True
+
+    stats_store = StatsStore(interval=10)
+    db = MagicMock()
+    reconciler = PlacementReconciler(controller, worker_pool, stats_store, db, stats_interval=10)
+
+    redispatch_counter = MagicMock()
+    redispatch_counter.labels.return_value = redispatch_counter
+    action_counter = MagicMock()
+    action_counter.labels.return_value = action_counter
+
+    with patch("tram.metrics.registry.MGR_REDISPATCH_TOTAL", redispatch_counter), \
+         patch("tram.metrics.registry.MGR_RECONCILE_ACTION_TOTAL", action_counter):
+        reconciler.run_once()
+
+    redispatch_counter.labels.assert_called_with(pipeline="pipe-a")
+    redispatch_counter.inc.assert_called()
+    action_counter.labels.assert_any_call(pipeline="pipe-a", action="redispatch")

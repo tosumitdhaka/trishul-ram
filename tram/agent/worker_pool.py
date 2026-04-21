@@ -193,6 +193,9 @@ class WorkerPool:
         with self._lock:
             healthy = sum(1 for h in self._health.values() if h["ok"])
         total = len(self._workers)
+        from tram.metrics.registry import MGR_WORKER_HEALTHY, MGR_WORKER_TOTAL
+        MGR_WORKER_HEALTHY.set(healthy)
+        MGR_WORKER_TOTAL.set(total)
         if healthy != self._last_healthy_count:
             self._last_healthy_count = healthy
             level = logging.INFO if healthy == total else logging.WARNING

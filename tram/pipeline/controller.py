@@ -456,6 +456,11 @@ class PipelineController:
                 logger.error("Batch dispatch failed: no healthy workers",
                              extra={"pipeline": pipeline_name, "run_id": run_id})
                 self.manager.set_status(pipeline_name, "error")
+                from tram.metrics.registry import MGR_DISPATCH_TOTAL
+                MGR_DISPATCH_TOTAL.labels(pipeline=pipeline_name, result="no_workers").inc()
+            else:
+                from tram.metrics.registry import MGR_DISPATCH_TOTAL
+                MGR_DISPATCH_TOTAL.labels(pipeline=pipeline_name, result="accepted").inc()
             return
         # ── Local execution path ───────────────────────────────────────────
 
@@ -596,6 +601,9 @@ class PipelineController:
                                  extra={"pipeline": config.name})
                     self.manager.set_status(config.name, "error")
                     return
+                from tram.metrics.registry import MGR_DISPATCH_TOTAL
+                for _ in result.accepted:
+                    MGR_DISPATCH_TOTAL.labels(pipeline=config.name, result="accepted").inc()
                 self._record_broadcast_placement(config.name, placement_group_id, result, workers_cfg)
                 self.manager.set_status(config.name, result.status)
                 self._activate_kubernetes_service(config)
@@ -623,6 +631,8 @@ class PipelineController:
                              extra={"pipeline": config.name})
                 self.manager.set_status(config.name, "error")
                 return
+            from tram.metrics.registry import MGR_DISPATCH_TOTAL
+            MGR_DISPATCH_TOTAL.labels(pipeline=config.name, result="accepted").inc()
             self._stream_run_ids[config.name] = [run_id]
             self.manager.set_status(config.name, "running")
             self._activate_kubernetes_service(config)
@@ -844,6 +854,9 @@ class PipelineController:
                 status,
                 slots=placement["slots"],
             )
+        from tram.metrics.registry import MGR_PLACEMENT_STATUS
+        for s in ("running", "degraded", "reconciling", "error"):
+            MGR_PLACEMENT_STATUS.labels(pipeline=pipeline_name, status=s).set(1 if s == status else 0)
 
     # ── Standalone live stats ──────────────────────────────────────────────
 

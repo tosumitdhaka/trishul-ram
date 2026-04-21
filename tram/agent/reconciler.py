@@ -117,6 +117,10 @@ class PlacementReconciler:
                     if slot.get("status") != "stale":
                         slot["status"] = "stale"
                         placement_changed = True
+                        from tram.metrics.registry import MGR_RECONCILE_ACTION_TOTAL
+                        MGR_RECONCILE_ACTION_TOTAL.labels(
+                            pipeline=placement["pipeline_name"], action="mark_stale"
+                        ).inc()
                     replacement_worker_url = self._select_replacement_worker(placement, slot)
                     if replacement_worker_url and self._controller.redispatch_broadcast_slot(
                         placement_group_id,
@@ -125,9 +129,18 @@ class PlacementReconciler:
                     ):
                         placement_changed = True
                         slot["status"] = "running"
+                        from tram.metrics.registry import MGR_REDISPATCH_TOTAL, MGR_RECONCILE_ACTION_TOTAL
+                        MGR_REDISPATCH_TOTAL.labels(pipeline=placement["pipeline_name"]).inc()
+                        MGR_RECONCILE_ACTION_TOTAL.labels(
+                            pipeline=placement["pipeline_name"], action="redispatch"
+                        ).inc()
                 elif slot.get("status") != "running":
                     slot["status"] = "running"
                     placement_changed = True
+                    from tram.metrics.registry import MGR_RECONCILE_ACTION_TOTAL
+                    MGR_RECONCILE_ACTION_TOTAL.labels(
+                        pipeline=placement["pipeline_name"], action="resolve_running"
+                    ).inc()
 
             next_status = placement["status"]
             target_count = self._target_count(placement)
