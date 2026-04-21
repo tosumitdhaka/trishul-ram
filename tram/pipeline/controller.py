@@ -897,11 +897,26 @@ class PipelineController:
 
     # ── Kubernetes service lifecycle ───────────────────────────────────────
 
+    def _get_dispatched_worker_ids(self, pipeline_name: str) -> list[str] | None:
+        """Return worker_id list for the active broadcast placement, or None if count:all / no placement."""
+        pg_id = self._active_placement_group.get(pipeline_name)
+        if pg_id is None:
+            return None
+        placement = self._broadcast_placements.get(pg_id)
+        if placement is None:
+            return None
+        if placement.get("target_count") == "all":
+            return None
+        return [s["worker_id"] for s in placement.get("slots", []) if s.get("worker_id")]
+
     def _activate_kubernetes_service(self, config: PipelineConfig) -> None:
         if self._kubernetes_service_manager is None:
             return
         try:
-            self._kubernetes_service_manager.ensure_service(config)
+            dispatched_worker_ids = self._get_dispatched_worker_ids(config.name)
+            self._kubernetes_service_manager.ensure_service(
+                config, dispatched_worker_ids=dispatched_worker_ids
+            )
         except Exception as exc:
             logger.warning(
                 "Failed to reconcile pipeline Service on activation",

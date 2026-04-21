@@ -281,3 +281,224 @@ def test_delete_service_removes_named_worker_endpoints() -> None:
     manager.delete_service(cfg)
     assert api.deleted == [(name, "default")]
     assert api.endpoints_deleted == [(name, "default")]
+
+
+# ── UDP push source tests ─────────────────────────────────────────────────
+
+
+def _syslog_pipeline() -> PipelineConfig:
+    return PipelineConfig.model_validate(
+        {
+            "name": "my-syslog",
+            "schedule": {"type": "stream"},
+            "source": {"type": "syslog", "host": "0.0.0.0", "port": 5514, "protocol": "udp"},
+            "serializer_in": {"type": "json"},
+            "sinks": [{"type": "local", "path": "/tmp/out"}],
+            "workers": {"count": "all"},
+            "kubernetes": {"enabled": True, "service_type": "NodePort"},
+        }
+    )
+
+
+def test_build_service_body_udp_derives_port_from_source() -> None:
+    """Service port must come from source.port (5514), not the hardcoded default (514)."""
+    manager = KubernetesServiceManager(
+        mode="standalone",
+        node_id="tram-0",
+        standalone_port=8765,
+        worker_ingress_port=8767,
+        namespace="default",
+        api=_FakeCoreV1Api(),
+    )
+    body = manager._build_service_body(_syslog_pipeline())
+    port_spec = body["spec"]["ports"][0]
+    assert port_spec["protocol"] == "UDP"
+    assert port_spec["name"] == "udp"
+    assert port_spec["port"] == 5514   # from source.port, not hardcoded default
+    assert port_spec["targetPort"] == 5514
+
+
+def test_build_service_body_udp_fallback_default_port() -> None:
+    """Without source.port attribute the hardcoded default is used."""
+    cfg = PipelineConfig.model_validate(
+        {
+            "name": "snmp-trap",
+            "schedule": {"type": "stream"},
+            "source": {"type": "snmp_trap", "host": "0.0.0.0"},
+            "serializer_in": {"type": "json"},
+            "sinks": [{"type": "local", "path": "/tmp/out"}],
+            "workers": {"count": "all"},
+            "kubernetes": {"enabled": True, "service_type": "NodePort"},
+        }
+    )
+    manager = KubernetesServiceManager(
+        mode="standalone",
+        node_id="tram-0",
+        standalone_port=8765,
+        worker_ingress_port=8767,
+        namespace="default",
+        api=_FakeCoreV1Api(),
+    )
+    body = manager._build_service_body(cfg)
+    port_spec = body["spec"]["ports"][0]
+    assert port_spec["protocol"] == "UDP"
+    assert port_spec["port"] == 162   # snmp_trap default
+
+def test_build_service_body_udp_kubernetes_port_overrides_source() -> None:
+    """kubernetes.port explicitly set overrides source.port."""
+    cfg = PipelineConfig.model_validate(
+        {
+            "name": "syslog-override",
+            "schedule": {"type": "stream"},
+            "source": {"type": "syslog", "host": "0.0.0.0", "port": 5514, "protocol": "udp"},
+            "serializer_in": {"type": "json"},
+            "sinks": [{"type": "local", "path": "/tmp/out"}],
+            "workers": {"count": "all"},
+            "kubernetes": {"enabled": True, "service_type": "NodePort", "port": 30514, "target_port": 5514},
+        }
+    )
+    manager = KubernetesServiceManager(
+        mode="standalone",
+        node_id="tram-0",
+        standalone_port=8765,
+        worker_ingress_port=8767,
+        namespace="default",
+        api=_FakeCoreV1Api(),
+    )
+    body = manager._build_service_body(cfg)
+    port_spec = body["spec"]["ports"][0]
+    assert port_spec["port"] == 30514    # kubernetes.port wins
+    assert port_spec["targetPort"] == 5514  # kubernetes.target_port wins
+    assert port_spec["protocol"] == "UDP"
+
+
+def test_build_service_body_annotations_merged() -> None:
+    cfg = PipelineConfig.model_validate(
+        {
+            **{
+                "name": "annotated-webhook",
+                "schedule": {"type": "stream"},
+                "source": {"type": "webhook", "path": "/ingest"},
+                "serializer_in": {"type": "json"},
+                "sinks": [{"type": "local", "path": "/tmp/out"}],
+            },
+            "kubernetes": {
+                "enabled": True,
+                "annotations": {"metallb.universe.tf/address-pool": "default"},
+            },
+        }
+    )
+    manager = KubernetesServiceManager(
+        mode="standalone",
+        node_id="tram-0",
+        standalone_port=8765,
+        worker_ingress_port=8767,
+        namespace="default",
+        api=_FakeCoreV1Api(),
+    )
+    body = manager._build_service_body(cfg)
+    assert body["metadata"]["annotations"]["metallb.universe.tf/address-pool"] == "default"
+    assert "tram.trishul.io/webhook-path" in body["metadata"]["annotations"]
+
+
+def test_is_eligible_for_udp_push_source() -> None:
+    manager = KubernetesServiceManager(
+        mode="manager",
+        node_id="tram-manager-0",
+        standalone_port=8765,
+        worker_ingress_port=8767,
+        namespace="default",
+        api=_FakeCoreV1Api(),
+    )
+    assert manager.is_eligible(_syslog_pipeline()) is True
+
+
+def test_ensure_service_with_dispatched_worker_ids_creates_endpoints() -> None:
+    api = _FakeCoreV1Api()
+    api.pods[("default", "tram-worker-0")] = SimpleNamespace(status=SimpleNamespace(pod_ip="10.0.0.10"))
+    api.pods[("default", "tram-worker-1")] = SimpleNamespace(status=SimpleNamespace(pod_ip="10.0.0.11"))
+    manager = KubernetesServiceManager(
+        mode="manager",
+        node_id="tram-manager-0",
+        standalone_port=8765,
+        worker_ingress_port=8767,
+        namespace="default",
+        api=api,
+    )
+    # count:all pipeline — normally no manual endpoints, but controller provides dispatched IDs for count:N
+    cfg = PipelineConfig.model_validate(
+        {
+            "name": "count-n-webhook",
+            "schedule": {"type": "stream"},
+            "source": {"type": "webhook", "path": "/ingest"},
+            "serializer_in": {"type": "json"},
+            "sinks": [{"type": "local", "path": "/tmp/out"}],
+            "workers": {"count": 2},
+            "kubernetes": {"enabled": True, "service_type": "NodePort"},
+        }
+    )
+    manager.ensure_service(cfg, dispatched_worker_ids=["tram-worker-0", "tram-worker-1"])
+    assert len(api.created) == 1
+    assert len(api.endpoints_created) == 1
+    ep_addresses = api.endpoints_created[0][1]["subsets"][0]["addresses"]
+    assert {a["targetRef"]["name"] for a in ep_addresses} == {"tram-worker-0", "tram-worker-1"}
+    port_spec = api.endpoints_created[0][1]["subsets"][0]["ports"][0]
+    assert port_spec["protocol"] == "TCP"
+
+
+def test_delete_service_removes_count_n_endpoints() -> None:
+    """count:N pipelines create manual Endpoints; delete_service must clean them up."""
+    api = _FakeCoreV1Api()
+    manager = KubernetesServiceManager(
+        mode="manager",
+        node_id="tram-manager-0",
+        standalone_port=8765,
+        worker_ingress_port=8767,
+        namespace="default",
+        api=api,
+    )
+    cfg = PipelineConfig.model_validate(
+        {
+            "name": "count-n-webhook",
+            "schedule": {"type": "stream"},
+            "source": {"type": "webhook", "path": "/ingest"},
+            "serializer_in": {"type": "json"},
+            "sinks": [{"type": "local", "path": "/tmp/out"}],
+            "workers": {"count": 2},
+            "kubernetes": {"enabled": True, "service_type": "NodePort"},
+        }
+    )
+    name = manager.service_name_for_pipeline(cfg)
+    api.services[("default", name)] = {"metadata": {"name": name}}
+    api.endpoints[("default", name)] = {"metadata": {"name": name}}
+    manager.delete_service(cfg)
+    assert api.deleted == [(name, "default")]
+    assert api.endpoints_deleted == [(name, "default")]
+
+
+def test_ensure_service_udp_endpoints_protocol() -> None:
+    api = _FakeCoreV1Api()
+    api.pods[("default", "tram-worker-0")] = SimpleNamespace(status=SimpleNamespace(pod_ip="10.0.0.10"))
+    manager = KubernetesServiceManager(
+        mode="manager",
+        node_id="tram-manager-0",
+        standalone_port=8765,
+        worker_ingress_port=8767,
+        namespace="default",
+        api=api,
+    )
+    cfg = PipelineConfig.model_validate(
+        {
+            "name": "syslog-count-n",
+            "schedule": {"type": "stream"},
+            "source": {"type": "syslog", "host": "0.0.0.0", "port": 5514, "protocol": "udp"},
+            "serializer_in": {"type": "json"},
+            "sinks": [{"type": "local", "path": "/tmp/out"}],
+            "workers": {"count": 1},
+            "kubernetes": {"enabled": True, "service_type": "NodePort"},
+        }
+    )
+    manager.ensure_service(cfg, dispatched_worker_ids=["tram-worker-0"])
+    port_spec = api.endpoints_created[0][1]["subsets"][0]["ports"][0]
+    assert port_spec["protocol"] == "UDP"
+    assert port_spec["name"] == "udp"

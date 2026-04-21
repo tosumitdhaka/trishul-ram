@@ -1091,8 +1091,12 @@ class WorkersConfig(BaseModel):
 
 class KubernetesServiceConfig(BaseModel):
     enabled: bool = True
-    service_type: Literal["NodePort", "LoadBalancer"] = "NodePort"
+    service_type: Literal["NodePort", "LoadBalancer", "ClusterIP"] = "NodePort"
     node_port: int | None = None
+    port: int | None = None          # Service port (defaults per protocol if omitted)
+    target_port: int | None = None   # Container port (defaults to source port if omitted)
+    load_balancer_ip: str | None = None
+    annotations: dict[str, str] = Field(default_factory=dict)
     service_name: str = ""
 
     @field_validator("service_name")
@@ -1117,6 +1121,8 @@ class KubernetesServiceConfig(BaseModel):
             raise ValueError("kubernetes.node_port is only valid when service_type=NodePort")
         if self.node_port is not None and not (30000 <= self.node_port <= 32767):
             raise ValueError("kubernetes.node_port must be between 30000 and 32767")
+        if self.load_balancer_ip is not None and self.service_type != "LoadBalancer":
+            raise ValueError("kubernetes.load_balancer_ip is only valid when service_type=LoadBalancer")
         return self
 
 
@@ -1167,10 +1173,11 @@ class PipelineConfig(BaseModel):
         if self.on_error == "dlq" and self.dlq is None:
             raise ValueError("on_error='dlq' requires a 'dlq' sink to be configured")
         if self.kubernetes is not None and self.kubernetes.enabled:
-            if self.source.type not in ("webhook", "prometheus_rw"):
+            _push_sources = {"webhook", "prometheus_rw", "syslog", "snmp_trap"}
+            if self.source.type not in _push_sources:
                 raise ValueError(
                     "kubernetes service provisioning is only supported for "
-                    "webhook and prometheus_rw sources"
+                    "push sources (webhook, prometheus_rw, syslog, snmp_trap)"
                 )
             if self.schedule.type != "stream":
                 raise ValueError(
@@ -1181,7 +1188,7 @@ class PipelineConfig(BaseModel):
     @model_validator(mode="after")
     def apply_workers_default(self) -> PipelineConfig:
         if self.workers is None:
-            if self.source.type in ("webhook", "prometheus_rw"):
+            if self.source.type in ("webhook", "prometheus_rw", "syslog", "snmp_trap"):
                 self.workers = WorkersConfig(count="all")
             else:
                 self.workers = WorkersConfig(count=1)

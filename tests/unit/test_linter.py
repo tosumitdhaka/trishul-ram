@@ -323,7 +323,8 @@ class TestWorkersDefaultsAndManagerLint:
         findings = lint(config, tram_mode="manager")
         assert not any(f.rule_id == "L006" for f in findings)
 
-    def test_l006_fires_for_pipeline_service_with_count_n(self):
+    def test_l006_allows_count_n_with_kubernetes_block(self):
+        """count:N + kubernetes block is valid — runtime uses manual Endpoints pinned to dispatched workers."""
         config = _load("""
             pipeline:
               name: count-n-push-service
@@ -336,6 +337,29 @@ class TestWorkersDefaultsAndManagerLint:
                 count: 2
               kubernetes:
                 enabled: true
+              serializer_in:
+                type: json
+              serializer_out:
+                type: json
+              sink:
+                type: local
+                path: /out
+        """)
+        findings = lint(config, tram_mode="manager")
+        assert not any(f.rule_id == "L006" for f in findings)
+
+    def test_l006_fires_without_kubernetes_and_without_count_all(self):
+        """count:N with no kubernetes block and no count:all → L006 error."""
+        config = _load("""
+            pipeline:
+              name: bad-count-n-no-k8s
+              schedule:
+                type: stream
+              source:
+                type: webhook
+                path: /test
+              workers:
+                count: 2
               serializer_in:
                 type: json
               serializer_out:
@@ -367,10 +391,10 @@ class TestWorkersDefaultsAndManagerLint:
         findings = lint(config, tram_mode="manager")
         assert any(f.rule_id == "L007" and f.severity == "error" for f in findings)
 
-    def test_l008_blocks_udp_push_in_manager(self):
+    def test_l012_fires_for_udp_push_without_kubernetes_in_manager(self):
         config = _load("""
             pipeline:
-              name: blocked-syslog
+              name: syslog-no-k8s
               schedule:
                 type: stream
               source:
@@ -387,7 +411,109 @@ class TestWorkersDefaultsAndManagerLint:
                 path: /out
         """)
         findings = lint(config, tram_mode="manager")
-        assert any(f.rule_id == "L008" and f.severity == "error" for f in findings)
+        assert any(f.rule_id == "L012" and f.severity == "error" for f in findings)
+
+    def test_l012_not_fired_when_kubernetes_enabled(self):
+        config = _load("""
+            pipeline:
+              name: syslog-with-k8s
+              schedule:
+                type: stream
+              source:
+                type: syslog
+                host: 0.0.0.0
+                port: 5514
+                protocol: udp
+              workers:
+                count: all
+              kubernetes:
+                enabled: true
+              serializer_in:
+                type: json
+              serializer_out:
+                type: json
+              sink:
+                type: local
+                path: /out
+        """)
+        findings = lint(config, tram_mode="manager")
+        assert not any(f.rule_id == "L012" for f in findings)
+
+    def test_l012_not_fired_in_standalone(self):
+        config = _load("""
+            pipeline:
+              name: syslog-standalone
+              schedule:
+                type: stream
+              source:
+                type: syslog
+                host: 0.0.0.0
+                port: 5514
+                protocol: udp
+              serializer_in:
+                type: json
+              serializer_out:
+                type: json
+              sink:
+                type: local
+                path: /out
+        """)
+        findings = lint(config, tram_mode="standalone")
+        assert not any(f.rule_id == "L012" for f in findings)
+
+    def test_l012_allows_count_n_with_kubernetes_block(self):
+        """count:N + kubernetes block is valid for UDP — runtime uses manual Endpoints pinned to dispatched workers."""
+        config = _load("""
+            pipeline:
+              name: syslog-count-n
+              schedule:
+                type: stream
+              source:
+                type: syslog
+                host: 0.0.0.0
+                port: 5514
+                protocol: udp
+              workers:
+                count: 2
+              kubernetes:
+                enabled: true
+              serializer_in:
+                type: json
+              serializer_out:
+                type: json
+              sink:
+                type: local
+                path: /out
+        """)
+        findings = lint(config, tram_mode="manager")
+        assert not any(f.rule_id == "L012" for f in findings)
+
+    def test_l012_allows_workers_list_with_kubernetes_block(self):
+        config = _load("""
+            pipeline:
+              name: syslog-list
+              schedule:
+                type: stream
+              source:
+                type: syslog
+                host: 0.0.0.0
+                port: 5514
+                protocol: udp
+              workers:
+                list:
+                  - tram-worker-0
+              kubernetes:
+                enabled: true
+              serializer_in:
+                type: json
+              serializer_out:
+                type: json
+              sink:
+                type: local
+                path: /out
+        """)
+        findings = lint(config, tram_mode="manager")
+        assert not any(f.rule_id == "L012" for f in findings)
 
     def test_l011_warns_for_risky_filename_partition_field(self):
         config = _load("""
@@ -469,4 +595,4 @@ class TestWorkersDefaultsAndManagerLint:
                 path: /out
         """)
         findings = lint(config, tram_mode="standalone")
-        assert not any(f.rule_id in {"L006", "L007", "L008", "L009", "L010"} for f in findings)
+        assert not any(f.rule_id in {"L006", "L007", "L009", "L010", "L012"} for f in findings)
