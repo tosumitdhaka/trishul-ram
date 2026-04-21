@@ -68,6 +68,11 @@ async def run_complete(payload: RunCompletePayload, request: Request) -> dict:
         },
     )
 
+    from tram.metrics.registry import MGR_RUN_COMPLETE_RECEIVED_TOTAL
+    MGR_RUN_COMPLETE_RECEIVED_TOTAL.labels(
+        pipeline=payload.pipeline_name, status=payload.status
+    ).inc()
+
     controller.on_worker_run_complete(
         run_id=payload.run_id,
         pipeline_name=payload.pipeline_name,
@@ -89,6 +94,9 @@ async def run_complete(payload: RunCompletePayload, request: Request) -> dict:
 async def pipeline_stats(payload: PipelineStatsPayload, request: Request) -> dict:
     store = request.app.state.stats_store
     controller = request.app.state.controller
+    from tram.metrics.registry import MGR_PIPELINE_STATS_RECEIVED_TOTAL
+    MGR_PIPELINE_STATS_RECEIVED_TOTAL.inc()
+
     if payload.is_final:
         store.remove(payload.run_id)
     else:

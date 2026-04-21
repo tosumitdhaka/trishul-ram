@@ -11,6 +11,10 @@ router = APIRouter()
 async def metrics() -> Response:
     """Expose Prometheus metrics in text format.
 
+    All series are process-local. In manager+worker mode, tram_mgr_* series
+    appear here; worker-side execution metrics (tram_records_*, tram_chunk_duration_seconds,
+    etc.) require scraping each worker pod separately.
+
     Returns 503 if prometheus_client is not installed.
     """
     from tram.metrics.registry import _PROMETHEUS_AVAILABLE
