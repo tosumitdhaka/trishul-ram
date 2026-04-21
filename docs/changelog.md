@@ -14,7 +14,7 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 ### Added
 
 **Placement and K8s exposure for push streams**
-- `workers.count: N` and `workers.list` placement behavior is now implemented for broadcast-capable push streams in manager mode
+- `workers.count: N` and `workers.list` placement behavior is now implemented for multi-worker push streams in manager mode
 - Dedicated per-pipeline Kubernetes Service provisioning is now available for active `webhook` and `prometheus_rw` stream pipelines
 - `workers.list` dedicated Services use explicit `Endpoints` targeting only the selected worker pods
 
@@ -51,15 +51,15 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Added
 
-**Broadcast streams for HTTP push sources**
-- `workers:` config now supports broadcast placement for `webhook` and `prometheus_rw` in manager mode, defaulting those sources to `count: all`
-- `WorkerPool.multi_dispatch()` and broadcast placement tracking allow a single stream pipeline to run across all healthy workers
+**Multi-worker streams for HTTP push sources**
+- `workers:` config now supports multi-worker placement for `webhook` and `prometheus_rw` in manager mode, defaulting those sources to `count: all`
+- `WorkerPool.multi_dispatch()` and placement tracking allow a single stream pipeline to run across all healthy workers
 - New placement visibility endpoints:
   - `GET /api/pipelines/{name}/placement`
   - `GET /api/cluster/streams`
 
 **Placement persistence and reconciliation**
-- Active broadcast placements are persisted in `broadcast_placements`
+- Active multi-worker placements are persisted in `broadcast_placements`
 - `PlacementReconciler` detects stale slots, re-dispatches recovered workers, and restores placement state after manager restart
 - Placement slot metadata now persists immutable `run_id_prefix` and mutable `current_run_id`
 
@@ -86,8 +86,8 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Fixed
 
-- Broadcast stream slot completion no longer drives the pipeline state machine while sibling slots are still running
-- Intermediate broadcast slot completion no longer evicts stats too early and trigger re-dispatch storms
+- Multi-worker stream slot completion no longer drives the pipeline state machine while sibling slots are still running
+- Intermediate placement slot completion no longer evicts stats too early and trigger re-dispatch storms
 - Stream run completion now persists final counters instead of zero totals in run history
 
 ### Tests

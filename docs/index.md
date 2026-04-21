@@ -139,9 +139,9 @@ helm install tram oci://ghcr.io/tosumitdhaka/charts/trishul-ram \
 - **Manager** StatefulSet — scheduler, DB, and UI; dispatches runs to workers via HTTP
 - **Worker** StatefulSet — stateless executors; internal agent on `:8766`, ingress-only webhook receiver on `:8767`
 - Dedicated `Dockerfile.worker` — lighter image without apscheduler/sqlalchemy/UI
-- Least-loaded dispatch plus broadcast placement for HTTP push streams
+- Least-loaded dispatch plus multi-worker placement for HTTP push streams
 - `TRAM_MODE=manager` / `TRAM_MODE=worker` — SQLite on manager PVC is sufficient (single writer)
-- `PipelineController` — unified pipeline lifecycle authority; core lifecycle states are `scheduled`, `running`, `stopped`, `error`, with `degraded` / `reconciling` surfaced for broadcast placements in v1.3.0
+- `PipelineController` — unified pipeline lifecycle authority; core lifecycle states are `scheduled`, `running`, `stopped`, `error`, with `degraded` / `reconciling` surfaced for multi-worker placements in v1.3.0
 
 ### Security
 - API key authentication
@@ -200,7 +200,7 @@ docs/
 See [changelog.md](changelog.md) for detailed release notes.
 
 **Current Release:** v1.3.1 (2026-04-20)
-- `workers.count: N` and `workers.list` placement behavior are now implemented for broadcast-capable push streams in manager mode
+- `workers.count: N` and `workers.list` placement behavior are now implemented for multi-worker push streams in manager mode
 - Dedicated per-pipeline Kubernetes Services are available for active `webhook` and `prometheus_rw` streams, including pinned-worker `workers.list` endpoints
 - File sinks support shared source filename variables, executor-side `{field.*}` partitioning, and append-mode rolling via `max_records`, `max_time`, and `max_bytes`
 - SNMP connectors now target `pysnmp>=7,<8`, and the `1.3.1` pass was revalidated on a live kind cluster for placement, ingress, and scale-down recovery

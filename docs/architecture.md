@@ -235,7 +235,7 @@ TRAM v1.2.0 replaces the previous shared-DB cluster model with a dedicated **man
 │         ▼                                                              │
 │  WorkerPool                                                            │
 │  ├── least_loaded() + round-robin tiebreaker (batch/poll sources)      │
-│  ├── multi_dispatch(count:all) → broadcast all push-HTTP sources       │
+│  ├── multi_dispatch(count:all) → all healthy workers for push-HTTP      │
 │  └── poll /agent/health every 10s → single summary log on change      │
 │                   │                                                    │
 │  PlacementReconciler (background thread)                               │
@@ -285,10 +285,10 @@ TRAM v1.2.0 replaces the previous shared-DB cluster model with a dedicated **man
 6. Worker POSTs `run-complete` to manager: `records_in/out/skipped`, `bytes_in/bytes_out`, `error`, `errors[]`
 7. Manager calls `on_worker_run_complete()` → saves to DB (including byte counters), updates pipeline state
 
-### Run lifecycle — broadcast push-HTTP streams (`webhook`, `prometheus_rw`)
+### Run lifecycle — multi-worker streams (`webhook`, `prometheus_rw`)
 
 1. Pipeline controller calls `WorkerPool.multi_dispatch(count='all')` → sends `POST /agent/run` to every healthy worker
-2. A `BroadcastPlacement` is created with one slot per worker; state saved to `broadcast_placements` DB table
+2. A placement group is created with one slot per worker; state saved to `broadcast_placements` DB table
 3. Each worker runs `PipelineExecutor.stream_run()` continuously; posts periodic stats to `POST /api/internal/pipeline-stats`
 4. `StatsStore` holds live per-slot stats; `PlacementReconciler` polls every `min(TRAM_STATS_INTERVAL, 10)s`
 5. Stale slot (age > `3 × TRAM_STATS_INTERVAL`): reconciler re-dispatches to same worker, updates `current_run_id`
@@ -367,7 +367,7 @@ Tables:
 - `alert_state` — last-alerted timestamp per `(pipeline_name, rule_name)`
 - `processed_files` — `(pipeline_name, source_key, filepath, processed_at)`; used by `skip_processed` to make file-source runs idempotent
 - `user_passwords` — scrypt-hashed passwords for browser auth (override `TRAM_AUTH_USERS` bootstrap values)
-- `broadcast_placements` — active broadcast placement groups; persists `slots_json` (including mutable `current_run_id` per slot) so the manager can reconcile after restart
+- `broadcast_placements` — active multi-worker placement groups; persists `slots_json` (including mutable `current_run_id` per slot) so the manager can reconcile after restart
 
 **Schema migrations**: `_create_tables()` runs `CREATE TABLE IF NOT EXISTS` + `ALTER TABLE ADD COLUMN` guards at startup. Existing databases from v0.6.0 are upgraded automatically.
 
