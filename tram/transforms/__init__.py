@@ -9,8 +9,10 @@ from tram.transforms.enrich import EnrichTransform  # noqa: F401
 from tram.transforms.explode import ExplodeTransform  # noqa: F401
 from tram.transforms.filter_rows import FilterRowsTransform  # noqa: F401
 from tram.transforms.flatten import FlattenTransform  # noqa: F401
+from tram.transforms.hex_decode import HexDecodeTransform  # noqa: F401
 from tram.transforms.inject_meta import InjectMetaTransform  # noqa: F401
 from tram.transforms.jmespath_extract import JmesPathExtractTransform  # noqa: F401
+from tram.transforms.json_flatten import JsonFlattenTransform  # noqa: F401
 from tram.transforms.limit import LimitTransform  # noqa: F401
 from tram.transforms.mask import MaskTransform  # noqa: F401
 from tram.transforms.melt import MeltTransform  # noqa: F401

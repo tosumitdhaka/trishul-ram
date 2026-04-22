@@ -35,6 +35,29 @@ class TestAsn1Serializer:
         with pytest.raises(SerializerError, match="message_class"):
             Asn1Serializer({"schema_file": "/tmp/test.asn"})
 
+    def test_message_class_and_message_classes_are_mutually_exclusive(self, tmp_path):
+        schema_file = _schema_file(tmp_path)
+        with pytest.raises(SerializerError, match="exactly one"):
+            Asn1Serializer(
+                {
+                    "schema_file": str(schema_file),
+                    "message_class": "Foo",
+                    "message_classes": ["Bar"],
+                }
+            )
+
+    def test_split_records_requires_ber(self, tmp_path):
+        schema_file = _schema_file(tmp_path)
+        with pytest.raises(SerializerError, match="only supported for BER"):
+            Asn1Serializer(
+                {
+                    "schema_file": str(schema_file),
+                    "message_class": "Foo",
+                    "encoding": "der",
+                    "split_records": True,
+                }
+            )
+
     def test_import_error_raises(self, tmp_path):
         schema_file = _schema_file(tmp_path)
         serializer = Asn1Serializer({"schema_file": str(schema_file), "message_class": "Foo"})
@@ -121,6 +144,90 @@ class TestAsn1Serializer:
             with pytest.MonkeyPatch.context() as mp:
                 mp.setitem(sys.modules, "asn1tools", fake_asn1tools)
                 serializer.parse(b"payload")
+
+    def test_parse_tries_message_classes_in_order(self, tmp_path):
+        schema_file = _schema_file(tmp_path)
+        compiled = MagicMock()
+        compiled.decode.side_effect = [
+            ValueError("bad Foo"),
+            {"kind": "bar"},
+        ]
+        fake_asn1tools = SimpleNamespace(compile_files=MagicMock(return_value=compiled))
+        serializer = Asn1Serializer(
+            {
+                "schema_file": str(schema_file),
+                "message_classes": ["Foo", "Bar"],
+            }
+        )
+
+        with pytest.MonkeyPatch.context() as mp:
+            mp.setitem(sys.modules, "asn1tools", fake_asn1tools)
+            result = serializer.parse(b"payload")
+
+        assert result == [{"kind": "bar"}]
+        assert compiled.decode.call_args_list[0].args == ("Foo", b"payload")
+        assert compiled.decode.call_args_list[1].args == ("Bar", b"payload")
+
+    def test_parse_raises_when_all_message_classes_fail(self, tmp_path):
+        schema_file = _schema_file(tmp_path)
+        compiled = MagicMock()
+        compiled.decode.side_effect = [ValueError("bad Foo"), ValueError("bad Bar")]
+        fake_asn1tools = SimpleNamespace(compile_files=MagicMock(return_value=compiled))
+        serializer = Asn1Serializer(
+            {
+                "schema_file": str(schema_file),
+                "message_classes": ["Foo", "Bar"],
+            }
+        )
+
+        with pytest.raises(SerializerError, match="Foo"):
+            with pytest.MonkeyPatch.context() as mp:
+                mp.setitem(sys.modules, "asn1tools", fake_asn1tools)
+                serializer.parse(b"payload")
+
+    def test_parse_split_records_decodes_each_top_level_tlv(self, tmp_path):
+        schema_file = _schema_file(tmp_path)
+        compiled = MagicMock()
+        record1 = b"\x30\x03abc"
+        record2 = b"\x30\x03def"
+        compiled.decode.side_effect = [{"id": 1}, {"id": 2}]
+        fake_asn1tools = SimpleNamespace(compile_files=MagicMock(return_value=compiled))
+        serializer = Asn1Serializer(
+            {
+                "schema_file": str(schema_file),
+                "message_class": "Foo",
+                "split_records": True,
+            }
+        )
+
+        with pytest.MonkeyPatch.context() as mp:
+            mp.setitem(sys.modules, "asn1tools", fake_asn1tools)
+            result = serializer.parse(record1 + record2)
+
+        assert result == [{"id": 1}, {"id": 2}]
+        assert compiled.decode.call_args_list[0].args == ("Foo", record1)
+        assert compiled.decode.call_args_list[1].args == ("Foo", record2)
+
+    def test_parse_split_records_supports_indefinite_length(self, tmp_path):
+        schema_file = _schema_file(tmp_path)
+        compiled = MagicMock()
+        record = b"\x30\x80\x02\x01\x05\x00\x00"
+        compiled.decode.return_value = {"value": 5}
+        fake_asn1tools = SimpleNamespace(compile_files=MagicMock(return_value=compiled))
+        serializer = Asn1Serializer(
+            {
+                "schema_file": str(schema_file),
+                "message_class": "Foo",
+                "split_records": True,
+            }
+        )
+
+        with pytest.MonkeyPatch.context() as mp:
+            mp.setitem(sys.modules, "asn1tools", fake_asn1tools)
+            result = serializer.parse(record)
+
+        assert result == [{"value": 5}]
+        assert compiled.decode.call_args.args == ("Foo", record)
 
     def test_compiled_schema_is_cached(self, tmp_path):
         schema_file = _schema_file(tmp_path)

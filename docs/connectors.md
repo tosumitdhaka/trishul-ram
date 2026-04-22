@@ -1483,8 +1483,12 @@ Deserialize only (`serializer_in`) — use `serializer_out: type: json` (or anot
 | Parameter | Default | Description |
 |---|---|---|
 | `schema_file` | required | Path to `.asn` file **or** directory of `.asn` files (compiled together) |
-| `message_class` | required | Top-level ASN.1 type name to decode |
+| `message_class` | required* | Top-level ASN.1 type name to decode |
+| `message_classes` | `null` | Optional ordered fallback list of top-level ASN.1 types to try per record |
 | `encoding` | `ber` | `ber` \| `der` \| `per` \| `uper` \| `xer` \| `jer` |
+| `split_records` | `false` | BER only: split concatenated top-level TLVs and decode each separately |
+
+\* Exactly one of `message_class` or `message_classes` must be provided.
 
 **Type mapping:**
 
@@ -1499,12 +1503,32 @@ Deserialize only (`serializer_in`) — use `serializer_out: type: json` (or anot
 
 **Multi-file schemas:** point `schema_file` at a directory and all `.asn` files in it are compiled together (imports resolved across files).
 
+**Concatenated BER files:** set `split_records: true` to walk the BER stream and decode one
+top-level TLV at a time. This is useful for CDR-style files that concatenate many ASN.1 records
+into a single file.
+
 ```yaml
 serializer_in:
   type: asn1
   schema_file: /data/schemas/ericsson/3gpp_32401.asn
   message_class: FileContent
   encoding: ber
+  split_records: false
+
+serializer_out:
+  type: json
+  indent: 2
+```
+
+Ordered root-type fallback:
+
+```yaml
+serializer_in:
+  type: asn1
+  schema_file: /data/schemas/asn1/ericsson/sgw-CDRFR9OLD.asn
+  message_classes: [CallEventRecord, GPRSRecord]
+  encoding: ber
+  split_records: true
 
 serializer_out:
   type: json

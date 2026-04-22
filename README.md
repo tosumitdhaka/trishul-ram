@@ -275,7 +275,7 @@ Quick-start examples use `latest`. For production deployments, pin a specific re
 | **Sources** | 24 | `sftp` `kafka` `rest` `snmp_trap` `snmp_poll` `syslog` `gnmi` `corba` `nats` `mqtt` `amqp` `websocket` `sql` `clickhouse` `influxdb` `redis` `s3` `gcs` `azure_blob` `elasticsearch` `prometheus_rw` `webhook` `local` `ftp` |
 | **Sinks** | 20 | `sftp` `kafka` `rest` `opensearch` `snmp_trap` `mqtt` `amqp` `nats` `sql` `clickhouse` `influxdb` `redis` `s3` `gcs` `azure_blob` `websocket` `elasticsearch` `ves` `local` `ftp` |
 | **Serializers** | 12 | `json` `ndjson` `csv` `xml` `avro` `parquet` `protobuf` `msgpack` `bytes` `text` `asn1` `pm_xml` |
-| **Transforms** | 21 | `rename` `cast` `add_field` `drop` `filter` `value_map` `flatten` `explode` `melt` `aggregate` `enrich` `deduplicate` `regex_extract` `template` `mask` `validate` `sort` `limit` `jmespath` `unnest` `timestamp_normalize` |
+| **Transforms** | 23 | `rename` `cast` `add_field` `drop` `filter` `value_map` `flatten` `json_flatten` `explode` `melt` `aggregate` `enrich` `deduplicate` `regex_extract` `template` `mask` `validate` `sort` `limit` `jmespath` `unnest` `timestamp_normalize` `hex_decode` |
 
 Install only what you need:
 
@@ -307,7 +307,7 @@ pip install tram[all]                      # everything (except corba — system
 |-----|----------|
 | [Architecture](docs/architecture.md) | System design, execution modes, manager+worker internals |
 | [Connectors](docs/connectors.md) | All sources and sinks — config reference, SNMPv3, retry/circuit-breaker |
-| [Transforms](docs/transforms.md) | All 21 transforms and condition expression syntax |
+| [Transforms](docs/transforms.md) | All 23 transforms and condition expression syntax |
 | [API Reference](docs/api.md) | REST API endpoints, authentication, rate limiting |
 | [Deployment](docs/deployment.md) | Docker, Kubernetes/Helm, TLS, environment variables |
 | [Roadmap](docs/roadmap.md) | Planned features and known issues |

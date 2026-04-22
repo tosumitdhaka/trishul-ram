@@ -106,6 +106,38 @@ Recursively flatten nested dicts.
 
 ---
 
+## json_flatten
+
+Recursively hoist nested dicts, expand nested list-of-record structures, and optionally zip
+paired lists into row-oriented output.
+
+```yaml
+- type: json_flatten
+  explode_mode: auto        # auto | off | paths
+  zip_lists: auto           # auto | off | mappings
+  choice_mode: type_value   # keep | unwrap_value | type_value
+  rename_style: snake_case  # none | snake_case
+  ambiguity_mode: keep      # keep | error
+```
+
+Useful for decoded ASN.1 / XML / nested JSON payloads where a long chain of `unnest` and
+`explode` transforms would otherwise be required.
+
+Optional controls:
+
+```yaml
+- type: json_flatten
+  explode_mode: paths
+  explode_paths: [measData, measData.measInfo]
+  zip_lists: mappings
+  zip_mappings:
+    - labels: measTypes
+      values: measResults
+  drop_paths: [measFileFooter]
+```
+
+---
+
 ## timestamp_normalize
 
 Normalize heterogeneous timestamp strings/ints to a uniform format.
@@ -289,6 +321,48 @@ Lift a nested dict field's keys to the top level.
 ```
 
 `{"metadata": {"region": "eu", "tier": 1}}` → `{"meta_region": "eu", "meta_tier": 1}`
+
+---
+
+## hex_decode
+
+Interpret scalar hex-string leaf values heuristically or via explicit codecs. This is especially
+useful after ASN.1 decode, where `OCTET STRING` values are emitted as hex strings.
+
+```yaml
+- type: hex_decode
+  mode: utf8_or_hex       # hex | utf8_or_hex | latin1_or_hex
+  preserve_original: false
+```
+
+With overrides:
+
+```yaml
+- type: hex_decode
+  mode: utf8_or_hex
+  preserve_original: true
+  overrides:
+    - path: servedIMSI
+      decode_as: digits
+      format: tbcd
+    - path: recordOpeningTime
+      decode_as: timestamp
+      format: bcd_semi_octet
+    - path: mSTimeZone
+      decode_as: timezone
+      format: tbcd_quarter_hour
+    - path: pGWAddress.value.value
+      decode_as: ip
+      format: packed
+```
+
+Supported built-in semantic targets / formats in `1.3.2`:
+- `text` + `utf8` / `latin1`
+- `digits` + `tbcd`
+- `timestamp` + `bcd_semi_octet`
+- `timezone` + `tbcd_quarter_hour`
+- `ip` + `packed`
+- `hex`
 
 ---
 

@@ -99,7 +99,7 @@ helm install tram oci://ghcr.io/tosumitdhaka/charts/trishul-ram \
 | **Sources** | 24 | sftp, kafka, rest, snmp_poll, snmp_trap, syslog, webhook, mqtt, amqp, nats, gnmi, sql, clickhouse, influxdb, corba, websocket, prometheus_rw |
 | **Sinks** | 20 | sftp, kafka, rest, opensearch, snmp_trap, mqtt, amqp, nats, sql, clickhouse, influxdb, ves, websocket, elasticsearch |
 | **Serializers** | 12 | json, ndjson, csv, xml, avro, parquet, protobuf, msgpack, bytes, text, asn1, pm_xml |
-| **Transforms** | 21 | rename, cast, filter, aggregate, jmespath, flatten, explode, melt, deduplicate, mask, validate, template, enrich |
+| **Transforms** | 23 | rename, cast, filter, aggregate, jmespath, flatten, json_flatten, explode, melt, deduplicate, mask, validate, template, enrich, hex_decode |
 
 ---
 
