@@ -168,9 +168,9 @@ class SNMPTrapSource(BaseSource):
             from pyasn1.codec.ber import decoder as ber_decoder
             from pysnmp.proto.api import v2c as pMod
             msg, _ = ber_decoder.decode(raw, asn1Spec=pMod.Message())
-            reqPDU = pMod.apiMessage.getPDU(msg)
+            reqPDU = pMod.apiMessage.get_pdu(msg)
             bindings: dict = {}
-            for oid, val in pMod.apiPDU.getVarBinds(reqPDU):
+            for oid, val in pMod.apiPDU.get_varbinds(reqPDU):
                 bindings[str(oid)] = str(val)
             return bindings
         except Exception:
