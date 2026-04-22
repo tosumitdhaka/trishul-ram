@@ -1,4 +1,4 @@
-# v1.3.2 Design Plan: Metrics/Stats Parity & UDP Multi-Worker Streams
+# v1.3.2 Design Plan: Metrics/Stats Parity, UDP Multi-Worker Streams, and ASN.1 Decode Flattening
 
 **Status:** Draft for review
 **Target version:** v1.3.2
@@ -9,7 +9,7 @@
 
 ## Goal
 
-v1.3.2 closes three observability gaps deferred from v1.3.0/v1.3.1:
+v1.3.2 closes four backend gaps deferred from v1.3.0/v1.3.1:
 
 1. **Standalone live stats parity (A)** — standalone mode exposes live stats for active stream
    pipelines via `StatsStore` and the existing `GET /api/cluster/streams` surface, instead of
@@ -20,12 +20,17 @@ v1.3.2 closes three observability gaps deferred from v1.3.0/v1.3.1:
    sources in manager mode; provision K8s Services for UDP multi-worker streams via the same
    generic `kubernetes:` block used by HTTP sources (`kubernetes: enabled: true` required in
    manager mode for all UDP push sources); validate the UDP path end-to-end in kind.
+4. **ASN.1 structured decode flattening (D)** — support concatenated BER files that contain
+   multiple top-level records; add a generic `json_flatten` transform for nested decoded
+   records plus a generic `hex_decode` transform for text/hex heuristics and field-path
+   decode overrides.
 
 This release does **not** contain:
 
 - UI revalidation (v1.3.3)
 - Pipeline cloning, bulk actions, or live log streaming (backlog)
 - Connector hardening (backlog)
+- Blind schema-wide ASN.1 root-type auto-detection by default
 
 ---
 
@@ -704,6 +709,262 @@ No changes to: `_stream_views.py`, `db.py`, `slots_json` schema — no new slot 
 
 ---
 
+## Workstream D — ASN.1 Structured Decode Flattening
+
+### Objectives
+
+- `serializer_in: {type: asn1}` can split a BER file containing concatenated top-level
+  objects and return one logical record per BER object instead of one record per file.
+- Root-type selection remains explicit by default (`message_class`), with an optional ordered
+  fallback list (`message_classes`) for cases where multiple top-level roots are valid.
+- A new generic `json_flatten` transform can collapse nested decoded records into flat JSON /
+  NDJSON / CSV friendly rows using configurable dict hoisting, list explosion, and list zipping.
+- A new generic `hex_decode` transform can turn byte-derived hex-string values into readable
+  text where safe, while supporting explicit field-path overrides for semantic decode.
+
+### Design decisions
+
+**1. Multi-record BER split belongs in the ASN.1 serializer.** `BaseSerializer.parse()` already
+returns `list[dict]`; `executor.py` already counts and processes multiple logical records per
+source chunk. The missing behavior is only in `Asn1Serializer.parse()`, which currently calls
+`compiled.decode(message_class, data)` once on the whole file. The serializer is therefore the
+correct layer to add `split_records: true` for BER files containing concatenated top-level
+objects.
+
+**BER boundary walking is explicit and manual.** `asn1tools.decode()` expects one complete BER
+value at a time; it does not consume a concatenated BER stream for TRAM. D1 therefore adds a
+small BER envelope walker inside `asn1_serializer.py`:
+- parse outer tag bytes
+- parse BER length bytes (short form and long form)
+- for indefinite length BER, walk nested TLVs until end-of-contents (`00 00`)
+- slice the exact top-level TLV bytes
+- call `compiled.decode(root_type, record_bytes)`
+- advance by the consumed byte count and continue until EOF
+
+This is the same boundary model already proven in the existing external CDR decode scripts.
+The walker is BER-only; `split_records` is rejected for `der`, `per`, `uper`, `xer`, and `jer`.
+
+**2. Root-type selection stays explicit by default.** For schemas like PGW where the user can
+provide a real top-level `CHOICE` root (`GPRSRecord`), ASN.1 already performs branch selection
+from BER tags. TRAM should preserve that path. The new optional fallback is:
+
+```yaml
+serializer_in:
+  type: asn1
+  schema_file: /data/schemas/asn1/ericsson/sgw-CDRFR9OLD.asn
+  message_classes: [CallEventRecord, GPRSRecord]
+  encoding: ber
+  split_records: true
+```
+
+Per top-level BER object, TRAM tries the configured root types in order until one decodes.
+This is intentionally narrower than "probe every type in every schema." Blind schema-wide
+probing is deferred because it is expensive, ambiguous, and too easy to bias with keyword
+heuristics.
+
+**Failure path is explicit: decode failure raises `SerializerError`.** If none of the configured
+`message_classes` can decode a split BER object, the serializer raises `SerializerError`. The
+executor already routes parse failures through the existing DLQ / error path. There is no silent
+skip and no raw-record fallback in D1.
+
+**3. Flattening is generic, not ASN.1-branded.** After decode, the data shape is nested JSON-like
+dicts/lists/scalars. The transform should therefore be named `json_flatten`, not
+`asn1_flatten`. ASN.1-specific patterns such as CHOICE objects represented as
+`{"type": ..., "value": ...}` are supported through configuration rather than hardcoded as
+the only behavior.
+
+**4. Hex interpretation is separate from structural flattening.** `json_flatten` should not also
+decode telecom encodings or guess text codecs. A separate `hex_decode` transform keeps the
+structural and semantic concerns separate:
+- `json_flatten` decides record shape
+- `hex_decode` decides how to interpret byte-derived hex-string values
+
+This keeps `json_flatten` reusable for non-ASN.1 nested JSON workflows as well.
+
+### `asn1` serializer changes
+
+`Asn1SerializerConfig` gains:
+
+| Field | Default | Meaning |
+|---|---|---|
+| `split_records` | `false` | For BER only: split concatenated top-level BER objects and decode each separately |
+| `message_classes` | `null` | Optional ordered fallback list of root types; mutually exclusive with `message_class` |
+
+Rules:
+- `split_records` is valid only for `encoding: ber`
+- exactly one of `message_class` or `message_classes` must be set
+- when `message_classes` is present, TRAM tries each configured root type in order per split BER
+  object and records the first success
+
+### Why a new `json_flatten` transform?
+
+TRAM already has `flatten`, `explode`, and `unnest`. D2 does **not** replace them; it adds a
+higher-level transform for cases where the current primitive chain becomes long, repetitive, and
+schema-fragile.
+
+The explicit gap relative to existing transforms is the combination of:
+- recursive application of unnest/explode decisions across a nested tree
+- configurable CHOICE-object handling (`{"type": ..., "value": ...}`)
+- index-based list zipping (for patterns like labels[] + values[])
+- one transform owning the flattening plan so pipelines do not need 8–12 ordered primitive
+  transforms for common nested-record expansion
+
+If a pipeline only needs one or two explicit `unnest` / `explode` steps, the existing transforms
+remain the preferred tool. `json_flatten` is for the larger "nested structured payload to flat
+row set" case.
+
+### `json_flatten` transform
+
+`json_flatten` is a generic nested-record transform with heuristic defaults plus explicit
+override controls.
+
+Planned default behavior:
+- recursively hoist nested dict wrappers where safe
+- explode lists of dicts into multiple output records
+- preserve parent scalar fields across explosions
+- support CHOICE-like dicts via configurable `choice_mode`
+- optionally zip paired lists by index
+- optionally normalize output field names (`snake_case`)
+
+Planned controls:
+
+| Field | Purpose |
+|---|---|
+| `explode_mode` | `auto | off | paths` |
+| `explode_paths` | Explicit list paths to explode |
+| `zip_lists` | `auto | off | mappings` |
+| `zip_mappings` | Explicit list-pair mappings for index-based zipping |
+| `choice_mode` | `keep | unwrap_value | type_value` |
+| `rename_style` | `none | snake_case` |
+| `drop_paths` | Remove unwanted subtrees after flattening |
+| `keep_paths` | Whitelist specific subtrees |
+| `max_depth` | Limit recursive flatten depth |
+| `ambiguity_mode` | `keep | error` when auto rules detect more than one valid auto-expansion plan |
+
+Example target usage:
+
+```yaml
+transforms:
+  - type: json_flatten
+    explode_mode: auto
+    zip_lists: auto
+    choice_mode: type_value
+    rename_style: snake_case
+```
+
+This transform is intended to replace long hand-authored chains of `unnest` / `explode` /
+`add_field` / `drop` / `rename` for common nested-record patterns, while still allowing a
+pipeline author to fall back to the explicit primitive transforms when needed.
+
+**Ambiguity trigger in D2:** "auto rules are not decisive" means `json_flatten` encounters more
+than one candidate list-expansion plan at the same structural level and those plans would
+produce materially different row sets. Example: two sibling list fields are both eligible for
+auto-explode but are not declared as a zip pair and have incompatible lengths / semantics.
+In D2 the allowed responses are:
+- `keep`: preserve the subtree without auto-expanding it
+- `error`: raise `TransformError`
+
+The earlier `explode` option is dropped from `ambiguity_mode` because it is too underspecified.
+
+### `hex_decode` transform
+
+`hex_decode` is a second generic transform that operates after decode and after optional
+structural flattening. Its goal is not "ASN.1 magic"; its goal is controlled interpretation
+of byte-derived hex-string values.
+
+**Input model:** by the time records reach transforms, `_to_json_safe()` in the ASN.1 serializer
+has already converted `bytes` values to lowercase hex strings. D2 therefore does **not** operate
+on Python `bytes`; it operates on strings that may represent hex-encoded binary values. Every
+override path first converts `value -> bytes.fromhex(value)` before applying a semantic codec.
+Heuristic text decoding likewise means "decode the hex string as bytes, then try UTF-8 /
+Latin-1."
+
+Planned generic behavior:
+- default safe heuristics: decode printable UTF-8 / Latin-1 text; otherwise keep hex
+- optional preservation of original raw value or raw hex shadow fields
+- explicit field-path overrides for semantic decode
+
+Proposed config shape:
+
+```yaml
+transforms:
+  - type: hex_decode
+    mode: utf8_or_hex
+    preserve_original: false
+    overrides:
+      - path: recordOpeningTime
+        decode_as: timestamp
+        format: bcd_semi_octet
+      - path: pGWAddress
+        decode_as: ip
+        format: asn1_choice
+      - path: mSTimeZone
+        decode_as: timezone
+        format: tbcd_quarter_hour
+      - path: servedIMSI
+        decode_as: digits
+        format: tbcd
+```
+
+`decode_as` is semantic, not vendor-branded. `format` selects the wire codec. The code path is
+therefore generic-but-extensible: hardcoded reusable codecs are acceptable; hardcoded vendor
+field names are not.
+
+Planned built-in semantic targets include:
+- `text`
+- `digits`
+- `timestamp`
+- `timezone`
+- `ip`
+- `enum`
+- `bit_flags`
+- `hex`
+
+Planned built-in wire formats include:
+- `utf8`
+- `latin1`
+- `tbcd`
+- `bcd_semi_octet`
+- `asn1_choice`
+- `asn1_bit_string`
+- `tbcd_quarter_hour`
+
+These codecs are allowed to include IETF / 3GPP / ASN.1 reusable wire encodings. D2 does not
+promise support for vendor-proprietary binary layouts.
+
+### Non-goals
+
+- No blind "try every type in every schema" root detection by default
+- No vendor-specific flatteners in core (`mtas_flatten`, `pgw_flatten`, etc.)
+- No implicit semantic reinterpretation of every `OCTET STRING`; raw-safe output remains valid
+- No promise that `json_flatten` can infer one universally correct flat row model for every
+  arbitrary ASN.1 schema without hints
+- Built-in codecs may cover reusable standard wire formats (for example ASN.1 / BER / 3GPP-style
+  encodings such as `tbcd`), but not vendor-proprietary binary layouts
+
+### Code changes
+
+| File | Change |
+|------|--------|
+| `tram/models/pipeline.py` | Extend `Asn1SerializerConfig`; add transform config models for `json_flatten` and `hex_decode` |
+| `tram/serializers/asn1_serializer.py` | Add BER top-level splitter; add ordered `message_classes` fallback; preserve current single-message path when `split_records=false` |
+| `tram/transforms/json_flatten.py` | New generic nested-record flatten transform |
+| `tram/transforms/hex_decode.py` | New generic hex-string heuristic + override transform |
+| `tram/transforms/__init__.py` | Register new transforms |
+| `docs/connectors.md` | Document new ASN.1 serializer options and both transforms |
+| `pipelines/` | Add example ASN.1 pipelines for raw JSON, flat NDJSON, and flat CSV |
+
+### Tests
+
+| Test file | Cases |
+|-----------|-------|
+| `tests/unit/test_asn1_serializer.py` | BER split path; concatenated BER file returns N records; `message_classes` ordered fallback; invalid `split_records` on non-BER rejected |
+| `tests/unit/test_json_flatten.py` | Dict hoist, list explode, choice handling, zip behavior, ambiguity modes |
+| `tests/unit/test_hex_decode.py` | UTF-8 / Latin-1 heuristics, preserve-original behavior, semantic override dispatch by path |
+| `tests/integration/test_asn1_pipeline.py` | ASN.1 raw export, flat NDJSON pipeline, flat CSV pipeline on sample BER input |
+
+---
+
 ## Recommended PR split
 
 | PR | Branch | Content | Merge order |
@@ -712,9 +973,13 @@ No changes to: `_stream_views.py`, `db.py`, `slots_json` schema — no new slot 
 | PR-B | `observer-b-mgr-metrics` | Workstream B: registry series + instrumentation at controller/reconciler/worker_pool/internal router | 2nd (parallel with A) |
 | PR-C1 | `observer-c1-udp-model` | Workstream C: L008 removal, L012, `count: N` over-selection fix in service manager, UDP eligibility, unit tests | 3rd |
 | PR-C2 | `observer-c2-udp-e2e` | Workstream C: controller `_get_dispatched_worker_ids` wiring, kind validation evidence in PR body | 4th (gated on C1) |
+| PR-D1 | `observer-d1-asn1-split` | Workstream D: BER split, `message_classes` fallback, serializer tests | 5th |
+| PR-D2 | `observer-d2-json-flatten` | Workstream D: `json_flatten`, `hex_decode`, docs, example pipelines, integration tests | 6th (gated on D1) |
 
 PR-A and PR-B share no code paths and can be reviewed in parallel. PR-C1 is a prerequisite
-for C2 because the kind validation requires the full stack wired together.
+for C2 because the kind validation requires the full stack wired together. PR-D1 should land
+before PR-D2 so the flattening examples and tests run against the real multi-record ASN.1 path
+instead of the legacy one-record-per-file limitation.
 
 ---
 
