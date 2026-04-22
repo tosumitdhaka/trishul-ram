@@ -230,6 +230,17 @@ class TestUnnestTransform:
         with pytest.raises(TransformError):
             UnnestTransform({})
 
+    def test_nested_path_unnest(self):
+        t = UnnestTransform({"field": "a.meta"})
+        records = [{"id": 1, "a": {"meta": {"host": "srv1"}, "x": 2}}]
+        result = t.apply(records)
+        assert result == [{"id": 1, "a": {"x": 2}, "host": "srv1"}]
+
+    def test_nested_scalar_raise(self):
+        t = UnnestTransform({"field": "a.meta", "on_non_dict": "raise"})
+        with pytest.raises(TransformError):
+            t.apply([{"a": {"meta": "not-a-dict"}}])
+
 
 # ── TimestampNormalize epoch output ───────────────────────────────────────────
 

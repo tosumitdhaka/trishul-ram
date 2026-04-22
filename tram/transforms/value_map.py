@@ -2,10 +2,12 @@
 
 from __future__ import annotations
 
+from copy import deepcopy
 from typing import Any
 
 from tram.interfaces.base_transform import BaseTransform
 from tram.registry.registry import register_transform
+from tram.transforms.path_utils import get_path, set_path
 
 _SENTINEL = object()
 
@@ -23,13 +25,14 @@ class ValueMapTransform(BaseTransform):
     def apply(self, records: list[dict]) -> list[dict]:
         result = []
         for record in records:
-            new_record = dict(record)
-            if self.field in new_record:
-                key = str(new_record[self.field])
+            new_record = deepcopy(record)
+            found, value = get_path(new_record, self.field)
+            if found:
+                key = str(value)
                 if key in self.mapping:
-                    new_record[self.field] = self.mapping[key]
+                    set_path(new_record, self.field, self.mapping[key], create_missing=True)
                 elif self.default is not _SENTINEL:
-                    new_record[self.field] = self.default
+                    set_path(new_record, self.field, self.default, create_missing=True)
                 # else: keep original value
             result.append(new_record)
         return result

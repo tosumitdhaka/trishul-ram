@@ -2,9 +2,12 @@
 
 from __future__ import annotations
 
+from copy import deepcopy
+
 from tram.core.exceptions import TransformError
 from tram.interfaces.base_transform import BaseTransform
 from tram.registry.registry import register_transform
+from tram.transforms.path_utils import delete_path, get_path, set_path
 
 
 @register_transform("explode")
@@ -23,18 +26,19 @@ class ExplodeTransform(BaseTransform):
     def apply(self, records: list[dict]) -> list[dict]:
         result = []
         for record in records:
-            if self.field not in record or not isinstance(record[self.field], list):
+            found, value = get_path(record, self.field)
+            if not found or not isinstance(value, list):
                 result.append(record)
                 continue
-            elements = record[self.field]
+            elements = value
             for i, element in enumerate(elements):
-                new_record = dict(record)
+                new_record = deepcopy(record)
                 if self.drop_source:
-                    new_record.pop(self.field, None)
+                    delete_path(new_record, self.field)
                 if isinstance(element, dict):
                     new_record.update(element)
                 else:
-                    new_record[self.field] = element
+                    set_path(new_record, self.field, element, create_missing=True)
                 if self.include_index:
                     new_record[self.index_field] = i
                 result.append(new_record)
