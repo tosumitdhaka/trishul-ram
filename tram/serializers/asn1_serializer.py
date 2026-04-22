@@ -35,6 +35,7 @@ def _to_json_safe(obj):
     - datetime  → ISO 8601 string
     - CHOICE    → {"type": name, "value": value}  (asn1tools returns 2-tuples)
     - bytes     → hex string
+    - bytearray → hex string
     - tuple     → list (e.g. SEQUENCE OF decoded as tuple)
     """
     if isinstance(obj, datetime):
@@ -46,7 +47,7 @@ def _to_json_safe(obj):
         return [_to_json_safe(v) for v in obj]
     if isinstance(obj, dict):
         return {k: _to_json_safe(v) for k, v in obj.items()}
-    if isinstance(obj, bytes):
+    if isinstance(obj, (bytes, bytearray)):
         return obj.hex()
     return obj
 

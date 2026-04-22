@@ -44,6 +44,13 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - kind cluster: `webhook` with `count: 2` + `kubernetes: enabled: true` — no L006; HTTP Endpoints target exactly 2 workers (HTTP regression confirmed)
 - kind cluster: `snmp_trap` without kubernetes block — L012 fires; add block — L012 clears, no L008
 
+**ASN.1 structured decode flattening**
+- `split_records: true` on the `asn1` serializer splits concatenated BER files into individual top-level TLV records before decode; supports short-form, long-form, and indefinite-length (0x80) encodings
+- `message_classes: [...]` accepts an ordered fallback list of root ASN.1 types; all-fail raises `SerializerError` and routes to DLQ; mutually exclusive with the existing `message_class` field
+- `bytearray` values are now hex-stringified in `_to_json_safe()` alongside `bytes`
+- `json_flatten` transform — registered as `"json_flatten"`; recursively flattens nested dicts/lists with dotted-key output; options: `explode_mode` (auto/off/paths), `zip_lists` (auto/off/mappings), `choice_mode` (keep/unwrap_value/type_value), `rename_style` (none/snake_case), `drop_paths`, `keep_paths`, `max_depth`, `ambiguity_mode` (keep/error)
+- `hex_decode` transform — registered as `"hex_decode"`; decodes hex-string leaf values produced by `_to_json_safe()`; `mode: utf8_or_hex|latin1_or_hex|hex`; per-path `overrides` with `decode_as` and `format` (utf8, latin1, tbcd, bcd_semi_octet, packed, bit_string_bytes, tbcd_quarter_hour); does not re-invoke asn1tools
+
 ---
 
 ## [1.3.1] — 2026-04-20
