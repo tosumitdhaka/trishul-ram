@@ -507,8 +507,43 @@ class UnnestTransformConfig(BaseModel):
     on_non_dict: Literal["keep", "drop", "raise"] = "keep"
 
 
+class JsonFlattenZipMappingConfig(BaseModel):
+    labels: str
+    values: str
+    labels_output: str | None = None
+    values_output: str | None = None
+
+
+class JsonFlattenTransformConfig(BaseModel):
+    type: Literal["json_flatten"]
+    explode_mode: Literal["auto", "off", "paths"] = "auto"
+    explode_paths: list[str] = Field(default_factory=list)
+    zip_lists: Literal["auto", "off", "mappings"] = "auto"
+    zip_mappings: list[JsonFlattenZipMappingConfig] = Field(default_factory=list)
+    choice_mode: Literal["keep", "unwrap_value", "type_value"] = "type_value"
+    rename_style: Literal["none", "snake_case"] = "none"
+    drop_paths: list[str] = Field(default_factory=list)
+    keep_paths: list[str] = Field(default_factory=list)
+    max_depth: int = 0
+    ambiguity_mode: Literal["keep", "error"] = "keep"
+
+
+class HexDecodeOverrideConfig(BaseModel):
+    path: str
+    decode_as: str
+    format: str | None = None
+
+
+class HexDecodeTransformConfig(BaseModel):
+    type: Literal["hex_decode"]
+    mode: Literal["hex", "utf8_or_hex", "latin1_or_hex"] = "utf8_or_hex"
+    preserve_original: bool = False
+    original_suffix: str = "_hex"
+    overrides: list[HexDecodeOverrideConfig] = Field(default_factory=list)
+
+
 TransformConfig = Annotated[
-    RenameTransformConfig | CastTransformConfig | AddFieldTransformConfig | DropTransformConfig | ValueMapTransformConfig | FilterTransformConfig | FlattenTransformConfig | TimestampNormalizeTransformConfig | AggregateTransformConfig | EnrichTransformConfig | ExplodeTransformConfig | DeduplicateTransformConfig | RegexExtractTransformConfig | InjectMetaTransformConfig | TemplateTransformConfig | MaskTransformConfig | ValidateTransformConfig | SortTransformConfig | LimitTransformConfig | JmesPathExtractTransformConfig | UnnestTransformConfig,
+    RenameTransformConfig | CastTransformConfig | AddFieldTransformConfig | DropTransformConfig | ValueMapTransformConfig | FilterTransformConfig | FlattenTransformConfig | TimestampNormalizeTransformConfig | AggregateTransformConfig | EnrichTransformConfig | ExplodeTransformConfig | DeduplicateTransformConfig | RegexExtractTransformConfig | InjectMetaTransformConfig | TemplateTransformConfig | MaskTransformConfig | ValidateTransformConfig | SortTransformConfig | LimitTransformConfig | JmesPathExtractTransformConfig | UnnestTransformConfig | JsonFlattenTransformConfig | HexDecodeTransformConfig,
     Field(discriminator="type"),
 ]
 
@@ -1009,8 +1044,20 @@ class TextSerializerConfig(BaseModel):
 class Asn1SerializerConfig(BaseModel):
     type: Literal["asn1"]
     schema_file: str
-    message_class: str
+    message_class: str | None = None
+    message_classes: list[str] | None = None
     encoding: Literal["ber", "der", "per", "uper", "xer", "jer"] = "ber"
+    split_records: bool = False
+
+    @model_validator(mode="after")
+    def check_message_fields(self) -> Asn1SerializerConfig:
+        if bool(self.message_class) == bool(self.message_classes):
+            raise ValueError(
+                "Exactly one of 'message_class' or 'message_classes' must be provided"
+            )
+        if self.split_records and self.encoding != "ber":
+            raise ValueError("split_records is only supported when encoding='ber'")
+        return self
 
 
 class PmXmlSerializerConfig(BaseModel):
