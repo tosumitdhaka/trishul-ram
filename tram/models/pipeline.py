@@ -507,6 +507,70 @@ class UnnestTransformConfig(BaseModel):
     on_non_dict: Literal["keep", "drop", "raise"] = "keep"
 
 
+class CoalesceFieldRuleConfig(BaseModel):
+    sources: list[str]
+    default: Any | None = None
+    empty_values: list[Any] = Field(default_factory=lambda: [None, ""])
+
+    @field_validator("sources")
+    @classmethod
+    def validate_sources(cls, value: list[str]) -> list[str]:
+        if not value:
+            raise ValueError("sources must not be empty")
+        return value
+
+
+class CoalesceFieldsTransformConfig(BaseModel):
+    type: Literal["coalesce_fields"]
+    fields: dict[str, CoalesceFieldRuleConfig]
+
+
+class SelectFromListSelectionConfig(BaseModel):
+    name: str | None = None
+    match: dict[str, Any] | None = None
+    first_item: bool = False
+    output: dict[str, str]
+
+    @field_validator("output")
+    @classmethod
+    def validate_output(cls, value: dict[str, str]) -> dict[str, str]:
+        if not value:
+            raise ValueError("output must not be empty")
+        return value
+
+    @model_validator(mode="after")
+    def validate_selector_mode(self):
+        has_match = self.match is not None
+        has_first = self.first_item
+        if has_match == has_first:
+            raise ValueError("exactly one of match or first_item=true must be set")
+        return self
+
+
+class SelectFromListTransformConfig(BaseModel):
+    type: Literal["select_from_list"]
+    field: str
+    select: list[SelectFromListSelectionConfig]
+    on_no_match: Literal["null_fields", "raise"] = "null_fields"
+
+    @field_validator("select")
+    @classmethod
+    def validate_select_non_empty(cls, value: list[SelectFromListSelectionConfig]):
+        if not value:
+            raise ValueError("select must not be empty")
+        return value
+
+    @model_validator(mode="after")
+    def validate_duplicate_outputs(self):
+        seen: set[str] = set()
+        for selection in self.select:
+            for output_field in selection.output.values():
+                if output_field in seen:
+                    raise ValueError(f"duplicate output field '{output_field}' across selections")
+                seen.add(output_field)
+        return self
+
+
 class JsonFlattenZipMappingConfig(BaseModel):
     labels: str
     values: str
@@ -543,7 +607,7 @@ class HexDecodeTransformConfig(BaseModel):
 
 
 TransformConfig = Annotated[
-    RenameTransformConfig | CastTransformConfig | AddFieldTransformConfig | DropTransformConfig | ValueMapTransformConfig | FilterTransformConfig | FlattenTransformConfig | TimestampNormalizeTransformConfig | AggregateTransformConfig | EnrichTransformConfig | ExplodeTransformConfig | DeduplicateTransformConfig | RegexExtractTransformConfig | InjectMetaTransformConfig | TemplateTransformConfig | MaskTransformConfig | ValidateTransformConfig | SortTransformConfig | LimitTransformConfig | JmesPathExtractTransformConfig | UnnestTransformConfig | JsonFlattenTransformConfig | HexDecodeTransformConfig,
+    RenameTransformConfig | CastTransformConfig | AddFieldTransformConfig | DropTransformConfig | ValueMapTransformConfig | FilterTransformConfig | FlattenTransformConfig | TimestampNormalizeTransformConfig | AggregateTransformConfig | EnrichTransformConfig | ExplodeTransformConfig | DeduplicateTransformConfig | RegexExtractTransformConfig | InjectMetaTransformConfig | TemplateTransformConfig | MaskTransformConfig | ValidateTransformConfig | SortTransformConfig | LimitTransformConfig | JmesPathExtractTransformConfig | UnnestTransformConfig | CoalesceFieldsTransformConfig | SelectFromListTransformConfig | JsonFlattenTransformConfig | HexDecodeTransformConfig,
     Field(discriminator="type"),
 ]
 

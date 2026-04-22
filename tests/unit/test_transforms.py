@@ -33,6 +33,30 @@ class TestRenameTransform:
         t = RenameTransform({"fields": {"a": "b"}})
         assert t.apply([]) == []
 
+    def test_renames_nested_to_top_level(self):
+        t = RenameTransform({"fields": {"a.b": "new"}})
+        result = t.apply([{"a": {"b": 1}, "x": 2}])
+        assert result == [{"a": {}, "new": 1, "x": 2}]
+
+    def test_renames_top_level_to_nested(self):
+        t = RenameTransform({"fields": {"a": "b.c"}})
+        result = t.apply([{"a": 1, "x": 2}])
+        assert result == [{"b": {"c": 1}, "x": 2}]
+
+    def test_renames_nested_to_nested(self):
+        t = RenameTransform({"fields": {"a.b": "c.d"}})
+        result = t.apply([{"a": {"b": 1}, "x": 2}])
+        assert result == [{"a": {}, "c": {"d": 1}, "x": 2}]
+
+    def test_overlapping_source_paths_raise_on_init(self):
+        with pytest.raises(TransformError):
+            RenameTransform({"fields": {"a": "x", "a.b": "y"}})
+
+    def test_destination_non_dict_intermediate_raises(self):
+        t = RenameTransform({"fields": {"a": "b.c"}})
+        with pytest.raises(TransformError):
+            t.apply([{"a": 1, "b": 5}])
+
 
 # ── CastTransform ──────────────────────────────────────────────────────────
 
@@ -84,6 +108,11 @@ class TestCastTransform:
     def test_unknown_type_raises_on_init(self):
         with pytest.raises(TransformError):
             CastTransform({"fields": {"x": "uuid"}})
+
+    def test_cast_nested_field(self):
+        t = CastTransform({"fields": {"a.b": "int"}})
+        result = t.apply([{"a": {"b": "42"}}])
+        assert result == [{"a": {"b": 42}}]
 
 
 # ── AddFieldTransform ──────────────────────────────────────────────────────
@@ -138,6 +167,11 @@ class TestDropTransform:
         t = DropTransform({"fields": ["a"]})
         assert t.apply([]) == []
 
+    def test_drops_nested_field(self):
+        t = DropTransform({"fields": ["a.b"]})
+        result = t.apply([{"a": {"b": 1, "c": 2}, "x": 3}])
+        assert result == [{"a": {"c": 2}, "x": 3}]
+
 
 # ── ValueMapTransform ──────────────────────────────────────────────────────
 
@@ -173,6 +207,11 @@ class TestValueMapTransform:
         t = ValueMapTransform({"field": "severity", "mapping": {"1": "CRITICAL"}})
         result = t.apply([{"other": "x"}])
         assert result == [{"other": "x"}]
+
+    def test_maps_nested_field(self):
+        t = ValueMapTransform({"field": "a.severity", "mapping": {"1": "CRITICAL"}})
+        result = t.apply([{"a": {"severity": "1"}}])
+        assert result == [{"a": {"severity": "CRITICAL"}}]
 
 
 # ── FilterRowsTransform ────────────────────────────────────────────────────

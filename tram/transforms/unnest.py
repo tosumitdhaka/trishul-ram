@@ -2,9 +2,12 @@
 
 from __future__ import annotations
 
+from copy import deepcopy
+
 from tram.core.exceptions import TransformError
 from tram.interfaces.base_transform import BaseTransform
 from tram.registry.registry import register_transform
+from tram.transforms.path_utils import delete_path, get_path
 
 
 @register_transform("unnest")
@@ -39,7 +42,11 @@ class UnnestTransform(BaseTransform):
     def apply(self, records: list[dict]) -> list[dict]:
         result = []
         for record in records:
-            val = record.get(self.field)
+            found, val = get_path(record, self.field)
+
+            if not found:
+                result.append(record)
+                continue
 
             if not isinstance(val, dict):
                 if self.on_non_dict == "keep":
@@ -53,9 +60,9 @@ class UnnestTransform(BaseTransform):
                     )
                 continue
 
-            new_record = dict(record)
-            if self.drop_source and self.field in new_record:
-                del new_record[self.field]
+            new_record = deepcopy(record)
+            if self.drop_source:
+                delete_path(new_record, self.field)
             for k, v in val.items():
                 new_record[self.prefix + k] = v
             result.append(new_record)

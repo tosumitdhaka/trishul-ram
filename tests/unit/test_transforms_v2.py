@@ -59,6 +59,21 @@ class TestExplodeTransform:
         with pytest.raises(TransformError):
             ExplodeTransform({})
 
+    def test_explode_nested_dicts(self):
+        t = ExplodeTransform({"field": "a.items"})
+        records = [{"id": 1, "a": {"items": [{"name": "foo"}, {"name": "bar"}]}}]
+        result = t.apply(records)
+        assert result == [{"id": 1, "a": {}, "name": "foo"}, {"id": 1, "a": {}, "name": "bar"}]
+
+    def test_explode_nested_scalars_keep_source_writes_back_nested(self):
+        t = ExplodeTransform({"field": "a.items", "drop_source": False})
+        records = [{"id": 1, "a": {"items": ["x", "y"]}}]
+        result = t.apply(records)
+        assert result == [
+            {"id": 1, "a": {"items": "x"}},
+            {"id": 1, "a": {"items": "y"}},
+        ]
+
 
 # ── DeduplicateTransform ──────────────────────────────────────────────────────
 

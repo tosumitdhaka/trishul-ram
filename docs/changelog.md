@@ -51,6 +51,19 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - `json_flatten` transform — registered as `"json_flatten"`; recursively flattens nested dicts/lists with dotted-key output; options: `explode_mode` (auto/off/paths), `zip_lists` (auto/off/mappings), `choice_mode` (keep/unwrap_value/type_value), `rename_style` (none/snake_case), `drop_paths`, `keep_paths`, `max_depth`, `ambiguity_mode` (keep/error)
 - `hex_decode` transform — registered as `"hex_decode"`; decodes hex-string leaf values produced by `_to_json_safe()`; `mode: utf8_or_hex|latin1_or_hex|hex`; per-path `overrides` with `decode_as` and `format` (utf8, latin1, tbcd, bcd_semi_octet, packed, bit_string_bytes, tbcd_quarter_hour); does not re-invoke asn1tools
 
+**CDR record shaping — dotted-path transform support**
+- Shared `tram/transforms/path_utils.py` — `get_path`, `set_path`, `delete_path`, `rename_path` helpers with consistent dict-only traversal semantics; used by all path-aware transforms
+- `unnest`, `explode`, `drop`, `rename`, `value_map`, `cast` — all `field`/`fields` config keys now accept dotted paths (`a.b.c`); plain top-level keys unchanged; list-index syntax not supported
+- `unnest`: missing nested path passes through unchanged; only present non-dict values trigger `on_non_dict` behavior
+- `explode`: scalar elements in nested lists write back via `set_path` to the correct nested location
+- `rename`: prefix-overlap detection at init time raises `TransformError` for conflicting source paths; both source and destination may be dotted
+- All path-mutating transforms use `deepcopy` per record to prevent nested mutation leaking across output rows
+
+**CDR record shaping — new primitives**
+- `select_from_list` transform — selects elements from a list field by exact-match predicate or `first_item: true` without exploding the record; multi-select in one invocation via `select: [...]`; projects element fields to top-level output names; `on_no_match: null_fields|raise` (default `null_fields`); `name` optional for error context; duplicate output fields across selections rejected at config load
+- `coalesce_fields` transform — writes each output field from the first non-empty candidate path in `sources`; default `empty_values` is `[null, ""]`; `default` used when all candidates miss
+- Both transforms registered in `tram/transforms/__init__.py` and included in the `TransformConfig` union in `pipeline.py`
+
 ---
 
 ## [1.3.1] — 2026-04-20

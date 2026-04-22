@@ -3,11 +3,13 @@
 from __future__ import annotations
 
 import logging
+from copy import deepcopy
 from datetime import datetime
 
 from tram.core.exceptions import TransformError
 from tram.interfaces.base_transform import BaseTransform
 from tram.registry.registry import register_transform
+from tram.transforms.path_utils import get_path, set_path
 
 logger = logging.getLogger(__name__)
 
@@ -54,13 +56,14 @@ class CastTransform(BaseTransform):
     def apply(self, records: list[dict]) -> list[dict]:
         result = []
         for record in records:
-            new_record = dict(record)
+            new_record = deepcopy(record)
             for field, target_type in self.fields.items():
-                if field not in new_record:
+                found, value = get_path(new_record, field)
+                if not found:
                     continue
                 caster = _CASTERS[target_type]
                 try:
-                    new_record[field] = caster(new_record[field])
+                    set_path(new_record, field, caster(value), create_missing=True)
                 except (TransformError, ValueError, TypeError) as exc:
                     raise TransformError(
                         f"Failed to cast field '{field}' to {target_type}: {exc}"
