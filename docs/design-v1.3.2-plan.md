@@ -874,10 +874,16 @@ of byte-derived hex-string values.
 
 **Input model:** by the time records reach transforms, `_to_json_safe()` in the ASN.1 serializer
 has already converted `bytes` values to lowercase hex strings. D2 therefore does **not** operate
-on Python `bytes`; it operates on strings that may represent hex-encoded binary values. Every
-override path first converts `value -> bytes.fromhex(value)` before applying a semantic codec.
-Heuristic text decoding likewise means "decode the hex string as bytes, then try UTF-8 /
+on Python `bytes`; it operates on scalar strings that may represent hex-encoded binary values.
+Every override path first converts `value -> bytes.fromhex(value)` before applying a semantic
+codec. Heuristic text decoding likewise means "decode the hex string as bytes, then try UTF-8 /
 Latin-1."
+
+**Scope boundary:** `hex_decode` is not a second ASN.1 decoder. It does not re-run `asn1tools`
+against nested BER fragments and it does not interpret structured wrapper objects such as
+CHOICE dicts directly. Container selection / structural navigation belongs to `json_flatten`
+and explicit path targeting. `hex_decode` is for leaf values that are already scalar hex
+strings.
 
 Planned generic behavior:
 - default safe heuristics: decode printable UTF-8 / Latin-1 text; otherwise keep hex
@@ -895,9 +901,9 @@ transforms:
       - path: recordOpeningTime
         decode_as: timestamp
         format: bcd_semi_octet
-      - path: pGWAddress
+      - path: pGWAddress.value.value
         decode_as: ip
-        format: asn1_choice
+        format: packed
       - path: mSTimeZone
         decode_as: timezone
         format: tbcd_quarter_hour
@@ -925,8 +931,8 @@ Planned built-in wire formats include:
 - `latin1`
 - `tbcd`
 - `bcd_semi_octet`
-- `asn1_choice`
-- `asn1_bit_string`
+- `packed`
+- `bit_string_bytes`
 - `tbcd_quarter_hour`
 
 These codecs are allowed to include IETF / 3GPP / ASN.1 reusable wire encodings. D2 does not
