@@ -2,11 +2,8 @@
 from __future__ import annotations
 
 import threading
-import time
 from datetime import UTC, datetime
 from unittest.mock import MagicMock, patch
-
-import pytest
 
 from tram.agent.stats_store import StatsStore
 from tram.pipeline.controller import PipelineController, _LocalRun
