@@ -230,9 +230,11 @@ These fields are set per-pipeline in the pipeline YAML (not environment variable
 |-------|---------|-------------|
 | `thread_workers` | `1` | Worker threads for parallel chunk processing (batch + stream) |
 | `batch_size` | _(none)_ | Stop after N records per run; useful for controlled catch-up |
+| `record_chunk_size` | _(none)_ | Serial batch mode only: process decoded records in bounded windows instead of one large list; useful for large ASN.1/file inputs |
 | `on_error` | `continue` | Error policy: `continue` \| `abort` \| `retry` \| `dlq` |
 | `skip_processed` | `false` | On file/object sources: skip files already processed |
 | `parallel_sinks` | `false` | Fan out to all sinks concurrently via thread pool |
+| `post_batch_cleanup` | `false` | After batch completion, optionally run `gc.collect()` plus best-effort heap trim; useful for memory-heavy one-shot file pipelines on shared workers |
 
 ### Per-sink reliability fields (v1.0.0)
 
@@ -488,7 +490,7 @@ TRAM ships a production-ready Helm chart in `helm/`. Published to GHCR OCI on ev
 
 ### Install
 
-Quick-start examples below use `latest`. For production, pin `image.tag` and worker image tags to a specific release such as `1.3.1`.
+Quick-start examples below use `latest`. For production, pin `image.tag` and worker image tags to a specific release such as `1.3.2`.
 
 ```bash
 # Add chart from OCI registry

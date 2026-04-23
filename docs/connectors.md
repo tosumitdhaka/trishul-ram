@@ -56,6 +56,9 @@ pipeline:
       # ... sink params
 
   on_error: continue           # continue | abort | retry | dlq
+  # batch_size: 100000         # optional hard cap per batch run
+  # record_chunk_size: 500     # serial batch only; bounded decode windows for large files
+  # post_batch_cleanup: true   # optional gc + heap trim after batch completion
 
   dlq:                         # dead-letter queue for failed records
     type: local
@@ -280,7 +283,10 @@ source:
 ### syslog
 
 Receives syslog messages over UDP or TCP. Stream mode.
-In manager mode, `syslog` is blocked in v1.3.0 because the UDP push-source architecture is not ready yet; use standalone mode or wait for v1.3.1 broadcast support.
+In manager mode, `syslog` multi-worker streams are supported in `1.3.2+`, but UDP ingress must
+go through a per-pipeline Kubernetes Service. Set `kubernetes.enabled: true` on the pipeline;
+`workers.count: all` uses the shared worker selector path, while `workers.count: N` and
+`workers.list` use manual Endpoints pinned to the dispatched workers.
 
 | Parameter | Default | Description |
 |---|---|---|
@@ -301,7 +307,10 @@ source:
 ### snmp_trap
 
 Receives SNMP v1/v2c/v3 traps. Stream mode. Requires `pip install tram[snmp]`.
-In manager mode, `snmp_trap` is blocked in v1.3.0 because the UDP push-source architecture is not ready yet; use standalone mode or wait for v1.3.1 broadcast support.
+In manager mode, `snmp_trap` multi-worker streams are supported in `1.3.2+`, but UDP ingress
+must go through a per-pipeline Kubernetes Service. Set `kubernetes.enabled: true` on the
+pipeline; `workers.count: all` uses the shared worker selector path, while `workers.count: N`
+and `workers.list` use manual Endpoints pinned to the dispatched workers.
 
 | Parameter | Default | Description |
 |---|---|---|
@@ -817,6 +826,7 @@ Notes:
 - Field tokens such as `{field.nf_name}` trigger executor-side partitioning before serialization. Each distinct field value gets its own active file/object path; missing values use `unknown`.
 - `csv` and `ndjson` support append/rolling naturally.
 - `json` file sinks are forced to `file_mode=single`; rolling with `max_records`, `max_time`, or `max_bytes` is rejected because plain JSON arrays are not append-safe.
+- in serial batch runs, staged safe-finalize for record-safe serializers (`csv`, `ndjson`) publishes only on source-file success; failure removes the current run temp file, and reruns discard stale temp siblings for the same final filename before writing
 - When rolling is enabled and the template lacks a strong uniqueness token (`{part}`, `{index}`, or `{epoch_m}`), TRAM auto-appends `_{part}` and logs a warning to avoid filename collisions.
 - Risky field choices like `{field.timestamp}` or `{field.value}` are allowed but produce a lint warning because they may create runaway file counts.
 
@@ -858,6 +868,7 @@ Notes:
 - `csv` append strips repeated headers after the first file write.
 - `ndjson` append preserves newline-delimited framing automatically.
 - `json` file sinks are forced to `file_mode=single`; rolling with `max_records`, `max_time`, or `max_bytes` is rejected.
+- in serial batch runs, staged safe-finalize for record-safe serializers (`csv`, `ndjson`) publishes only on source-file success; failure removes the current run temp file, and reruns discard stale temp siblings for the same final filename before writing
 
 ```yaml
 sinks:
@@ -1483,8 +1494,12 @@ Deserialize only (`serializer_in`) — use `serializer_out: type: json` (or anot
 | Parameter | Default | Description |
 |---|---|---|
 | `schema_file` | required | Path to `.asn` file **or** directory of `.asn` files (compiled together) |
-| `message_class` | required | Top-level ASN.1 type name to decode |
+| `message_class` | required* | Top-level ASN.1 type name to decode |
+| `message_classes` | `null` | Optional ordered fallback list of top-level ASN.1 types to try per record |
 | `encoding` | `ber` | `ber` \| `der` \| `per` \| `uper` \| `xer` \| `jer` |
+| `split_records` | `false` | BER only: split concatenated top-level TLVs and decode each separately |
+
+\* Exactly one of `message_class` or `message_classes` must be provided.
 
 **Type mapping:**
 
@@ -1499,12 +1514,32 @@ Deserialize only (`serializer_in`) — use `serializer_out: type: json` (or anot
 
 **Multi-file schemas:** point `schema_file` at a directory and all `.asn` files in it are compiled together (imports resolved across files).
 
+**Concatenated BER files:** set `split_records: true` to walk the BER stream and decode one
+top-level TLV at a time. This is useful for CDR-style files that concatenate many ASN.1 records
+into a single file.
+
 ```yaml
 serializer_in:
   type: asn1
   schema_file: /data/schemas/ericsson/3gpp_32401.asn
   message_class: FileContent
   encoding: ber
+  split_records: false
+
+serializer_out:
+  type: json
+  indent: 2
+```
+
+Ordered root-type fallback:
+
+```yaml
+serializer_in:
+  type: asn1
+  schema_file: /data/schemas/asn1/ericsson/sgw-CDRFR9OLD.asn
+  message_classes: [CallEventRecord, GPRSRecord]
+  encoding: ber
+  split_records: true
 
 serializer_out:
   type: json

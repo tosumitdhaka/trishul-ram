@@ -9,12 +9,86 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ---
 
+## [1.3.2] — 2026-04-21
+
+### Added
+
+**Standalone live stats parity**
+- Local stream runs on standalone deployments now create a `PipelineStats` entry in `StatsStore`; `GET /api/pipelines/{name}/placement` returns a synthetic single-slot view instead of 404
+- A background stats loop emits live `uptime_seconds` updates; a lock-guarded race fix prevents a stopped stream from being re-inserted after exit
+- Stats loop is suppressed in manager mode (worker stats flow through the normal stats callback path)
+
+**Manager operational metrics**
+- 8 new `tram_mgr_*` Prometheus series: `tram_mgr_dispatch_total`, `tram_mgr_redispatch_total`, `tram_mgr_reconcile_action_total`, `tram_mgr_placement_status`, `tram_mgr_worker_healthy`, `tram_mgr_worker_total`, `tram_mgr_run_complete_received_total`, `tram_mgr_pipeline_stats_received_total`
+- All series have `_NoOp` fallbacks when `prometheus_client` is not installed; `/metrics` returns 503 with install hint instead of 500
+- `/metrics` docstring clarifies that series are process-local to the manager; worker execution metrics require scraping each worker pod
+
+**UDP multi-worker streams**
+- `syslog` and `snmp_trap` sources now support `kubernetes: enabled: true` in manager mode; `KubernetesServiceManager.is_eligible` extended to all push sources
+- UDP Services use `protocol: UDP`; service/target port derived from `source.port` (fallback: 514 for syslog, 162 for snmp_trap); overridable via `kubernetes.port` / `kubernetes.target_port`
+- `count: N` and `workers.list` use manual `Endpoints` objects targeting only dispatched worker pods; `count: all` uses the broad worker label selector
+- `KubernetesServiceConfig` gains optional `port`, `target_port`, `load_balancer_ip`, `annotations` fields; `ClusterIP` added as valid `service_type`
+- `delete_service()` now cleans up manual `Endpoints` for both `workers.list` and `count: N` pipelines
+
+**Large-batch resilience**
+- `BatchReconciler` now runs alongside `PlacementReconciler` so the manager can scan worker `/agent/status`, adopt orphaned running batch runs after restart, and synthesize failures when a worker-owned batch run disappears before callback
+- batch run completion paths now reuse the normal controller finalization logic, so manual, interval, and cron pipelines keep the same status transitions even when a lost run is reconciled instead of completing normally
+- `record_chunk_size` was added to pipeline config for bounded record windows in serial batch runs; serializers can implement `parse_chunks(data, record_chunk_size)` and the ASN.1 serializer now decodes concatenated BER payloads incrementally instead of materializing one giant list first
+
+### Changed
+
+**Linter rules**
+- L008 removed (was blocking all UDP push sources in manager mode)
+- L012 added (error): UDP push sources in manager mode require `kubernetes: enabled: true` — no pre-existing shared UDP ingress exists in the worker chart
+- L006 updated: `kubernetes: enabled: true` now permits `count: N` and `workers.list` in addition to `count: all`; the controller threads `dispatched_worker_ids` into the service manager to avoid over-selection
+
+**Safe staged file output cleanup**
+- local and SFTP sinks now delete their run-scoped staged temp file on `finalize_source(..., success=False)` instead of leaving it behind
+- when a new staged write begins for the same deterministic final filename, stale `.tram-*.tmp` artifacts from failed prior attempts are discarded before the new run writes
+- staged safe-finalize is applied only to record-safe serializers (`csv`, `ndjson`) in the serial batch path and publishes output only after a source file completes successfully
+
+**Optional post-batch heap cleanup**
+- batch-mode heap cleanup is now pipeline-controlled via `post_batch_cleanup: true` instead of being enabled globally for every batch run
+- when enabled, the executor performs `gc.collect()` and best-effort `malloc_trim(0)` after the batch result is finalized; default remains off to avoid surprising process-wide pauses on shared workers
+
+### Validated
+
+- kind cluster: `snmp_trap → file` with `count: all` — NodePort UDP Service created; ECMP routes each sender consistently to one worker
+- kind cluster: `snmp_trap → file` with `count: 2` — manual Endpoints target exactly the 2 dispatched worker pods
+- kind cluster: `webhook` with `count: 2` + `kubernetes: enabled: true` — no L006; HTTP Endpoints target exactly 2 workers (HTTP regression confirmed)
+- kind cluster: `snmp_trap` without kubernetes block — L012 fires; add block — L012 clears, no L008
+
+**ASN.1 structured decode flattening**
+- `split_records: true` on the `asn1` serializer splits concatenated BER files into individual top-level TLV records before decode; supports short-form, long-form, and indefinite-length (0x80) encodings
+- `message_classes: [...]` accepts an ordered fallback list of root ASN.1 types; all-fail raises `SerializerError` and routes to DLQ; mutually exclusive with the existing `message_class` field
+- `bytearray` values are now hex-stringified in `_to_json_safe()` alongside `bytes`
+- `json_flatten` transform — now uses the explicit ordered row-shaping contract for nested payloads with `explode_paths`, `zip_groups`, `choice_unwrap`, final dotted-key flattening, and `drop_paths` on flattened keys; this replaces the earlier heuristic `explode_mode` / `zip_lists` behavior
+- `hex_decode` transform — registered as `"hex_decode"`; decodes hex-string leaf values produced by `_to_json_safe()`; `mode: utf8_or_hex|latin1_or_hex|hex`; per-path `overrides` with `decode_as`, `format`, optional `bit_length_field`, optional bit-index `mapping`, and `output` for `bit_flags` (`names|indexes|both`); does not re-invoke asn1tools
+
+**CDR record shaping — dotted-path transform support**
+- Shared `tram/transforms/path_utils.py` — `get_path`, `set_path`, `delete_path`, `rename_path` helpers with consistent dict-only traversal semantics; used by all path-aware transforms
+- `unnest`, `explode`, `drop`, `rename`, `value_map`, `cast` — all `field`/`fields` config keys now accept dotted paths (`a.b.c`); plain top-level keys unchanged; list-index syntax not supported
+- `project` transform — declarative final-schema extraction/rename step with compact `output: source.path` form plus expanded `source`, `source_any`, `default`, and `required` options
+- `unnest`: missing nested path passes through unchanged; only present non-dict values trigger `on_non_dict` behavior
+- `explode`: scalar elements in nested lists write back via `set_path` to the correct nested location
+- `rename`: prefix-overlap detection at init time raises `TransformError` for conflicting source paths; both source and destination may be dotted
+- All path-mutating transforms use `deepcopy` per record to prevent nested mutation leaking across output rows
+
+**CDR record shaping — new primitives**
+- `select_from_list` transform — selects elements from a list field by exact-match predicate or `first_item: true` without exploding the record; multi-select in one invocation via `select: [...]`; projects element fields to top-level output names; `on_no_match: null_fields|raise` (default `null_fields`); `name` optional for error context; duplicate output fields across selections rejected at config load
+- `coalesce_fields` transform — writes each output field from the first non-empty candidate path in `sources`; default `empty_values` is `[null, ""]`; `default` used when all candidates miss
+- `drop` transform — `fields` now accepts either `list[str]` for unconditional drops or `dict[path, list[value]]` for conditional drops; conditional matching supports dotted paths and removes a field only when its value equals one of the configured values
+- light path-pattern support — `hex_decode.overrides[].path` and `json_flatten.drop_paths` now accept simple single-segment `*` wildcards; exact path matches keep precedence over wildcard rules
+- Both transforms registered in `tram/transforms/__init__.py` and included in the `TransformConfig` union in `pipeline.py`
+
+---
+
 ## [1.3.1] — 2026-04-20
 
 ### Added
 
 **Placement and K8s exposure for push streams**
-- `workers.count: N` and `workers.list` placement behavior is now implemented for broadcast-capable push streams in manager mode
+- `workers.count: N` and `workers.list` placement behavior is now implemented for multi-worker push streams in manager mode
 - Dedicated per-pipeline Kubernetes Service provisioning is now available for active `webhook` and `prometheus_rw` stream pipelines
 - `workers.list` dedicated Services use explicit `Endpoints` targeting only the selected worker pods
 
@@ -51,15 +125,15 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Added
 
-**Broadcast streams for HTTP push sources**
-- `workers:` config now supports broadcast placement for `webhook` and `prometheus_rw` in manager mode, defaulting those sources to `count: all`
-- `WorkerPool.multi_dispatch()` and broadcast placement tracking allow a single stream pipeline to run across all healthy workers
+**Multi-worker streams for HTTP push sources**
+- `workers:` config now supports multi-worker placement for `webhook` and `prometheus_rw` in manager mode, defaulting those sources to `count: all`
+- `WorkerPool.multi_dispatch()` and placement tracking allow a single stream pipeline to run across all healthy workers
 - New placement visibility endpoints:
   - `GET /api/pipelines/{name}/placement`
   - `GET /api/cluster/streams`
 
 **Placement persistence and reconciliation**
-- Active broadcast placements are persisted in `broadcast_placements`
+- Active multi-worker placements are persisted in `broadcast_placements`
 - `PlacementReconciler` detects stale slots, re-dispatches recovered workers, and restores placement state after manager restart
 - Placement slot metadata now persists immutable `run_id_prefix` and mutable `current_run_id`
 
@@ -86,8 +160,8 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Fixed
 
-- Broadcast stream slot completion no longer drives the pipeline state machine while sibling slots are still running
-- Intermediate broadcast slot completion no longer evicts stats too early and trigger re-dispatch storms
+- Multi-worker stream slot completion no longer drives the pipeline state machine while sibling slots are still running
+- Intermediate placement slot completion no longer evicts stats too early and trigger re-dispatch storms
 - Stream run completion now persists final counters instead of zero totals in run history
 
 ### Tests
@@ -1279,7 +1353,8 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 ---
 
 <!-- Comparison links -->
-[Unreleased]: https://github.com/tosumitdhaka/trishul-ram/compare/v1.3.1...HEAD
+[Unreleased]: https://github.com/tosumitdhaka/trishul-ram/compare/v1.3.2...HEAD
+[1.3.2]: https://github.com/tosumitdhaka/trishul-ram/compare/v1.3.1...v1.3.2
 [1.3.1]: https://github.com/tosumitdhaka/trishul-ram/compare/v1.3.0...v1.3.1
 [1.3.0]: https://github.com/tosumitdhaka/trishul-ram/compare/v1.2.3...v1.3.0
 [1.2.3]: https://github.com/tosumitdhaka/trishul-ram/compare/v1.2.2...v1.2.3

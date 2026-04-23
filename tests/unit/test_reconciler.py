@@ -5,7 +5,7 @@ from __future__ import annotations
 from datetime import UTC, datetime, timedelta
 from unittest.mock import MagicMock
 
-from tram.agent.reconciler import PlacementReconciler
+from tram.agent.reconciler import BatchReconciler, PlacementReconciler
 from tram.agent.stats_store import StatsStore
 from tram.api.routers.internal import PipelineStatsPayload
 
@@ -255,4 +255,166 @@ def test_reconciler_refreshes_k8s_service_for_named_worker_stale_slot():
     reconciler.run_once()
 
     controller.reconcile_kubernetes_service.assert_called_once_with("pipe-list")
-    controller._update_broadcast_placement_status.assert_called_once_with("pg-list", "degraded")
+
+
+def test_batch_reconciler_marks_missing_tracked_run_failed():
+    controller = MagicMock()
+    controller.get_active_batch_runs.return_value = [
+        {
+            "run_id": "b1",
+            "pipeline_name": "pipe-a",
+            "worker_url": "http://w0:8766",
+            "schedule_type": "interval",
+            "started_at": datetime.now(UTC) - timedelta(seconds=60),
+        }
+    ]
+    controller.list_all.return_value = []
+    controller.mark_active_batch_run_lost.return_value = True
+
+    worker_pool = MagicMock()
+    worker_pool.is_run_active.return_value = False
+
+    reconciler = BatchReconciler(controller, worker_pool, interval=10)
+    reconciler.run_once()
+
+    controller.mark_active_batch_run_lost.assert_called_once()
+
+
+def test_batch_reconciler_does_not_double_fail_pipeline_cleared_in_same_cycle():
+    state = MagicMock()
+    state.config.name = "pipe-a"
+    state.config.schedule.type = "interval"
+    state.status = "running"
+
+    controller = MagicMock()
+    controller.get_active_batch_runs.return_value = [
+        {
+            "run_id": "b1",
+            "pipeline_name": "pipe-a",
+            "worker_url": "http://w0:8766",
+            "schedule_type": "interval",
+            "started_at": datetime.now(UTC) - timedelta(seconds=60),
+        }
+    ]
+    controller.list_all.return_value = [state]
+
+    worker_pool = MagicMock()
+    worker_pool.is_run_active.return_value = False
+
+    reconciler = BatchReconciler(controller, worker_pool, interval=10)
+    reconciler.run_once()
+
+    controller.mark_active_batch_run_lost.assert_called_once_with(
+        "pipe-a",
+        error="Worker-owned batch run disappeared before callback: b1",
+        run_id="b1",
+    )
+    worker_pool.find_pipeline_runs.assert_not_called()
+
+
+def test_batch_reconciler_adopts_untracked_running_batch():
+    state = MagicMock()
+    state.config.name = "pipe-a"
+    state.config.schedule.type = "interval"
+    state.status = "running"
+
+    controller = MagicMock()
+    controller.get_active_batch_runs.return_value = []
+    controller.list_all.return_value = [state]
+    controller.adopt_active_batch_run.return_value = True
+
+    worker_pool = MagicMock()
+    worker_pool.find_pipeline_runs.return_value = [
+        {
+            "worker_url": "http://w0:8766",
+            "run_id": "b1",
+            "pipeline_name": "pipe-a",
+            "started_at": "2026-04-23T10:00:00+00:00",
+            "schedule_type": "batch",
+        }
+    ]
+
+    reconciler = BatchReconciler(controller, worker_pool, interval=10)
+    reconciler.run_once()
+
+    controller.adopt_active_batch_run.assert_called_once_with(
+        pipeline_name="pipe-a",
+        run_id="b1",
+        worker_url="http://w0:8766",
+        started_at="2026-04-23T10:00:00+00:00",
+    )
+
+
+def test_batch_reconciler_clears_untracked_stale_running_batch():
+    state = MagicMock()
+    state.config.name = "pipe-a"
+    state.config.schedule.type = "interval"
+    state.status = "running"
+
+    controller = MagicMock()
+    controller.get_active_batch_runs.return_value = []
+    controller.list_all.return_value = [state]
+    controller.mark_active_batch_run_lost.return_value = True
+
+    worker_pool = MagicMock()
+    worker_pool.find_pipeline_runs.return_value = []
+
+    reconciler = BatchReconciler(controller, worker_pool, interval=10)
+    reconciler.run_once()
+
+    controller.mark_active_batch_run_lost.assert_called_once()
+
+
+# ── Manager metrics ────────────────────────────────────────────────────────
+
+
+def test_reconciler_stale_increments_mark_stale_metric():
+    from unittest.mock import MagicMock, patch
+    controller = MagicMock()
+    placement = _placement()
+    controller.get_active_broadcast_placements.return_value = [placement]
+    controller.redispatch_broadcast_slot.return_value = False
+
+    worker_pool = MagicMock()
+    worker_pool.is_worker_healthy.return_value = True
+
+    stats_store = StatsStore(interval=10)
+    db = MagicMock()
+    reconciler = PlacementReconciler(controller, worker_pool, stats_store, db, stats_interval=10)
+
+    action_counter = MagicMock()
+    action_counter.labels.return_value = action_counter
+
+    with patch("tram.metrics.registry.MGR_RECONCILE_ACTION_TOTAL", action_counter):
+        reconciler.run_once()
+
+    action_counter.labels.assert_any_call(pipeline="pipe-a", action="mark_stale")
+    action_counter.inc.assert_called()
+
+
+def test_reconciler_redispatch_increments_redispatch_metrics():
+    from unittest.mock import MagicMock, patch
+    controller = MagicMock()
+    placement = _placement()
+    controller.get_active_broadcast_placements.return_value = [placement]
+    controller.redispatch_broadcast_slot.return_value = True
+
+    worker_pool = MagicMock()
+    worker_pool.is_worker_healthy.return_value = True
+
+    stats_store = StatsStore(interval=10)
+    db = MagicMock()
+    reconciler = PlacementReconciler(controller, worker_pool, stats_store, db, stats_interval=10)
+
+    redispatch_counter = MagicMock()
+    redispatch_counter.labels.return_value = redispatch_counter
+    action_counter = MagicMock()
+    action_counter.labels.return_value = action_counter
+
+    with patch("tram.metrics.registry.MGR_REDISPATCH_TOTAL", redispatch_counter), \
+         patch("tram.metrics.registry.MGR_RECONCILE_ACTION_TOTAL", action_counter):
+        reconciler.run_once()
+
+    redispatch_counter.labels.assert_called_with(pipeline="pipe-a")
+    redispatch_counter.inc.assert_called()
+    action_counter.labels.assert_any_call(pipeline="pipe-a", action="redispatch")

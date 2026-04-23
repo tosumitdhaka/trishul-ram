@@ -152,6 +152,36 @@ def test_invalid_pipeline_name_raises():
         load_pipeline_from_yaml(yaml_text)
 
 
+def test_loader_coerces_hex_decode_bit_flag_mapping_keys_to_ints():
+    yaml_text = textwrap.dedent("""
+        pipeline:
+          name: test-hex-decode-mapping
+          source:
+            type: local
+            path: /tmp/in
+          serializer_in:
+            type: json
+          transforms:
+            - type: hex_decode
+              mode: hex
+              overrides:
+                - path: service_condition_change_hex
+                  decode_as: bit_flags
+                  bit_length_field: service_condition_change_bits
+                  mapping:
+                    0: qosChange
+                    1: tariffTime
+          serializer_out:
+            type: json
+          sink:
+            type: local
+            path: /tmp/out
+    """)
+    config = load_pipeline_from_yaml(yaml_text)
+    override = config.transforms[0].overrides[0]
+    assert override.mapping == {0: "qosChange", 1: "tariffTime"}
+
+
 def test_file_sink_json_output_forces_single_mode():
     yaml_text = textwrap.dedent("""
         pipeline:

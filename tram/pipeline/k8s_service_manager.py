@@ -1,4 +1,4 @@
-"""Kubernetes Service lifecycle helper for pipeline-owned HTTP push endpoints."""
+"""Kubernetes Service lifecycle helper for pipeline-owned push endpoints (HTTP and UDP)."""
 
 from __future__ import annotations
 
@@ -14,6 +14,9 @@ if TYPE_CHECKING:
 logger = logging.getLogger(__name__)
 
 HTTP_PUSH_SOURCES = {"webhook", "prometheus_rw"}
+UDP_PUSH_SOURCES = {"syslog", "snmp_trap"}
+ALL_PUSH_SOURCES = HTTP_PUSH_SOURCES | UDP_PUSH_SOURCES
+UDP_PORT_DEFAULTS = {"syslog": 514, "snmp_trap": 162}
 _NAMESPACE_FILE = "/var/run/secrets/kubernetes.io/serviceaccount/namespace"
 
 
@@ -84,16 +87,18 @@ class KubernetesServiceManager:
             and config.kubernetes is not None
             and config.kubernetes.enabled
             and config.schedule.type == "stream"
-            and config.source.type in HTTP_PUSH_SOURCES
+            and config.source.type in ALL_PUSH_SOURCES
         )
 
-    def ensure_service(self, config: PipelineConfig) -> None:
+    def ensure_service(
+        self, config: PipelineConfig, dispatched_worker_ids: list[str] | None = None
+    ) -> None:
         if not self.is_eligible(config):
             return
         api = self._get_api()
         if api is None:
             return
-        body = self._build_service_body(config)
+        body = self._build_service_body(config, dispatched_worker_ids=dispatched_worker_ids)
         name = body["metadata"]["name"]
         try:
             api.read_namespaced_service(name=name, namespace=self._namespace)
@@ -116,8 +121,18 @@ class KubernetesServiceManager:
                 extra={"pipeline": config.name, "service": name, "namespace": self._namespace},
             )
 
-        if self._uses_manual_endpoints(config):
-            self._ensure_endpoints(api, config)
+        if self._uses_manual_endpoints(config, dispatched_worker_ids):
+            self._ensure_endpoints(api, config, dispatched_worker_ids)
+
+    def _had_manual_endpoints(self, config: PipelineConfig) -> bool:
+        """True if this pipeline may have had manual Endpoints created (workers.list or count:N)."""
+        if self._mode != "manager":
+            return False
+        if config.workers is None:
+            return False
+        if config.workers.worker_ids is not None:
+            return True
+        return isinstance(config.workers.count, int) and config.workers.count > 1
 
     def delete_service(self, config: PipelineConfig) -> None:
         if config.kubernetes is None:
@@ -126,7 +141,7 @@ class KubernetesServiceManager:
         if api is None:
             return
         name = self.service_name_for_pipeline(config)
-        if self._uses_manual_endpoints(config):
+        if self._had_manual_endpoints(config):
             self._delete_endpoints(api, name, config.name)
         try:
             api.delete_namespaced_service(name=name, namespace=self._namespace)
@@ -203,35 +218,76 @@ class KubernetesServiceManager:
             "app.kubernetes.io/component": "worker",
         }
 
-    def _uses_manual_endpoints(self, config: PipelineConfig) -> bool:
-        return (
-            self._mode == "manager"
-            and config.workers is not None
-            and config.workers.worker_ids is not None
-        )
+    def _uses_manual_endpoints(
+        self, config: PipelineConfig, dispatched_worker_ids: list[str] | None = None
+    ) -> bool:
+        if self._mode != "manager":
+            return False
+        if dispatched_worker_ids is not None:
+            return True
+        return config.workers is not None and config.workers.worker_ids is not None
 
-    def _listed_worker_ids(self, config: PipelineConfig) -> list[str]:
+    def _listed_worker_ids(
+        self, config: PipelineConfig, dispatched_worker_ids: list[str] | None = None
+    ) -> list[str]:
+        if dispatched_worker_ids is not None:
+            return list(dispatched_worker_ids)
         if config.workers is None or config.workers.worker_ids is None:
             return []
         return list(config.workers.worker_ids)
 
-    def _build_service_body(self, config: PipelineConfig) -> dict[str, Any]:
-        selector = None if self._uses_manual_endpoints(config) else self._build_selector()
-        if selector is None and not self._uses_manual_endpoints(config):
+    def _resolve_protocol(self, source_type: str) -> str:
+        return "UDP" if source_type in UDP_PUSH_SOURCES else "TCP"
+
+    def _resolve_service_port(self, config: PipelineConfig) -> int:
+        assert config.kubernetes is not None
+        if config.kubernetes.port is not None:
+            return config.kubernetes.port
+        if config.source.type in UDP_PUSH_SOURCES:
+            source_port = getattr(config.source, "port", None)
+            if source_port is not None:
+                return int(source_port)
+            return UDP_PORT_DEFAULTS.get(config.source.type, 514)
+        return self._worker_ingress_port if self._mode == "manager" else self._standalone_port
+
+    def _resolve_target_port(self, config: PipelineConfig) -> int:
+        assert config.kubernetes is not None
+        if config.kubernetes.target_port is not None:
+            return config.kubernetes.target_port
+        if config.source.type in UDP_PUSH_SOURCES:
+            source_port = getattr(config.source, "port", None)
+            if source_port is not None:
+                return int(source_port)
+            return UDP_PORT_DEFAULTS.get(config.source.type, 514)
+        return self._worker_ingress_port if self._mode == "manager" else self._standalone_port
+
+    def _build_service_body(
+        self, config: PipelineConfig, dispatched_worker_ids: list[str] | None = None
+    ) -> dict[str, Any]:
+        uses_manual = self._uses_manual_endpoints(config, dispatched_worker_ids)
+        selector = None if uses_manual else self._build_selector()
+        if selector is None and not uses_manual:
             raise RuntimeError(f"cannot derive selector for mode={self._mode}")
         assert config.kubernetes is not None
         service_name = self.service_name_for_pipeline(config)
-        service_port = self._worker_ingress_port if self._mode == "manager" else self._standalone_port
+        protocol = self._resolve_protocol(config.source.type)
+        svc_port = self._resolve_service_port(config)
+        target_port = self._resolve_target_port(config)
         source_path = getattr(config.source, "path", "")
+        port_name = "udp" if protocol == "UDP" else "http"
         port_spec: dict[str, Any] = {
-            "name": "http",
-            "port": service_port,
-            "protocol": "TCP",
-            "targetPort": service_port,
+            "name": port_name,
+            "port": svc_port,
+            "protocol": protocol,
+            "targetPort": target_port,
         }
         if config.kubernetes.service_type == "NodePort" and config.kubernetes.node_port is not None:
             port_spec["nodePort"] = config.kubernetes.node_port
-        body = {
+        annotations: dict[str, str] = {}
+        if protocol == "TCP":
+            annotations["tram.trishul.io/webhook-path"] = str(source_path)
+        annotations.update(config.kubernetes.annotations)
+        body: dict[str, Any] = {
             "apiVersion": "v1",
             "kind": "Service",
             "metadata": {
@@ -242,24 +298,28 @@ class KubernetesServiceManager:
                     "tram.trishul.io/pipeline": config.name,
                     "tram.trishul.io/source-type": config.source.type,
                 },
-                "annotations": {
-                    "tram.trishul.io/webhook-path": str(source_path),
-                },
+                "annotations": annotations,
             },
             "spec": {
                 "type": config.kubernetes.service_type,
                 "ports": [port_spec],
             },
         }
+        if config.kubernetes.load_balancer_ip is not None:
+            body["spec"]["loadBalancerIP"] = config.kubernetes.load_balancer_ip
         if selector is not None:
             body["spec"]["selector"] = selector
         return body
 
-    def _build_endpoints_body(self, config: PipelineConfig) -> dict[str, Any]:
+    def _build_endpoints_body(
+        self, config: PipelineConfig, dispatched_worker_ids: list[str] | None = None
+    ) -> dict[str, Any]:
         service_name = self.service_name_for_pipeline(config)
-        service_port = self._worker_ingress_port
+        protocol = self._resolve_protocol(config.source.type)
+        ep_port = self._resolve_target_port(config)
+        port_name = "udp" if protocol == "UDP" else "http"
         addresses: list[dict[str, Any]] = []
-        for worker_id in self._listed_worker_ids(config):
+        for worker_id in self._listed_worker_ids(config, dispatched_worker_ids):
             pod = self._read_worker_pod(worker_id)
             if pod is None:
                 continue
@@ -279,9 +339,9 @@ class KubernetesServiceManager:
             subsets.append({
                 "addresses": addresses,
                 "ports": [{
-                    "name": "http",
-                    "port": service_port,
-                    "protocol": "TCP",
+                    "name": port_name,
+                    "port": ep_port,
+                    "protocol": protocol,
                 }],
             })
         return {
@@ -314,8 +374,10 @@ class KubernetesServiceManager:
             )
             return None
 
-    def _ensure_endpoints(self, api, config: PipelineConfig) -> None:
-        body = self._build_endpoints_body(config)
+    def _ensure_endpoints(
+        self, api, config: PipelineConfig, dispatched_worker_ids: list[str] | None = None
+    ) -> None:
+        body = self._build_endpoints_body(config, dispatched_worker_ids)
         name = body["metadata"]["name"]
         try:
             api.read_namespaced_endpoints(name=name, namespace=self._namespace)

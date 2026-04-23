@@ -115,6 +115,52 @@ class TestSNMPTrapSource:
                 assert list(source.read()) == []
 
 
+    def test_decode_trap_ber(self):
+        """_decode_trap correctly decodes a real BER-encoded SNMPv2c trap (pysnmp 7.x)."""
+        from pyasn1.codec.ber import encoder as ber_encoder
+        from pysnmp.proto.api import v2c as pMod
+
+        def call_api(obj, snake_name: str, *args):
+            method = getattr(obj, snake_name, None)
+            if method is None:
+                normalized = snake_name.replace("_", "").lower()
+                for attr_name in dir(obj):
+                    if attr_name.replace("_", "").lower() == normalized:
+                        method = getattr(obj, attr_name)
+                        break
+            if method is None:
+                raise AttributeError(f"{obj!r} has no method matching {snake_name!r}")
+            return method(*args)
+
+        msg = pMod.Message()
+        call_api(pMod.apiMessage, "set_defaults", msg)
+        call_api(pMod.apiMessage, "set_community", msg, b"public")
+        reqPDU = pMod.SNMPv2TrapPDU()
+        call_api(pMod.apiPDU, "set_defaults", reqPDU)
+        call_api(pMod.apiPDU, "set_varbinds", reqPDU, [
+            ((1, 3, 6, 1, 2, 1, 1, 3, 0), pMod.TimeTicks(12345)),
+            ((1, 3, 6, 1, 6, 3, 1, 1, 4, 1, 0), pMod.ObjectIdentifier((1, 3, 6, 1, 6, 3, 1, 1, 5, 4))),
+            ((1, 3, 6, 1, 2, 1, 2, 2, 1, 1, 1), pMod.Integer(42)),
+        ])
+        call_api(pMod.apiMessage, "set_pdu", msg, reqPDU)
+        trap_bytes = ber_encoder.encode(msg)
+
+        source = SNMPTrapSource({"port": 162})
+        result = source._decode_trap(trap_bytes)
+
+        assert "1.3.6.1.2.1.1.3.0" in result
+        assert "1.3.6.1.6.3.1.1.4.1.0" in result
+        assert result["1.3.6.1.2.1.2.2.1.1.1"] == "42"
+        assert "_raw" not in result
+
+    def test_decode_trap_fallback_on_garbage(self):
+        """_decode_trap returns _raw hex for non-SNMP bytes."""
+        source = SNMPTrapSource({"port": 162})
+        result = source._decode_trap(b"\x00\x01\x02garbage")
+        assert "_raw" in result
+        assert result["_raw"] == b"\x00\x01\x02garbage".hex()
+
+
 # ── SNMPPollSource ─────────────────────────────────────────────────────────
 
 

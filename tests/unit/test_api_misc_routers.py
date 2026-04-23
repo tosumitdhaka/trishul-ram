@@ -140,6 +140,39 @@ pipeline:
         assert t["name"] == "demo-pipe"
         assert "sftp" in t["tags"]
 
+    def test_root_level_yaml_template_returned(self):
+        with tempfile.TemporaryDirectory() as d:
+            yaml_content = """
+name: demo-root
+description: Root-level pipeline example
+schedule:
+  type: stream
+source:
+  type: snmp_trap
+  host: 0.0.0.0
+sinks:
+  - type: kafka
+    topic: demo
+"""
+            Path(d, "demo-root.yaml").write_text(yaml_content)
+            app = _make_templates_app(d)
+            client = TestClient(app)
+            resp = client.get("/api/templates")
+
+        assert resp.status_code == 200
+        data = resp.json()
+        assert len(data) == 1
+        t = data[0]
+        assert t["id"] == "demo-root"
+        assert t["name"] == "demo-root"
+        assert t["description"] == "Root-level pipeline example"
+        assert t["source_type"] == "snmp_trap"
+        assert t["sink_types"] == ["kafka"]
+        assert t["schedule_type"] == "stream"
+        assert "snmp_trap" in t["tags"]
+        assert "kafka" in t["tags"]
+        assert "stream" in t["tags"]
+
     def test_invalid_yaml_skipped_gracefully(self):
         with tempfile.TemporaryDirectory() as d:
             Path(d, "bad.yaml").write_text(": invalid: yaml: [\n")

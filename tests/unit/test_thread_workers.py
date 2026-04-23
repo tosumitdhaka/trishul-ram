@@ -7,7 +7,10 @@ import threading
 from concurrent.futures import Future
 from unittest.mock import MagicMock, patch
 
+import pytest
+
 from tram.core.context import PipelineRunContext, RunStatus
+from tram.core.exceptions import TramError
 from tram.pipeline.executor import PipelineExecutor
 
 # ── PipelineRunContext thread-safety ──────────────────────────────────────
@@ -93,11 +96,12 @@ class TestPipelineRunContextThreadSafety:
 class TestRunBatchChunksSingleThreaded:
     """Verify sequential processing when thread_workers=1."""
 
-    def _make_config(self, chunks, thread_workers=1, batch_size=None):
+    def _make_config(self, chunks, thread_workers=1, batch_size=None, record_chunk_size=None):
         config = MagicMock()
         config.name = "test-pipe"
         config.thread_workers = thread_workers
         config.batch_size = batch_size
+        config.record_chunk_size = record_chunk_size
         config.on_error = "continue"
         config.rate_limit_rps = None
 
@@ -151,6 +155,125 @@ class TestRunBatchChunksSingleThreaded:
         # Should have stopped after 2 records
         assert ctx.records_in <= 2
         assert mock_sink.write.call_count <= 2
+
+    def test_single_threaded_uses_serializer_parse_chunks_when_configured(self):
+        chunks = [(b"payload", {"f": "a.ber"})]
+        config, mock_source = self._make_config(
+            chunks, thread_workers=1, record_chunk_size=2
+        )
+
+        mock_sink = MagicMock()
+        mock_ser_in = MagicMock()
+        mock_ser_in.parse_chunks.return_value = iter([
+            [{"x": 1}, {"x": 2}],
+            [{"x": 3}],
+        ])
+        mock_ser_out = MagicMock()
+        mock_ser_out.serialize.return_value = b"[]"
+        sinks = [(mock_sink, None, [])]
+
+        executor = PipelineExecutor()
+        ctx = PipelineRunContext(pipeline_name="test-pipe")
+
+        executor._run_batch_chunks(
+            config, mock_source, sinks, mock_ser_in, mock_ser_out, [], None, ctx
+        )
+
+        mock_ser_in.parse.assert_not_called()
+        mock_ser_in.parse_chunks.assert_called_once_with(b"payload", 2)
+        assert ctx.records_in == 3
+        assert mock_sink.write.call_count == 2
+
+    def test_single_threaded_record_chunk_size_respects_batch_size(self):
+        chunks = [(b"payload", {"f": "a.ber"})]
+        config, mock_source = self._make_config(
+            chunks, thread_workers=1, batch_size=2, record_chunk_size=3
+        )
+
+        mock_sink = MagicMock()
+        mock_ser_in = MagicMock()
+        mock_ser_in.parse_chunks.return_value = iter([
+            [{"x": 1}, {"x": 2}, {"x": 3}],
+        ])
+        mock_ser_out = MagicMock()
+        mock_ser_out.serialize.return_value = b"[]"
+        sinks = [(mock_sink, None, [])]
+
+        executor = PipelineExecutor()
+        ctx = PipelineRunContext(pipeline_name="test-pipe")
+
+        executor._run_batch_chunks(
+            config, mock_source, sinks, mock_ser_in, mock_ser_out, [], None, ctx
+        )
+
+        assert ctx.records_in == 2
+        serialized_records = mock_ser_out.serialize.call_args.args[0]
+        assert serialized_records == [{"x": 1}, {"x": 2}]
+
+    def test_single_threaded_finalizes_each_source_file(self):
+        chunks = [
+            (b"payload-a", {"source_filename": "a.ber", "source_path": "/in/a.ber"}),
+            (b"payload-b", {"source_filename": "b.ber", "source_path": "/in/b.ber"}),
+        ]
+        config, mock_source = self._make_config(
+            chunks, thread_workers=1, record_chunk_size=2
+        )
+
+        mock_sink = MagicMock()
+        mock_ser_in = MagicMock()
+        mock_ser_in.parse_chunks.side_effect = [
+            iter([[{"x": 1}], [{"x": 2}]]),
+            iter([[{"x": 3}]]),
+        ]
+        mock_ser_out = MagicMock()
+        mock_ser_out.serialize.return_value = b"[]"
+        sinks = [(mock_sink, None, [])]
+
+        executor = PipelineExecutor()
+        ctx = PipelineRunContext(pipeline_name="test-pipe")
+
+        executor._run_batch_chunks(
+            config, mock_source, sinks, mock_ser_in, mock_ser_out, [], None, ctx
+        )
+
+        assert mock_sink.finalize_source.call_count == 2
+        first_meta, first_success = mock_sink.finalize_source.call_args_list[0].args
+        second_meta, second_success = mock_sink.finalize_source.call_args_list[1].args
+        assert first_meta["source_filename"] == "a.ber"
+        assert second_meta["source_filename"] == "b.ber"
+        assert first_meta["run_id"] == ctx.run_id
+        assert second_meta["run_id"] == ctx.run_id
+        assert first_meta["pipeline_name"] == "test-pipe"
+        assert second_meta["pipeline_name"] == "test-pipe"
+        assert first_success is True
+        assert second_success is True
+
+    def test_single_threaded_failure_finalizes_current_source_with_failure(self):
+        chunks = [
+            (b"payload-a", {"source_filename": "a.ber", "source_path": "/in/a.ber"}),
+        ]
+        config, mock_source = self._make_config(chunks, thread_workers=1)
+        config.on_error = "abort"
+
+        mock_sink = MagicMock()
+        mock_ser_in = MagicMock()
+        mock_ser_in.parse.side_effect = ValueError("boom")
+        mock_ser_out = MagicMock()
+        sinks = [(mock_sink, None, [])]
+
+        executor = PipelineExecutor()
+        ctx = PipelineRunContext(pipeline_name="test-pipe")
+
+        with pytest.raises(TramError):
+            executor._run_batch_chunks(
+                config, mock_source, sinks, mock_ser_in, mock_ser_out, [], None, ctx
+            )
+
+        assert mock_sink.finalize_source.call_count == 1
+        failed_meta, failed_success = mock_sink.finalize_source.call_args.args
+        assert failed_meta["source_filename"] == "a.ber"
+        assert failed_meta["run_id"] == ctx.run_id
+        assert failed_success is False
 
 
 # ── _run_batch_chunks: multi-threaded path ────────────────────────────────

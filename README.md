@@ -57,7 +57,7 @@ schedule:
 ### Fault Event Mediation (SNMP Traps → Ticketing)
 
 Receive SNMP traps from network elements, enrich them with MIB OID resolution, apply severity mapping, and push to a REST-based ticketing system.
-This works in standalone mode today; in manager mode, `snmp_trap` is intentionally blocked in v1.3.0 until the UDP push-source path lands.
+In manager mode, `snmp_trap` is supported in `v1.3.2+` with a per-pipeline Kubernetes ingress service (`kubernetes: enabled: true`).
 
 ```yaml
 source:
@@ -132,7 +132,7 @@ schedule:
 ### Log Aggregation (Syslog → OpenSearch)
 
 Collect syslog from network nodes, parse structured fields, mask sensitive data, and index into OpenSearch.
-This works in standalone mode today; in manager mode, `syslog` is intentionally blocked in v1.3.0 until the UDP push-source path lands.
+In manager mode, `syslog` is supported in `v1.3.2+` with a per-pipeline Kubernetes ingress service (`kubernetes: enabled: true`).
 
 ```yaml
 source:
@@ -275,7 +275,7 @@ Quick-start examples use `latest`. For production deployments, pin a specific re
 | **Sources** | 24 | `sftp` `kafka` `rest` `snmp_trap` `snmp_poll` `syslog` `gnmi` `corba` `nats` `mqtt` `amqp` `websocket` `sql` `clickhouse` `influxdb` `redis` `s3` `gcs` `azure_blob` `elasticsearch` `prometheus_rw` `webhook` `local` `ftp` |
 | **Sinks** | 20 | `sftp` `kafka` `rest` `opensearch` `snmp_trap` `mqtt` `amqp` `nats` `sql` `clickhouse` `influxdb` `redis` `s3` `gcs` `azure_blob` `websocket` `elasticsearch` `ves` `local` `ftp` |
 | **Serializers** | 12 | `json` `ndjson` `csv` `xml` `avro` `parquet` `protobuf` `msgpack` `bytes` `text` `asn1` `pm_xml` |
-| **Transforms** | 21 | `rename` `cast` `add_field` `drop` `filter` `value_map` `flatten` `explode` `melt` `aggregate` `enrich` `deduplicate` `regex_extract` `template` `mask` `validate` `sort` `limit` `jmespath` `unnest` `timestamp_normalize` |
+| **Transforms** | 27 | `rename` `cast` `add_field` `drop` `filter` `value_map` `flatten` `json_flatten` `explode` `unnest` `select_from_list` `coalesce_fields` `project` `inject_meta` `aggregate` `enrich` `deduplicate` `regex_extract` `template` `mask` `validate` `sort` `limit` `jmespath` `melt` `timestamp_normalize` `hex_decode` |
 
 Install only what you need:
 
@@ -307,7 +307,7 @@ pip install tram[all]                      # everything (except corba — system
 |-----|----------|
 | [Architecture](docs/architecture.md) | System design, execution modes, manager+worker internals |
 | [Connectors](docs/connectors.md) | All sources and sinks — config reference, SNMPv3, retry/circuit-breaker |
-| [Transforms](docs/transforms.md) | All 21 transforms and condition expression syntax |
+| [Transforms](docs/transforms.md) | All 27 transforms and condition expression syntax |
 | [API Reference](docs/api.md) | REST API endpoints, authentication, rate limiting |
 | [Deployment](docs/deployment.md) | Docker, Kubernetes/Helm, TLS, environment variables |
 | [Roadmap](docs/roadmap.md) | Planned features and known issues |

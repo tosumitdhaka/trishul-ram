@@ -9,7 +9,7 @@ title: TRAM Documentation
 
 Lightweight, container-native Python daemon for telecom data pipeline orchestration.
 
-**Version:** 1.3.1 | **Status:** Production-ready | **Python:** 3.11+
+**Version:** 1.3.2 | **Status:** Production-ready | **Python:** 3.11+
 
 ---
 
@@ -39,8 +39,9 @@ Lightweight, container-native Python daemon for telecom data pipeline orchestrat
 - **[Pipeline Controller Design](pipeline-controller-design.md)** - Historical design notes for the v1.1.x controller transition; current manager/worker architecture is documented in `architecture.md`
 - **[Roadmap](roadmap.md)** - Planned features and version checklist
 - **Archive**
+  - **[v1.3.2 Plan](archive/v1.3.2-plan.md)** - Archived consolidated `1.3.2` design and implementation plan covering stats parity, multi-worker UDP streams, ASN.1 flattening, CDR record shaping, and batch resilience
   - **[v1.3.1 Plan](archive/v1.3.1-plan.md)** - Archived planning document for the `1.3.1` implementation slice set
-  - **[v1.3.0 Broadcast Streams Design](archive/v1.3.0-broadcast-streams-design.md)** - Archived design document for the `1.3.0` broadcast-streams rollout
+  - **[v1.3.0 Plan *Architecture Change*](archive/v1.3.0-plan.md)** - Archived design document for the `1.3.0` broadcast-streams rollout
 
 ---
 
@@ -73,7 +74,7 @@ curl http://localhost:8765/api/ready
 
 ### Kubernetes (Helm)
 
-Quick-start examples below use `latest`. For production, pin `image.tag` to a specific release such as `1.3.1`.
+Quick-start examples below use `latest`. For production, pin `image.tag` to a specific release such as `1.3.2`.
 
 ```bash
 # Standalone mode (SQLite, single pod)
@@ -99,7 +100,7 @@ helm install tram oci://ghcr.io/tosumitdhaka/charts/trishul-ram \
 | **Sources** | 24 | sftp, kafka, rest, snmp_poll, snmp_trap, syslog, webhook, mqtt, amqp, nats, gnmi, sql, clickhouse, influxdb, corba, websocket, prometheus_rw |
 | **Sinks** | 20 | sftp, kafka, rest, opensearch, snmp_trap, mqtt, amqp, nats, sql, clickhouse, influxdb, ves, websocket, elasticsearch |
 | **Serializers** | 12 | json, ndjson, csv, xml, avro, parquet, protobuf, msgpack, bytes, text, asn1, pm_xml |
-| **Transforms** | 21 | rename, cast, filter, aggregate, jmespath, flatten, explode, melt, deduplicate, mask, validate, template, enrich |
+| **Transforms** | 27 | rename, cast, filter, aggregate, jmespath, flatten, json_flatten, explode, unnest, select_from_list, coalesce_fields, project, inject_meta, melt, deduplicate, mask, validate, template, enrich, hex_decode |
 
 ---
 
@@ -139,9 +140,9 @@ helm install tram oci://ghcr.io/tosumitdhaka/charts/trishul-ram \
 - **Manager** StatefulSet — scheduler, DB, and UI; dispatches runs to workers via HTTP
 - **Worker** StatefulSet — stateless executors; internal agent on `:8766`, ingress-only webhook receiver on `:8767`
 - Dedicated `Dockerfile.worker` — lighter image without apscheduler/sqlalchemy/UI
-- Least-loaded dispatch plus broadcast placement for HTTP push streams
+- Least-loaded dispatch plus multi-worker placement for HTTP push streams
 - `TRAM_MODE=manager` / `TRAM_MODE=worker` — SQLite on manager PVC is sufficient (single writer)
-- `PipelineController` — unified pipeline lifecycle authority; core lifecycle states are `scheduled`, `running`, `stopped`, `error`, with `degraded` / `reconciling` surfaced for broadcast placements in v1.3.0
+- `PipelineController` — unified pipeline lifecycle authority; core lifecycle states are `scheduled`, `running`, `stopped`, `error`, with `degraded` / `reconciling` surfaced for multi-worker placements in v1.3.0
 
 ### Security
 - API key authentication
@@ -183,6 +184,9 @@ docs/
 ├── changelog.md                  # Full release history
 ├── checklist.md                  # Development checklist
 └── archive/                      # Archived version-specific design and planning docs
+    ├── v1.3.2-plan.md            # Archived consolidated 1.3.2 backend implementation plan
+    ├── v1.3.1-plan.md            # Archived 1.3.1 implementation plan
+    └── v1.3.0-plan.md            # Archived 1.3.0 implementation plan
 ```
 
 ---
@@ -199,8 +203,18 @@ docs/
 
 See [changelog.md](changelog.md) for detailed release notes.
 
-**Current Release:** v1.3.1 (2026-04-20)
-- `workers.count: N` and `workers.list` placement behavior are now implemented for broadcast-capable push streams in manager mode
+**Current Release:** v1.3.2 (2026-04-21)
+- Standalone live stats: local stream runs now feed `StatsStore` so `/api/pipelines/{name}/placement` returns a live single-slot view in standalone mode
+- Manager operational metrics: 8 new `tram_mgr_*` Prometheus series for dispatch, redispatch, reconcile actions, placement status, worker health, and callback receipt; `/metrics` is process-local
+- UDP multi-worker streams: `syslog` and `snmp_trap` sources work in manager mode with `kubernetes: enabled: true`; per-pipeline NodePort Services; `count: N` uses manual Endpoints pinned to dispatched workers; L012 enforces the kubernetes requirement
+- ASN.1 decode improvements: concatenated BER multi-record split, ordered `message_classes` fallback, and the explicit `json_flatten` / `hex_decode` shaping path
+- CDR shaping primitives: dotted-path support across core transforms plus `select_from_list`, `coalesce_fields`, `project`, conditional `drop`, and narrow wildcard path support for explicit LTE/SGW/PGW mediation pipelines
+- Batch resilience: `BatchReconciler` adopts or clears lost worker-owned batch runs after manager restart or worker loss, reusing the normal final status path
+- Large-file batch efficiency: `record_chunk_size` enables bounded serial batch decode windows, and ASN.1 BER payloads now support incremental record parsing instead of one giant in-memory decode
+- Safer batch file output: serial batch `csv` / `ndjson` sinks stage temp files per source unit, publish only on successful source completion, and can optionally run post-batch heap cleanup via `post_batch_cleanup: true`
+
+**v1.3.1** (2026-04-20)
+- `workers.count: N` and `workers.list` placement behavior are now implemented for multi-worker push streams in manager mode
 - Dedicated per-pipeline Kubernetes Services are available for active `webhook` and `prometheus_rw` streams, including pinned-worker `workers.list` endpoints
 - File sinks support shared source filename variables, executor-side `{field.*}` partitioning, and append-mode rolling via `max_records`, `max_time`, and `max_bytes`
 - SNMP connectors now target `pysnmp>=7,<8`, and the `1.3.1` pass was revalidated on a live kind cluster for placement, ingress, and scale-down recovery
@@ -217,4 +231,4 @@ See [changelog.md](changelog.md) for detailed release notes.
 
 ---
 
-*Last updated: 2026-04-20*
+*Last updated: 2026-04-23*

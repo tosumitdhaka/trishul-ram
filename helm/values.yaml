@@ -60,7 +60,7 @@ manager:
 
 ## Worker configuration (only used when manager.enabled=true)
 worker:
-  replicas: 5
+  replicas: 3
   port: 8766
   ingressPort: 8767
   ingressService:

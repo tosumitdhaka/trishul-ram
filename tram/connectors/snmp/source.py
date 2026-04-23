@@ -24,6 +24,20 @@ from tram.registry.registry import register_source
 logger = logging.getLogger(__name__)
 
 
+def _call_snmp_api(obj: object, snake_name: str, *args):
+    """Call a pysnmp API method across snake_case and camelCase variants."""
+    method = getattr(obj, snake_name, None)
+    if method is None:
+        normalized = snake_name.replace("_", "").lower()
+        for attr_name in dir(obj):
+            if attr_name.replace("_", "").lower() == normalized:
+                method = getattr(obj, attr_name)
+                break
+    if method is None:
+        raise AttributeError(f"{obj!r} has no method matching {snake_name!r}")
+    return method(*args)
+
+
 @register_source("snmp_trap")
 class SNMPTrapSource(BaseSource):
     """Receive SNMP traps (v1/v2c/v3) over UDP, operating in stream mode.
@@ -168,9 +182,9 @@ class SNMPTrapSource(BaseSource):
             from pyasn1.codec.ber import decoder as ber_decoder
             from pysnmp.proto.api import v2c as pMod
             msg, _ = ber_decoder.decode(raw, asn1Spec=pMod.Message())
-            reqPDU = pMod.apiMessage.getPDU(msg)
+            reqPDU = _call_snmp_api(pMod.apiMessage, "get_pdu", msg)
             bindings: dict = {}
-            for oid, val in pMod.apiPDU.getVarBinds(reqPDU):
+            for oid, val in _call_snmp_api(pMod.apiPDU, "get_varbinds", reqPDU):
                 bindings[str(oid)] = str(val)
             return bindings
         except Exception:

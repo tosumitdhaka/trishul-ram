@@ -21,20 +21,40 @@ import logging
 import threading
 import uuid
 from concurrent.futures import ThreadPoolExecutor
+from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from typing import TYPE_CHECKING
 
-from tram.core.context import RunStatus
+from tram.core.context import RunResult, RunStatus
 from tram.pipeline.executor import PipelineExecutor
 from tram.pipeline.manager import PipelineManager, PipelineState
 
 if TYPE_CHECKING:
+    from tram.agent.metrics import PipelineStats
     from tram.agent.worker_pool import WorkerPool
     from tram.models.pipeline import PipelineConfig
     from tram.persistence.db import TramDB
     from tram.persistence.file_tracker import ProcessedFileTracker
 
 logger = logging.getLogger(__name__)
+
+
+@dataclass
+class _LocalRun:
+    run_id: str
+    pipeline_name: str
+    schedule_type: str
+    started_at: datetime
+    stats: PipelineStats
+
+
+@dataclass
+class _ActiveBatchRun:
+    run_id: str
+    pipeline_name: str
+    worker_url: str
+    schedule_type: str
+    started_at: datetime
 
 
 class PipelineController:
@@ -71,8 +91,15 @@ class PipelineController:
         self._broadcast_placements: dict[str, dict] = {}
         # {pipeline_name: placement_group_id}
         self._active_placement_group: dict[str, str] = {}
+        # {pipeline_name: _ActiveBatchRun}
+        self._active_batch_runs: dict[str, _ActiveBatchRun] = {}
 
         self._running = False
+
+        # Standalone live stats — only used when _worker_pool is None
+        self._local_active_stats: dict[str, _LocalRun] = {}
+        self._local_stats_lock = threading.Lock()
+        self._local_stats_stop = threading.Event()
 
     # ── Lifecycle ──────────────────────────────────────────────────────────
 
@@ -88,11 +115,24 @@ class PipelineController:
             self._boot_load()
 
         self._scheduler.start()
+
+        if self._worker_pool is None:
+            stats_interval = int(getattr(self._stats_store, "_interval", 30)) if self._stats_store else 30
+            self._local_stats_stop.clear()
+            t = threading.Thread(
+                target=self._local_stats_loop,
+                args=(stats_interval,),
+                name="tram-local-stats",
+                daemon=True,
+            )
+            t.start()
+
         logger.info("PipelineController started")
 
     def stop(self, timeout: int = 30) -> None:
         """Stop the controller and all running pipelines gracefully."""
         self._running = False
+        self._local_stats_stop.set()
         logger.info("PipelineController stopping",
                     extra={"drain_timeout_seconds": timeout})
 
@@ -407,10 +447,11 @@ class PipelineController:
 
         self.manager.set_status(pipeline_name, "running")
 
+        if run_id is None:
+            run_id = str(uuid.uuid4())
+
         # ── Manager+worker dispatch path ───────────────────────────────────
         if self._worker_pool is not None:
-            if run_id is None:
-                run_id = str(uuid.uuid4())
             callback_url = (
                 f"{self._manager_url}/api/internal/run-complete"
                 if self._manager_url else ""
@@ -426,14 +467,25 @@ class PipelineController:
                 logger.error("Batch dispatch failed: no healthy workers",
                              extra={"pipeline": pipeline_name, "run_id": run_id})
                 self.manager.set_status(pipeline_name, "error")
+                from tram.metrics.registry import MGR_DISPATCH_TOTAL
+                MGR_DISPATCH_TOTAL.labels(pipeline=pipeline_name, result="no_workers").inc()
+            else:
+                self._active_batch_runs[pipeline_name] = _ActiveBatchRun(
+                    run_id=run_id,
+                    pipeline_name=pipeline_name,
+                    worker_url=worker_url,
+                    schedule_type=state.config.schedule.type,
+                    started_at=datetime.now(UTC),
+                )
+                from tram.metrics.registry import MGR_DISPATCH_TOTAL
+                MGR_DISPATCH_TOTAL.labels(pipeline=pipeline_name, result="accepted").inc()
             return
         # ── Local execution path ───────────────────────────────────────────
 
         try:
             state = self.manager.get(pipeline_name)
             result = self.executor.batch_run(state.config, run_id=run_id)
-            self.manager.record_run(pipeline_name, result)
-            self._on_run_complete(pipeline_name, result)
+            self._finalize_batch_result(pipeline_name, result)
         except Exception as exc:
             logger.error("Batch run exception",
                          extra={"pipeline": pipeline_name, "error": str(exc)})
@@ -468,6 +520,86 @@ class PipelineController:
 
         self.manager.set_status(pipeline_name, final_status)
 
+    def _finalize_batch_result(self, pipeline_name: str, result: RunResult) -> None:
+        """Record a batch result and apply the standard post-run state transition."""
+        self.manager.record_run(pipeline_name, result)
+        self._on_run_complete(pipeline_name, result)
+        state = self.manager.get(pipeline_name)
+        if state.status in {"stopped", "error"}:
+            self._deactivate_kubernetes_service(state.config)
+
+    def get_active_batch_runs(self) -> list[dict]:
+        return [
+            {
+                "run_id": run.run_id,
+                "pipeline_name": run.pipeline_name,
+                "worker_url": run.worker_url,
+                "schedule_type": run.schedule_type,
+                "started_at": run.started_at,
+            }
+            for run in self._active_batch_runs.values()
+        ]
+
+    def adopt_active_batch_run(
+        self,
+        *,
+        pipeline_name: str,
+        run_id: str,
+        worker_url: str,
+        started_at: datetime | str | None = None,
+    ) -> bool:
+        if not self.manager.exists(pipeline_name):
+            return False
+        state = self.manager.get(pipeline_name)
+        if state.config.schedule.type == "stream":
+            return False
+        if isinstance(started_at, str):
+            started_at = datetime.fromisoformat(started_at)
+        self._active_batch_runs[pipeline_name] = _ActiveBatchRun(
+            run_id=run_id,
+            pipeline_name=pipeline_name,
+            worker_url=worker_url,
+            schedule_type=state.config.schedule.type,
+            started_at=started_at or datetime.now(UTC),
+        )
+        self.manager.set_status(pipeline_name, "running")
+        return True
+
+    def mark_active_batch_run_lost(
+        self,
+        pipeline_name: str,
+        *,
+        error: str,
+        run_id: str | None = None,
+        finished_at: datetime | None = None,
+    ) -> bool:
+        lease = self._active_batch_runs.pop(pipeline_name, None)
+        state = self.manager.get(pipeline_name) if self.manager.exists(pipeline_name) else None
+        if state is None:
+            return False
+
+        lease_run_id = run_id or (lease.run_id if lease is not None else str(uuid.uuid4()))
+        if self._worker_pool is not None:
+            self._worker_pool.on_run_complete(lease_run_id)
+        lease_started_at = lease.started_at if lease is not None else (
+            state.last_run or datetime.now(UTC)
+        )
+
+        result = RunResult(
+            run_id=lease_run_id,
+            pipeline_name=pipeline_name,
+            status=RunStatus.FAILED,
+            started_at=lease_started_at,
+            finished_at=finished_at or datetime.now(UTC),
+            records_in=0,
+            records_out=0,
+            records_skipped=0,
+            error=error,
+            node_id=self._node_id,
+        )
+        self._finalize_batch_result(pipeline_name, result)
+        return True
+
     def on_worker_run_complete(
         self,
         run_id: str,
@@ -484,12 +616,22 @@ class PipelineController:
         finished_at: datetime | str | None = None,
     ) -> None:
         """Callback from a worker agent when a dispatched run finishes."""
-        from tram.core.context import RunResult, RunStatus
-
         try:
             run_status = RunStatus(status)
         except ValueError:
             run_status = RunStatus.FAILED
+
+        existing_run = self.manager.get_run(run_id)
+        if self._worker_pool is not None:
+            self._worker_pool.on_run_complete(run_id)
+        if existing_run is not None:
+            logger.info(
+                "Ignoring duplicate worker run-complete callback",
+                extra={"pipeline": pipeline_name, "run_id": run_id},
+            )
+            self._active_batch_runs.pop(pipeline_name, None)
+            self._remove_stream_run_id(pipeline_name, run_id)
+            return
 
         if isinstance(started_at, str):
             started_at = datetime.fromisoformat(started_at)
@@ -513,7 +655,7 @@ class PipelineController:
         )
 
         if self._worker_pool is not None:
-            self._worker_pool.on_run_complete(run_id)
+            self._active_batch_runs.pop(pipeline_name, None)
             self._remove_stream_run_id(pipeline_name, run_id)
             if self._stream_run_ids.get(pipeline_name):
                 return
@@ -521,11 +663,7 @@ class PipelineController:
                 self._stats_store.remove(run_id)
 
         if self.manager.exists(pipeline_name):
-            self.manager.record_run(pipeline_name, result)
-            self._on_run_complete(pipeline_name, result)
-            state = self.manager.get(pipeline_name)
-            if state.status in {"stopped", "error"}:
-                self._deactivate_kubernetes_service(state.config)
+            self._finalize_batch_result(pipeline_name, result)
         else:
             logger.warning(
                 "on_worker_run_complete: pipeline not found",
@@ -566,6 +704,9 @@ class PipelineController:
                                  extra={"pipeline": config.name})
                     self.manager.set_status(config.name, "error")
                     return
+                from tram.metrics.registry import MGR_DISPATCH_TOTAL
+                for _ in result.accepted:
+                    MGR_DISPATCH_TOTAL.labels(pipeline=config.name, result="accepted").inc()
                 self._record_broadcast_placement(config.name, placement_group_id, result, workers_cfg)
                 self.manager.set_status(config.name, result.status)
                 self._activate_kubernetes_service(config)
@@ -593,6 +734,8 @@ class PipelineController:
                              extra={"pipeline": config.name})
                 self.manager.set_status(config.name, "error")
                 return
+            from tram.metrics.registry import MGR_DISPATCH_TOTAL
+            MGR_DISPATCH_TOTAL.labels(pipeline=config.name, result="accepted").inc()
             self._stream_run_ids[config.name] = [run_id]
             self.manager.set_status(config.name, "running")
             self._activate_kubernetes_service(config)
@@ -627,13 +770,37 @@ class PipelineController:
         logger.info("Started stream pipeline", extra={"pipeline": config.name})
 
     def _stream_worker(self, config: PipelineConfig, stop_event: threading.Event) -> None:
+        run_id: str | None = None
+        if self._worker_pool is None and self._stats_store is not None:
+            from tram.agent.metrics import PipelineStats
+            run_id = str(uuid.uuid4())
+            stats = PipelineStats(run_id=run_id, pipeline_name=config.name, schedule_type="stream")
+            local_run = _LocalRun(
+                run_id=run_id,
+                pipeline_name=config.name,
+                schedule_type="stream",
+                started_at=datetime.now(UTC),
+                stats=stats,
+            )
+            with self._local_stats_lock:
+                self._local_active_stats[run_id] = local_run
+        else:
+            stats = None
+
         try:
-            self.executor.stream_run(config, stop_event)
+            self.executor.stream_run(config, stop_event, stats=stats)
         except Exception as exc:
             logger.error("Stream pipeline crashed",
                          extra={"pipeline": config.name, "error": str(exc)}, exc_info=True)
             self.manager.set_status(config.name, "error")
         finally:
+            if run_id is not None:
+                # Remove from dict and StatsStore atomically under the same lock so
+                # _emit_local_stats_once() cannot resurrect the entry after removal.
+                with self._local_stats_lock:
+                    self._local_active_stats.pop(run_id, None)
+                    if self._stats_store is not None:
+                        self._stats_store.remove(run_id)
             self._stream_threads.pop(config.name, None)
             self._stop_events.pop(config.name, None)
             if self.manager.exists(config.name):
@@ -790,12 +957,76 @@ class PipelineController:
                 status,
                 slots=placement["slots"],
             )
+        from tram.metrics.registry import MGR_PLACEMENT_STATUS
+        for s in ("running", "degraded", "reconciling", "error"):
+            MGR_PLACEMENT_STATUS.labels(pipeline=pipeline_name, status=s).set(1 if s == status else 0)
+
+    # ── Standalone live stats ──────────────────────────────────────────────
+
+    def _emit_local_stats_once(self) -> None:
+        """Snapshot all active standalone stream runs into StatsStore."""
+        if self._stats_store is None:
+            return
+        from tram.api.routers.internal import PipelineStatsPayload
+        now = datetime.now(UTC)
+        with self._local_stats_lock:
+            runs = list(self._local_active_stats.items())
+        for run_id, local_run in runs:
+            uptime = (now - local_run.started_at).total_seconds()
+            snapshot = local_run.stats.snapshot_and_reset_window()
+            payload = PipelineStatsPayload(
+                worker_id=self._node_id,
+                pipeline_name=local_run.pipeline_name,
+                run_id=run_id,
+                schedule_type=local_run.schedule_type,
+                uptime_seconds=uptime,
+                timestamp=now,
+                is_final=False,
+                **snapshot,
+            )
+            # Re-check under lock: _stream_worker finally removes from dict and
+            # StatsStore atomically, so if the run_id is gone here the stream has
+            # already stopped and we must not re-insert it.
+            with self._local_stats_lock:
+                if run_id in self._local_active_stats:
+                    self._stats_store.update(payload)
+
+    def _local_stats_loop(self, interval: int) -> None:
+        while not self._local_stats_stop.wait(interval):
+            try:
+                self._emit_local_stats_once()
+            except Exception:
+                logger.exception("Error in local stats loop")
+
+    # ── Kubernetes service lifecycle ───────────────────────────────────────
+
+    def _get_dispatched_worker_ids(self, pipeline_name: str) -> list[str] | None:
+        """Return worker_id list for count:N placements; None for count:all and workers.list.
+
+        workers.list uses config.workers.worker_ids in _listed_worker_ids, so passing None here
+        lets the service manager fall through to that path naturally.
+        """
+        pg_id = self._active_placement_group.get(pipeline_name)
+        if pg_id is None:
+            return None
+        placement = self._broadcast_placements.get(pg_id)
+        if placement is None:
+            return None
+        if placement.get("target_count") == "all":
+            return None
+        state = self.manager.get(pipeline_name)
+        if state is not None and state.config.workers and state.config.workers.worker_ids is not None:
+            return None  # workers.list: config path handles Endpoints
+        return [s["worker_id"] for s in placement.get("slots", []) if s.get("worker_id")]
 
     def _activate_kubernetes_service(self, config: PipelineConfig) -> None:
         if self._kubernetes_service_manager is None:
             return
         try:
-            self._kubernetes_service_manager.ensure_service(config)
+            dispatched_worker_ids = self._get_dispatched_worker_ids(config.name)
+            self._kubernetes_service_manager.ensure_service(
+                config, dispatched_worker_ids=dispatched_worker_ids
+            )
         except Exception as exc:
             logger.warning(
                 "Failed to reconcile pipeline Service on activation",

@@ -160,9 +160,19 @@ Token-bucket algorithm on `PipelineExecutor`. One token consumed per sink write.
 
 `PipelineConfig.thread_workers: int = 1` — number of parallel worker threads per pipeline run.
 
-**Batch mode** (`thread_workers > 1`): source chunks are submitted to a `ThreadPoolExecutor`. N chunks process concurrently. `batch_size` checks are approximate across threads.
+**Batch mode** (`thread_workers > 1`): source chunks are submitted to a `ThreadPoolExecutor`. N
+chunks process concurrently. `batch_size` checks are approximate across threads.
 
-**Stream mode** (`thread_workers > 1`): a bounded `Queue(maxsize=thread_workers * 2)` decouples the source producer from N worker threads, providing natural backpressure.
+**Serial batch mode with `record_chunk_size`**: the executor can ask a serializer for
+`parse_chunks(data, record_chunk_size)` and process bounded decoded record windows instead of one
+large in-memory list. This is the preferred path for very large file batches such as concatenated
+ASN.1 BER CDR files.
+
+**Current scope note:** threaded batch execution still uses the eager parse path in `v1.3.2`;
+bounded record chunking is implemented in the serial batch path.
+
+**Stream mode** (`thread_workers > 1`): a bounded `Queue(maxsize=thread_workers * 2)` decouples
+the source producer from N worker threads, providing natural backpressure.
 
 `PipelineRunContext` is fully thread-safe — all counter mutations are Lock-protected.
 
@@ -235,12 +245,15 @@ TRAM v1.2.0 replaces the previous shared-DB cluster model with a dedicated **man
 │         ▼                                                              │
 │  WorkerPool                                                            │
 │  ├── least_loaded() + round-robin tiebreaker (batch/poll sources)      │
-│  ├── multi_dispatch(count:all) → broadcast all push-HTTP sources       │
+│  ├── multi_dispatch(count:all) → all healthy workers for push-HTTP      │
 │  └── poll /agent/health every 10s → single summary log on change      │
 │                   │                                                    │
 │  PlacementReconciler (background thread)                               │
 │  ├── stale slot detection (age > 3 × TRAM_STATS_INTERVAL)             │
 │  └── re-dispatch + reconciling-window timeout                          │
+│  BatchReconciler (background thread)                                   │
+│  ├── adopt orphaned running batch runs from worker /agent/status       │
+│  └── mark lost worker-owned batch runs failed before they stick        │
 │                   │                                                    │
 │  FastAPI REST API + Web UI                                             │
 │  POST /api/internal/run-complete  ← worker callback                   │
@@ -279,16 +292,20 @@ TRAM v1.2.0 replaces the previous shared-DB cluster model with a dedicated **man
 
 1. APScheduler fires → `PipelineController._run_batch()`
 2. Manager calls `WorkerPool.dispatch()` → picks least-loaded worker (round-robin on ties)
-3. Worker receives `POST /agent/run` with YAML + run_id
-4. Worker syncs schemas/MIBs from manager (`GET /api/schemas`, `GET /api/mibs/{name}`)
-5. Worker executes `PipelineExecutor.batch_run()` in a background thread; tracks `bytes_in`/`bytes_out`
-6. Worker POSTs `run-complete` to manager: `records_in/out/skipped`, `bytes_in/bytes_out`, `error`, `errors[]`
-7. Manager calls `on_worker_run_complete()` → saves to DB (including byte counters), updates pipeline state
+3. Controller records an active batch lease for the dispatched worker/run pair
+4. Worker receives `POST /agent/run` with YAML + run_id
+5. Worker syncs schemas/MIBs from manager (`GET /api/schemas`, `GET /api/mibs/{name}`)
+6. Worker executes `PipelineExecutor.batch_run()` in a background thread; tracks `bytes_in`/`bytes_out`
+7. Worker POSTs `run-complete` to manager: `records_in/out/skipped`, `bytes_in/bytes_out`, `error`, `errors[]`
+8. Manager calls `on_worker_run_complete()` → saves to DB (including byte counters), updates pipeline state
+9. If the manager restarts or the worker disappears before callback, `BatchReconciler` scans
+   worker `/agent/status` to adopt surviving runs or mark lost runs failed through the same normal
+   completion path
 
-### Run lifecycle — broadcast push-HTTP streams (`webhook`, `prometheus_rw`)
+### Run lifecycle — multi-worker streams (`webhook`, `prometheus_rw`)
 
 1. Pipeline controller calls `WorkerPool.multi_dispatch(count='all')` → sends `POST /agent/run` to every healthy worker
-2. A `BroadcastPlacement` is created with one slot per worker; state saved to `broadcast_placements` DB table
+2. A placement group is created with one slot per worker; state saved to `broadcast_placements` DB table
 3. Each worker runs `PipelineExecutor.stream_run()` continuously; posts periodic stats to `POST /api/internal/pipeline-stats`
 4. `StatsStore` holds live per-slot stats; `PlacementReconciler` polls every `min(TRAM_STATS_INTERVAL, 10)s`
 5. Stale slot (age > `3 × TRAM_STATS_INTERVAL`): reconciler re-dispatches to same worker, updates `current_run_id`
@@ -367,7 +384,7 @@ Tables:
 - `alert_state` — last-alerted timestamp per `(pipeline_name, rule_name)`
 - `processed_files` — `(pipeline_name, source_key, filepath, processed_at)`; used by `skip_processed` to make file-source runs idempotent
 - `user_passwords` — scrypt-hashed passwords for browser auth (override `TRAM_AUTH_USERS` bootstrap values)
-- `broadcast_placements` — active broadcast placement groups; persists `slots_json` (including mutable `current_run_id` per slot) so the manager can reconcile after restart
+- `broadcast_placements` — active multi-worker placement groups; persists `slots_json` (including mutable `current_run_id` per slot) so the manager can reconcile after restart
 
 **Schema migrations**: `_create_tables()` runs `CREATE TABLE IF NOT EXISTS` + `ALTER TABLE ADD COLUMN` guards at startup. Existing databases from v0.6.0 are upgraded automatically.
 

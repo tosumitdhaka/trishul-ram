@@ -39,6 +39,49 @@ class _NoOpGauge:
 try:
     from prometheus_client import Counter, Gauge, Histogram
 
+    # ── Manager operational metrics ────────────────────────────────────────
+    # These series are process-local to the manager. Worker-side execution
+    # metrics (tram_records_*, tram_chunk_duration_seconds, etc.) require
+    # scraping each worker pod separately.
+
+    MGR_DISPATCH_TOTAL = Counter(
+        "tram_mgr_dispatch_total",
+        "Pipeline dispatch attempts by manager",
+        ["pipeline", "result"],
+    )
+    MGR_REDISPATCH_TOTAL = Counter(
+        "tram_mgr_redispatch_total",
+        "Reconciler-triggered re-dispatches",
+        ["pipeline"],
+    )
+    MGR_RECONCILE_ACTION_TOTAL = Counter(
+        "tram_mgr_reconcile_action_total",
+        "Reconciler per-slot actions",
+        ["pipeline", "action"],
+    )
+    MGR_PLACEMENT_STATUS = Gauge(
+        "tram_mgr_placement_status",
+        "1 when placement is in the given status, 0 otherwise",
+        ["pipeline", "status"],
+    )
+    MGR_WORKER_HEALTHY = Gauge(
+        "tram_mgr_worker_healthy",
+        "Currently healthy worker count",
+    )
+    MGR_WORKER_TOTAL = Gauge(
+        "tram_mgr_worker_total",
+        "Total configured worker count",
+    )
+    MGR_RUN_COMPLETE_RECEIVED_TOTAL = Counter(
+        "tram_mgr_run_complete_received_total",
+        "Run-complete callbacks received at manager",
+        ["pipeline", "status"],
+    )
+    MGR_PIPELINE_STATS_RECEIVED_TOTAL = Counter(
+        "tram_mgr_pipeline_stats_received_total",
+        "Pipeline-stats callbacks received at manager",
+    )
+
     RECORDS_IN = Counter(
         "tram_records_in_total",
         "Total records read from source",
@@ -83,6 +126,14 @@ try:
     _PROMETHEUS_AVAILABLE = True
 
 except ImportError:
+    MGR_DISPATCH_TOTAL = _NoOpCounter()  # type: ignore[assignment]
+    MGR_REDISPATCH_TOTAL = _NoOpCounter()  # type: ignore[assignment]
+    MGR_RECONCILE_ACTION_TOTAL = _NoOpCounter()  # type: ignore[assignment]
+    MGR_PLACEMENT_STATUS = _NoOpGauge()  # type: ignore[assignment]
+    MGR_WORKER_HEALTHY = _NoOpGauge()  # type: ignore[assignment]
+    MGR_WORKER_TOTAL = _NoOpGauge()  # type: ignore[assignment]
+    MGR_RUN_COMPLETE_RECEIVED_TOTAL = _NoOpCounter()  # type: ignore[assignment]
+    MGR_PIPELINE_STATS_RECEIVED_TOTAL = _NoOpCounter()  # type: ignore[assignment]
     RECORDS_IN = _NoOpCounter()  # type: ignore[assignment]
     RECORDS_OUT = _NoOpCounter()  # type: ignore[assignment]
     RECORDS_SKIP = _NoOpCounter()  # type: ignore[assignment]

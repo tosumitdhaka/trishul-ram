@@ -23,7 +23,8 @@ class LintResult:
 
 
 HTTP_PUSH_SOURCES = {"webhook", "prometheus_rw"}
-UDP_BLOCKED_SOURCES = {"syslog", "snmp_trap"}
+UDP_PUSH_SOURCES = {"syslog", "snmp_trap"}
+ALL_PUSH_SOURCES = HTTP_PUSH_SOURCES | UDP_PUSH_SOURCES
 QUEUE_SOURCES = {"kafka", "nats", "amqp"}
 POLL_BATCH_SOURCES = {
     "sftp", "s3", "rest", "sql", "local", "ftp", "gcs", "azure_blob",
@@ -50,10 +51,10 @@ def lint(
     findings.extend(_l005_email_no_smtp(config))
     findings.extend(_l006_http_push_requires_all(config, resolved_mode))
     findings.extend(_l007_poll_batch_multi_worker(config, resolved_mode))
-    findings.extend(_l008_udp_blocked_in_manager(config, resolved_mode))
     findings.extend(_l009_queue_count_exceeds_pool(config, resolved_mode, resolved_pool_size))
     findings.extend(_l010_count_exceeds_pool(config, resolved_mode, resolved_pool_size))
     findings.extend(_l011_risky_filename_partition_fields(config))
+    findings.extend(_l012_udp_push_requires_kubernetes(config, resolved_mode))
 
     return findings
 
@@ -165,17 +166,9 @@ def _l006_http_push_requires_all(config: PipelineConfig, tram_mode: str) -> list
     workers = config.workers
     has_pipeline_service = config.kubernetes is not None and config.kubernetes.enabled
     if has_pipeline_service:
-        if workers and (workers.count == "all" or workers.worker_ids is not None):
-            return []
-        return [LintResult(
-            rule_id="L006",
-            severity="error",
-            message=(
-                f"Pipeline '{config.name}': push-source pipeline Services in manager mode support "
-                "only workers.count='all' or workers.list. workers.count=N cannot constrain "
-                "Service endpoints safely."
-            ),
-        )]
+        # kubernetes block: count:all uses broad selector; count:N and workers.list use manual
+        # Endpoints pinned to dispatched workers — all three are correctly wired at runtime.
+        return []
     if workers and workers.count == "all":
         return []
     return [LintResult(
@@ -183,8 +176,8 @@ def _l006_http_push_requires_all(config: PipelineConfig, tram_mode: str) -> list
         severity="error",
         message=(
             f"Pipeline '{config.name}': source '{config.source.type}' requires workers.count='all' "
-            "on the shared worker ingress in manager mode. Use kubernetes.enabled with "
-            "workers.list for pinned worker subsets."
+            "on the shared worker ingress in manager mode, or add a kubernetes block to get a "
+            "pipeline-owned Service (supports count:N and workers.list)."
         ),
     )]
 
@@ -200,19 +193,6 @@ def _l007_poll_batch_multi_worker(config: PipelineConfig, tram_mode: str) -> lis
         message=(
             f"Pipeline '{config.name}': poll/batch source '{config.source.type}' cannot use "
             "multi-worker placement in manager mode — reads would be duplicated."
-        ),
-    )]
-
-
-def _l008_udp_blocked_in_manager(config: PipelineConfig, tram_mode: str) -> list[LintResult]:
-    if tram_mode != "manager" or config.source.type not in UDP_BLOCKED_SOURCES:
-        return []
-    return [LintResult(
-        rule_id="L008",
-        severity="error",
-        message=(
-            f"Pipeline '{config.name}': source '{config.source.type}' is blocked in manager mode "
-            "until the UDP push-source architecture lands."
         ),
     )]
 
@@ -253,6 +233,25 @@ def _l010_count_exceeds_pool(
         message=(
             f"Pipeline '{config.name}': workers.count={count} exceeds configured worker pool size "
             f"{worker_pool_size}."
+        ),
+    )]
+
+
+def _l012_udp_push_requires_kubernetes(config: PipelineConfig, tram_mode: str) -> list[LintResult]:
+    """L012 — UDP push sources in manager mode require a kubernetes block for a per-pipeline NodePort Service."""
+    if tram_mode != "manager" or config.source.type not in UDP_PUSH_SOURCES:
+        return []
+    has_pipeline_service = config.kubernetes is not None and config.kubernetes.enabled
+    if has_pipeline_service:
+        # count:all uses broad selector; count:N and workers.list use manual Endpoints — all wired correctly.
+        return []
+    return [LintResult(
+        rule_id="L012",
+        severity="error",
+        message=(
+            f"Pipeline '{config.name}': source '{config.source.type}' requires "
+            "kubernetes.enabled=true in manager mode — there is no shared UDP ingress in the "
+            "worker chart. Add a kubernetes block to provision a per-pipeline NodePort Service."
         ),
     )]
 

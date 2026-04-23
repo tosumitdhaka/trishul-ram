@@ -253,7 +253,7 @@ sinks:
         )
         ctrl.manager.register(config, yaml_text="test")
         ctrl._start_stream(config)
-        k8s.ensure_service.assert_called_once_with(config)
+        k8s.ensure_service.assert_called_once_with(config, dispatched_worker_ids=None)
 
     def test_stop_execution_deletes_pipeline_service(self):
         k8s = MagicMock()
@@ -840,6 +840,28 @@ class TestOnWorkerRunComplete:
         worker_pool.on_run_complete.assert_called_once_with("r6")
         ctrl.stop()
 
+    def test_worker_batch_completion_clears_active_batch_lease(self):
+        worker_pool = MagicMock()
+        worker_pool.dispatch.return_value = "http://worker-0:8766"
+        ctrl = _started_controller(worker_pool=worker_pool, manager_url="http://manager:8765")
+        config = load_pipeline_from_yaml(_MANUAL_YAML)
+        ctrl.register(config, yaml_text=_MANUAL_YAML)
+        ctrl.manager.set_status("my-manual", "scheduled")
+
+        ctrl._run_batch("my-manual", run_id="rb1")
+        assert ctrl.get_active_batch_runs()[0]["run_id"] == "rb1"
+
+        ctrl.on_worker_run_complete(
+            run_id="rb1",
+            pipeline_name="my-manual",
+            status="success",
+            records_in=1,
+            records_out=1,
+        )
+
+        assert ctrl.get_active_batch_runs() == []
+        ctrl.stop()
+
 
 # ── Worker dispatch path ───────────────────────────────────────────────────
 
@@ -879,6 +901,99 @@ class TestWorkerDispatch:
         call_kwargs = wp.dispatch.call_args.kwargs
         assert call_kwargs["pipeline_name"] == "my-interval"
         assert "r1" in call_kwargs["run_id"] or call_kwargs["run_id"]
+        ctrl.stop()
+
+    def test_run_batch_tracks_active_batch_lease(self):
+        wp = self._worker_pool()
+        ctrl = _started_controller(worker_pool=wp, manager_url="http://manager:8765")
+        config = load_pipeline_from_yaml(_INTERVAL_YAML)
+        ctrl.register(config, yaml_text=_INTERVAL_YAML)
+        ctrl.manager.set_status("my-interval", "scheduled")
+
+        ctrl._run_batch("my-interval", run_id="r-batch")
+
+        assert ctrl.get_active_batch_runs() == [{
+            "run_id": "r-batch",
+            "pipeline_name": "my-interval",
+            "worker_url": "http://worker-0:8766",
+            "schedule_type": "interval",
+            "started_at": ctrl.get_active_batch_runs()[0]["started_at"],
+        }]
+        ctrl.stop()
+
+    def test_mark_active_batch_run_lost_records_failed_run(self):
+        wp = self._worker_pool()
+        ctrl = _started_controller(worker_pool=wp, manager_url="http://manager:8765")
+        config = load_pipeline_from_yaml(_INTERVAL_YAML)
+        ctrl.register(config, yaml_text=_INTERVAL_YAML)
+        ctrl.manager.set_status("my-interval", "scheduled")
+
+        ctrl._run_batch("my-interval", run_id="lost-1")
+        assert len(ctrl.get_active_batch_runs()) == 1
+
+        assert ctrl.mark_active_batch_run_lost(
+            "my-interval",
+            error="worker-owned batch run disappeared before callback: lost-1",
+            run_id="lost-1",
+        ) is True
+
+        assert ctrl.get_active_batch_runs() == []
+        state = ctrl.manager.get("my-interval")
+        assert state.status == "error"
+        assert state.run_history[0].run_id == "lost-1"
+        assert state.run_history[0].status == RunStatus.FAILED
+        ctrl.stop()
+
+    def test_mark_active_batch_run_lost_records_failed_manual_run(self):
+        wp = self._worker_pool()
+        ctrl = _started_controller(worker_pool=wp, manager_url="http://manager:8765")
+        config = load_pipeline_from_yaml(_MANUAL_YAML)
+        ctrl.register(config, yaml_text=_MANUAL_YAML)
+        ctrl.manager.set_status("my-manual", "stopped")
+
+        ctrl._run_batch("my-manual", run_id="lost-manual")
+
+        assert ctrl.mark_active_batch_run_lost(
+            "my-manual",
+            error="worker-owned batch run disappeared before callback: lost-manual",
+            run_id="lost-manual",
+        ) is True
+
+        state = ctrl.manager.get("my-manual")
+        assert state.status == "error"
+        assert state.run_history[0].run_id == "lost-manual"
+        assert state.run_history[0].status == RunStatus.FAILED
+        ctrl.stop()
+
+    def test_duplicate_worker_callback_after_lost_run_is_ignored(self):
+        wp = self._worker_pool()
+        ctrl = _started_controller(worker_pool=wp, manager_url="http://manager:8765")
+        config = load_pipeline_from_yaml(_MANUAL_YAML)
+        ctrl.register(config, yaml_text=_MANUAL_YAML)
+        ctrl.manager.set_status("my-manual", "stopped")
+
+        ctrl._run_batch("my-manual", run_id="lost-late")
+        assert ctrl.mark_active_batch_run_lost(
+            "my-manual",
+            error="worker-owned batch run disappeared before callback: lost-late",
+            run_id="lost-late",
+        ) is True
+
+        state = ctrl.manager.get("my-manual")
+        first_result = state.run_history[0]
+
+        ctrl.on_worker_run_complete(
+            run_id="lost-late",
+            pipeline_name="my-manual",
+            status="success",
+            records_in=5,
+            records_out=5,
+        )
+
+        state = ctrl.manager.get("my-manual")
+        assert len(state.run_history) == 1
+        assert state.run_history[0] == first_result
+        assert state.status == "error"
         ctrl.stop()
 
     def test_run_batch_generates_full_uuid_when_run_id_missing(self):

@@ -52,6 +52,31 @@ Add computed fields using safe `simpleeval` expressions.
 
 ---
 
+## project
+
+Build a final output row from declared source paths.
+
+```yaml
+- type: project
+  fields:
+    record_type: recordType
+    served_imsi:
+      source: servedIMSI
+    served_msisdn:
+      source_any: [servedMSISDN, subscription.msisdn]
+      default: null
+```
+
+Rules:
+- only declared output fields are kept
+- `output_name: source.path` is the compact rename form; missing compact-form paths yield `null`
+  (`None`), so use expanded form with `required: true` for mandatory fields
+- expanded form supports `source`, `source_any`, `default`, and `required`
+- `source_any` checks candidate paths in order and uses the first path that exists, even if its
+  value is `null`
+
+---
+
 ## drop
 
 Remove fields from each record.
@@ -59,6 +84,16 @@ Remove fields from each record.
 ```yaml
 - type: drop
   fields: [debug_flag, internal_id]
+```
+
+Conditional drop is also supported. In dict form, each key is dropped only when its current value
+matches one of the listed values. Dotted paths are supported.
+
+```yaml
+- type: drop
+  fields:
+    served_sip_uri: [null, ""]
+    a.note: [null, ""]
 ```
 
 ---
@@ -103,6 +138,52 @@ Recursively flatten nested dicts.
 ```
 
 `{"a": {"b": {"c": 1}}}` → `{"a_b_c": 1}`
+
+---
+
+## json_flatten
+
+Explicit ordered row-shaping for nested dict/list payloads.
+
+```yaml
+- type: json_flatten
+  explode_paths: [listOfServiceData, listOfTrafficVolumes]
+  separator: "."
+  keep_empty_rows: true
+  preserve_lists: true
+  max_depth: 0
+```
+
+Useful for decoded ASN.1 / XML / nested JSON payloads where row multiplication and flattening
+need to be explicit and predictable.
+
+Optional controls:
+
+```yaml
+- type: json_flatten
+  explode_paths: [records]
+  zip_groups:
+    - fields:
+        measTypes: meas_type
+        measResults: meas_result
+      strict: true
+  choice_unwrap:
+    paths: [pGWAddress]
+    mode: both        # keep | value | both
+    type_suffix: "_type"
+    value_suffix: ""
+  drop_paths: [diagnostics.note]
+```
+
+`drop_paths` also supports simple single-segment `*` wildcards on the final flattened keys.
+Example: `*.debug` matches `service.debug` but not `outer.service.debug`.
+
+Execution order is fixed:
+- explode `explode_paths` in order, against the current row state after prior explosions
+- apply `zip_groups`
+- apply `choice_unwrap`
+- flatten dicts to dotted keys
+- apply `drop_paths` to final flattened keys
 
 ---
 
@@ -289,6 +370,66 @@ Lift a nested dict field's keys to the top level.
 ```
 
 `{"metadata": {"region": "eu", "tier": 1}}` → `{"meta_region": "eu", "meta_tier": 1}`
+
+---
+
+## hex_decode
+
+Interpret scalar hex-string leaf values heuristically or via explicit codecs. This is especially
+useful after ASN.1 decode, where `OCTET STRING` values are emitted as hex strings.
+
+```yaml
+- type: hex_decode
+  mode: utf8_or_hex       # hex | utf8_or_hex | latin1_or_hex
+  preserve_original: false
+```
+
+With overrides:
+
+```yaml
+- type: hex_decode
+  mode: utf8_or_hex
+  preserve_original: true
+  overrides:
+    - path: servedIMSI
+      decode_as: digits
+      format: tbcd
+    - path: recordOpeningTime
+      decode_as: timestamp
+      format: bcd_semi_octet
+    - path: mSTimeZone
+      decode_as: timezone
+      format: tbcd_quarter_hour
+    - path: pGWAddress.value.value
+      decode_as: ip
+      format: packed
+    - path: "*.pGWAddress"
+      decode_as: ip
+      format: packed
+    - path: service_condition_change_hex
+      decode_as: bit_flags
+      bit_length_field: service_condition_change_bits
+      mapping:
+        0: qosChange
+        1: tariffTime
+        5: recordClosure
+      output: both
+```
+
+Supported built-in semantic targets / formats in `1.3.2`:
+- `text` + `utf8` / `latin1`
+- `digits` + `tbcd`
+- `timestamp` + `bcd_semi_octet`
+- `timezone` + `tbcd_quarter_hour`
+- `ip` + `packed`
+- `bit_flags` + companion `bit_length_field`
+- `hex`
+
+For `bit_flags`, `output` may be `names`, `indexes`, or `both`.
+If `output` is omitted, `hex_decode` defaults to `names` when a `mapping` is present and to
+`indexes` when no `mapping` is provided.
+Override `path` values support simple single-segment `*` wildcards. Example:
+`*.pGWAddress` matches `serviceInformation.pGWAddress` but not `outer.serviceInformation.pGWAddress`.
 
 ---
 

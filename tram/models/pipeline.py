@@ -386,7 +386,18 @@ class AddFieldTransformConfig(BaseModel):
 
 class DropTransformConfig(BaseModel):
     type: Literal["drop"]
-    fields: list[str]
+    fields: list[str] | dict[str, list[Any]]
+
+    @field_validator("fields")
+    @classmethod
+    def validate_fields(cls, value):
+        if isinstance(value, dict):
+            for key, item in value.items():
+                if not isinstance(item, list):
+                    raise ValueError(
+                        f"conditional drop field '{key}' must map to a list of values"
+                    )
+        return value
 
 
 class ValueMapTransformConfig(BaseModel):
@@ -507,8 +518,140 @@ class UnnestTransformConfig(BaseModel):
     on_non_dict: Literal["keep", "drop", "raise"] = "keep"
 
 
+class CoalesceFieldRuleConfig(BaseModel):
+    sources: list[str]
+    default: Any | None = None
+    empty_values: list[Any] = Field(default_factory=lambda: [None, ""])
+
+    @field_validator("sources")
+    @classmethod
+    def validate_sources(cls, value: list[str]) -> list[str]:
+        if not value:
+            raise ValueError("sources must not be empty")
+        return value
+
+
+class CoalesceFieldsTransformConfig(BaseModel):
+    type: Literal["coalesce_fields"]
+    fields: dict[str, CoalesceFieldRuleConfig]
+
+
+class SelectFromListSelectionConfig(BaseModel):
+    name: str | None = None
+    match: dict[str, Any] | None = None
+    first_item: bool = False
+    output: dict[str, str]
+
+    @field_validator("output")
+    @classmethod
+    def validate_output(cls, value: dict[str, str]) -> dict[str, str]:
+        if not value:
+            raise ValueError("output must not be empty")
+        return value
+
+    @model_validator(mode="after")
+    def validate_selector_mode(self):
+        has_match = self.match is not None
+        has_first = self.first_item
+        if has_match == has_first:
+            raise ValueError("exactly one of match or first_item=true must be set")
+        return self
+
+
+class SelectFromListTransformConfig(BaseModel):
+    type: Literal["select_from_list"]
+    field: str
+    select: list[SelectFromListSelectionConfig]
+    on_no_match: Literal["null_fields", "raise"] = "null_fields"
+
+    @field_validator("select")
+    @classmethod
+    def validate_select_non_empty(cls, value: list[SelectFromListSelectionConfig]):
+        if not value:
+            raise ValueError("select must not be empty")
+        return value
+
+    @model_validator(mode="after")
+    def validate_duplicate_outputs(self):
+        seen: set[str] = set()
+        for selection in self.select:
+            for output_field in selection.output.values():
+                if output_field in seen:
+                    raise ValueError(f"duplicate output field '{output_field}' across selections")
+                seen.add(output_field)
+        return self
+
+
+class ProjectFieldConfig(BaseModel):
+    source: str | None = None
+    source_any: list[str] = Field(default_factory=list)
+    default: Any | None = None
+    required: bool = False
+
+    @model_validator(mode="after")
+    def validate_source_mode(self):
+        has_source = self.source is not None
+        has_source_any = bool(self.source_any)
+        if has_source == has_source_any:
+            raise ValueError("exactly one of source or source_any must be set")
+        return self
+
+
+class ProjectTransformConfig(BaseModel):
+    type: Literal["project"]
+    fields: dict[str, str | ProjectFieldConfig]
+
+    @field_validator("fields")
+    @classmethod
+    def validate_fields(cls, value: dict[str, str | ProjectFieldConfig]):
+        if not value:
+            raise ValueError("fields must not be empty")
+        return value
+
+
+class JsonFlattenTransformConfig(BaseModel):
+    type: Literal["json_flatten"]
+    explode_paths: list[str] = Field(default_factory=list)
+    separator: str = "."
+    keep_empty_rows: bool = True
+    preserve_lists: bool = True
+    max_depth: int = 0
+    zip_groups: list[JsonFlattenZipGroupConfig] = Field(default_factory=list)
+    choice_unwrap: JsonFlattenChoiceUnwrapConfig | None = None
+    drop_paths: list[str] = Field(default_factory=list)
+
+
+class JsonFlattenZipGroupConfig(BaseModel):
+    fields: dict[str, str]
+    strict: bool = True
+
+
+class JsonFlattenChoiceUnwrapConfig(BaseModel):
+    paths: list[str]
+    mode: Literal["keep", "value", "both"] = "value"
+    type_suffix: str = "_type"
+    value_suffix: str = ""
+
+
+class HexDecodeOverrideConfig(BaseModel):
+    path: str
+    decode_as: str
+    format: str | None = None
+    bit_length_field: str | None = None
+    mapping: dict[int, str] = Field(default_factory=dict)
+    output: Literal["names", "indexes", "both"] | None = None
+
+
+class HexDecodeTransformConfig(BaseModel):
+    type: Literal["hex_decode"]
+    mode: Literal["hex", "utf8_or_hex", "latin1_or_hex"] = "utf8_or_hex"
+    preserve_original: bool = False
+    original_suffix: str = "_hex"
+    overrides: list[HexDecodeOverrideConfig] = Field(default_factory=list)
+
+
 TransformConfig = Annotated[
-    RenameTransformConfig | CastTransformConfig | AddFieldTransformConfig | DropTransformConfig | ValueMapTransformConfig | FilterTransformConfig | FlattenTransformConfig | TimestampNormalizeTransformConfig | AggregateTransformConfig | EnrichTransformConfig | ExplodeTransformConfig | DeduplicateTransformConfig | RegexExtractTransformConfig | InjectMetaTransformConfig | TemplateTransformConfig | MaskTransformConfig | ValidateTransformConfig | SortTransformConfig | LimitTransformConfig | JmesPathExtractTransformConfig | UnnestTransformConfig,
+    RenameTransformConfig | CastTransformConfig | AddFieldTransformConfig | DropTransformConfig | ValueMapTransformConfig | FilterTransformConfig | FlattenTransformConfig | TimestampNormalizeTransformConfig | AggregateTransformConfig | EnrichTransformConfig | ExplodeTransformConfig | DeduplicateTransformConfig | RegexExtractTransformConfig | InjectMetaTransformConfig | TemplateTransformConfig | MaskTransformConfig | ValidateTransformConfig | SortTransformConfig | LimitTransformConfig | JmesPathExtractTransformConfig | UnnestTransformConfig | CoalesceFieldsTransformConfig | SelectFromListTransformConfig | ProjectTransformConfig | JsonFlattenTransformConfig | HexDecodeTransformConfig,
     Field(discriminator="type"),
 ]
 
@@ -1009,8 +1152,20 @@ class TextSerializerConfig(BaseModel):
 class Asn1SerializerConfig(BaseModel):
     type: Literal["asn1"]
     schema_file: str
-    message_class: str
+    message_class: str | None = None
+    message_classes: list[str] | None = None
     encoding: Literal["ber", "der", "per", "uper", "xer", "jer"] = "ber"
+    split_records: bool = False
+
+    @model_validator(mode="after")
+    def check_message_fields(self) -> Asn1SerializerConfig:
+        if bool(self.message_class) == bool(self.message_classes):
+            raise ValueError(
+                "Exactly one of 'message_class' or 'message_classes' must be provided"
+            )
+        if self.split_records and self.encoding != "ber":
+            raise ValueError("split_records is only supported when encoding='ber'")
+        return self
 
 
 class PmXmlSerializerConfig(BaseModel):
@@ -1091,8 +1246,12 @@ class WorkersConfig(BaseModel):
 
 class KubernetesServiceConfig(BaseModel):
     enabled: bool = True
-    service_type: Literal["NodePort", "LoadBalancer"] = "NodePort"
+    service_type: Literal["NodePort", "LoadBalancer", "ClusterIP"] = "NodePort"
     node_port: int | None = None
+    port: int | None = None          # Service port (defaults per protocol if omitted)
+    target_port: int | None = None   # Container port (defaults to source port if omitted)
+    load_balancer_ip: str | None = None
+    annotations: dict[str, str] = Field(default_factory=dict)
     service_name: str = ""
 
     @field_validator("service_name")
@@ -1117,6 +1276,8 @@ class KubernetesServiceConfig(BaseModel):
             raise ValueError("kubernetes.node_port is only valid when service_type=NodePort")
         if self.node_port is not None and not (30000 <= self.node_port <= 32767):
             raise ValueError("kubernetes.node_port must be between 30000 and 32767")
+        if self.load_balancer_ip is not None and self.service_type != "LoadBalancer":
+            raise ValueError("kubernetes.load_balancer_ip is only valid when service_type=LoadBalancer")
         return self
 
 
@@ -1153,6 +1314,8 @@ class PipelineConfig(BaseModel):
 
     # Batch size cap (max records to process per batch run; None = unlimited)
     batch_size: int | None = None
+    record_chunk_size: int | None = Field(default=None, gt=0)
+    post_batch_cleanup: bool = False
 
     # Error handling
     on_error: Literal["continue", "abort", "retry", "dlq"] = "continue"
@@ -1167,10 +1330,11 @@ class PipelineConfig(BaseModel):
         if self.on_error == "dlq" and self.dlq is None:
             raise ValueError("on_error='dlq' requires a 'dlq' sink to be configured")
         if self.kubernetes is not None and self.kubernetes.enabled:
-            if self.source.type not in ("webhook", "prometheus_rw"):
+            _push_sources = {"webhook", "prometheus_rw", "syslog", "snmp_trap"}
+            if self.source.type not in _push_sources:
                 raise ValueError(
                     "kubernetes service provisioning is only supported for "
-                    "webhook and prometheus_rw sources"
+                    "push sources (webhook, prometheus_rw, syslog, snmp_trap)"
                 )
             if self.schedule.type != "stream":
                 raise ValueError(
@@ -1181,7 +1345,7 @@ class PipelineConfig(BaseModel):
     @model_validator(mode="after")
     def apply_workers_default(self) -> PipelineConfig:
         if self.workers is None:
-            if self.source.type in ("webhook", "prometheus_rw"):
+            if self.source.type in ("webhook", "prometheus_rw", "syslog", "snmp_trap"):
                 self.workers = WorkersConfig(count="all")
             else:
                 self.workers = WorkersConfig(count=1)

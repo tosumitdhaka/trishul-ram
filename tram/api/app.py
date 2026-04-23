@@ -41,6 +41,7 @@ async def lifespan(app: FastAPI):
     controller: PipelineController = app.state.controller
     worker_pool = getattr(app.state, "worker_pool", None)
     reconciler = getattr(app.state, "reconciler", None)
+    batch_reconciler = getattr(app.state, "batch_reconciler", None)
 
     # ── Startup ────────────────────────────────────────────────────────────
     logger.info("TRAM daemon starting",
@@ -86,6 +87,8 @@ async def lifespan(app: FastAPI):
 
     if reconciler is not None:
         reconciler.start()
+    if batch_reconciler is not None:
+        batch_reconciler.start()
 
     watcher = None
     if config.watch_pipelines:
@@ -112,6 +115,8 @@ async def lifespan(app: FastAPI):
 
     if reconciler is not None:
         reconciler.stop()
+    if batch_reconciler is not None:
+        batch_reconciler.stop()
 
     controller.stop(timeout=config.shutdown_timeout)
 
@@ -178,6 +183,7 @@ def create_app(config: AppConfig | None = None) -> FastAPI:
 
     worker_pool = None
     reconciler = None
+    batch_reconciler = None
     kubernetes_service_manager = None
     if config.tram_mode == "manager":
         from tram.agent.worker_pool import WorkerPool
@@ -213,13 +219,18 @@ def create_app(config: AppConfig | None = None) -> FastAPI:
     # Keep manager reference on controller's alert evaluator
     controller.manager._alert_evaluator = alert_evaluator
     if config.tram_mode == "manager" and worker_pool is not None and db is not None:
-        from tram.agent.reconciler import PlacementReconciler
+        from tram.agent.reconciler import BatchReconciler, PlacementReconciler
         reconciler = PlacementReconciler(
             controller=controller,
             worker_pool=worker_pool,
             stats_store=stats_store,
             db=db,
             stats_interval=config.stats_interval,
+        )
+        batch_reconciler = BatchReconciler(
+            controller=controller,
+            worker_pool=worker_pool,
+            interval=min(config.stats_interval, 10),
         )
     # Convenience alias — routers that still reference app.state.manager continue to work
     manager = controller.manager
@@ -241,6 +252,7 @@ def create_app(config: AppConfig | None = None) -> FastAPI:
     app.state.worker_pool = worker_pool
     app.state.stats_store = stats_store
     app.state.reconciler = reconciler
+    app.state.batch_reconciler = batch_reconciler
     app.state.kubernetes_service_manager = kubernetes_service_manager
     from datetime import datetime
     app.state.started_at = datetime.now(UTC)

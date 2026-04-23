@@ -202,9 +202,12 @@ Auto-saves a pipeline version to SQLite and auto-starts if `enabled: true` and s
 Get pipeline config and live status.
 
 ### GET /api/pipelines/{name}/placement
-Per-slot placement view for an active broadcast stream.
+Per-slot placement view for an active multi-worker stream, or a synthetic single-slot view
+for an active standalone stream pipeline (v1.3.2+).
 
-Returns `404` when the pipeline exists but has no active broadcast placement.
+Returns `404` when: the pipeline has no active multi-worker placement (manager mode), or the
+stream is not yet reporting stats / has stopped (standalone mode), or the pipeline is not a
+stream type.
 
 ```json
 {
