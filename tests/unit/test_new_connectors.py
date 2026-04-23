@@ -192,6 +192,111 @@ class TestLocalSink:
 
         assert (tmp_path / "rows.csv").read_text() == "id,name\n1,alpha\n2,beta\n"
 
+    def test_single_mode_stages_record_safe_output_until_finalize(self, tmp_path):
+        sink = LocalSink({
+            "path": str(tmp_path),
+            "filename_template": "rows.ndjson",
+            "file_mode": "single",
+        })
+        meta = {
+            "pipeline_name": "mypipe",
+            "run_id": "run-1",
+            "source_filename": "input.ber",
+            "source_path": "/in/input.ber",
+            "serializer_type": "ndjson",
+            "serializer_config": {"type": "ndjson"},
+            "output_record_count": 1,
+            "enable_safe_finalize": True,
+        }
+
+        sink.write(b'{"seq": 1}', meta)
+        sink.write(b'{"seq": 2}', meta)
+
+        temp = tmp_path / ".rows.ndjson.tram-run-1.tmp"
+        assert temp.read_text() == '{"seq": 1}\n{"seq": 2}\n'
+        assert not (tmp_path / "rows.ndjson").exists()
+
+        sink.finalize_source(meta, success=True)
+
+        assert not temp.exists()
+        assert (tmp_path / "rows.ndjson").read_text() == '{"seq": 1}\n{"seq": 2}\n'
+
+    def test_single_mode_failure_cleanup_removes_temp_file(self, tmp_path):
+        sink = LocalSink({
+            "path": str(tmp_path),
+            "filename_template": "rows.ndjson",
+            "file_mode": "single",
+        })
+        meta = {
+            "pipeline_name": "mypipe",
+            "run_id": "run-1",
+            "source_filename": "input.ber",
+            "source_path": "/in/input.ber",
+            "serializer_type": "ndjson",
+            "serializer_config": {"type": "ndjson"},
+            "output_record_count": 1,
+            "enable_safe_finalize": True,
+        }
+
+        sink.write(b'{"seq": 1}', meta)
+        temp = tmp_path / ".rows.ndjson.tram-run-1.tmp"
+        assert temp.exists()
+
+        sink.finalize_source(meta, success=False)
+
+        assert not temp.exists()
+        assert not (tmp_path / "rows.ndjson").exists()
+
+    def test_single_mode_rerun_discards_stale_temp_artifact(self, tmp_path):
+        sink = LocalSink({
+            "path": str(tmp_path),
+            "filename_template": "rows.ndjson",
+            "file_mode": "single",
+        })
+        stale = tmp_path / ".rows.ndjson.tram-old-run.tmp"
+        stale.write_text("stale\n")
+        meta = {
+            "pipeline_name": "mypipe",
+            "run_id": "run-1",
+            "source_filename": "input.ber",
+            "source_path": "/in/input.ber",
+            "serializer_type": "ndjson",
+            "serializer_config": {"type": "ndjson"},
+            "output_record_count": 1,
+            "enable_safe_finalize": True,
+        }
+
+        sink.write(b'{"seq": 1}', meta)
+
+        assert not stale.exists()
+        assert (tmp_path / ".rows.ndjson.tram-run-1.tmp").read_text() == '{"seq": 1}\n'
+
+    def test_append_mode_stages_csv_until_finalize(self, tmp_path):
+        sink = LocalSink({
+            "path": str(tmp_path),
+            "filename_template": "rows.csv",
+            "file_mode": "append",
+        })
+        meta = {
+            "pipeline_name": "mypipe",
+            "run_id": "run-1",
+            "source_filename": "input.ber",
+            "source_path": "/in/input.ber",
+            "serializer_type": "csv",
+            "serializer_config": {"type": "csv", "has_header": True},
+            "output_record_count": 1,
+            "enable_safe_finalize": True,
+        }
+
+        sink.write(b"id,name\r\n1,alpha\r\n", meta)
+        sink.write(b"id,name\r\n2,beta\r\n", meta)
+
+        assert not (tmp_path / "rows.csv").exists()
+
+        sink.finalize_source(meta, success=True)
+
+        assert (tmp_path / "rows.csv").read_text() == "id,name\n1,alpha\n2,beta\n"
+
 
 # ── SFTPSink ───────────────────────────────────────────────────────────────
 
@@ -229,6 +334,32 @@ class _FakeSFTPClient:
 
     def open(self, path: str, mode: str):
         return _FakeRemoteFile(self.files, path, mode)
+
+    def listdir(self, path: str) -> list[str]:
+        prefix = "" if path in ("", ".") else f"{path.rstrip('/')}/"
+        entries: set[str] = set()
+        for directory in self.directories:
+            if not directory.startswith(prefix):
+                continue
+            remainder = directory[len(prefix):]
+            if remainder and "/" not in remainder:
+                entries.add(remainder)
+        for filename in self.files:
+            if not filename.startswith(prefix):
+                continue
+            remainder = filename[len(prefix):]
+            if remainder and "/" not in remainder:
+                entries.add(remainder)
+        return sorted(entries)
+
+    def rename(self, old: str, new: str) -> None:
+        self.files[new] = self.files.pop(old)
+
+    def posix_rename(self, old: str, new: str) -> None:
+        self.rename(old, new)
+
+    def remove(self, path: str) -> None:
+        self.files.pop(path, None)
 
     def close(self) -> None:
         return None
@@ -375,6 +506,95 @@ class TestSFTPSink:
         )
         assert sftp.files["/out/MSC_00002.ndjson"] == b'{"nf_name": "MSC", "value": 3}\n'
         assert sftp.files["/out/SMSC_00001.ndjson"] == b'{"nf_name": "SMSC", "value": 10}\n'
+
+    def test_single_mode_stages_record_safe_output_until_finalize(self):
+        sftp = _FakeSFTPClient()
+        sink = SFTPSink({
+            "host": "example.com",
+            "username": "user",
+            "password": "pass",
+            "remote_path": "/out",
+            "filename_template": "rows.ndjson",
+            "file_mode": "single",
+        })
+        meta = {
+            "pipeline_name": "mypipe",
+            "run_id": "run-1",
+            "source_filename": "input.ber",
+            "source_path": "/in/input.ber",
+            "serializer_type": "ndjson",
+            "serializer_config": {"type": "ndjson"},
+            "output_record_count": 1,
+            "enable_safe_finalize": True,
+        }
+
+        with patch.object(sink, "_connect", return_value=(_FakeTransport(), sftp)):
+            sink.write(b'{"seq": 1}', meta)
+            sink.write(b'{"seq": 2}', meta)
+            assert "/out/.rows.ndjson.tram-run-1.tmp" in sftp.files
+            assert "/out/rows.ndjson" not in sftp.files
+            sink.finalize_source(meta, success=True)
+
+        assert sftp.files["/out/rows.ndjson"] == b'{"seq": 1}\n{"seq": 2}\n'
+        assert "/out/.rows.ndjson.tram-run-1.tmp" not in sftp.files
+
+    def test_single_mode_failure_cleanup_removes_temp_file(self):
+        sftp = _FakeSFTPClient()
+        sink = SFTPSink({
+            "host": "example.com",
+            "username": "user",
+            "password": "pass",
+            "remote_path": "/out",
+            "filename_template": "rows.ndjson",
+            "file_mode": "single",
+        })
+        meta = {
+            "pipeline_name": "mypipe",
+            "run_id": "run-1",
+            "source_filename": "input.ber",
+            "source_path": "/in/input.ber",
+            "serializer_type": "ndjson",
+            "serializer_config": {"type": "ndjson"},
+            "output_record_count": 1,
+            "enable_safe_finalize": True,
+        }
+
+        with patch.object(sink, "_connect", return_value=(_FakeTransport(), sftp)):
+            sink.write(b'{"seq": 1}', meta)
+            assert "/out/.rows.ndjson.tram-run-1.tmp" in sftp.files
+            sink.finalize_source(meta, success=False)
+
+        assert "/out/.rows.ndjson.tram-run-1.tmp" not in sftp.files
+        assert "/out/rows.ndjson" not in sftp.files
+
+    def test_single_mode_rerun_discards_stale_temp_artifact(self):
+        sftp = _FakeSFTPClient()
+        sftp.directories.add("/out")
+        sftp.files["/out/.rows.ndjson.tram-old-run.tmp"] = b"stale\n"
+        sink = SFTPSink({
+            "host": "example.com",
+            "username": "user",
+            "password": "pass",
+            "remote_path": "/out",
+            "filename_template": "rows.ndjson",
+            "file_mode": "single",
+        })
+        meta = {
+            "pipeline_name": "mypipe",
+            "run_id": "run-1",
+            "source_filename": "input.ber",
+            "source_path": "/in/input.ber",
+            "serializer_type": "ndjson",
+            "serializer_config": {"type": "ndjson"},
+            "output_record_count": 1,
+            "enable_safe_finalize": True,
+        }
+
+        with patch.object(sink, "_connect", return_value=(_FakeTransport(), sftp)):
+            sink.write(b'{"seq": 1}', meta)
+
+        assert "/out/.rows.ndjson.tram-old-run.tmp" not in sftp.files
+        assert sftp.files["/out/.rows.ndjson.tram-run-1.tmp"] == b'{"seq": 1}\n'
 
 
 # ── RestSource ─────────────────────────────────────────────────────────────

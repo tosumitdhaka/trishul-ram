@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from abc import ABC, abstractmethod
+from collections.abc import Iterator
 
 
 class BaseSerializer(ABC):
@@ -22,6 +23,20 @@ class BaseSerializer(ABC):
             List of dicts, one per logical record.
         """
         ...
+
+    def parse_chunks(self, data: bytes, record_chunk_size: int) -> Iterator[list[dict]]:
+        """Parse raw bytes into bounded batches of records.
+
+        Serializers may override this to avoid materializing the full decoded
+        record set in memory. The default implementation preserves current
+        behavior by calling ``parse()`` once and slicing the result.
+        """
+        records = self.parse(data)
+        if record_chunk_size <= 0:
+            yield records
+            return
+        for offset in range(0, len(records), record_chunk_size):
+            yield records[offset:offset + record_chunk_size]
 
     @abstractmethod
     def serialize(self, records: list[dict]) -> bytes:

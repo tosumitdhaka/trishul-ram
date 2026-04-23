@@ -306,6 +306,60 @@ class WorkerPool:
                 for url, h in self._health.items()
             ]
 
+    def assignment_for_run(self, run_id: str) -> str | None:
+        with self._lock:
+            return self._assignments.get(run_id)
+
+    def worker_status(self, worker_url: str) -> dict | None:
+        try:
+            with httpx.Client(timeout=5) as client:
+                resp = client.get(f"{worker_url}/agent/status")
+                resp.raise_for_status()
+                data = resp.json()
+        except Exception as exc:
+            logger.warning(
+                "worker_status probe failed",
+                extra={"worker": worker_url, "error": str(exc)},
+            )
+            return None
+
+        return {
+            "running": list(data.get("running", [])),
+            "streams": list(data.get("streams", [])),
+        }
+
+    def is_run_active(self, run_id: str, worker_url: str | None = None) -> bool:
+        target_worker = worker_url or self.assignment_for_run(run_id)
+        if not target_worker:
+            return False
+        status = self.worker_status(target_worker)
+        if status is None:
+            return False
+        active = list(status.get("running", [])) + list(status.get("streams", []))
+        return any(item.get("run_id") == run_id for item in active)
+
+    def find_pipeline_runs(self, pipeline_name: str, *, schedule_type: str = "batch") -> list[dict]:
+        matches: list[dict] = []
+        with self._lock:
+            worker_urls = list(self._workers)
+
+        key = "streams" if schedule_type == "stream" else "running"
+        for worker_url in worker_urls:
+            status = self.worker_status(worker_url)
+            if status is None:
+                continue
+            for item in status.get(key, []):
+                if item.get("pipeline") != pipeline_name or not item.get("run_id"):
+                    continue
+                matches.append({
+                    "worker_url": worker_url,
+                    "run_id": str(item["run_id"]),
+                    "pipeline_name": str(item.get("pipeline", pipeline_name)),
+                    "started_at": item.get("started_at"),
+                    "schedule_type": schedule_type,
+                })
+        return matches
+
     # ── Dispatch ───────────────────────────────────────────────────────────
 
     def _dispatch_to_worker(

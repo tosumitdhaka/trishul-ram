@@ -6,11 +6,14 @@ import logging
 
 from tram.connectors.file_sink_common import (
     FilePartState,
+    StagedFileTarget,
     ensure_rolling_token,
     file_state_key,
     prepare_payload_for_append,
     render_filename,
     should_roll,
+    should_stage_file_output,
+    source_unit_key,
     utc_now,
 )
 from tram.core.exceptions import SinkError
@@ -60,6 +63,38 @@ class SFTPSink(BaseSink):
         self._states: dict[tuple[tuple[str, str], ...], FilePartState] = {}
         self._current_remote_files: dict[tuple[tuple[str, str], ...], str] = {}
         self._part_counters: dict[tuple[tuple[str, str], ...], int] = {}
+        self._staged_targets: dict[tuple[str, str, str], dict[tuple[tuple[str, str], ...], StagedFileTarget]] = {}
+
+    @staticmethod
+    def _temp_remote_file(final_remote_file: str, run_id: str) -> str:
+        if "/" in final_remote_file:
+            directory, filename = final_remote_file.rsplit("/", 1)
+            return f"{directory}/.{filename}.tram-{run_id}.tmp"
+        return f".{final_remote_file}.tram-{run_id}.tmp"
+
+    @staticmethod
+    def _cleanup_stale_temp_files(sftp, final_remote_file: str, *, keep_path: str | None = None) -> None:
+        if "/" in final_remote_file:
+            directory, filename = final_remote_file.rsplit("/", 1)
+        else:
+            directory, filename = "", final_remote_file
+        prefix = f".{filename}.tram-"
+        suffix = ".tmp"
+        listing_path = directory or "."
+        try:
+            names = sftp.listdir(listing_path)
+        except Exception:
+            return
+        for name in names:
+            if not name.startswith(prefix) or not name.endswith(suffix):
+                continue
+            candidate = f"{directory}/{name}" if directory else name
+            if keep_path is not None and candidate == keep_path:
+                continue
+            try:
+                sftp.remove(candidate)
+            except Exception:
+                continue
 
     def _connect(self):
         try:
@@ -113,6 +148,8 @@ class SFTPSink(BaseSink):
             record_count = int(meta.get("output_record_count", 0))
             now = utc_now()
             state_key = file_state_key(self.filename_template, meta=meta)
+            stage_output = should_stage_file_output(meta, serializer_type)
+            staged_source_key = source_unit_key(meta) if stage_output else None
 
             if self.file_mode == "append":
                 state = self._states.get(state_key)
@@ -137,6 +174,23 @@ class SFTPSink(BaseSink):
                         now=now,
                         state_key=state_key,
                     )
+                    if stage_output:
+                        final_remote_file = current_remote_file
+                        current_remote_file = self._temp_remote_file(
+                            final_remote_file,
+                            str(meta.get("run_id", "") or "run"),
+                        )
+                        self._cleanup_stale_temp_files(
+                            sftp,
+                            final_remote_file,
+                            keep_path=current_remote_file,
+                        )
+                        staged_targets = self._staged_targets.setdefault(staged_source_key, {})
+                        staged_targets[state_key] = StagedFileTarget(
+                            state_key=state_key,
+                            temp_path=current_remote_file,
+                            final_path=final_remote_file,
+                        )
                     self._current_remote_files[state_key] = current_remote_file
                     self._states[state_key] = state
                 remote_file = current_remote_file
@@ -155,8 +209,42 @@ class SFTPSink(BaseSink):
                 state.bytes_written += len(payload)
             else:
                 remote_file, state = self._next_remote_file(meta, now=now, state_key=state_key)
-                with sftp.open(remote_file, "wb") as fh:
-                    fh.write(data)
+                if stage_output:
+                    final_remote_file = remote_file
+                    remote_file = self._temp_remote_file(
+                        final_remote_file,
+                        str(meta.get("run_id", "") or "run"),
+                    )
+                    self._cleanup_stale_temp_files(
+                        sftp,
+                        final_remote_file,
+                        keep_path=remote_file,
+                    )
+                    staged_targets = self._staged_targets.setdefault(staged_source_key, {})
+                    staged_targets[state_key] = StagedFileTarget(
+                        state_key=state_key,
+                        temp_path=remote_file,
+                        final_path=final_remote_file,
+                    )
+                    try:
+                        sftp.stat(remote_file)
+                        existing = True
+                    except Exception:
+                        existing = False
+                    payload = prepare_payload_for_append(
+                        data,
+                        serializer_type=serializer_type,
+                        serializer_config=serializer_config,
+                        is_new_file=not existing,
+                    )
+                    if payload:
+                        with sftp.open(remote_file, "ab") as fh:
+                            fh.write(payload)
+                        state.records_written += record_count
+                        state.bytes_written += len(payload)
+                else:
+                    with sftp.open(remote_file, "wb") as fh:
+                        fh.write(data)
                 self._current_remote_files[state_key] = remote_file
                 self._states[state_key] = state
 
@@ -172,6 +260,53 @@ class SFTPSink(BaseSink):
             raise
         except Exception as exc:
             raise SinkError(f"Error writing to SFTP {self.host}: {exc}") from exc
+        finally:
+            try:
+                sftp.close()
+            except Exception:
+                pass
+            try:
+                transport.close()
+            except Exception:
+                pass
+
+    def finalize_source(self, meta: dict, success: bool) -> None:
+        source_key = source_unit_key(meta)
+        staged_targets = self._staged_targets.pop(source_key, {})
+        if not staged_targets:
+            return
+
+        transport, sftp = self._connect()
+        try:
+            for state_key, target in staged_targets.items():
+                temp_remote_file = target.temp_path
+                final_remote_file = target.final_path
+
+                try:
+                    if success:
+                        try:
+                            if hasattr(sftp, "posix_rename"):
+                                sftp.posix_rename(temp_remote_file, final_remote_file)
+                            else:
+                                try:
+                                    sftp.remove(final_remote_file)
+                                except Exception:
+                                    pass
+                                sftp.rename(temp_remote_file, final_remote_file)
+                        except Exception as exc:
+                            raise SinkError(
+                                f"Error finalizing SFTP sink output for {final_remote_file}: {exc}"
+                            ) from exc
+                    else:
+                        try:
+                            sftp.remove(temp_remote_file)
+                        except Exception:
+                            pass
+                    self._states.pop(state_key, None)
+                    self._current_remote_files.pop(state_key, None)
+                    self._part_counters.pop(state_key, None)
+                except SinkError:
+                    raise
         finally:
             try:
                 sftp.close()

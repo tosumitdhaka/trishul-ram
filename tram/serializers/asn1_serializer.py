@@ -18,6 +18,7 @@ Schema file is required; there is no schema-less fallback.
 from __future__ import annotations
 
 import os
+from collections.abc import Iterator
 from datetime import datetime
 from typing import Any
 
@@ -110,7 +111,10 @@ def _find_indefinite_end(data: bytes, offset: int) -> int:
 
 
 def _split_ber_records(data: bytes) -> list[bytes]:
-    records: list[bytes] = []
+    return list(_iter_ber_records(data))
+
+
+def _iter_ber_records(data: bytes) -> Iterator[bytes]:
     offset = 0
     while offset < len(data):
         tag_end, _ = _parse_tag(data, offset)
@@ -118,9 +122,8 @@ def _split_ber_records(data: bytes) -> list[bytes]:
         end = _find_indefinite_end(data, len_end) if length is None else len_end + length
         if end > len(data):
             raise SerializerError("ASN.1 BER split error: record extends past end of payload")
-        records.append(data[offset:end])
+        yield data[offset:end]
         offset = end
-    return records
 
 
 @register_serializer("asn1")
@@ -215,6 +218,31 @@ class Asn1Serializer(BaseSerializer):
         payloads = _split_ber_records(data) if self.split_records else [data]
         try:
             return [self._wrap_result(self._decode_record(compiled, payload)) for payload in payloads]
+        except SerializerError:
+            raise
+        except Exception as exc:
+            roots = [self.message_class] if self.message_class else list(self.message_classes or [])
+            raise SerializerError(
+                f"ASN.1 decode error (types={roots}, encoding={self.encoding}): {exc}"
+            ) from exc
+
+    def parse_chunks(self, data: bytes, record_chunk_size: int) -> Iterator[list[dict]]:
+        if record_chunk_size <= 0:
+            yield self.parse(data)
+            return
+
+        compiled = self._get_compiled()
+        payloads = _iter_ber_records(data) if self.split_records else iter([data])
+        batch: list[dict] = []
+
+        try:
+            for payload in payloads:
+                batch.append(self._wrap_result(self._decode_record(compiled, payload)))
+                if len(batch) >= record_chunk_size:
+                    yield batch
+                    batch = []
+            if batch:
+                yield batch
         except SerializerError:
             raise
         except Exception as exc:

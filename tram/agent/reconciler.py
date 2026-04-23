@@ -177,3 +177,103 @@ class PlacementReconciler:
                 self._controller.reconcile_kubernetes_service(placement["pipeline_name"])
             if next_status != placement["status"]:
                 self._controller._update_broadcast_placement_status(placement_group_id, next_status)
+
+
+class BatchReconciler:
+    """Reconcile worker-owned batch runs after worker or manager failure."""
+
+    def __init__(self, controller, worker_pool, interval: int = 10) -> None:
+        self._controller = controller
+        self._worker_pool = worker_pool
+        self._interval = interval
+        self._stop = threading.Event()
+        self._thread: threading.Thread | None = None
+
+    def start(self) -> None:
+        self._stop.clear()
+        self._thread = threading.Thread(
+            target=self._loop,
+            daemon=True,
+            name="tram-batch-reconciler",
+        )
+        self._thread.start()
+
+    def stop(self) -> None:
+        self._stop.set()
+        if self._thread and self._thread.is_alive():
+            self._thread.join(timeout=self._interval + 1)
+
+    def _loop(self) -> None:
+        while not self._stop.wait(self._interval):
+            try:
+                self.run_once()
+            except Exception as exc:
+                logger.warning("Batch reconciler iteration failed", extra={"error": str(exc)})
+
+    def _reconcile_tracked_runs(self) -> set[str]:
+        from tram.metrics.registry import MGR_RECONCILE_ACTION_TOTAL
+
+        cleared: set[str] = set()
+        for lease in self._controller.get_active_batch_runs():
+            pipeline_name = str(lease["pipeline_name"])
+            run_id = str(lease["run_id"])
+            worker_url = str(lease["worker_url"])
+            if self._worker_pool.is_run_active(run_id, worker_url=worker_url):
+                continue
+            error = f"Worker-owned batch run disappeared before callback: {run_id}"
+            if self._controller.mark_active_batch_run_lost(
+                pipeline_name,
+                error=error,
+                run_id=run_id,
+            ):
+                cleared.add(pipeline_name)
+                MGR_RECONCILE_ACTION_TOTAL.labels(
+                    pipeline=pipeline_name, action="batch_mark_lost"
+                ).inc()
+        return cleared
+
+    def _reconcile_untracked_running_pipelines(self, skip: set[str] | None = None) -> None:
+        from tram.metrics.registry import MGR_RECONCILE_ACTION_TOTAL
+
+        skip = skip or set()
+        tracked = {
+            str(run["pipeline_name"])
+            for run in self._controller.get_active_batch_runs()
+        }
+        for state in self._controller.list_all():
+            pipeline_name = state.config.name
+            if state.config.schedule.type == "stream":
+                continue
+            if state.status != "running":
+                continue
+            if pipeline_name in skip:
+                continue
+            if pipeline_name in tracked:
+                continue
+
+            matches = self._worker_pool.find_pipeline_runs(pipeline_name, schedule_type="batch")
+            if matches:
+                adopted = min(
+                    matches,
+                    key=lambda item: str(item.get("started_at") or ""),
+                )
+                if self._controller.adopt_active_batch_run(
+                    pipeline_name=pipeline_name,
+                    run_id=str(adopted["run_id"]),
+                    worker_url=str(adopted["worker_url"]),
+                    started_at=adopted.get("started_at"),
+                ):
+                    MGR_RECONCILE_ACTION_TOTAL.labels(
+                        pipeline=pipeline_name, action="batch_adopt"
+                    ).inc()
+                continue
+
+            error = "Manager recovered no active worker batch run for pipeline marked running"
+            if self._controller.mark_active_batch_run_lost(pipeline_name, error=error):
+                MGR_RECONCILE_ACTION_TOTAL.labels(
+                    pipeline=pipeline_name, action="batch_clear_stale"
+                ).inc()
+
+    def run_once(self) -> None:
+        cleared = self._reconcile_tracked_runs()
+        self._reconcile_untracked_running_pipelines(skip=cleared)

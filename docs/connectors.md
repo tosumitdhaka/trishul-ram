@@ -56,6 +56,9 @@ pipeline:
       # ... sink params
 
   on_error: continue           # continue | abort | retry | dlq
+  # batch_size: 100000         # optional hard cap per batch run
+  # record_chunk_size: 500     # serial batch only; bounded decode windows for large files
+  # post_batch_cleanup: true   # optional gc + heap trim after batch completion
 
   dlq:                         # dead-letter queue for failed records
     type: local
@@ -823,6 +826,7 @@ Notes:
 - Field tokens such as `{field.nf_name}` trigger executor-side partitioning before serialization. Each distinct field value gets its own active file/object path; missing values use `unknown`.
 - `csv` and `ndjson` support append/rolling naturally.
 - `json` file sinks are forced to `file_mode=single`; rolling with `max_records`, `max_time`, or `max_bytes` is rejected because plain JSON arrays are not append-safe.
+- in serial batch runs, staged safe-finalize for record-safe serializers (`csv`, `ndjson`) publishes only on source-file success; failure removes the current run temp file, and reruns discard stale temp siblings for the same final filename before writing
 - When rolling is enabled and the template lacks a strong uniqueness token (`{part}`, `{index}`, or `{epoch_m}`), TRAM auto-appends `_{part}` and logs a warning to avoid filename collisions.
 - Risky field choices like `{field.timestamp}` or `{field.value}` are allowed but produce a lint warning because they may create runaway file counts.
 
@@ -864,6 +868,7 @@ Notes:
 - `csv` append strips repeated headers after the first file write.
 - `ndjson` append preserves newline-delimited framing automatically.
 - `json` file sinks are forced to `file_mode=single`; rolling with `max_records`, `max_time`, or `max_bytes` is rejected.
+- in serial batch runs, staged safe-finalize for record-safe serializers (`csv`, `ndjson`) publishes only on source-file success; failure removes the current run temp file, and reruns discard stale temp siblings for the same final filename before writing
 
 ```yaml
 sinks:

@@ -30,12 +30,26 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - `KubernetesServiceConfig` gains optional `port`, `target_port`, `load_balancer_ip`, `annotations` fields; `ClusterIP` added as valid `service_type`
 - `delete_service()` now cleans up manual `Endpoints` for both `workers.list` and `count: N` pipelines
 
+**Large-batch resilience**
+- `BatchReconciler` now runs alongside `PlacementReconciler` so the manager can scan worker `/agent/status`, adopt orphaned running batch runs after restart, and synthesize failures when a worker-owned batch run disappears before callback
+- batch run completion paths now reuse the normal controller finalization logic, so manual, interval, and cron pipelines keep the same status transitions even when a lost run is reconciled instead of completing normally
+- `record_chunk_size` was added to pipeline config for bounded record windows in serial batch runs; serializers can implement `parse_chunks(data, record_chunk_size)` and the ASN.1 serializer now decodes concatenated BER payloads incrementally instead of materializing one giant list first
+
 ### Changed
 
 **Linter rules**
 - L008 removed (was blocking all UDP push sources in manager mode)
 - L012 added (error): UDP push sources in manager mode require `kubernetes: enabled: true` — no pre-existing shared UDP ingress exists in the worker chart
 - L006 updated: `kubernetes: enabled: true` now permits `count: N` and `workers.list` in addition to `count: all`; the controller threads `dispatched_worker_ids` into the service manager to avoid over-selection
+
+**Safe staged file output cleanup**
+- local and SFTP sinks now delete their run-scoped staged temp file on `finalize_source(..., success=False)` instead of leaving it behind
+- when a new staged write begins for the same deterministic final filename, stale `.tram-*.tmp` artifacts from failed prior attempts are discarded before the new run writes
+- staged safe-finalize is applied only to record-safe serializers (`csv`, `ndjson`) in the serial batch path and publishes output only after a source file completes successfully
+
+**Optional post-batch heap cleanup**
+- batch-mode heap cleanup is now pipeline-controlled via `post_batch_cleanup: true` instead of being enabled globally for every batch run
+- when enabled, the executor performs `gc.collect()` and best-effort `malloc_trim(0)` after the batch result is finalized; default remains off to avoid surprising process-wide pauses on shared workers
 
 ### Validated
 

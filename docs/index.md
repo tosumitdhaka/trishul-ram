@@ -41,8 +41,9 @@ Lightweight, container-native Python daemon for telecom data pipeline orchestrat
 - **Archive**
   - **[Structured Record Shaping Design](archive/structured-record-shaping-design.md)** - Archived shaping/design record for explicit `json_flatten`, `hex_decode`, `project`, conditional `drop`, and narrow wildcard path support on nested JSON / ASN.1-decoded payloads
   - **[v1.3.2 Plan](archive/v1.3.2-plan.md)** - Archived implementation plan for the `1.3.2` backend slice set
+  - **[v1.3.2 Batch Recovery Plan](archive/v1.3.2-batch-recovery-plan.md)** - Archived design and validation record for batch reconciliation, incremental large-record processing, and safe staged file output
   - **[v1.3.1 Plan](archive/v1.3.1-plan.md)** - Archived planning document for the `1.3.1` implementation slice set
-  - **[v1.3.0 Broadcast Streams Design](archive/v1.3.0-broadcast-streams-design.md)** - Archived design document for the `1.3.0` broadcast-streams rollout
+  - **[v1.3.0 Plan *Architecture Change*](archive/v1.3.0-plan.md)** - Archived design document for the `1.3.0` broadcast-streams rollout
 
 ---
 
@@ -187,8 +188,9 @@ docs/
 └── archive/                      # Archived version-specific design and planning docs
     ├── structured-record-shaping-design.md # Archived shaping/decode design for nested record payloads
     ├── v1.3.2-plan.md            # Archived 1.3.2 backend implementation plan
+    ├── v1.3.2-batch-recovery-plan.md # Archived 1.3.2 batch resilience follow-up plan
     ├── v1.3.1-plan.md            # Archived 1.3.1 implementation plan
-    └── v1.3.0-broadcast-streams-design.md
+    └── v1.3.0-plan.md            # Archived 1.3.0 implementation plan
 ```
 
 ---
@@ -211,6 +213,9 @@ See [changelog.md](changelog.md) for detailed release notes.
 - UDP multi-worker streams: `syslog` and `snmp_trap` sources work in manager mode with `kubernetes: enabled: true`; per-pipeline NodePort Services; `count: N` uses manual Endpoints pinned to dispatched workers; L012 enforces the kubernetes requirement
 - ASN.1 decode improvements: concatenated BER multi-record split, ordered `message_classes` fallback, and the explicit `json_flatten` / `hex_decode` shaping path
 - CDR shaping primitives: dotted-path support across core transforms plus `select_from_list`, `coalesce_fields`, `project`, conditional `drop`, and narrow wildcard path support for explicit LTE/SGW/PGW mediation pipelines
+- Batch resilience: `BatchReconciler` adopts or clears lost worker-owned batch runs after manager restart or worker loss, reusing the normal final status path
+- Large-file batch efficiency: `record_chunk_size` enables bounded serial batch decode windows, and ASN.1 BER payloads now support incremental record parsing instead of one giant in-memory decode
+- Safer batch file output: serial batch `csv` / `ndjson` sinks stage temp files per source unit, publish only on successful source completion, and can optionally run post-batch heap cleanup via `post_batch_cleanup: true`
 
 **v1.3.1** (2026-04-20)
 - `workers.count: N` and `workers.list` placement behavior are now implemented for multi-worker push streams in manager mode
@@ -230,4 +235,4 @@ See [changelog.md](changelog.md) for detailed release notes.
 
 ---
 
-*Last updated: 2026-04-22*
+*Last updated: 2026-04-23*
