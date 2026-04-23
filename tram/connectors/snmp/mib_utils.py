@@ -50,6 +50,16 @@ def _set_mib_sources(mib_builder, *sources) -> None:
     mib_builder.mibSources = tuple(sources)
 
 
+def _load_mib_module(mib_builder, module: str) -> None:
+    """Load one MIB module across snake_case and camelCase APIs."""
+    loader = getattr(mib_builder, "load_modules", None) or getattr(
+        mib_builder, "loadModules", None
+    )
+    if not callable(loader):
+        raise AttributeError("MIB builder has no load_modules/loadModules method")
+    loader(module)
+
+
 # ── SNMPv3 USM auth builder ─────────────────────────────────────────────────
 
 # Maps human-readable protocol strings → pysnmp.hlapi attribute names.
@@ -239,7 +249,7 @@ def build_mib_view(mib_dirs: list[str], mib_modules: list[str]):
 
     for mod in all_modules:
         try:
-            mib_builder.loadModules(mod)
+            _load_mib_module(mib_builder, mod)
         except Exception as exc:
             logger.debug("Could not load MIB module %s: %s", mod, exc)
 
@@ -274,7 +284,10 @@ def resolve_oid(mib_view, oid_tuple: tuple) -> str:
         from pyasn1.type.univ import ObjectIdentifier
 
         oid_obj = ObjectIdentifier(oid_tuple)
-        mod_name, sym_name, indices = mib_view.getNodeLocation(oid_obj)
+        get_node_location = getattr(mib_view, "get_node_location", None)
+        if get_node_location is None:
+            get_node_location = getattr(mib_view, "getNodeLocation")
+        mod_name, sym_name, indices = get_node_location(oid_obj)
         if indices:
             idx_str = "." + ".".join(str(i) for i in indices)
         else:

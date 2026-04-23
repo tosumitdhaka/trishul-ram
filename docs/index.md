@@ -39,6 +39,8 @@ Lightweight, container-native Python daemon for telecom data pipeline orchestrat
 - **[Pipeline Controller Design](pipeline-controller-design.md)** - Historical design notes for the v1.1.x controller transition; current manager/worker architecture is documented in `architecture.md`
 - **[Roadmap](roadmap.md)** - Planned features and version checklist
 - **Archive**
+  - **[Structured Record Shaping Design](archive/structured-record-shaping-design.md)** - Archived shaping/design record for explicit `json_flatten`, `hex_decode`, `project`, conditional `drop`, and narrow wildcard path support on nested JSON / ASN.1-decoded payloads
+  - **[v1.3.2 Plan](archive/v1.3.2-plan.md)** - Archived implementation plan for the `1.3.2` backend slice set
   - **[v1.3.1 Plan](archive/v1.3.1-plan.md)** - Archived planning document for the `1.3.1` implementation slice set
   - **[v1.3.0 Broadcast Streams Design](archive/v1.3.0-broadcast-streams-design.md)** - Archived design document for the `1.3.0` broadcast-streams rollout
 
@@ -73,7 +75,7 @@ curl http://localhost:8765/api/ready
 
 ### Kubernetes (Helm)
 
-Quick-start examples below use `latest`. For production, pin `image.tag` to a specific release such as `1.3.1`.
+Quick-start examples below use `latest`. For production, pin `image.tag` to a specific release such as `1.3.2`.
 
 ```bash
 # Standalone mode (SQLite, single pod)
@@ -99,7 +101,7 @@ helm install tram oci://ghcr.io/tosumitdhaka/charts/trishul-ram \
 | **Sources** | 24 | sftp, kafka, rest, snmp_poll, snmp_trap, syslog, webhook, mqtt, amqp, nats, gnmi, sql, clickhouse, influxdb, corba, websocket, prometheus_rw |
 | **Sinks** | 20 | sftp, kafka, rest, opensearch, snmp_trap, mqtt, amqp, nats, sql, clickhouse, influxdb, ves, websocket, elasticsearch |
 | **Serializers** | 12 | json, ndjson, csv, xml, avro, parquet, protobuf, msgpack, bytes, text, asn1, pm_xml |
-| **Transforms** | 23 | rename, cast, filter, aggregate, jmespath, flatten, json_flatten, explode, melt, deduplicate, mask, validate, template, enrich, hex_decode |
+| **Transforms** | 27 | rename, cast, filter, aggregate, jmespath, flatten, json_flatten, explode, unnest, select_from_list, coalesce_fields, project, inject_meta, melt, deduplicate, mask, validate, template, enrich, hex_decode |
 
 ---
 
@@ -183,6 +185,10 @@ docs/
 ├── changelog.md                  # Full release history
 ├── checklist.md                  # Development checklist
 └── archive/                      # Archived version-specific design and planning docs
+    ├── structured-record-shaping-design.md # Archived shaping/decode design for nested record payloads
+    ├── v1.3.2-plan.md            # Archived 1.3.2 backend implementation plan
+    ├── v1.3.1-plan.md            # Archived 1.3.1 implementation plan
+    └── v1.3.0-broadcast-streams-design.md
 ```
 
 ---
@@ -203,6 +209,8 @@ See [changelog.md](changelog.md) for detailed release notes.
 - Standalone live stats: local stream runs now feed `StatsStore` so `/api/pipelines/{name}/placement` returns a live single-slot view in standalone mode
 - Manager operational metrics: 8 new `tram_mgr_*` Prometheus series for dispatch, redispatch, reconcile actions, placement status, worker health, and callback receipt; `/metrics` is process-local
 - UDP multi-worker streams: `syslog` and `snmp_trap` sources work in manager mode with `kubernetes: enabled: true`; per-pipeline NodePort Services; `count: N` uses manual Endpoints pinned to dispatched workers; L012 enforces the kubernetes requirement
+- ASN.1 decode improvements: concatenated BER multi-record split, ordered `message_classes` fallback, and the explicit `json_flatten` / `hex_decode` shaping path
+- CDR shaping primitives: dotted-path support across core transforms plus `select_from_list`, `coalesce_fields`, `project`, conditional `drop`, and narrow wildcard path support for explicit LTE/SGW/PGW mediation pipelines
 
 **v1.3.1** (2026-04-20)
 - `workers.count: N` and `workers.list` placement behavior are now implemented for multi-worker push streams in manager mode
@@ -222,4 +230,4 @@ See [changelog.md](changelog.md) for detailed release notes.
 
 ---
 
-*Last updated: 2026-04-20*
+*Last updated: 2026-04-22*

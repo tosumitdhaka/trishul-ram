@@ -34,7 +34,12 @@ def _load_templates(pipeline_dir: str) -> list[dict]:
             import yaml as _yaml
             text = path.read_text()
             doc = _yaml.safe_load(text)
-            p = doc.get("pipeline", {}) if isinstance(doc, dict) else {}
+            if isinstance(doc, dict) and "pipeline" in doc and isinstance(doc["pipeline"], dict):
+                p = doc["pipeline"]
+            elif isinstance(doc, dict):
+                p = doc
+            else:
+                p = {}
 
             name = p.get("name") or path.stem
             description = _short_desc(p.get("description", ""))

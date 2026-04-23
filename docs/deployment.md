@@ -488,7 +488,7 @@ TRAM ships a production-ready Helm chart in `helm/`. Published to GHCR OCI on ev
 
 ### Install
 
-Quick-start examples below use `latest`. For production, pin `image.tag` and worker image tags to a specific release such as `1.3.1`.
+Quick-start examples below use `latest`. For production, pin `image.tag` and worker image tags to a specific release such as `1.3.2`.
 
 ```bash
 # Add chart from OCI registry

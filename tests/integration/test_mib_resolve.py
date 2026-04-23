@@ -48,7 +48,7 @@ class TestMibResolveIntegration:
         from tram.connectors.snmp.mib_utils import resolve_oid
 
         mock_view = MagicMock()
-        mock_view.getNodeLocation.return_value = ("SNMPv2-MIB", "sysDescr", ())
+        mock_view.get_node_location.return_value = ("SNMPv2-MIB", "sysDescr", ())
 
         mock_oid_obj = MagicMock()
         mock_oid_cls = MagicMock(return_value=mock_oid_obj)

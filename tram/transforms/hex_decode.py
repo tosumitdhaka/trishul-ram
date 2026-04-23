@@ -9,6 +9,8 @@ from typing import Any
 from tram.core.exceptions import TransformError
 from tram.interfaces.base_transform import BaseTransform
 from tram.registry.registry import register_transform
+from tram.transforms.path_patterns import has_path_pattern, path_matches_pattern
+from tram.transforms.path_utils import get_path
 
 
 def _is_hex_string(value: str) -> bool:
@@ -88,8 +90,50 @@ def _decode_packed_ip(data: bytes) -> str:
     raise TransformError("hex_decode: packed IP codec expects 4 or 16 bytes")
 
 
-def _decode_value(raw_hex: str, decode_as: str, fmt: str | None):
+def _decode_bit_flags(
+    raw_hex: str,
+    bit_length: int | None,
+    mapping: dict[int, str],
+    output: str | None,
+):
     data = bytes.fromhex(raw_hex)
+    total_bits = len(data) * 8
+    if bit_length is None:
+        bit_length = total_bits
+    if bit_length < 0:
+        raise TransformError("hex_decode: bit_length_field must be >= 0")
+    if bit_length > total_bits:
+        raise TransformError("hex_decode: bit_length_field exceeds available bits")
+
+    indexes: list[int] = []
+    for index in range(bit_length):
+        byte_index = index // 8
+        bit_index = 7 - (index % 8)
+        if data[byte_index] & (1 << bit_index):
+            indexes.append(index)
+
+    mode = output or ("names" if mapping else "indexes")
+    if mode not in {"names", "indexes", "both"}:
+        raise TransformError("hex_decode: bit_flags output must be names, indexes, or both")
+
+    names = [mapping[index] for index in indexes if index in mapping]
+    if mode == "indexes":
+        return indexes
+    if mode == "both":
+        return {"indexes": indexes, "names": names}
+    return names if mapping else indexes
+
+
+def _decode_value(
+    raw_hex: str,
+    decode_as: str,
+    fmt: str | None,
+    bit_length: int | None = None,
+    mapping: dict[int, str] | None = None,
+    output: str | None = None,
+):
+    data = bytes.fromhex(raw_hex)
+    mapping = mapping or {}
     if decode_as == "text":
         encoding = fmt or "utf8"
         if encoding == "utf8":
@@ -105,6 +149,8 @@ def _decode_value(raw_hex: str, decode_as: str, fmt: str | None):
         return _decode_tbcd_timezone(data)
     if decode_as == "ip" and fmt == "packed":
         return _decode_packed_ip(data)
+    if decode_as == "bit_flags":
+        return _decode_bit_flags(raw_hex, bit_length, mapping, output)
     if decode_as == "hex":
         return raw_hex
     raise TransformError(
@@ -125,24 +171,64 @@ class HexDecodeTransform(BaseTransform):
         self.mode: str = config.get("mode", "utf8_or_hex")
         self.preserve_original: bool = bool(config.get("preserve_original", False))
         self.original_suffix: str = config.get("original_suffix", "_hex")
-        self.overrides: dict[str, dict[str, str | None]] = {
-            item["path"]: {"decode_as": item["decode_as"], "format": item.get("format")}
-            for item in config.get("overrides", [])
-        }
+        self.exact_overrides: dict[str, dict[str, Any]] = {}
+        self.pattern_overrides: list[tuple[str, dict[str, Any]]] = []
+        for item in config.get("overrides", []):
+            override = {
+                "decode_as": item["decode_as"],
+                "format": item.get("format"),
+                "bit_length_field": item.get("bit_length_field"),
+                "mapping": item.get("mapping", {}),
+                "output": item.get("output"),
+            }
+            path = item["path"]
+            if has_path_pattern(path):
+                self.pattern_overrides.append((path, override))
+            else:
+                self.exact_overrides[path] = override
 
         if self.mode not in {"hex", "utf8_or_hex", "latin1_or_hex"}:
             raise TransformError("hex_decode: mode must be hex, utf8_or_hex, or latin1_or_hex")
 
     def apply(self, records: list[dict]) -> list[dict]:
-        return [self._transform_mapping(record, "") for record in records]
+        return [self._transform_mapping(record, "", record) for record in records]
 
-    def _maybe_decode(self, value: Any, path: str):
+    def _resolve_bit_length(self, override: dict[str, Any], root: dict[str, Any]) -> int | None:
+        bit_length_field = override.get("bit_length_field")
+        if not bit_length_field:
+            return None
+        found, value = get_path(root, bit_length_field)
+        if not found:
+            raise TransformError(
+                f"hex_decode: bit_length_field '{bit_length_field}' not found"
+            )
+        if not isinstance(value, int):
+            raise TransformError(
+                f"hex_decode: bit_length_field '{bit_length_field}' must be an int"
+            )
+        return value
+
+    def _maybe_decode(self, value: Any, path: str, root: dict[str, Any]):
         if not isinstance(value, str) or not _is_hex_string(value):
             return value, False
 
-        override = self.overrides.get(path)
+        override = self.exact_overrides.get(path)
+        if override is None:
+            override = next(
+                (candidate for pattern, candidate in self.pattern_overrides
+                 if path_matches_pattern(path, pattern)),
+                None,
+            )
         if override is not None:
-            return _decode_value(value, override["decode_as"], override.get("format")), True
+            bit_length = self._resolve_bit_length(override, root)
+            return _decode_value(
+                value,
+                override["decode_as"],
+                override.get("format"),
+                bit_length=bit_length,
+                mapping=override.get("mapping", {}),
+                output=override.get("output"),
+            ), True
 
         if self.mode == "hex":
             return value, False
@@ -152,31 +238,31 @@ class HexDecodeTransform(BaseTransform):
             return value, False
         return decoded, True
 
-    def _transform_mapping(self, data: dict[str, Any], prefix: str) -> dict[str, Any]:
+    def _transform_mapping(self, data: dict[str, Any], prefix: str, root: dict[str, Any]) -> dict[str, Any]:
         result: dict[str, Any] = {}
         for key, value in data.items():
             path = f"{prefix}.{key}" if prefix else key
             if isinstance(value, dict):
-                result[key] = self._transform_mapping(value, path)
+                result[key] = self._transform_mapping(value, path, root)
                 continue
             if isinstance(value, list):
-                result[key] = self._transform_list(value, path)
+                result[key] = self._transform_list(value, path, root)
                 continue
-            decoded, changed = self._maybe_decode(value, path)
+            decoded, changed = self._maybe_decode(value, path, root)
             result[key] = decoded
             if self.preserve_original and changed:
                 result[f"{key}{self.original_suffix}"] = value
         return result
 
-    def _transform_list(self, values: list[Any], prefix: str) -> list[Any]:
+    def _transform_list(self, values: list[Any], prefix: str, root: dict[str, Any]) -> list[Any]:
         result: list[Any] = []
         for value in values:
             if isinstance(value, dict):
-                result.append(self._transform_mapping(value, prefix))
+                result.append(self._transform_mapping(value, prefix, root))
                 continue
             if isinstance(value, list):
-                result.append(self._transform_list(value, prefix))
+                result.append(self._transform_list(value, prefix, root))
                 continue
-            decoded, _ = self._maybe_decode(value, prefix)
+            decoded, _ = self._maybe_decode(value, prefix, root)
             result.append(decoded)
         return result

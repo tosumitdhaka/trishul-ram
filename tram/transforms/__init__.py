@@ -17,6 +17,7 @@ from tram.transforms.json_flatten import JsonFlattenTransform  # noqa: F401
 from tram.transforms.limit import LimitTransform  # noqa: F401
 from tram.transforms.mask import MaskTransform  # noqa: F401
 from tram.transforms.melt import MeltTransform  # noqa: F401
+from tram.transforms.project import ProjectTransform  # noqa: F401
 from tram.transforms.regex_extract import RegexExtractTransform  # noqa: F401
 from tram.transforms.rename import RenameTransform  # noqa: F401
 from tram.transforms.select_from_list import SelectFromListTransform  # noqa: F401

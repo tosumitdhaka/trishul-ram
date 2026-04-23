@@ -9,74 +9,155 @@ from tram.transforms.json_flatten import JsonFlattenTransform
 
 
 class TestJsonFlattenTransform:
-    def test_auto_expands_nested_list_of_dicts(self):
-        transform = JsonFlattenTransform({"explode_mode": "auto"})
+    def test_explode_paths_use_current_row_state(self):
+        transform = JsonFlattenTransform({
+            "explode_paths": ["listOfServiceData", "listOfTrafficVolumes"],
+        })
         records = [{
-            "measFileHeader": {"fileFormatVersion": 1},
-            "measData": [
-                {"nEId": {"name": "A"}, "value": 10},
-                {"nEId": {"name": "B"}, "value": 20},
+            "recordType": "pgw",
+            "listOfServiceData": [
+                {
+                    "serviceId": "svc-a",
+                    "listOfTrafficVolumes": [{"bytes": 1}, {"bytes": 2}],
+                },
+                {
+                    "serviceId": "svc-b",
+                    "listOfTrafficVolumes": [{"bytes": 3}],
+                },
             ],
         }]
 
         result = transform.apply(records)
 
         assert result == [
-            {"fileFormatVersion": 1, "name": "A", "value": 10},
-            {"fileFormatVersion": 1, "name": "B", "value": 20},
+            {"recordType": "pgw", "serviceId": "svc-a", "bytes": 1},
+            {"recordType": "pgw", "serviceId": "svc-a", "bytes": 2},
+            {"recordType": "pgw", "serviceId": "svc-b", "bytes": 3},
         ]
 
-    def test_choice_mode_unwrap_value(self):
-        transform = JsonFlattenTransform({"choice_mode": "unwrap_value"})
-        result = transform.apply([{"event": {"type": "iValue", "value": 7}}])
-        assert result == [{"event": 7}]
+    def test_missing_explode_path_keeps_row_when_keep_empty_rows_true(self):
+        transform = JsonFlattenTransform({
+            "explode_paths": ["missingList"],
+            "keep_empty_rows": True,
+        })
 
-    def test_choice_mode_type_value_hoists_choice_fields(self):
-        transform = JsonFlattenTransform({"choice_mode": "type_value"})
-        result = transform.apply([{"event": {"type": "iValue", "value": 7}}])
-        assert result == [{"type": "iValue", "value": 7}]
+        assert transform.apply([{"recordType": "lte"}]) == [{"recordType": "lte"}]
 
-    def test_choice_mode_keep_preserves_choice_under_field(self):
-        transform = JsonFlattenTransform({"choice_mode": "keep"})
-        result = transform.apply([{"event": {"type": "iValue", "value": 7}}])
-        assert result == [{"event": {"type": "iValue", "value": 7}}]
+    def test_missing_explode_path_drops_row_when_keep_empty_rows_false(self):
+        transform = JsonFlattenTransform({
+            "explode_paths": ["missingList"],
+            "keep_empty_rows": False,
+        })
 
-    def test_zip_lists_auto_pairs_scalar_and_value_lists(self):
-        transform = JsonFlattenTransform({"zip_lists": "auto", "choice_mode": "type_value"})
+        assert transform.apply([{"recordType": "lte"}]) == []
+
+    def test_non_list_explode_path_raises(self):
+        transform = JsonFlattenTransform({"explode_paths": ["serviceData"]})
+
+        with pytest.raises(TransformError, match="not a list"):
+            transform.apply([{"serviceData": {"x": 1}}])
+
+    def test_zip_groups_emit_positionally_zipped_rows(self):
+        transform = JsonFlattenTransform({
+            "zip_groups": [{
+                "fields": {
+                    "measTypes": "meas_type",
+                    "measResults": "meas_result",
+                },
+            }],
+        })
         records = [{
+            "node": "n1",
             "measTypes": ["cpu", "mem"],
-            "measResults": [
-                {"type": "iValue", "value": 10},
-                {"type": "iValue", "value": 20},
-            ],
+            "measResults": [10, 20],
         }]
 
         result = transform.apply(records)
 
         assert result == [
-            {"measTypes": "cpu", "type": "iValue", "value": 10},
-            {"measTypes": "mem", "type": "iValue", "value": 20},
+            {"node": "n1", "meas_type": "cpu", "meas_result": 10},
+            {"node": "n1", "meas_type": "mem", "meas_result": 20},
         ]
 
-    def test_ambiguity_mode_keep_preserves_multiple_auto_explode_candidates(self):
-        transform = JsonFlattenTransform({"ambiguity_mode": "keep"})
-        records = [{"a": [{"x": 1}], "b": [{"y": 2}]}]
+    def test_choice_unwrap_both_keeps_type_and_value(self):
+        transform = JsonFlattenTransform({
+            "choice_unwrap": {
+                "paths": ["pGWAddress"],
+                "mode": "both",
+                "type_suffix": "_type",
+                "value_suffix": "",
+            },
+        })
 
-        result = transform.apply(records)
+        result = transform.apply([{
+            "pGWAddress": {"type": "ipv4", "value": {"host": "1.2.3.4"}},
+        }])
 
-        assert result == records
+        assert result == [{
+            "pGWAddress_type": "ipv4",
+            "pGWAddress.host": "1.2.3.4",
+        }]
 
-    def test_ambiguity_mode_error_raises(self):
-        transform = JsonFlattenTransform({"ambiguity_mode": "error"})
-        with pytest.raises(TransformError, match="ambiguous"):
-            transform.apply([{"a": [{"x": 1}], "b": [{"y": 2}]}])
+    def test_choice_unwrap_value_replaces_choice_with_value_only(self):
+        transform = JsonFlattenTransform({
+            "choice_unwrap": {
+                "paths": ["pGWAddress"],
+                "mode": "value",
+            },
+        })
 
-    def test_rename_style_snake_case(self):
-        transform = JsonFlattenTransform({"rename_style": "snake_case"})
-        result = transform.apply([{"measFileHeader": {"fileFormatVersion": 1}}])
-        assert result == [{"file_format_version": 1}]
+        result = transform.apply([{
+            "pGWAddress": {"type": "ipv4", "value": {"host": "1.2.3.4"}},
+        }])
 
-    def test_max_depth_preserves_nested_dict_beyond_limit(self):
+        assert result == [{"pGWAddress.host": "1.2.3.4"}]
+
+    def test_preserve_lists_false_raises_for_unexploded_list(self):
+        transform = JsonFlattenTransform({"preserve_lists": False})
+
+        with pytest.raises(TransformError, match="preserve_lists=true"):
+            transform.apply([{"serviceIds": ["a", "b"]}])
+
+    def test_drop_paths_uses_final_flattened_keys(self):
+        transform = JsonFlattenTransform({
+            "drop_paths": ["diagnostics.note"],
+        })
+
+        result = transform.apply([{
+            "diagnostics": {"note": "drop-me"},
+            "recordType": "sgw",
+        }])
+
+        assert result == [{"recordType": "sgw"}]
+
+    def test_drop_paths_support_single_segment_wildcards(self):
+        transform = JsonFlattenTransform({
+            "drop_paths": ["*.note"],
+        })
+
+        result = transform.apply([{
+            "diagnostics": {"note": "drop-me"},
+            "details": {"note": "drop-me-too"},
+            "recordType": "sgw",
+        }])
+
+        assert result == [{"recordType": "sgw"}]
+
+    def test_drop_paths_wildcards_do_not_match_deeper_suffix_paths(self):
+        transform = JsonFlattenTransform({
+            "drop_paths": ["*.note"],
+        })
+
+        result = transform.apply([{
+            "outer": {"diagnostics": {"note": "keep-me"}},
+            "recordType": "sgw",
+        }])
+
+        assert result == [{"outer.diagnostics.note": "keep-me", "recordType": "sgw"}]
+
+    def test_max_depth_preserves_subtree_beyond_limit(self):
         transform = JsonFlattenTransform({"max_depth": 1})
+
         result = transform.apply([{"outer": {"inner": {"leaf": 1}}}])
-        assert result == [{"inner": {"leaf": 1}}]
+
+        assert result == [{"outer.inner": {"leaf": 1}}]

@@ -46,3 +46,7 @@ output/
 CLAUDE.md
 AGENTS.md
 .codex
+
+# Temp files
+tmp/*
+

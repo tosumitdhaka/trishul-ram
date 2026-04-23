@@ -120,17 +120,29 @@ class TestSNMPTrapSource:
         from pyasn1.codec.ber import encoder as ber_encoder
         from pysnmp.proto.api import v2c as pMod
 
+        def call_api(obj, snake_name: str, *args):
+            method = getattr(obj, snake_name, None)
+            if method is None:
+                normalized = snake_name.replace("_", "").lower()
+                for attr_name in dir(obj):
+                    if attr_name.replace("_", "").lower() == normalized:
+                        method = getattr(obj, attr_name)
+                        break
+            if method is None:
+                raise AttributeError(f"{obj!r} has no method matching {snake_name!r}")
+            return method(*args)
+
         msg = pMod.Message()
-        pMod.apiMessage.set_defaults(msg)
-        pMod.apiMessage.set_community(msg, b"public")
+        call_api(pMod.apiMessage, "set_defaults", msg)
+        call_api(pMod.apiMessage, "set_community", msg, b"public")
         reqPDU = pMod.SNMPv2TrapPDU()
-        pMod.apiPDU.set_defaults(reqPDU)
-        pMod.apiPDU.set_varbinds(reqPDU, [
+        call_api(pMod.apiPDU, "set_defaults", reqPDU)
+        call_api(pMod.apiPDU, "set_varbinds", reqPDU, [
             ((1, 3, 6, 1, 2, 1, 1, 3, 0), pMod.TimeTicks(12345)),
             ((1, 3, 6, 1, 6, 3, 1, 1, 4, 1, 0), pMod.ObjectIdentifier((1, 3, 6, 1, 6, 3, 1, 1, 5, 4))),
             ((1, 3, 6, 1, 2, 1, 2, 2, 1, 1, 1), pMod.Integer(42)),
         ])
-        pMod.apiMessage.set_pdu(msg, reqPDU)
+        call_api(pMod.apiMessage, "set_pdu", msg, reqPDU)
         trap_bytes = ber_encoder.encode(msg)
 
         source = SNMPTrapSource({"port": 162})
