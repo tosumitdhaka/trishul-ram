@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import base64
+import gc
 import json
 import logging
 import queue as _queue
@@ -101,6 +102,23 @@ def _sink_filename_template(sink_cfg, sink_instance) -> str | None:
     return None
 
 
+def _source_unit_key(meta: dict) -> tuple[str, str] | None:
+    source_path = str(meta.get("source_path", "") or "").strip()
+    source_filename = str(meta.get("source_filename", "") or "").strip()
+    if not source_path and not source_filename:
+        return None
+    return source_path, source_filename
+
+
+def _augment_chunk_meta(meta: dict, ctx: PipelineRunContext) -> dict:
+    """Attach stable run-scoped metadata used by sinks and filename templates."""
+    enriched = dict(meta)
+    enriched["pipeline_name"] = ctx.pipeline_name
+    enriched["run_id"] = ctx.run_id
+    enriched["run_timestamp"] = ctx.started_at.strftime("%Y%m%dT%H%M%S")
+    return enriched
+
+
 def _partition_records_for_template(
     records: list[dict],
     template: str | None,
@@ -148,6 +166,21 @@ def _write_dlq_envelope(
             "DLQ write failed",
             extra={"pipeline": ctx.pipeline_name, "error": str(dlq_exc)},
         )
+
+
+def _try_trim_process_heap() -> bool:
+    """Best-effort release of unused process heap pages after large batch runs."""
+    try:
+        import ctypes
+        libc = ctypes.CDLL("libc.so.6")
+        malloc_trim = getattr(libc, "malloc_trim", None)
+        if malloc_trim is None:
+            return False
+        malloc_trim.argtypes = [ctypes.c_size_t]
+        malloc_trim.restype = ctypes.c_int
+        return bool(malloc_trim(0))
+    except Exception:
+        return False
 
 
 class PipelineExecutor:
@@ -247,6 +280,16 @@ class PipelineExecutor:
         return transforms
 
     @staticmethod
+    def _post_batch_cleanup(config: PipelineConfig) -> None:
+        """Reclaim temporary batch-run heap without affecting stream workers."""
+        gc.collect()
+        trimmed = _try_trim_process_heap()
+        logger.debug(
+            "Post-batch cleanup completed",
+            extra={"pipeline": config.name, "heap_trimmed": trimmed},
+        )
+
+    @staticmethod
     def _set_transform_runtime_meta(transform, meta: dict) -> None:
         """Pass per-chunk metadata to transforms that opt into it."""
         setter = getattr(transform, "set_runtime_meta", None)
@@ -264,11 +307,18 @@ class PipelineExecutor:
         sink_type = config.sinks[index].type if index < len(config.sinks) else "unknown"
         return f"{config.name}:{sink_type}:{index}"
 
-    def _process_chunk(
+    @staticmethod
+    def _finalize_source_for_sinks(sinks: list[tuple], meta: dict, *, success: bool) -> None:
+        for sink_tuple in sinks:
+            sink_instance = sink_tuple[0]
+            finalize = getattr(sink_instance, "finalize_source", None)
+            if callable(finalize):
+                finalize(meta, success)
+
+    def _process_records(
         self,
-        raw: bytes,
+        records: list[dict],
         meta: dict,
-        serializer_in,
         transforms: list,
         serializer_out,
         sinks: list[tuple],
@@ -280,10 +330,7 @@ class PipelineExecutor:
         sink_cb_keys: list[str] | None = None,
         stats: PipelineStats | None = None,
     ) -> bool:
-        """Process one (raw, meta) chunk. Returns True on success.
-
-        Thread-safe: all ctx mutations go through locked helper methods.
-        """
+        """Process one decoded record batch."""
         from tram.metrics.registry import (
             DLQ_RECORDS,
             DURATION,
@@ -293,37 +340,9 @@ class PipelineExecutor:
             RECORDS_SKIP,
         )
 
-        meta = dict(meta)
-        meta["pipeline_name"] = ctx.pipeline_name
-        meta["run_id"] = ctx.run_id
-        # Human-readable timestamp (run start, consistent across all chunks)
-        meta["run_timestamp"] = ctx.started_at.strftime("%Y%m%dT%H%M%S")
         t_start = time.monotonic()
 
         try:
-            raw_size = _payload_size_bytes(raw)
-            ctx.inc_bytes_in(raw_size)
-            if stats is not None:
-                stats.increment(bytes_in=raw_size)
-
-            # ── Parse ───────────────────────────────────────────────────────────
-            try:
-                records = serializer_in.parse(raw)
-            except Exception as exc:
-                if dlq_sink is not None:
-                    _write_dlq_envelope(
-                        dlq_sink, ctx,
-                        stage="parse", error=str(exc), record=None, raw=raw,
-                    )
-                    ctx.record_dlq()
-                    DLQ_RECORDS.labels(pipeline=ctx.pipeline_name).inc()
-                if stats is not None:
-                    stats.increment(
-                        dlq=1 if dlq_sink is not None else 0,
-                        errors=[f"Parse error: {exc}"],
-                    )
-                raise TramError(f"Parse error: {exc}") from exc
-
             ctx.inc_records_in(len(records))
             RECORDS_IN.labels(pipeline=ctx.pipeline_name).inc(len(records))
             if stats is not None:
@@ -575,6 +594,141 @@ class PipelineExecutor:
                 stats.increment(skipped=1, errors=[msg])
             return False
 
+    def _process_chunk(
+        self,
+        raw: bytes,
+        meta: dict,
+        serializer_in,
+        transforms: list,
+        serializer_out,
+        sinks: list[tuple],
+        ctx: PipelineRunContext,
+        on_error: str,
+        rate_limit_rps: float | None = None,
+        dlq_sink=None,
+        parallel_sinks: bool = False,
+        sink_cb_keys: list[str] | None = None,
+        stats: PipelineStats | None = None,
+    ) -> bool:
+        """Process one (raw, meta) chunk. Returns True on success.
+
+        Thread-safe: all ctx mutations go through locked helper methods.
+        """
+        from tram.metrics.registry import DLQ_RECORDS, ERRORS
+
+        meta = _augment_chunk_meta(meta, ctx)
+        try:
+            raw_size = _payload_size_bytes(raw)
+            ctx.inc_bytes_in(raw_size)
+            if stats is not None:
+                stats.increment(bytes_in=raw_size)
+
+            # ── Parse ───────────────────────────────────────────────────────────
+            try:
+                records = serializer_in.parse(raw)
+            except Exception as exc:
+                if dlq_sink is not None:
+                    _write_dlq_envelope(
+                        dlq_sink, ctx,
+                        stage="parse", error=str(exc), record=None, raw=raw,
+                    )
+                    ctx.record_dlq()
+                    DLQ_RECORDS.labels(pipeline=ctx.pipeline_name).inc()
+                if stats is not None:
+                    stats.increment(
+                        dlq=1 if dlq_sink is not None else 0,
+                        errors=[f"Parse error: {exc}"],
+                    )
+                raise TramError(f"Parse error: {exc}") from exc
+            return self._process_records(
+                records, meta, transforms, serializer_out, sinks, ctx, on_error,
+                rate_limit_rps, dlq_sink, parallel_sinks, sink_cb_keys, stats,
+            )
+
+        except TramError as exc:
+            msg = f"Processing error: {exc}"
+            logger.error(msg, extra={"pipeline": ctx.pipeline_name, "run_id": ctx.run_id})
+            ERRORS.labels(pipeline=ctx.pipeline_name).inc()
+            if on_error == "abort":
+                raise
+            ctx.record_error(msg)
+            if stats is not None:
+                stats.increment(skipped=1, errors=[msg])
+            return False
+
+    def _process_chunk_incrementally(
+        self,
+        raw: bytes,
+        meta: dict,
+        serializer_in,
+        transforms: list,
+        serializer_out,
+        sinks: list[tuple],
+        ctx: PipelineRunContext,
+        on_error: str,
+        record_chunk_size: int,
+        batch_size: int | None = None,
+        rate_limit_rps: float | None = None,
+        dlq_sink=None,
+        parallel_sinks: bool = False,
+        sink_cb_keys: list[str] | None = None,
+        stats: PipelineStats | None = None,
+    ) -> bool:
+        """Process one raw chunk through serializer-provided record batches."""
+        from tram.metrics.registry import DLQ_RECORDS, ERRORS
+
+        meta = _augment_chunk_meta(meta, ctx)
+
+        try:
+            raw_size = _payload_size_bytes(raw)
+            ctx.inc_bytes_in(raw_size)
+            if stats is not None:
+                stats.increment(bytes_in=raw_size)
+
+            try:
+                record_batches = serializer_in.parse_chunks(raw, record_chunk_size)
+                for records in record_batches:
+                    remaining = (batch_size - ctx.records_in) if batch_size is not None else None
+                    if remaining is not None and remaining <= 0:
+                        return True
+                    if remaining is not None and len(records) > remaining:
+                        records = records[:remaining]
+                    if not records:
+                        continue
+                    self._process_records(
+                        records, meta, transforms, serializer_out, sinks, ctx, on_error,
+                        rate_limit_rps, dlq_sink, parallel_sinks, sink_cb_keys, stats,
+                    )
+                    if batch_size and ctx.records_in >= batch_size:
+                        return True
+                return True
+            except TramError:
+                raise
+            except Exception as exc:
+                if dlq_sink is not None:
+                    _write_dlq_envelope(
+                        dlq_sink, ctx,
+                        stage="parse", error=str(exc), record=None, raw=raw,
+                    )
+                    ctx.record_dlq()
+                    DLQ_RECORDS.labels(pipeline=ctx.pipeline_name).inc()
+                if stats is not None:
+                    stats.increment(
+                        dlq=1 if dlq_sink is not None else 0,
+                        errors=[f"Parse error: {exc}"],
+                    )
+                raise TramError(f"Parse error: {exc}") from exc
+        except TramError as exc:
+            msg = f"Processing error: {exc}"
+            logger.error(msg, extra={"pipeline": ctx.pipeline_name, "run_id": ctx.run_id})
+            ERRORS.labels(pipeline=ctx.pipeline_name).inc()
+            if on_error == "abort":
+                raise
+            ctx.record_error(msg)
+            if stats is not None:
+                stats.increment(skipped=1, errors=[msg])
+            return False
+
     # ── Batch run ────────────────────────────────────────────────────────────
 
     def batch_run(
@@ -620,59 +774,63 @@ class PipelineExecutor:
         retry_count = config.retry_count if config.on_error == "retry" else 0
         retry_delay = config.retry_delay_seconds
 
-        for attempt in range(max(1, retry_count + 1)):
-            try:
-                self._run_batch_chunks(
-                    config, source, sinks, serializer_in, serializer_out,
-                    transforms, dlq_sink, ctx, sink_cb_keys=sink_cb_keys, stats=stats,
-                )
+        result = RunResult.from_context(ctx, RunStatus.FAILED, error="Max retries exceeded")
+        try:
+            for attempt in range(max(1, retry_count + 1)):
+                try:
+                    self._run_batch_chunks(
+                        config, source, sinks, serializer_in, serializer_out,
+                        transforms, dlq_sink, ctx, sink_cb_keys=sink_cb_keys, stats=stats,
+                    )
 
-                result = RunResult.from_context(ctx, RunStatus.SUCCESS)
-                logger.info(
-                    "Batch run completed",
-                    extra={
-                        "pipeline": config.name,
-                        "run_id": ctx.run_id,
-                        "records_in": ctx.records_in,
-                        "records_out": ctx.records_out,
-                        "records_skipped": ctx.records_skipped,
-                    },
-                )
-                return result
-
-            except TramError as exc:
-                if config.on_error == "retry" and attempt < retry_count:
-                    logger.warning(
-                        "Run failed, retrying",
+                    result = RunResult.from_context(ctx, RunStatus.SUCCESS)
+                    logger.info(
+                        "Batch run completed",
                         extra={
                             "pipeline": config.name,
-                            "attempt": attempt + 1,
-                            "retry_count": retry_count,
-                            "error": str(exc),
+                            "run_id": ctx.run_id,
+                            "records_in": ctx.records_in,
+                            "records_out": ctx.records_out,
+                            "records_skipped": ctx.records_skipped,
                         },
                     )
-                    time.sleep(retry_delay)
-                    # Reset counters and rebuild ALL components for a clean retry.
-                    # Rebuilding only the source on retry would reuse a potentially
-                    # broken sink connection that caused the original failure.
-                    ctx = PipelineRunContext(pipeline_name=config.name)
-                    source = self._build_source(config)
-                    sinks = self._build_sinks(config)
-                    serializer_in = self._build_serializer_in(config)
-                    serializer_out = self._build_serializer_out(config)
-                    transforms = self._build_transforms(config)
-                    dlq_sink = self._build_dlq_sink(config)
-                    sink_cb_keys = [self._make_sink_cb_key(config, i) for i in range(len(sinks))]
-                    continue
-                else:
+                    return result
+
+                except TramError as exc:
+                    if config.on_error == "retry" and attempt < retry_count:
+                        logger.warning(
+                            "Run failed, retrying",
+                            extra={
+                                "pipeline": config.name,
+                                "attempt": attempt + 1,
+                                "retry_count": retry_count,
+                                "error": str(exc),
+                            },
+                        )
+                        time.sleep(retry_delay)
+                        # Reset counters and rebuild ALL components for a clean retry.
+                        # Rebuilding only the source on retry would reuse a potentially
+                        # broken sink connection that caused the original failure.
+                        ctx = PipelineRunContext(pipeline_name=config.name)
+                        source = self._build_source(config)
+                        sinks = self._build_sinks(config)
+                        serializer_in = self._build_serializer_in(config)
+                        serializer_out = self._build_serializer_out(config)
+                        transforms = self._build_transforms(config)
+                        dlq_sink = self._build_dlq_sink(config)
+                        sink_cb_keys = [self._make_sink_cb_key(config, i) for i in range(len(sinks))]
+                        continue
+
                     result = RunResult.from_context(ctx, RunStatus.FAILED, error=str(exc))
                     logger.error(
                         "Batch run failed",
                         extra={"pipeline": config.name, "run_id": ctx.run_id, "error": str(exc)},
                     )
                     return result
-
-        return RunResult.from_context(ctx, RunStatus.FAILED, error="Max retries exceeded")
+            return result
+        finally:
+            if getattr(config, "post_batch_cleanup", False):
+                self._post_batch_cleanup(config)
 
     def _run_batch_chunks(
         self,
@@ -689,6 +847,7 @@ class PipelineExecutor:
     ) -> None:
         """Inner loop: read source chunks and process with optional thread pool."""
         batch_size = config.batch_size
+        record_chunk_size = getattr(config, "record_chunk_size", None)
         on_error = config.on_error
         rate_limit_rps = config.rate_limit_rps
 
@@ -729,18 +888,48 @@ class PipelineExecutor:
                             stats.increment(skipped=1, errors=[str(exc)])
         else:
             # Single-threaded
-            for raw, meta in source.read():
-                self._process_chunk(
-                    raw, meta, serializer_in, transforms,
-                    serializer_out, sinks, ctx, on_error,
-                    rate_limit_rps, dlq_sink, parallel_sinks, sink_cb_keys, stats,
-                )
-                if batch_size and ctx.records_in >= batch_size:
-                    logger.info(
-                        "batch_size limit reached, stopping source read",
-                        extra={"pipeline": config.name, "batch_size": batch_size},
-                    )
-                    break
+            current_source_key: tuple[str, str] | None = None
+            current_source_meta: dict | None = None
+            try:
+                for raw, meta in source.read():
+                    meta = _augment_chunk_meta(meta, ctx)
+                    source_key = _source_unit_key(meta)
+                    if source_key is not None:
+                        meta["enable_safe_finalize"] = True
+                        if current_source_key is not None and source_key != current_source_key:
+                            self._finalize_source_for_sinks(sinks, current_source_meta, success=True)
+                            current_source_key = None
+                            current_source_meta = None
+                        if current_source_key is None:
+                            current_source_key = source_key
+                        current_source_meta = dict(meta)
+
+                    if record_chunk_size:
+                        self._process_chunk_incrementally(
+                            raw, meta, serializer_in, transforms,
+                            serializer_out, sinks, ctx, on_error, record_chunk_size,
+                            batch_size, rate_limit_rps, dlq_sink,
+                            parallel_sinks, sink_cb_keys, stats,
+                        )
+                    else:
+                        self._process_chunk(
+                            raw, meta, serializer_in, transforms,
+                            serializer_out, sinks, ctx, on_error,
+                            rate_limit_rps, dlq_sink, parallel_sinks, sink_cb_keys, stats,
+                        )
+                    if batch_size and ctx.records_in >= batch_size:
+                        logger.info(
+                            "batch_size limit reached, stopping source read",
+                            extra={"pipeline": config.name, "batch_size": batch_size},
+                        )
+                        break
+            except Exception:
+                if current_source_meta is not None:
+                    self._finalize_source_for_sinks(sinks, current_source_meta, success=False)
+                raise
+            else:
+                if current_source_meta is not None:
+                    self._finalize_source_for_sinks(sinks, current_source_meta, success=True)
 
     # ── Stream run ────────────────────────────────────────────────────────────
 

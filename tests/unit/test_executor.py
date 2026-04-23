@@ -37,6 +37,18 @@ def _make_pipeline(extra_yaml: str = "") -> object:
 
 
 class TestPipelineExecutorDryRun:
+    def test_pipeline_config_accepts_record_chunk_size(self):
+        config = _make_pipeline("record_chunk_size: 1000")
+        assert config.record_chunk_size == 1000
+
+    def test_pipeline_config_post_batch_cleanup_defaults_false(self):
+        config = _make_pipeline()
+        assert config.post_batch_cleanup is False
+
+    def test_pipeline_config_accepts_post_batch_cleanup(self):
+        config = _make_pipeline("post_batch_cleanup: true")
+        assert config.post_batch_cleanup is True
+
     def test_dry_run_valid_pipeline(self):
         config = _make_pipeline()
         executor = PipelineExecutor()
@@ -145,6 +157,83 @@ class TestPipelineExecutorBatchRun:
 
         assert result.status == RunStatus.SUCCESS
         assert result.records_skipped > 0
+
+    def test_batch_run_skips_post_batch_cleanup_by_default(self):
+        config = _make_pipeline()
+        executor = PipelineExecutor()
+
+        mock_source = MagicMock()
+        mock_source.read.return_value = iter([])
+        mock_sink = MagicMock()
+
+        with (
+            patch.object(executor, "_build_source", return_value=mock_source),
+            patch.object(executor, "_build_sinks", return_value=[(mock_sink, None, [])]),
+            patch.object(executor, "_build_serializer_in", return_value=MagicMock()),
+            patch.object(executor, "_build_serializer_out", return_value=MagicMock()),
+            patch.object(executor, "_build_transforms", return_value=[]),
+            patch.object(executor, "_post_batch_cleanup") as cleanup,
+        ):
+            result = executor.batch_run(config)
+
+        assert result.status == RunStatus.SUCCESS
+        cleanup.assert_not_called()
+
+    def test_batch_run_invokes_post_batch_cleanup_on_success_when_enabled(self):
+        config = _make_pipeline("post_batch_cleanup: true")
+        executor = PipelineExecutor()
+
+        mock_source = MagicMock()
+        mock_source.read.return_value = iter([])
+        mock_sink = MagicMock()
+
+        with (
+            patch.object(executor, "_build_source", return_value=mock_source),
+            patch.object(executor, "_build_sinks", return_value=[(mock_sink, None, [])]),
+            patch.object(executor, "_build_serializer_in", return_value=MagicMock()),
+            patch.object(executor, "_build_serializer_out", return_value=MagicMock()),
+            patch.object(executor, "_build_transforms", return_value=[]),
+            patch.object(executor, "_post_batch_cleanup") as cleanup,
+        ):
+            result = executor.batch_run(config)
+
+        assert result.status == RunStatus.SUCCESS
+        cleanup.assert_called_once_with(config)
+
+    def test_batch_run_invokes_post_batch_cleanup_on_failure_when_enabled(self):
+        config = _make_pipeline("on_error: abort\n          post_batch_cleanup: true")
+        executor = PipelineExecutor()
+
+        mock_source = MagicMock()
+        mock_source.read.return_value = iter([(b"bad", {})])
+        mock_sink = MagicMock()
+        mock_ser_in = MagicMock()
+        mock_ser_in.parse.side_effect = ValueError("boom")
+
+        with (
+            patch.object(executor, "_build_source", return_value=mock_source),
+            patch.object(executor, "_build_sinks", return_value=[(mock_sink, None, [])]),
+            patch.object(executor, "_build_serializer_in", return_value=mock_ser_in),
+            patch.object(executor, "_build_serializer_out", return_value=MagicMock()),
+            patch.object(executor, "_build_transforms", return_value=[]),
+            patch.object(executor, "_post_batch_cleanup") as cleanup,
+        ):
+            result = executor.batch_run(config)
+
+        assert result.status == RunStatus.FAILED
+        cleanup.assert_called_once_with(config)
+
+    def test_post_batch_cleanup_ignores_missing_trim_support(self):
+        config = _make_pipeline()
+
+        with (
+            patch("tram.pipeline.executor.gc.collect") as collect,
+            patch("tram.pipeline.executor._try_trim_process_heap", return_value=False) as trim,
+        ):
+            PipelineExecutor._post_batch_cleanup(config)
+
+        collect.assert_called_once_with()
+        trim.assert_called_once_with()
 
 
 class TestTransformChain:

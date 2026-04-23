@@ -25,7 +25,7 @@ from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from typing import TYPE_CHECKING
 
-from tram.core.context import RunStatus
+from tram.core.context import RunResult, RunStatus
 from tram.pipeline.executor import PipelineExecutor
 from tram.pipeline.manager import PipelineManager, PipelineState
 
@@ -46,6 +46,15 @@ class _LocalRun:
     schedule_type: str
     started_at: datetime
     stats: PipelineStats
+
+
+@dataclass
+class _ActiveBatchRun:
+    run_id: str
+    pipeline_name: str
+    worker_url: str
+    schedule_type: str
+    started_at: datetime
 
 
 class PipelineController:
@@ -82,6 +91,8 @@ class PipelineController:
         self._broadcast_placements: dict[str, dict] = {}
         # {pipeline_name: placement_group_id}
         self._active_placement_group: dict[str, str] = {}
+        # {pipeline_name: _ActiveBatchRun}
+        self._active_batch_runs: dict[str, _ActiveBatchRun] = {}
 
         self._running = False
 
@@ -459,6 +470,13 @@ class PipelineController:
                 from tram.metrics.registry import MGR_DISPATCH_TOTAL
                 MGR_DISPATCH_TOTAL.labels(pipeline=pipeline_name, result="no_workers").inc()
             else:
+                self._active_batch_runs[pipeline_name] = _ActiveBatchRun(
+                    run_id=run_id,
+                    pipeline_name=pipeline_name,
+                    worker_url=worker_url,
+                    schedule_type=state.config.schedule.type,
+                    started_at=datetime.now(UTC),
+                )
                 from tram.metrics.registry import MGR_DISPATCH_TOTAL
                 MGR_DISPATCH_TOTAL.labels(pipeline=pipeline_name, result="accepted").inc()
             return
@@ -467,8 +485,7 @@ class PipelineController:
         try:
             state = self.manager.get(pipeline_name)
             result = self.executor.batch_run(state.config, run_id=run_id)
-            self.manager.record_run(pipeline_name, result)
-            self._on_run_complete(pipeline_name, result)
+            self._finalize_batch_result(pipeline_name, result)
         except Exception as exc:
             logger.error("Batch run exception",
                          extra={"pipeline": pipeline_name, "error": str(exc)})
@@ -503,6 +520,86 @@ class PipelineController:
 
         self.manager.set_status(pipeline_name, final_status)
 
+    def _finalize_batch_result(self, pipeline_name: str, result: RunResult) -> None:
+        """Record a batch result and apply the standard post-run state transition."""
+        self.manager.record_run(pipeline_name, result)
+        self._on_run_complete(pipeline_name, result)
+        state = self.manager.get(pipeline_name)
+        if state.status in {"stopped", "error"}:
+            self._deactivate_kubernetes_service(state.config)
+
+    def get_active_batch_runs(self) -> list[dict]:
+        return [
+            {
+                "run_id": run.run_id,
+                "pipeline_name": run.pipeline_name,
+                "worker_url": run.worker_url,
+                "schedule_type": run.schedule_type,
+                "started_at": run.started_at,
+            }
+            for run in self._active_batch_runs.values()
+        ]
+
+    def adopt_active_batch_run(
+        self,
+        *,
+        pipeline_name: str,
+        run_id: str,
+        worker_url: str,
+        started_at: datetime | str | None = None,
+    ) -> bool:
+        if not self.manager.exists(pipeline_name):
+            return False
+        state = self.manager.get(pipeline_name)
+        if state.config.schedule.type == "stream":
+            return False
+        if isinstance(started_at, str):
+            started_at = datetime.fromisoformat(started_at)
+        self._active_batch_runs[pipeline_name] = _ActiveBatchRun(
+            run_id=run_id,
+            pipeline_name=pipeline_name,
+            worker_url=worker_url,
+            schedule_type=state.config.schedule.type,
+            started_at=started_at or datetime.now(UTC),
+        )
+        self.manager.set_status(pipeline_name, "running")
+        return True
+
+    def mark_active_batch_run_lost(
+        self,
+        pipeline_name: str,
+        *,
+        error: str,
+        run_id: str | None = None,
+        finished_at: datetime | None = None,
+    ) -> bool:
+        lease = self._active_batch_runs.pop(pipeline_name, None)
+        state = self.manager.get(pipeline_name) if self.manager.exists(pipeline_name) else None
+        if state is None:
+            return False
+
+        lease_run_id = run_id or (lease.run_id if lease is not None else str(uuid.uuid4()))
+        if self._worker_pool is not None:
+            self._worker_pool.on_run_complete(lease_run_id)
+        lease_started_at = lease.started_at if lease is not None else (
+            state.last_run or datetime.now(UTC)
+        )
+
+        result = RunResult(
+            run_id=lease_run_id,
+            pipeline_name=pipeline_name,
+            status=RunStatus.FAILED,
+            started_at=lease_started_at,
+            finished_at=finished_at or datetime.now(UTC),
+            records_in=0,
+            records_out=0,
+            records_skipped=0,
+            error=error,
+            node_id=self._node_id,
+        )
+        self._finalize_batch_result(pipeline_name, result)
+        return True
+
     def on_worker_run_complete(
         self,
         run_id: str,
@@ -519,12 +616,22 @@ class PipelineController:
         finished_at: datetime | str | None = None,
     ) -> None:
         """Callback from a worker agent when a dispatched run finishes."""
-        from tram.core.context import RunResult, RunStatus
-
         try:
             run_status = RunStatus(status)
         except ValueError:
             run_status = RunStatus.FAILED
+
+        existing_run = self.manager.get_run(run_id)
+        if self._worker_pool is not None:
+            self._worker_pool.on_run_complete(run_id)
+        if existing_run is not None:
+            logger.info(
+                "Ignoring duplicate worker run-complete callback",
+                extra={"pipeline": pipeline_name, "run_id": run_id},
+            )
+            self._active_batch_runs.pop(pipeline_name, None)
+            self._remove_stream_run_id(pipeline_name, run_id)
+            return
 
         if isinstance(started_at, str):
             started_at = datetime.fromisoformat(started_at)
@@ -548,7 +655,7 @@ class PipelineController:
         )
 
         if self._worker_pool is not None:
-            self._worker_pool.on_run_complete(run_id)
+            self._active_batch_runs.pop(pipeline_name, None)
             self._remove_stream_run_id(pipeline_name, run_id)
             if self._stream_run_ids.get(pipeline_name):
                 return
@@ -556,11 +663,7 @@ class PipelineController:
                 self._stats_store.remove(run_id)
 
         if self.manager.exists(pipeline_name):
-            self.manager.record_run(pipeline_name, result)
-            self._on_run_complete(pipeline_name, result)
-            state = self.manager.get(pipeline_name)
-            if state.status in {"stopped", "error"}:
-                self._deactivate_kubernetes_service(state.config)
+            self._finalize_batch_result(pipeline_name, result)
         else:
             logger.warning(
                 "on_worker_run_complete: pipeline not found",

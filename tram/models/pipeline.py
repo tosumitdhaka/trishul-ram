@@ -1314,6 +1314,8 @@ class PipelineConfig(BaseModel):
 
     # Batch size cap (max records to process per batch run; None = unlimited)
     batch_size: int | None = None
+    record_chunk_size: int | None = Field(default=None, gt=0)
+    post_batch_cleanup: bool = False
 
     # Error handling
     on_error: Literal["continue", "abort", "retry", "dlq"] = "continue"

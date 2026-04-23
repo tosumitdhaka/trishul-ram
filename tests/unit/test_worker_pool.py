@@ -474,6 +474,90 @@ class TestStopRun:
         ]
 
 
+class TestStatusQueries:
+    def test_worker_status_returns_running_and_streams(self):
+        pool = _pool("http://w0:8766")
+
+        def _get(url, **kwargs):
+            resp = MagicMock()
+            resp.raise_for_status = MagicMock()
+            resp.json.return_value = {
+                "running": [{"run_id": "b1", "pipeline": "pipe-a", "started_at": "now"}],
+                "streams": [{"run_id": "s1", "pipeline": "pipe-b", "started_at": "later"}],
+            }
+            return resp
+
+        mock_client = MagicMock()
+        mock_client.__enter__ = lambda s: mock_client
+        mock_client.__exit__ = MagicMock(return_value=False)
+        mock_client.get.side_effect = _get
+
+        with patch("httpx.Client", return_value=mock_client):
+            status = pool.worker_status("http://w0:8766")
+
+        assert status == {
+            "running": [{"run_id": "b1", "pipeline": "pipe-a", "started_at": "now"}],
+            "streams": [{"run_id": "s1", "pipeline": "pipe-b", "started_at": "later"}],
+        }
+
+    def test_is_run_active_checks_assigned_worker(self):
+        pool = _pool("http://w0:8766")
+        pool._assignments["r1"] = "http://w0:8766"
+
+        def _get(url, **kwargs):
+            resp = MagicMock()
+            resp.raise_for_status = MagicMock()
+            resp.json.return_value = {
+                "running": [{"run_id": "r1", "pipeline": "pipe-a", "started_at": "now"}],
+                "streams": [],
+            }
+            return resp
+
+        mock_client = MagicMock()
+        mock_client.__enter__ = lambda s: mock_client
+        mock_client.__exit__ = MagicMock(return_value=False)
+        mock_client.get.side_effect = _get
+
+        with patch("httpx.Client", return_value=mock_client):
+            assert pool.is_run_active("r1") is True
+
+    def test_find_pipeline_runs_returns_batch_matches_across_workers(self):
+        pool = _pool("http://w0:8766", "http://w1:8766")
+
+        def _get(url, **kwargs):
+            resp = MagicMock()
+            resp.raise_for_status = MagicMock()
+            if url == "http://w0:8766/agent/status":
+                resp.json.return_value = {
+                    "running": [{"run_id": "b1", "pipeline": "pipe-a", "started_at": "2026-04-23T10:00:00+00:00"}],
+                    "streams": [],
+                }
+            elif url == "http://w1:8766/agent/status":
+                resp.json.return_value = {
+                    "running": [{"run_id": "b2", "pipeline": "other", "started_at": "2026-04-23T10:01:00+00:00"}],
+                    "streams": [],
+                }
+            else:
+                raise ConnectionError(url)
+            return resp
+
+        mock_client = MagicMock()
+        mock_client.__enter__ = lambda s: mock_client
+        mock_client.__exit__ = MagicMock(return_value=False)
+        mock_client.get.side_effect = _get
+
+        with patch("httpx.Client", return_value=mock_client):
+            matches = pool.find_pipeline_runs("pipe-a", schedule_type="batch")
+
+        assert matches == [{
+            "worker_url": "http://w0:8766",
+            "run_id": "b1",
+            "pipeline_name": "pipe-a",
+            "started_at": "2026-04-23T10:00:00+00:00",
+            "schedule_type": "batch",
+        }]
+
+
 # ── on_run_complete ────────────────────────────────────────────────────────
 
 

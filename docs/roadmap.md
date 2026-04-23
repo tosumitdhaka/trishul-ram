@@ -16,7 +16,7 @@ unconfirmed work lives in the backlog at the bottom.
 
 ## v1.3.0 — Broadcast Streams & Push-Source Scaling
 
-> Full design: [`docs/archive/v1.3.0-broadcast-streams-design.md`](archive/v1.3.0-broadcast-streams-design.md)
+> Full design: [`docs/archive/v1.3.0-plan.md`](archive/v1.3.0-plan.md)
 > Skips v1.2.4–v1.2.7 due to severity of push-source architecture gap (issue #11).
 > Scope is intentionally limited to HTTP push sources (`webhook`, `prometheus_rw`).
 > UDP sources (`syslog`, `snmp_trap`) and dynamic K8s service provisioning are v1.3.1.
@@ -101,6 +101,9 @@ unconfirmed work lives in the backlog at the bottom.
 - [x] **UDP multi-worker streams** — `syslog` and `snmp_trap` sources; per-pipeline NodePort Service via `kubernetes: enabled: true` (shared selector for `count: all`, manual Endpoints for `count: N` / `workers.list`); `kubernetes: enabled: true` required in manager mode
 - [x] **ASN.1 structured decode flattening** — BER multi-record split for concatenated files; ordered `message_classes` fallback; generic `json_flatten` and `hex_decode` transforms with configurable ASN.1-oriented options and docs
 - [x] **CDR record shaping** — dotted-path support on `unnest`, `explode`, `drop`, `rename`, `value_map`, `cast`; shared `path_utils` helpers; `select_from_list`, `coalesce_fields`, and `project` primitives; conditional `drop`; and narrow single-segment wildcard support on `hex_decode` / `json_flatten` for explicit row-semantic CDR pipelines (LTE/SGW/PGW)
+- [x] **Batch reconciliation** — dedicated `BatchReconciler`, active batch lease tracking, worker-scan adoption after manager restart, and lost-run synthesis through the existing run-finalization path
+- [x] **Incremental large-record batch processing** — pipeline-level `record_chunk_size`, serializer `parse_chunks(...)` hook, and incremental ASN.1 BER decode for bounded-memory serial batch processing
+- [x] **Safe staged batch file output** — record-safe serial batch sinks (`csv`, `ndjson`) finalize output per source file, delete staged temp artifacts on failure, and support optional `post_batch_cleanup` heap trimming per pipeline
 
 ---
 

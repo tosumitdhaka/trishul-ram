@@ -20,3 +20,12 @@ class BaseSink(ABC):
             meta: Metadata from the originating source read (filename, etc.).
         """
         ...
+
+    def finalize_source(self, meta: dict, success: bool) -> None:
+        """Finalize writes for one logical source unit.
+
+        Batch file sinks may override this to publish staged output only after a
+        source file completes successfully. The default implementation is a
+        no-op for sinks without source-finalization semantics.
+        """
+        return None

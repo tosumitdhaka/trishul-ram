@@ -21,6 +21,13 @@ class FilePartState:
     bytes_written: int = 0
 
 
+@dataclass(frozen=True)
+class StagedFileTarget:
+    state_key: tuple[tuple[str, str], ...]
+    temp_path: str
+    final_path: str
+
+
 def format_part_index(part_index: int, max_index: int) -> str:
     width = max(1, len(str(max_index)))
     return f"{part_index:0{width}d}"
@@ -40,6 +47,26 @@ def _resolve_source_filename(meta: dict) -> str:
     source_path = str(meta.get("source_path", "") or "").strip()
     basename = _basename(source_path)
     return basename or "data"
+
+
+def source_unit_key(meta: dict) -> tuple[str, str, str]:
+    source_path = str(meta.get("source_path", "") or "").strip()
+    source_filename = _resolve_source_filename(meta)
+    run_id = str(meta.get("run_id", "") or "").strip()
+    return source_path, source_filename, run_id
+
+
+def is_record_safe_serializer(serializer_type: str) -> bool:
+    return serializer_type in {"ndjson", "csv"}
+
+
+def should_stage_file_output(meta: dict, serializer_type: str) -> bool:
+    if not meta.get("enable_safe_finalize"):
+        return False
+    if not is_record_safe_serializer(serializer_type):
+        return False
+    source_path, source_filename, run_id = source_unit_key(meta)
+    return bool(run_id and (source_path or source_filename))
 
 
 def build_filename_vars(

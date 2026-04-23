@@ -229,6 +229,55 @@ class TestAsn1Serializer:
         assert result == [{"value": 5}]
         assert compiled.decode.call_args.args == ("Foo", record)
 
+    def test_parse_chunks_split_records_yields_bounded_batches(self, tmp_path):
+        schema_file = _schema_file(tmp_path)
+        compiled = MagicMock()
+        record1 = b"\x30\x03abc"
+        record2 = b"\x30\x03def"
+        record3 = b"\x30\x03ghi"
+        compiled.decode.side_effect = [{"id": 1}, {"id": 2}, {"id": 3}]
+        fake_asn1tools = SimpleNamespace(compile_files=MagicMock(return_value=compiled))
+        serializer = Asn1Serializer(
+            {
+                "schema_file": str(schema_file),
+                "message_class": "Foo",
+                "split_records": True,
+            }
+        )
+
+        with pytest.MonkeyPatch.context() as mp:
+            mp.setitem(sys.modules, "asn1tools", fake_asn1tools)
+            result = list(serializer.parse_chunks(record1 + record2 + record3, 2))
+
+        assert result == [
+            [{"id": 1}, {"id": 2}],
+            [{"id": 3}],
+        ]
+        assert compiled.decode.call_args_list[0].args == ("Foo", record1)
+        assert compiled.decode.call_args_list[1].args == ("Foo", record2)
+        assert compiled.decode.call_args_list[2].args == ("Foo", record3)
+
+    def test_parse_chunks_without_split_records_decodes_single_document_once(self, tmp_path):
+        schema_file = _schema_file(tmp_path)
+        compiled = MagicMock()
+        compiled.decode.return_value = {"id": 1}
+        fake_asn1tools = SimpleNamespace(compile_files=MagicMock(return_value=compiled))
+        serializer = Asn1Serializer(
+            {
+                "schema_file": str(schema_file),
+                "message_class": "Foo",
+                "split_records": False,
+            }
+        )
+
+        with pytest.MonkeyPatch.context() as mp:
+            mp.setitem(sys.modules, "asn1tools", fake_asn1tools)
+            result = list(serializer.parse_chunks(b"payload", 2))
+
+        assert result == [[{"id": 1}]]
+        assert compiled.decode.call_count == 1
+        assert compiled.decode.call_args.args == ("Foo", b"payload")
+
     def test_compiled_schema_is_cached(self, tmp_path):
         schema_file = _schema_file(tmp_path)
         compiled = MagicMock()
