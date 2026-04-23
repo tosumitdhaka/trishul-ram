@@ -152,6 +152,131 @@ class TestSelectFromListTransform:
 
 
 class TestPhase2TransformConfigValidation:
+    def test_loader_accepts_conditional_drop(self):
+        yaml_text = textwrap.dedent(
+            """
+            pipeline:
+              name: test-drop
+              source:
+                type: local
+                path: /tmp/in
+              serializer_in:
+                type: json
+              transforms:
+                - type: drop
+                  fields:
+                    served_sip_uri: [null, ""]
+              serializer_out:
+                type: json
+              sink:
+                type: local
+                path: /tmp/out
+            """
+        )
+        config = load_pipeline_from_yaml(yaml_text)
+        assert config.transforms[0].type == "drop"
+
+    def test_conditional_drop_rejects_non_list_values(self):
+        yaml_text = textwrap.dedent(
+            """
+            pipeline:
+              name: bad-drop
+              source:
+                type: local
+                path: /tmp/in
+              serializer_in:
+                type: json
+              transforms:
+                - type: drop
+                  fields:
+                    served_sip_uri: null
+              serializer_out:
+                type: json
+              sink:
+                type: local
+                path: /tmp/out
+            """
+        )
+        with pytest.raises(ConfigError, match="Input should be a valid list"):
+            load_pipeline_from_yaml(yaml_text)
+
+    def test_loader_accepts_project(self):
+        yaml_text = textwrap.dedent(
+            """
+            pipeline:
+              name: test-project
+              source:
+                type: local
+                path: /tmp/in
+              serializer_in:
+                type: json
+              transforms:
+                - type: project
+                  fields:
+                    served_imsi:
+                      source_any: [servedIMSI, subscription.imsi]
+                    apn: accessPointNameNI
+              serializer_out:
+                type: json
+              sink:
+                type: local
+                path: /tmp/out
+            """
+        )
+        config = load_pipeline_from_yaml(yaml_text)
+        assert config.transforms[0].type == "project"
+
+    def test_project_config_rejects_invalid_source_mode(self):
+        yaml_text = textwrap.dedent(
+            """
+            pipeline:
+              name: bad-project
+              source:
+                type: local
+                path: /tmp/in
+              serializer_in:
+                type: json
+              transforms:
+                - type: project
+                  fields:
+                    served_imsi:
+                      required: true
+              serializer_out:
+                type: json
+              sink:
+                type: local
+                path: /tmp/out
+            """
+        )
+        with pytest.raises(ConfigError, match="exactly one of source or source_any must be set"):
+            load_pipeline_from_yaml(yaml_text)
+
+    def test_loader_accepts_json_flatten(self):
+        yaml_text = textwrap.dedent(
+            """
+            pipeline:
+              name: test-json-flatten
+              source:
+                type: local
+                path: /tmp/in
+              serializer_in:
+                type: json
+              transforms:
+                - type: json_flatten
+                  explode_paths: [records]
+                  choice_unwrap:
+                    paths: [address]
+                    mode: both
+              serializer_out:
+                type: json
+              sink:
+                type: local
+                path: /tmp/out
+            """
+        )
+        config = load_pipeline_from_yaml(yaml_text)
+        assert config.transforms[0].type == "json_flatten"
+
     def test_loader_accepts_phase2_transforms(self):
         yaml_text = textwrap.dedent(
             """

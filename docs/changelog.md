@@ -48,12 +48,13 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - `split_records: true` on the `asn1` serializer splits concatenated BER files into individual top-level TLV records before decode; supports short-form, long-form, and indefinite-length (0x80) encodings
 - `message_classes: [...]` accepts an ordered fallback list of root ASN.1 types; all-fail raises `SerializerError` and routes to DLQ; mutually exclusive with the existing `message_class` field
 - `bytearray` values are now hex-stringified in `_to_json_safe()` alongside `bytes`
-- `json_flatten` transform — registered as `"json_flatten"`; recursively flattens nested dicts/lists with dotted-key output; options: `explode_mode` (auto/off/paths), `zip_lists` (auto/off/mappings), `choice_mode` (keep/unwrap_value/type_value), `rename_style` (none/snake_case), `drop_paths`, `keep_paths`, `max_depth`, `ambiguity_mode` (keep/error)
-- `hex_decode` transform — registered as `"hex_decode"`; decodes hex-string leaf values produced by `_to_json_safe()`; `mode: utf8_or_hex|latin1_or_hex|hex`; per-path `overrides` with `decode_as` and `format` (utf8, latin1, tbcd, bcd_semi_octet, packed, bit_string_bytes, tbcd_quarter_hour); does not re-invoke asn1tools
+- `json_flatten` transform — now uses the explicit ordered row-shaping contract for nested payloads with `explode_paths`, `zip_groups`, `choice_unwrap`, final dotted-key flattening, and `drop_paths` on flattened keys; this replaces the earlier heuristic `explode_mode` / `zip_lists` behavior
+- `hex_decode` transform — registered as `"hex_decode"`; decodes hex-string leaf values produced by `_to_json_safe()`; `mode: utf8_or_hex|latin1_or_hex|hex`; per-path `overrides` with `decode_as`, `format`, optional `bit_length_field`, optional bit-index `mapping`, and `output` for `bit_flags` (`names|indexes|both`); does not re-invoke asn1tools
 
 **CDR record shaping — dotted-path transform support**
 - Shared `tram/transforms/path_utils.py` — `get_path`, `set_path`, `delete_path`, `rename_path` helpers with consistent dict-only traversal semantics; used by all path-aware transforms
 - `unnest`, `explode`, `drop`, `rename`, `value_map`, `cast` — all `field`/`fields` config keys now accept dotted paths (`a.b.c`); plain top-level keys unchanged; list-index syntax not supported
+- `project` transform — declarative final-schema extraction/rename step with compact `output: source.path` form plus expanded `source`, `source_any`, `default`, and `required` options
 - `unnest`: missing nested path passes through unchanged; only present non-dict values trigger `on_non_dict` behavior
 - `explode`: scalar elements in nested lists write back via `set_path` to the correct nested location
 - `rename`: prefix-overlap detection at init time raises `TransformError` for conflicting source paths; both source and destination may be dotted
@@ -62,6 +63,8 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 **CDR record shaping — new primitives**
 - `select_from_list` transform — selects elements from a list field by exact-match predicate or `first_item: true` without exploding the record; multi-select in one invocation via `select: [...]`; projects element fields to top-level output names; `on_no_match: null_fields|raise` (default `null_fields`); `name` optional for error context; duplicate output fields across selections rejected at config load
 - `coalesce_fields` transform — writes each output field from the first non-empty candidate path in `sources`; default `empty_values` is `[null, ""]`; `default` used when all candidates miss
+- `drop` transform — `fields` now accepts either `list[str]` for unconditional drops or `dict[path, list[value]]` for conditional drops; conditional matching supports dotted paths and removes a field only when its value equals one of the configured values
+- light path-pattern support — `hex_decode.overrides[].path` and `json_flatten.drop_paths` now accept simple single-segment `*` wildcards; exact path matches keep precedence over wildcard rules
 - Both transforms registered in `tram/transforms/__init__.py` and included in the `TransformConfig` union in `pipeline.py`
 
 ---

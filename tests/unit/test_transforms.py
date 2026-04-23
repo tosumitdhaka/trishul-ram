@@ -172,6 +172,22 @@ class TestDropTransform:
         result = t.apply([{"a": {"b": 1, "c": 2}, "x": 3}])
         assert result == [{"a": {"c": 2}, "x": 3}]
 
+    def test_conditional_drop_only_removes_matching_value(self):
+        t = DropTransform({"fields": {"served_sip_uri": [None, ""]}})
+        result = t.apply([
+            {"served_sip_uri": "", "x": 1},
+            {"served_sip_uri": "sip:user@example.com", "x": 2},
+        ])
+        assert result == [
+            {"x": 1},
+            {"served_sip_uri": "sip:user@example.com", "x": 2},
+        ]
+
+    def test_conditional_drop_supports_dotted_path(self):
+        t = DropTransform({"fields": {"a.note": [None, ""]}})
+        result = t.apply([{"a": {"note": "", "keep": 1}, "x": 3}])
+        assert result == [{"a": {"keep": 1}, "x": 3}]
+
 
 # ── ValueMapTransform ──────────────────────────────────────────────────────
 

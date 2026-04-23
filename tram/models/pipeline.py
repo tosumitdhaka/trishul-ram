@@ -386,7 +386,18 @@ class AddFieldTransformConfig(BaseModel):
 
 class DropTransformConfig(BaseModel):
     type: Literal["drop"]
-    fields: list[str]
+    fields: list[str] | dict[str, list[Any]]
+
+    @field_validator("fields")
+    @classmethod
+    def validate_fields(cls, value):
+        if isinstance(value, dict):
+            for key, item in value.items():
+                if not isinstance(item, list):
+                    raise ValueError(
+                        f"conditional drop field '{key}' must map to a list of values"
+                    )
+        return value
 
 
 class ValueMapTransformConfig(BaseModel):
@@ -571,31 +582,64 @@ class SelectFromListTransformConfig(BaseModel):
         return self
 
 
-class JsonFlattenZipMappingConfig(BaseModel):
-    labels: str
-    values: str
-    labels_output: str | None = None
-    values_output: str | None = None
+class ProjectFieldConfig(BaseModel):
+    source: str | None = None
+    source_any: list[str] = Field(default_factory=list)
+    default: Any | None = None
+    required: bool = False
+
+    @model_validator(mode="after")
+    def validate_source_mode(self):
+        has_source = self.source is not None
+        has_source_any = bool(self.source_any)
+        if has_source == has_source_any:
+            raise ValueError("exactly one of source or source_any must be set")
+        return self
+
+
+class ProjectTransformConfig(BaseModel):
+    type: Literal["project"]
+    fields: dict[str, str | ProjectFieldConfig]
+
+    @field_validator("fields")
+    @classmethod
+    def validate_fields(cls, value: dict[str, str | ProjectFieldConfig]):
+        if not value:
+            raise ValueError("fields must not be empty")
+        return value
 
 
 class JsonFlattenTransformConfig(BaseModel):
     type: Literal["json_flatten"]
-    explode_mode: Literal["auto", "off", "paths"] = "auto"
     explode_paths: list[str] = Field(default_factory=list)
-    zip_lists: Literal["auto", "off", "mappings"] = "auto"
-    zip_mappings: list[JsonFlattenZipMappingConfig] = Field(default_factory=list)
-    choice_mode: Literal["keep", "unwrap_value", "type_value"] = "type_value"
-    rename_style: Literal["none", "snake_case"] = "none"
-    drop_paths: list[str] = Field(default_factory=list)
-    keep_paths: list[str] = Field(default_factory=list)
+    separator: str = "."
+    keep_empty_rows: bool = True
+    preserve_lists: bool = True
     max_depth: int = 0
-    ambiguity_mode: Literal["keep", "error"] = "keep"
+    zip_groups: list[JsonFlattenZipGroupConfig] = Field(default_factory=list)
+    choice_unwrap: JsonFlattenChoiceUnwrapConfig | None = None
+    drop_paths: list[str] = Field(default_factory=list)
+
+
+class JsonFlattenZipGroupConfig(BaseModel):
+    fields: dict[str, str]
+    strict: bool = True
+
+
+class JsonFlattenChoiceUnwrapConfig(BaseModel):
+    paths: list[str]
+    mode: Literal["keep", "value", "both"] = "value"
+    type_suffix: str = "_type"
+    value_suffix: str = ""
 
 
 class HexDecodeOverrideConfig(BaseModel):
     path: str
     decode_as: str
     format: str | None = None
+    bit_length_field: str | None = None
+    mapping: dict[int, str] = Field(default_factory=dict)
+    output: Literal["names", "indexes", "both"] | None = None
 
 
 class HexDecodeTransformConfig(BaseModel):
@@ -607,7 +651,7 @@ class HexDecodeTransformConfig(BaseModel):
 
 
 TransformConfig = Annotated[
-    RenameTransformConfig | CastTransformConfig | AddFieldTransformConfig | DropTransformConfig | ValueMapTransformConfig | FilterTransformConfig | FlattenTransformConfig | TimestampNormalizeTransformConfig | AggregateTransformConfig | EnrichTransformConfig | ExplodeTransformConfig | DeduplicateTransformConfig | RegexExtractTransformConfig | InjectMetaTransformConfig | TemplateTransformConfig | MaskTransformConfig | ValidateTransformConfig | SortTransformConfig | LimitTransformConfig | JmesPathExtractTransformConfig | UnnestTransformConfig | CoalesceFieldsTransformConfig | SelectFromListTransformConfig | JsonFlattenTransformConfig | HexDecodeTransformConfig,
+    RenameTransformConfig | CastTransformConfig | AddFieldTransformConfig | DropTransformConfig | ValueMapTransformConfig | FilterTransformConfig | FlattenTransformConfig | TimestampNormalizeTransformConfig | AggregateTransformConfig | EnrichTransformConfig | ExplodeTransformConfig | DeduplicateTransformConfig | RegexExtractTransformConfig | InjectMetaTransformConfig | TemplateTransformConfig | MaskTransformConfig | ValidateTransformConfig | SortTransformConfig | LimitTransformConfig | JmesPathExtractTransformConfig | UnnestTransformConfig | CoalesceFieldsTransformConfig | SelectFromListTransformConfig | ProjectTransformConfig | JsonFlattenTransformConfig | HexDecodeTransformConfig,
     Field(discriminator="type"),
 ]
 

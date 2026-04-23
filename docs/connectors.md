@@ -280,7 +280,10 @@ source:
 ### syslog
 
 Receives syslog messages over UDP or TCP. Stream mode.
-In manager mode, `syslog` is blocked in v1.3.0 because the UDP push-source architecture is not ready yet; use standalone mode or wait for v1.3.2 multi-worker support.
+In manager mode, `syslog` multi-worker streams are supported in `1.3.2+`, but UDP ingress must
+go through a per-pipeline Kubernetes Service. Set `kubernetes.enabled: true` on the pipeline;
+`workers.count: all` uses the shared worker selector path, while `workers.count: N` and
+`workers.list` use manual Endpoints pinned to the dispatched workers.
 
 | Parameter | Default | Description |
 |---|---|---|
@@ -301,7 +304,10 @@ source:
 ### snmp_trap
 
 Receives SNMP v1/v2c/v3 traps. Stream mode. Requires `pip install tram[snmp]`.
-In manager mode, `snmp_trap` is blocked in v1.3.0 because the UDP push-source architecture is not ready yet; use standalone mode or wait for v1.3.2 multi-worker support.
+In manager mode, `snmp_trap` multi-worker streams are supported in `1.3.2+`, but UDP ingress
+must go through a per-pipeline Kubernetes Service. Set `kubernetes.enabled: true` on the
+pipeline; `workers.count: all` uses the shared worker selector path, while `workers.count: N`
+and `workers.list` use manual Endpoints pinned to the dispatched workers.
 
 | Parameter | Default | Description |
 |---|---|---|
