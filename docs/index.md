@@ -39,9 +39,7 @@ Lightweight, container-native Python daemon for telecom data pipeline orchestrat
 - **[Pipeline Controller Design](pipeline-controller-design.md)** - Historical design notes for the v1.1.x controller transition; current manager/worker architecture is documented in `architecture.md`
 - **[Roadmap](roadmap.md)** - Planned features and version checklist
 - **Archive**
-  - **[Structured Record Shaping Design](archive/structured-record-shaping-design.md)** - Archived shaping/design record for explicit `json_flatten`, `hex_decode`, `project`, conditional `drop`, and narrow wildcard path support on nested JSON / ASN.1-decoded payloads
-  - **[v1.3.2 Plan](archive/v1.3.2-plan.md)** - Archived implementation plan for the `1.3.2` backend slice set
-  - **[v1.3.2 Batch Recovery Plan](archive/v1.3.2-batch-recovery-plan.md)** - Archived design and validation record for batch reconciliation, incremental large-record processing, and safe staged file output
+  - **[v1.3.2 Plan](archive/v1.3.2-plan.md)** - Archived consolidated `1.3.2` design and implementation plan covering stats parity, multi-worker UDP streams, ASN.1 flattening, CDR record shaping, and batch resilience
   - **[v1.3.1 Plan](archive/v1.3.1-plan.md)** - Archived planning document for the `1.3.1` implementation slice set
   - **[v1.3.0 Plan *Architecture Change*](archive/v1.3.0-plan.md)** - Archived design document for the `1.3.0` broadcast-streams rollout
 
@@ -186,9 +184,7 @@ docs/
 ├── changelog.md                  # Full release history
 ├── checklist.md                  # Development checklist
 └── archive/                      # Archived version-specific design and planning docs
-    ├── structured-record-shaping-design.md # Archived shaping/decode design for nested record payloads
-    ├── v1.3.2-plan.md            # Archived 1.3.2 backend implementation plan
-    ├── v1.3.2-batch-recovery-plan.md # Archived 1.3.2 batch resilience follow-up plan
+    ├── v1.3.2-plan.md            # Archived consolidated 1.3.2 backend implementation plan
     ├── v1.3.1-plan.md            # Archived 1.3.1 implementation plan
     └── v1.3.0-plan.md            # Archived 1.3.0 implementation plan
 ```
