@@ -19,7 +19,7 @@ class S3Sink(BaseSink):
     The object key is generated from a template supporting tokens:
     - ``{pipeline}``        — pipeline name (from meta or config)
     - ``{timestamp}``       — UTC file-open timestamp
-    - ``{epoch}`` / ``{epoch_m}`` — UTC file-open epoch seconds / millis
+    - ``{epoch}`` / ``{epoch_m}`` / ``{epoch_ms}`` — UTC file-open epoch seconds / millis
     - ``{part}`` / ``{index}`` — file part number
     - ``{source_filename}`` — original source filename
     - ``{source_stem}`` / ``{source_suffix}`` — derived from source filename

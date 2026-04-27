@@ -31,7 +31,8 @@ class LocalSink(BaseSink):
     Config keys:
         path               (str, required)   Directory to write to (created if absent).
         filename_template  (str, optional)   Filename template. Tokens: {pipeline},
-                                             {timestamp}, {source_filename}.
+                                             {timestamp}, {epoch_m}/{epoch_ms},
+                                             {source_filename}.
                                              Default: "{pipeline}_{timestamp}.bin"
         overwrite          (bool, default True)  Overwrite existing files in single mode.
     """

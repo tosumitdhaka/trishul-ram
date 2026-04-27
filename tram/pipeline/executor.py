@@ -15,7 +15,7 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import UTC, datetime
 from typing import TYPE_CHECKING
 
-from tram.connectors.file_sink_common import extract_field_paths
+from tram.connectors.file_sink_common import extract_field_paths, validate_template_tokens
 from tram.core.context import PipelineRunContext, RunResult, RunStatus
 from tram.core.exceptions import TramError
 from tram.registry.registry import get_serializer, get_sink, get_source, get_transform
@@ -1117,4 +1117,20 @@ class PipelineExecutor:
             except Exception as exc:
                 issues.append(f"dlq: {exc}")
 
+        issues.extend(self._validate_sink_templates(config))
+
         return {"valid": len(issues) == 0, "issues": issues}
+
+    def _validate_sink_templates(self, config: PipelineConfig) -> list[str]:
+        issues: list[str] = []
+        sink_entries = [(sink.type, sink) for sink in config.sinks]
+        if config.dlq is not None:
+            sink_entries.append(("dlq", config.dlq))
+        for sink_label, sink_cfg in sink_entries:
+            for attr in _FILE_TEMPLATE_ATTRS:
+                template = getattr(sink_cfg, attr, None)
+                if not isinstance(template, str):
+                    continue
+                for issue in validate_template_tokens(template):
+                    issues.append(f"{sink_label}.{attr}: {issue}")
+        return issues

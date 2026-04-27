@@ -4,7 +4,11 @@ from __future__ import annotations
 
 from typing import Annotated, Any, Literal
 
-from pydantic import AliasChoices, BaseModel, Field, field_validator, model_validator
+from pydantic import AliasChoices, BaseModel as PydanticBaseModel, Field, field_validator, model_validator
+
+
+class BaseModel(PydanticBaseModel):
+    model_config = {"extra": "forbid"}
 
 # ── Schedule ───────────────────────────────────────────────────────────────
 
@@ -1087,6 +1091,7 @@ class XmlSerializerConfig(BaseModel):
 
 
 class AvroSerializerConfig(BaseModel):
+    model_config = {"populate_by_name": True}
     type: Literal["avro"]
     avro_schema: str | None = Field(default=None, alias="schema")
     schema_file: str | None = None
@@ -1094,8 +1099,6 @@ class AvroSerializerConfig(BaseModel):
     schema_registry_subject: str | None = None
     schema_registry_id: int | None = None
     use_magic_bytes: bool = True
-
-    model_config = {"populate_by_name": True}
 
     @model_validator(mode="after")
     def check_schema(self) -> AvroSerializerConfig:

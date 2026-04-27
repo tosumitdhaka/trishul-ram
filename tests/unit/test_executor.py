@@ -69,6 +69,16 @@ class TestPipelineExecutorDryRun:
         assert result["valid"] is False
         assert any("source" in issue for issue in result["issues"])
 
+    def test_dry_run_rejects_unknown_filename_template_tokens(self):
+        config = _make_pipeline()
+        config.sinks[0].filename_template = "{epoch_ms}_{unknown_token}.bin"
+        executor = PipelineExecutor()
+
+        result = executor.dry_run(config)
+
+        assert result["valid"] is False
+        assert any("unknown_token" in issue for issue in result["issues"])
+
 
 class TestPipelineExecutorBatchRun:
     def test_batch_run_success(self):
