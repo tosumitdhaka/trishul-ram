@@ -1,4 +1,4 @@
-import { getConfig } from '../api.js'
+import { api } from '../api.js'
 
 export async function init() {
   const userInput = document.getElementById('login-user')
@@ -21,19 +21,13 @@ export async function init() {
     if (errEl) errEl.style.display = 'none'
 
     try {
-      const { baseUrl } = getConfig()
-      const res = await fetch(`${baseUrl}/api/auth/login`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ username, password }),
-      })
-      const data = await res.json()
-      if (!res.ok) throw new Error(data.detail || 'Login failed')
+      const data = await api.auth.login(username, password)
       localStorage.setItem('tram_auth_token', data.token)
       localStorage.setItem('tram_auth_user', data.username)
       // Show the main shell and navigate to dashboard
       document.getElementById('app-shell').style.display = ''
       document.getElementById('login-overlay').style.display = 'none'
+      document.getElementById('logout-btn').style.display = ''
       window.navigate('dashboard')
     } catch (e) {
       showErr(e.message)

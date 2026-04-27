@@ -34,7 +34,7 @@ async function loadFiltered() {
   const params   = { limit: 200 }
   if (pipeline) params.pipeline = pipeline
   if (status)   params.status   = status
-  if (from)     params.from     = from
+  if (from)     params.from_dt  = new Date(`${from}T00:00:00`).toISOString()
   try {
     const runs = await api.runs.list(params)
     renderRuns(runs)
@@ -62,14 +62,15 @@ function renderRuns(runs) {
     tbody.innerHTML = '<tr><td colspan="11" class="text-secondary text-center py-4">No runs found</td></tr>'
     return
   }
-  tbody.innerHTML = runs.map(r => {
-    const errRow = r.error
-      ? `<tr class="error-detail-row"><td></td><td colspan="10" class="font-monospace" style="font-size:11px;color:#f85149;padding:4px 8px 8px">${esc(r.error)}</td></tr>`
+  const rows = []
+  runs.forEach((r, i) => {
+    const lines = [...(r.errors || [])]
+    if (r.error && !lines.includes(r.error)) lines.unshift(r.error)
+    const hasDetail = lines.length > 0 || r.records_skipped > 0 || r.dlq_count > 0
+    const toggle = hasDetail
+      ? `<button class="btn-flat" style="padding:0 4px" onclick="window._runsToggleLog(${i})"><i class="bi bi-chevron-right" id="runs-chev-${i}" style="font-size:10px"></i></button>`
       : ''
-    const toggle = r.error
-      ? `<button class="btn-flat" style="padding:0 4px" onclick="this.closest('tr').nextElementSibling.classList.toggle('d-none')"><i class="bi bi-chevron-right" style="font-size:10px"></i></button>`
-      : ''
-    return `<tr>
+    rows.push(`<tr id="runs-row-${i}">
       <td style="width:20px">${toggle}</td>
       <td class="mono" style="font-size:11px">${esc(String(r.run_id || r.id || '').slice(0,8))}</td>
       <td class="fw-semibold">${esc(r.pipeline)}</td>
@@ -81,8 +82,39 @@ function renderRuns(runs) {
       <td class="text-secondary">${fmtNum(r.records_skipped)}</td>
       <td class="text-secondary">${fmtNum(r.dlq_count)}</td>
       <td>${statusBadge(r.status)}</td>
-    </tr>${errRow ? errRow.replace('class="error-detail-row"', 'class="error-detail-row d-none"') : ''}`
-  }).join('')
+    </tr>`)
+  })
+  tbody.innerHTML = rows.join('')
+
+  window._runsToggleLog = (i) => {
+    const existingLog = document.getElementById(`runs-log-${i}`)
+    const chev = document.getElementById(`runs-chev-${i}`)
+    if (existingLog) {
+      existingLog.remove()
+      if (chev) { chev.classList.remove('bi-chevron-down'); chev.classList.add('bi-chevron-right') }
+      return
+    }
+    const r = runs[i]
+    const lines = [...(r.errors || [])]
+    if (r.error && !lines.includes(r.error)) lines.unshift(r.error)
+    const details = []
+    if (lines.length) {
+      details.push(lines.map(e => `<div style="color:#f85149;padding:1px 0"><i class="bi bi-x-circle me-1" style="font-size:10px"></i>${esc(e)}</div>`).join(''))
+    }
+    if (r.records_skipped > 0) {
+      details.push(`<div class="text-secondary" style="padding:1px 0"><i class="bi bi-skip-forward me-1" style="font-size:10px"></i>${fmtNum(r.records_skipped)} record(s) skipped</div>`)
+    }
+    if (r.dlq_count > 0) {
+      details.push(`<div class="text-secondary" style="padding:1px 0"><i class="bi bi-inbox me-1" style="font-size:10px"></i>${fmtNum(r.dlq_count)} record(s) sent to DLQ</div>`)
+    }
+    const content = details.join('') || '<div class="text-secondary">No error details available</div>'
+    const logRow = document.createElement('tr')
+    logRow.id = `runs-log-${i}`
+    logRow.className = 'error-detail-row'
+    logRow.innerHTML = `<td></td><td colspan="10" class="font-monospace" style="font-size:11px;padding:6px 8px 8px;background:#161b22">${content}</td>`
+    document.getElementById(`runs-row-${i}`)?.after(logRow)
+    if (chev) { chev.classList.remove('bi-chevron-right'); chev.classList.add('bi-chevron-down') }
+  }
 }
 
 function exportCsv() {

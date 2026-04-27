@@ -1,5 +1,5 @@
 <div class="row g-3">
-  <div class="col-4">
+  <div class="col-12 col-lg-5">
     <div class="settings-card h-100">
       <div class="fw-semibold mb-3">Connection</div>
       <div class="mb-3">
@@ -30,26 +30,8 @@
     </div>
   </div>
 
-  <div class="col-4">
-    <div class="settings-card h-100">
-      <div class="fw-semibold mb-3">Daemon Status</div>
-      <table class="table table-sm mb-0" style="font-size:13px">
-        <tbody>
-          <tr><td class="text-secondary" style="width:140px">Scheduler</td><td id="ds-scheduler">—</td></tr>
-          <tr><td class="text-secondary">DB Engine</td><td id="ds-db-engine" class="mono">—</td></tr>
-          <tr><td class="text-secondary">DB Status</td><td id="ds-db-status">—</td></tr>
-          <tr><td class="text-secondary">DB Path</td><td id="ds-db-path" class="mono text-secondary" style="font-size:11px">—</td></tr>
-          <tr><td class="text-secondary">Cluster</td><td id="ds-cluster" class="text-secondary">—</td></tr>
-          <tr><td class="text-secondary">Pipelines loaded</td><td id="ds-pipelines">—</td></tr>
-          <tr><td class="text-secondary">Python</td><td id="ds-python" class="mono text-secondary">—</td></tr>
-          <tr><td class="text-secondary">Uptime</td><td id="ds-uptime" class="text-secondary">—</td></tr>
-        </tbody>
-      </table>
-    </div>
-  </div>
-
   <!-- AI config card -->
-  <div class="col-4">
+  <div class="col-12 col-lg-7">
     <div class="settings-card h-100">
       <div class="fw-semibold mb-3 d-flex align-items-center gap-2">
         <i class="bi bi-stars" style="color:#9e6bde"></i> AI Assist
@@ -91,7 +73,7 @@
   </div>
 
   <!-- Change Password card — only shown when user is logged in -->
-  <div class="col-4" id="pwd-col" style="display:none">
+  <div class="col-12 col-lg-5" id="pwd-col" style="display:none">
     <div class="settings-card h-100">
       <div class="fw-semibold mb-3">Change Password</div>
       <div class="mb-2">

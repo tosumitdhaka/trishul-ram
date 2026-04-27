@@ -123,20 +123,4 @@ export async function init() {
       if (s) { s.textContent = `✗ ${e.message}`; s.style.color = '#f85149' }
     }
   }
-
-  // Load daemon status
-  try {
-    const [ready, meta] = await Promise.all([api.ready(), api.meta()])
-    const set = (id, val) => { const el = document.getElementById(id); if (el) el.textContent = val ?? '—' }
-    const sch = document.getElementById('ds-scheduler')
-    if (sch) sch.innerHTML = `<span class="tram-badge badge-${ready.scheduler === 'running' ? 'running has-dot running' : 'stopped'}">${ready.scheduler || '—'}</span>`
-    set('ds-db-engine',  ready.db_engine || 'SQLite')
-    const dbs = document.getElementById('ds-db-status')
-    if (dbs) { dbs.textContent = ready.db || '—'; dbs.style.color = ready.db === 'ok' ? '#3fb950' : '#f85149' }
-    set('ds-db-path',    ready.db_path   || '—')
-    set('ds-cluster',    ready.cluster   || 'standalone')
-    set('ds-pipelines',  ready.pipelines_loaded ?? '—')
-    set('ds-python',     meta.python_version || '—')
-    set('ds-uptime',     ready.uptime    || '—')
-  } catch { /* offline */ }
 }
