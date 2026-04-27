@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import inspect
 import sys
 from datetime import UTC, datetime
 
@@ -9,9 +10,36 @@ from fastapi import APIRouter, Request
 
 from tram import __version__
 from tram.api.routers._stream_views import build_cluster_streams
-from tram.registry.registry import list_plugins
+from tram.api.config_schema import SCHEMA_FIELDS
+from tram.registry.registry import _serializers, _sinks, _sources, _transforms, list_plugins
 
 router = APIRouter()
+
+
+def _current_worker_assignments(controller) -> dict[str, list[str]]:
+    assignments: dict[str, set[str]] = {}
+
+    for placement in controller.get_active_broadcast_placements():
+        pipeline_name = str(placement.get("pipeline_name", "") or "")
+        if not pipeline_name:
+            continue
+        for slot in placement.get("slots", []):
+            worker_url = str(slot.get("worker_url", "") or "")
+            if not worker_url:
+                continue
+            assignments.setdefault(worker_url, set()).add(pipeline_name)
+
+    for run in controller.get_active_batch_runs():
+        pipeline_name = str(run.get("pipeline_name", "") or "")
+        worker_url = str(run.get("worker_url", "") or "")
+        if not pipeline_name or not worker_url:
+            continue
+        assignments.setdefault(worker_url, set()).add(pipeline_name)
+
+    return {
+        worker_url: sorted(pipelines)
+        for worker_url, pipelines in assignments.items()
+    }
 
 
 @router.get("/api/health")
@@ -94,8 +122,74 @@ async def meta() -> dict:
 
 @router.get("/api/plugins")
 async def plugins() -> dict:
-    """All registered plugin keys by category."""
-    return list_plugins()
+    """All registered plugins by category, plus UI-friendly metadata."""
+    import tram.connectors  # noqa: F401
+    import tram.serializers  # noqa: F401
+    import tram.transforms  # noqa: F401
+
+    payload = list_plugins()
+    payload["details"] = {
+        "sources": _build_plugin_details("source", _sources),
+        "sinks": _build_plugin_details("sink", _sinks),
+        "serializers": _build_plugin_details("serializer", _serializers),
+        "transforms": _build_plugin_details("transform", _transforms),
+    }
+    return payload
+
+
+def _doc_parts(plugin_cls: type) -> tuple[str, str]:
+    doc = inspect.getdoc(plugin_cls) or ""
+    if not doc:
+        return "", ""
+    lines = [line.strip() for line in doc.splitlines()]
+    summary = lines[0]
+    description = " ".join(line for line in lines[1:] if line).strip()
+    return summary, description
+
+
+def _common_field_names(fields: list[dict], *, limit: int = 6) -> list[str]:
+    names = []
+    for field in fields:
+        if field["name"] in {"condition", "serializer_out", "transforms"}:
+            continue
+        names.append(field["name"])
+    return names[:limit]
+
+
+def _field_descriptors(fields: list[dict]) -> list[dict]:
+    return [
+        {
+            "name": field["name"],
+            "type": field["type"],
+            "required": bool(field.get("required")),
+            "default": field.get("default"),
+        }
+        for field in fields
+        if field["name"] not in {"condition", "serializer_out", "transforms"}
+    ]
+
+
+def _build_plugin_details(category: str, registry: dict[str, type]) -> list[dict]:
+    items = []
+    for name in sorted(registry.keys()):
+        plugin_cls = registry[name]
+        summary, description = _doc_parts(plugin_cls)
+        fields = SCHEMA_FIELDS.get(category, {}).get(name, [])
+        required = [field["name"] for field in fields if field.get("required")]
+        optional = [field for field in fields if not field.get("required")]
+        items.append(
+            {
+                "name": name,
+                "class_name": plugin_cls.__name__,
+                "summary": summary or name,
+                "description": description,
+                "required_fields": required,
+                "common_optional_fields": _common_field_names(optional),
+                "fields": _field_descriptors(fields),
+                "field_count": len(fields),
+            }
+        )
+    return items
 
 
 @router.get("/api/cluster/nodes")
@@ -107,14 +201,20 @@ async def cluster_nodes(request: Request) -> dict:
     """
     worker_pool = getattr(request.app.state, "worker_pool", None)
     config = getattr(request.app.state, "config", None)
+    controller = request.app.state.controller
     mode = getattr(config, "tram_mode", "standalone") if config else "standalone"
 
     if worker_pool is None:
         return {"mode": mode, "workers": []}
 
+    workers = worker_pool.status()
+    current_assignments = _current_worker_assignments(controller)
+    for worker in workers:
+        worker["assigned_pipelines"] = current_assignments.get(worker.get("url"), [])
+
     return {
         "mode": mode,
-        "workers": worker_pool.status(),
+        "workers": workers,
     }
 
 
@@ -126,6 +226,7 @@ async def cluster_streams(request: Request) -> dict:
     stats_store = getattr(request.app.state, "stats_store", None)
     config = getattr(request.app.state, "config", None)
     mode = getattr(config, "tram_mode", "standalone") if config else "standalone"
+    worker_pool = getattr(request.app.state, "worker_pool", None)
 
     if db is not None:
         placements = db.get_active_broadcast_placements()
@@ -134,5 +235,9 @@ async def cluster_streams(request: Request) -> dict:
 
     return {
         "mode": mode,
-        "streams": build_cluster_streams(placements, stats_store),
+        "streams": build_cluster_streams(
+            placements,
+            stats_store,
+            worker_pool.live_streams() if worker_pool is not None else None,
+        ),
     }
