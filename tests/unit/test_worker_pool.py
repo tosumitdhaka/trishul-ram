@@ -496,9 +496,94 @@ class TestStatusQueries:
             status = pool.worker_status("http://w0:8766")
 
         assert status == {
+            "worker_id": None,
+            "active_runs": 2,
+            "running_pipelines": [],
             "running": [{"run_id": "b1", "pipeline": "pipe-a", "started_at": "now"}],
             "streams": [{"run_id": "s1", "pipeline": "pipe-b", "started_at": "later"}],
         }
+
+    def test_status_prefers_live_worker_counts(self):
+        pool = _pool("http://w0:8766")
+        pool._health["http://w0:8766"] = {
+            "ok": True,
+            "active_runs": 0,
+            "running_pipelines": [],
+        }
+        pool._pipeline_workers["pipe-a"] = ["http://w0:8766"]
+
+        def _get(url, **kwargs):
+            resp = MagicMock()
+            resp.raise_for_status = MagicMock()
+            resp.json.return_value = {
+                "worker_id": "w0",
+                "active_runs": 1,
+                "running_pipelines": ["pipe-a"],
+                "running": [],
+                "streams": [{"run_id": "s1", "pipeline": "pipe-a", "started_at": "now"}],
+            }
+            return resp
+
+        mock_client = MagicMock()
+        mock_client.__enter__ = lambda s: mock_client
+        mock_client.__exit__ = MagicMock(return_value=False)
+        mock_client.get.side_effect = _get
+
+        with patch("httpx.Client", return_value=mock_client):
+            rows = pool.status()
+
+        assert rows == [{
+            "url": "http://w0:8766",
+            "worker_id": "w0",
+            "ok": True,
+            "active_runs": 1,
+            "active_streams": 1,
+            "running_pipelines": ["pipe-a"],
+            "running": [],
+            "streams": [{"run_id": "s1", "pipeline": "pipe-a", "started_at": "now"}],
+            "assigned_pipelines": ["pipe-a"],
+        }]
+
+    def test_live_streams_returns_normalized_stream_entries(self):
+        pool = _pool("http://w0:8766")
+
+        def _get(url, **kwargs):
+            resp = MagicMock()
+            resp.raise_for_status = MagicMock()
+            resp.json.return_value = {
+                "worker_id": "w0",
+                "active_runs": 1,
+                "running_pipelines": ["pipe-a"],
+                "running": [],
+                "streams": [{
+                    "run_id": "s1",
+                    "pipeline": "pipe-a",
+                    "started_at": "now",
+                    "schedule_type": "stream",
+                    "uptime_seconds": 3.0,
+                    "stats": {"records_out": 9},
+                }],
+            }
+            return resp
+
+        mock_client = MagicMock()
+        mock_client.__enter__ = lambda s: mock_client
+        mock_client.__exit__ = MagicMock(return_value=False)
+        mock_client.get.side_effect = _get
+
+        with patch("httpx.Client", return_value=mock_client):
+            live = pool.live_streams()
+
+        assert live == [{
+            "worker_url": "http://w0:8766",
+            "worker_id": "w0",
+            "pipeline_name": "pipe-a",
+            "run_id": "s1",
+            "started_at": "now",
+            "schedule_type": "stream",
+            "uptime_seconds": 3.0,
+            "stats": {"records_out": 9},
+        }]
 
     def test_is_run_active_checks_assigned_worker(self):
         pool = _pool("http://w0:8766")

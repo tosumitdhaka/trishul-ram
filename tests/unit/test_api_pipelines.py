@@ -156,6 +156,64 @@ class TestGetPipelinePlacement:
         assert data["slots"][0]["stats"]["stale"] is False
         assert data["slots"][0]["stats"]["bytes_in_per_sec"] == 100.0
 
+    def test_returns_live_broadcast_placement_when_manager_stats_are_missing(self):
+        stream_yaml = """\
+name: test-pipe
+schedule:
+  type: stream
+source:
+  type: webhook
+  path: /ingest
+serializer_in:
+  type: json
+sinks:
+  - type: local
+    path: /tmp/out
+"""
+        state = _make_state(yaml_text=stream_yaml)
+        app = _make_app()
+        app.state.controller.get.return_value = state
+        app.state.controller.get_active_broadcast_placements.return_value = [{
+            "placement_group_id": "pg1",
+            "pipeline_name": "test-pipe",
+            "status": "running",
+            "target_count": "all",
+            "started_at": datetime.now(UTC),
+            "slots": [{
+                "worker_index": 0,
+                "worker_id": "w0",
+                "worker_url": "http://worker-0:8766",
+                "run_id_prefix": "pg1-w0",
+                "current_run_id": "pg1-w0",
+                "status": "running",
+                "restart_count": 0,
+            }],
+        }]
+        app.state.controller._worker_pool = MagicMock()
+        app.state.controller._worker_pool.live_streams.return_value = [{
+            "worker_url": "http://worker-0:8766",
+            "worker_id": "w0",
+            "pipeline_name": "test-pipe",
+            "run_id": "pg1-w0",
+            "schedule_type": "stream",
+            "uptime_seconds": 5.0,
+            "stats": {
+                "records_in": 20,
+                "records_out": 10,
+                "bytes_in": 200,
+                "bytes_out": 100,
+            },
+        }]
+        client = TestClient(app)
+
+        resp = client.get("/api/pipelines/test-pipe/placement")
+
+        assert resp.status_code == 200
+        data = resp.json()
+        assert data["active_slots"] == 1
+        assert data["records_out_per_sec"] == 2.0
+        assert data["slots"][0]["stats"]["stale"] is False
+
     def test_includes_stale_slot_with_zeroed_per_sec(self):
         state = _make_state()
         app = _make_app()
@@ -359,6 +417,31 @@ class TestDryRun:
         client = TestClient(app, raise_server_exceptions=False)
         resp = client.post("/api/pipelines/dry-run", json={"yaml_text": ""})
         assert resp.status_code == 400
+
+    def test_serializer_in_rejects_unknown_nested_keys(self):
+        app = _make_app()
+        client = TestClient(app, raise_server_exceptions=False)
+        bad_yaml = """\
+name: test-pipe
+schedule:
+  type: manual
+source:
+  type: local
+  path: /tmp/in
+serializer_in:
+  type: json
+  transforms:
+    - type: rename
+      fields:
+        old_name: new_name
+sinks:
+  - type: local
+    path: /tmp/out
+"""
+        resp = client.post("/api/pipelines/dry-run", json={"yaml_text": bad_yaml})
+        assert resp.status_code == 200
+        assert resp.json()["valid"] is False
+        assert any("serializer_in" in issue for issue in resp.json()["issues"])
 
 
 class TestLifecycle:

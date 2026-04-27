@@ -59,3 +59,16 @@ class PipelineStats:
             }
             self.errors_last_window.clear()
         return snapshot
+
+    def snapshot(self) -> dict[str, int | list[str]]:
+        with self._lock:
+            return {
+                "records_in": self.records_in,
+                "records_out": self.records_out,
+                "records_skipped": self.records_skipped,
+                "dlq_count": self.dlq_count,
+                "error_count": self.error_count,
+                "bytes_in": self.bytes_in,
+                "bytes_out": self.bytes_out,
+                "errors_last_window": list(self.errors_last_window),
+            }

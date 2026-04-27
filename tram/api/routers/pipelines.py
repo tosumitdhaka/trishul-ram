@@ -14,6 +14,7 @@ from tram.core.exceptions import (
     PipelineNotFoundError,
 )
 from tram.pipeline.loader import load_pipeline_from_yaml, scan_pipeline_dir
+from tram.pipeline.linter import lint
 
 logger = logging.getLogger(__name__)
 
@@ -47,6 +48,9 @@ async def dry_run_pipeline(request: Request) -> dict:
 
     from tram.pipeline.executor import PipelineExecutor
     result = PipelineExecutor().dry_run(config)
+    warnings = [finding.message for finding in lint(config) if finding.severity == "warning"]
+    if warnings:
+        result["warnings"] = warnings
     return result
 
 
@@ -106,6 +110,7 @@ async def get_pipeline(name: str, request: Request) -> dict:
 async def get_pipeline_placement(name: str, request: Request) -> dict:
     controller = request.app.state.controller
     stats_store = getattr(request.app.state, "stats_store", None)
+    worker_pool = getattr(controller, "_worker_pool", None)
 
     try:
         state = controller.get(name)
@@ -117,7 +122,14 @@ async def get_pipeline_placement(name: str, request: Request) -> dict:
         None,
     )
     if placement is not None:
-        return build_placement_view(placement, stats_store)
+        live_items = None
+        if worker_pool is not None:
+            live_items = [
+                item
+                for item in worker_pool.live_streams()
+                if item.get("pipeline_name") == name
+            ]
+        return build_placement_view(placement, stats_store, live_items)
 
     # Standalone synthetic view: active stream pipeline with a live stats entry
     if (

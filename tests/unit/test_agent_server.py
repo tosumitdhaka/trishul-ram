@@ -169,6 +169,32 @@ class TestStatusEndpoint:
         assert data["running"] == []
         assert data["streams"] == []
 
+    def test_status_includes_live_stats_snapshot(self):
+        app = create_worker_app(worker_id="w0", manager_url="")
+        state: WorkerState = app.state.worker
+        run = ActiveRun(
+            run_id="s1",
+            pipeline_name="pipe-a",
+            schedule_type="stream",
+            started_at="2026-04-27T00:00:00+00:00",
+        )
+        from tram.agent.metrics import PipelineStats
+
+        run.stats = PipelineStats(run_id="s1", pipeline_name="pipe-a", schedule_type="stream")
+        run.stats.increment(records_in=12, records_out=8, bytes_in=120, bytes_out=80)
+        state.add(run)
+        client = TestClient(app, raise_server_exceptions=True)
+
+        resp = client.get("/agent/status")
+
+        assert resp.status_code == 200
+        data = resp.json()
+        assert data["worker_id"] == "w0"
+        assert data["active_runs"] == 1
+        assert data["running_pipelines"] == ["pipe-a"]
+        assert data["streams"][0]["run_id"] == "s1"
+        assert data["streams"][0]["stats"]["records_out"] == 8
+
 
 class TestIngressApp:
     def test_create_worker_ingress_app_has_no_agent_routes(self):

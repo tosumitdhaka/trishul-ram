@@ -3,8 +3,9 @@
 from __future__ import annotations
 
 from datetime import UTC, datetime, timedelta
+from typing import Literal
 
-from fastapi import APIRouter, Request
+from fastapi import APIRouter, Query, Request
 
 router = APIRouter()
 
@@ -17,8 +18,25 @@ def _iso(dt: datetime) -> str:
     return dt.isoformat()
 
 
+_PERIOD_MINUTES = {
+    "1h": 60,
+    "6h": 360,
+    "24h": 1440,
+}
+
+_GRANULARITY_MINUTES = {
+    "5m": 5,
+    "15m": 15,
+    "1h": 60,
+}
+
+
 @router.get("/api/stats")
-async def get_stats(request: Request) -> dict:
+async def get_stats(
+    request: Request,
+    period: Literal["1h", "6h", "24h"] = Query("1h", description="Chart lookback window"),
+    granularity: Literal["5m", "15m", "1h"] = Query("5m", description="Chart bucket size"),
+) -> dict:
     """Return aggregated pipeline and run statistics for the dashboard."""
     manager = request.app.state.manager
     db = getattr(request.app.state, "db", None)
@@ -27,6 +45,10 @@ async def get_stats(request: Request) -> dict:
     since_15m  = now - timedelta(minutes=15)
     since_1h   = now - timedelta(hours=1)
     since_today = now.replace(hour=0, minute=0, second=0, microsecond=0)
+    chart_window_minutes = _PERIOD_MINUTES[period]
+    bucket_minutes = _GRANULARITY_MINUTES[granularity]
+    bucket_count = max(1, chart_window_minutes // bucket_minutes)
+    chart_since = now - timedelta(minutes=chart_window_minutes)
 
     # ── Pipeline status counts from in-memory manager ──────────────────────
     all_states = manager.list_all()
@@ -42,7 +64,7 @@ async def get_stats(request: Request) -> dict:
         stats_15m   = _db_agg(db, since_15m)
         stats_1h    = _db_agg(db, since_1h)
         per_pipeline = _db_per_pipeline(db, since_1h, all_states)
-        sparkline   = _db_sparkline(db, since_1h)
+        sparkline   = _db_sparkline(db, chart_since, bucket_count=bucket_count, minutes=bucket_minutes)
     else:
         # In-memory fallback: scan deque[RunResult] in each PipelineState
         all_runs = []
@@ -53,7 +75,13 @@ async def get_stats(request: Request) -> dict:
         stats_15m   = _mem_agg(all_runs, since_15m)
         stats_1h    = _mem_agg(all_runs, since_1h)
         per_pipeline = _mem_per_pipeline(all_states, since_1h)
-        sparkline   = _mem_sparkline(all_runs, since_1h)
+        sparkline   = _mem_sparkline(all_runs, chart_since, bucket_count=bucket_count, minutes=bucket_minutes)
+
+    chart_total = sum(point["records_out"] for point in sparkline)
+    sparkline_legacy = [
+        {"bucket": point["bucket"], "records_out": point["records_out"]}
+        for point in sparkline
+    ]
 
     return {
         "pipelines_total":      pipelines_total,
@@ -67,7 +95,20 @@ async def get_stats(request: Request) -> dict:
         "errors_last_15m":      stats_15m["errors"],
         "avg_duration_last_hour_s": stats_1h["avg_duration_s"],
         "per_pipeline":         per_pipeline,
-        "sparkline":            sparkline,   # [{bucket, records_out}, ...] last 12×5min buckets
+        "sparkline":            sparkline_legacy,
+        "window": {
+            "period": period,
+            "granularity": granularity,
+            "bucket_count": bucket_count,
+        },
+        "chart": {
+            "metric": "records_out",
+            "period": period,
+            "granularity": granularity,
+            "bucket_count": bucket_count,
+            "total": chart_total,
+            "points": sparkline,
+        },
     }
 
 
@@ -142,8 +183,8 @@ def _db_per_pipeline(db, since: datetime, all_states) -> list[dict]:
     return result
 
 
-def _db_sparkline(db, since: datetime) -> list[dict]:
-    """12 × 5-minute buckets for the last hour, records_out per bucket."""
+def _db_sparkline(db, since: datetime, *, bucket_count: int, minutes: int) -> list[dict]:
+    """Fixed-width buckets for the requested chart window, records_out per bucket."""
     from sqlalchemy import text
     with db._engine.connect() as conn:
         rows = conn.execute(text("""
@@ -152,7 +193,7 @@ def _db_sparkline(db, since: datetime) -> list[dict]:
             WHERE finished_at >= :since
             ORDER BY finished_at
         """), {"since": since.isoformat()}).fetchall()
-    return _bucket_sparkline(rows, since, buckets=12, minutes=5)
+    return _bucket_sparkline(rows, since, bucket_count=bucket_count, minutes=minutes)
 
 
 # ── In-memory fallbacks ──────────────────────────────────────────────────────
@@ -206,27 +247,38 @@ def _mem_per_pipeline(all_states, since: datetime) -> list[dict]:
     return result
 
 
-def _mem_sparkline(runs, since: datetime) -> list[dict]:
+def _mem_sparkline(runs, since: datetime, *, bucket_count: int, minutes: int) -> list[dict]:
     rows = [
         (str(r.finished_at), r.records_out)
         for r in runs if _after(r.finished_at, since)
     ]
-    return _bucket_sparkline(rows, since, buckets=12, minutes=5)
+    return _bucket_sparkline(rows, since, bucket_count=bucket_count, minutes=minutes)
 
 
-def _bucket_sparkline(rows, since: datetime, buckets: int, minutes: int) -> list[dict]:
+def _bucket_sparkline(rows, since: datetime, *, bucket_count: int, minutes: int) -> list[dict]:
     """Bin (finished_at, records_out) rows into fixed-width time buckets."""
     bucket_secs = minutes * 60
-    counts = [0] * buckets
+    counts = [0] * bucket_count
+    bucket_starts = [since + timedelta(seconds=bucket_secs * i) for i in range(bucket_count)]
     for ts_str, rec_out in rows:
         try:
             ts = datetime.fromisoformat(str(ts_str))
             if ts.tzinfo is None:
                 ts = ts.replace(tzinfo=UTC)
-            age = (datetime.now(UTC) - ts).total_seconds()
-            idx = buckets - 1 - int(age // bucket_secs)
-            if 0 <= idx < buckets:
+            offset = (ts - since).total_seconds()
+            idx = int(offset // bucket_secs)
+            if 0 <= idx < bucket_count:
                 counts[idx] += (rec_out or 0)
         except Exception:
             pass
-    return [{"bucket": i, "records_out": counts[i]} for i in range(buckets)]
+    points = []
+    for i in range(bucket_count):
+        start = bucket_starts[i]
+        end = start + timedelta(seconds=bucket_secs)
+        points.append({
+            "bucket": i,
+            "bucket_start": _iso(start),
+            "bucket_end": _iso(end),
+            "records_out": counts[i],
+        })
+    return points

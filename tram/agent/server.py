@@ -197,6 +197,31 @@ def _final_stats_snapshot(run: ActiveRun) -> dict[str, int | list[str]]:
     return run.stats.snapshot_and_reset_window()
 
 
+def _active_run_status(run: ActiveRun, worker_id: str, now: datetime) -> dict[str, object]:
+    uptime_seconds = 0.0
+    if run.started_at_dt is not None:
+        uptime_seconds = max((now - run.started_at_dt).total_seconds(), 0.0)
+    stats = run.stats.snapshot() if run.stats is not None else {
+        "records_in": 0,
+        "records_out": 0,
+        "records_skipped": 0,
+        "dlq_count": 0,
+        "error_count": 0,
+        "bytes_in": 0,
+        "bytes_out": 0,
+        "errors_last_window": [],
+    }
+    return {
+        "run_id": run.run_id,
+        "pipeline": run.pipeline_name,
+        "started_at": run.started_at,
+        "schedule_type": run.schedule_type,
+        "worker_id": worker_id,
+        "uptime_seconds": uptime_seconds,
+        "stats": stats,
+    }
+
+
 def _stats_loop(state: WorkerState, interval: int) -> None:
     while not state.stats_stop.wait(interval):
         _emit_stats_once(state)
@@ -270,17 +295,24 @@ def create_worker_app(worker_id: str = "", manager_url: str = "", stats_interval
     @app.get("/agent/status")
     def status():
         active = state.snapshot()
+        now = datetime.now(UTC)
         running = [
-            {"run_id": r.run_id, "pipeline": r.pipeline_name, "started_at": r.started_at}
+            _active_run_status(r, worker_id, now)
             for r in active
             if r.schedule_type != "stream"
         ]
         streams = [
-            {"run_id": r.run_id, "pipeline": r.pipeline_name, "started_at": r.started_at}
+            _active_run_status(r, worker_id, now)
             for r in active
             if r.schedule_type == "stream"
         ]
-        return {"running": running, "streams": streams}
+        return {
+            "worker_id": worker_id,
+            "active_runs": len(active),
+            "running_pipelines": sorted({r.pipeline_name for r in active}),
+            "running": running,
+            "streams": streams,
+        }
 
     # ── POST /agent/run ────────────────────────────────────────────────────
 

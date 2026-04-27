@@ -69,6 +69,7 @@ def test_reconciler_marks_stale_slot_and_redispatches():
 
     worker_pool = MagicMock()
     worker_pool.is_worker_healthy.return_value = True
+    worker_pool.live_streams.return_value = []
 
     stats_store = StatsStore(interval=10)
     db = MagicMock()
@@ -93,6 +94,7 @@ def test_reconciler_does_not_redispatch_fresh_slot_before_first_stats():
 
     worker_pool = MagicMock()
     worker_pool.is_worker_healthy.return_value = True
+    worker_pool.live_streams.return_value = []
 
     stats_store = StatsStore(interval=30)
     db = MagicMock()
@@ -104,12 +106,66 @@ def test_reconciler_does_not_redispatch_fresh_slot_before_first_stats():
     db.update_broadcast_placement_status.assert_not_called()
 
 
+def test_reconciler_keeps_live_worker_stream_running_when_stats_are_missing():
+    controller = MagicMock()
+    placement = _placement()
+    controller.get_active_broadcast_placements.return_value = [placement]
+
+    worker_pool = MagicMock()
+    worker_pool.live_streams.return_value = [{
+        "worker_url": "http://w0:8766",
+        "worker_id": "w0",
+        "pipeline_name": "pipe-a",
+        "run_id": "pg1-w0",
+        "schedule_type": "stream",
+        "uptime_seconds": 120.0,
+        "stats": {"records_out": 0},
+    }]
+
+    stats_store = StatsStore(interval=10)
+    db = MagicMock()
+    reconciler = PlacementReconciler(controller, worker_pool, stats_store, db, stats_interval=10)
+
+    reconciler.run_once()
+
+    controller.redispatch_broadcast_slot.assert_not_called()
+    assert placement["slots"][0]["status"] == "running"
+    db.update_broadcast_placement_status.assert_not_called()
+
+
+def test_reconciler_updates_slot_run_id_from_live_worker_stream():
+    controller = MagicMock()
+    placement = _placement(status="reconciling")
+    controller.get_active_broadcast_placements.return_value = [placement]
+
+    worker_pool = MagicMock()
+    worker_pool.live_streams.return_value = [{
+        "worker_url": "http://w0:8766",
+        "worker_id": "w0",
+        "pipeline_name": "pipe-a",
+        "run_id": "pg1-w0-r2",
+        "schedule_type": "stream",
+        "uptime_seconds": 30.0,
+        "stats": {"records_out": 5},
+    }]
+
+    stats_store = StatsStore(interval=10)
+    db = MagicMock()
+    reconciler = PlacementReconciler(controller, worker_pool, stats_store, db, stats_interval=10)
+
+    reconciler.run_once()
+
+    assert placement["slots"][0]["current_run_id"] == "pg1-w0-r2"
+    controller._update_broadcast_placement_status.assert_called_once_with("pg1", "running")
+
+
 def test_reconciler_promotes_reconciling_group_after_timeout():
     controller = MagicMock()
     placement = _placement(status="reconciling")
     controller.get_active_broadcast_placements.return_value = [placement]
 
     worker_pool = MagicMock()
+    worker_pool.live_streams.return_value = []
     stats_store = StatsStore(interval=10)
     stats_store.update(PipelineStatsPayload(
         worker_id="w0",
@@ -137,6 +193,7 @@ def test_reconciler_reassigns_count_n_stale_slot_to_spare_worker():
     worker_pool.is_worker_healthy.side_effect = lambda url: url != "http://w1:8766"
     worker_pool.healthy_workers.return_value = ["http://w0:8766", "http://w2:8766"]
     worker_pool.load_score.side_effect = lambda url: {"http://w0:8766": 10.0, "http://w2:8766": 1.0}[url]
+    worker_pool.live_streams.return_value = []
 
     stats_store = StatsStore(interval=10)
     stats_store.update(PipelineStatsPayload(
@@ -199,6 +256,7 @@ def test_reconciler_retries_named_worker_only_when_it_returns():
         "tram-worker-1": "http://w1-new:8766",
     }.get(worker_id)
     worker_pool.is_worker_healthy.side_effect = lambda url: url in {"http://w0:8766", "http://w1-new:8766"}
+    worker_pool.live_streams.return_value = []
 
     stats_store = StatsStore(interval=10)
     stats_store.update(PipelineStatsPayload(
@@ -247,6 +305,7 @@ def test_reconciler_refreshes_k8s_service_for_named_worker_stale_slot():
 
     worker_pool = MagicMock()
     worker_pool.url_for_worker_id.return_value = None
+    worker_pool.live_streams.return_value = []
 
     stats_store = StatsStore(interval=10)
     db = MagicMock()

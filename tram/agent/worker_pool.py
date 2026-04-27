@@ -295,16 +295,49 @@ class WorkerPool:
                 for worker_url in worker_urls:
                     if worker_url in worker_pipelines:
                         worker_pipelines[worker_url].append(pipeline_name)
-            return [
-                {
-                    "url": url,
+            health = {
+                url: {
                     "ok": h["ok"],
-                    "active_runs": h["active_runs"],
-                    "running_pipelines": h.get("running_pipelines", []),
-                    "assigned_pipelines": sorted(worker_pipelines.get(url, [])),
+                    "active_runs": h.get("active_runs", 0),
+                    "running_pipelines": list(h.get("running_pipelines", [])),
                 }
                 for url, h in self._health.items()
-            ]
+            }
+            worker_ids = dict(self._url_to_worker_id)
+
+        rows: list[dict] = []
+        for url, h in health.items():
+            live_status = self.worker_status(url) if h["ok"] else None
+            running_items = []
+            stream_items = []
+            worker_id = worker_ids.get(url)
+            active_runs = int(h.get("active_runs", 0) or 0)
+            running_pipelines = sorted(set(h.get("running_pipelines", [])))
+            if live_status is not None:
+                running_items = list(live_status.get("running", []))
+                stream_items = list(live_status.get("streams", []))
+                if live_status.get("worker_id"):
+                    worker_id = str(live_status["worker_id"])
+                active_runs = int(
+                    live_status.get("active_runs", len(running_items) + len(stream_items)) or 0
+                )
+                running_pipelines = sorted({
+                    str(item.get("pipeline", ""))
+                    for item in running_items + stream_items
+                    if item.get("pipeline")
+                })
+            rows.append({
+                "url": url,
+                "worker_id": worker_id,
+                "ok": h["ok"],
+                "active_runs": active_runs,
+                "active_streams": len(stream_items),
+                "running_pipelines": running_pipelines,
+                "running": running_items,
+                "streams": stream_items,
+                "assigned_pipelines": sorted(worker_pipelines.get(url, [])),
+            })
+        return rows
 
     def assignment_for_run(self, run_id: str) -> str | None:
         with self._lock:
@@ -324,9 +357,37 @@ class WorkerPool:
             return None
 
         return {
+            "worker_id": data.get("worker_id"),
+            "active_runs": int(
+                data.get("active_runs", len(data.get("running", [])) + len(data.get("streams", []))) or 0
+            ),
+            "running_pipelines": list(data.get("running_pipelines", [])),
             "running": list(data.get("running", [])),
             "streams": list(data.get("streams", [])),
         }
+
+    def live_streams(self) -> list[dict]:
+        with self._lock:
+            worker_urls = list(self._workers)
+
+        live: list[dict] = []
+        for worker_url in worker_urls:
+            status = self.worker_status(worker_url)
+            if status is None:
+                continue
+            worker_id = status.get("worker_id") or self.worker_id_for_url(worker_url)
+            for item in status.get("streams", []):
+                live.append({
+                    "worker_url": worker_url,
+                    "worker_id": worker_id,
+                    "pipeline_name": item.get("pipeline"),
+                    "run_id": item.get("run_id"),
+                    "started_at": item.get("started_at"),
+                    "schedule_type": item.get("schedule_type", "stream"),
+                    "uptime_seconds": item.get("uptime_seconds", 0.0),
+                    "stats": dict(item.get("stats", {})),
+                })
+        return live
 
     def is_run_active(self, run_id: str, worker_url: str | None = None) -> bool:
         target_worker = worker_url or self.assignment_for_run(run_id)

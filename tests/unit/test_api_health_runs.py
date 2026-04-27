@@ -188,6 +188,31 @@ class TestClusterNodes:
         assert r.status_code == 200
         assert len(r.json()["workers"]) == 1
 
+    def test_cluster_nodes_uses_current_controller_assignments(self):
+        wp = MagicMock()
+        wp.status.return_value = [{
+            "url": "http://w1:8766",
+            "active_runs": 1,
+            "assigned_pipelines": ["old-pipe"],
+        }]
+        config = MagicMock()
+        config.tram_mode = "manager"
+        app = _make_health_app(worker_pool=wp, config=config)
+        app.state.controller.get_active_broadcast_placements.return_value = [{
+            "pipeline_name": "stream-a",
+            "slots": [{"worker_url": "http://w1:8766"}],
+        }]
+        app.state.controller.get_active_batch_runs.return_value = [{
+            "pipeline_name": "batch-b",
+            "worker_url": "http://w1:8766",
+        }]
+        client = TestClient(app)
+
+        r = client.get("/api/cluster/nodes")
+
+        assert r.status_code == 200
+        assert r.json()["workers"][0]["assigned_pipelines"] == ["batch-b", "stream-a"]
+
 
 class TestClusterStreams:
     def test_returns_broadcast_streams_with_aggregate_counters(self):
@@ -288,6 +313,36 @@ class TestClusterStreams:
         assert stream["placement_group_id"] is None
         assert stream["slot_count"] == 1
         assert stream["records_in_per_sec"] == 2.0
+
+    def test_uses_live_worker_streams_when_manager_store_has_not_received_stats_yet(self):
+        wp = MagicMock()
+        wp.live_streams.return_value = [{
+            "worker_url": "http://w0:8766",
+            "worker_id": "w0",
+            "pipeline_name": "pipe-live",
+            "run_id": "run-live",
+            "started_at": "2026-04-27T10:00:00+00:00",
+            "schedule_type": "stream",
+            "uptime_seconds": 5.0,
+            "stats": {
+                "records_in": 10,
+                "records_out": 10,
+                "bytes_in": 100,
+                "bytes_out": 100,
+            },
+        }]
+        config = MagicMock()
+        config.tram_mode = "manager"
+        app = _make_health_app(worker_pool=wp, config=config)
+        client = TestClient(app)
+
+        r = client.get("/api/cluster/streams")
+
+        assert r.status_code == 200
+        data = r.json()
+        assert data["streams"][0]["pipeline_name"] == "pipe-live"
+        assert data["streams"][0]["active_slots"] == 1
+        assert data["streams"][0]["records_out_per_sec"] == 2.0
 
 
 # ── Runs router ────────────────────────────────────────────────────────────
