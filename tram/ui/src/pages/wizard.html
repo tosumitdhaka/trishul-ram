@@ -2,11 +2,9 @@
 
   <!-- Step indicator -->
   <div class="wiz-steps mb-4" id="wiz-steps">
-    <div class="wiz-step active" data-step="1"><span class="wiz-num">1</span><span class="wiz-lbl">Info</span></div>
-    <div class="wiz-step" data-step="2"><span class="wiz-num">2</span><span class="wiz-lbl">Source</span></div>
-    <div class="wiz-step" data-step="3"><span class="wiz-num">3</span><span class="wiz-lbl">Transforms</span></div>
-    <div class="wiz-step" data-step="4"><span class="wiz-num">4</span><span class="wiz-lbl">Sinks</span></div>
-    <div class="wiz-step" data-step="5"><span class="wiz-num">5</span><span class="wiz-lbl">Review</span></div>
+    <div class="wiz-step active" data-step="1"><span class="wiz-num">1</span><span class="wiz-lbl">Basics</span></div>
+    <div class="wiz-step" data-step="2"><span class="wiz-num">2</span><span class="wiz-lbl">Wiring</span></div>
+    <div class="wiz-step" data-step="3"><span class="wiz-num">3</span><span class="wiz-lbl">Review</span></div>
   </div>
 
   <!-- Step 1 — Pipeline Info -->
@@ -33,7 +31,7 @@
       <div class="col-6">
         <label class="form-label text-secondary" style="font-size:12px">Pipeline Name <span style="color:#f85149">*</span></label>
         <input type="text" class="form-control form-control-sm" id="wiz-name" placeholder="e.g. sftp-to-kafka" autocomplete="off">
-        <div class="form-text" style="font-size:10px;color:#6e7681">Lowercase letters, numbers and hyphens only</div>
+        <div class="form-text" style="font-size:10px;color:#6e7681">Letters, numbers, `_` and `-` only</div>
       </div>
       <div class="col-6">
         <label class="form-label text-secondary" style="font-size:12px">Description <span style="opacity:.5">(optional)</span></label>
@@ -69,7 +67,6 @@
         <select class="form-select form-select-sm" id="wiz-on-error">
           <option value="continue">continue — skip failed records, keep running</option>
           <option value="abort">abort — halt pipeline on first error</option>
-          <option value="dlq">dlq — send failed records to dead-letter sink</option>
         </select>
       </div>
     </div>
@@ -80,8 +77,15 @@
     </div>
   </div>
 
-  <!-- Step 2 — Source & Ingestion -->
+  <!-- Step 2 — Source & Sinks -->
   <div id="wiz-step-2" class="wiz-page d-none">
+    <div class="detail-card mb-3">
+      <div class="fw-semibold mb-1" style="font-size:14px">Wizard Scope</div>
+      <div class="text-secondary" style="font-size:13px">
+        This step covers common source and sink wiring from backend schema truth.
+        Use the final review step to hand off into the editor for transforms, workers, alerts, kubernetes, DLQ, or deeper nested config.
+      </div>
+    </div>
     <div class="row g-3">
       <div class="col-4">
         <label class="form-label text-secondary" style="font-size:12px">Source Type <span style="color:#f85149">*</span></label>
@@ -119,53 +123,52 @@
           </div>
         </div>
       </div>
-    </div>
-  </div>
-
-  <!-- Step 3 — Transforms -->
-  <div id="wiz-step-3" class="wiz-page d-none">
-    <div class="d-flex align-items-center mb-3">
-      <span class="text-secondary" style="font-size:13px">Transforms are optional — click Next to skip.</span>
-      <button class="btn btn-sm btn-outline-primary ms-auto" onclick="window._wizAddTransform?.()">
-        <i class="bi bi-plus"></i> Add Transform
-      </button>
-    </div>
-    <div id="wiz-transforms-list"></div>
-  </div>
-
-  <!-- Step 4 — Sinks & Output -->
-  <div id="wiz-step-4" class="wiz-page d-none">
-    <!-- Global serializer out -->
-    <div class="row g-3 mb-3 pb-3" style="border-bottom:1px solid #30363d">
-      <div class="col-4">
-        <label class="form-label text-secondary" style="font-size:12px">Serializer Out <span style="opacity:.5">(default for all sinks)</span></label>
-        <select class="form-select form-select-sm" id="wiz-serializer-out">
-          <option value="">— same as serializer in —</option>
-          <option value="json">json</option>
-          <option value="ndjson">ndjson</option>
-          <option value="csv">csv</option>
-          <option value="xml">xml</option>
-          <option value="text">text</option>
-          <option value="bytes">bytes</option>
-          <option value="avro">avro</option>
-          <option value="protobuf">protobuf</option>
-          <option value="msgpack">msgpack</option>
-          <option value="parquet">parquet</option>
-        </select>
-        <div class="form-text" style="font-size:10px;color:#6e7681">How to serialize records before writing — individual sinks can override this</div>
+      <div class="col-12 pt-3 mt-2" style="border-top:1px solid #30363d">
+        <div class="row g-3 mb-3 pb-3" style="border-bottom:1px solid #30363d">
+          <div class="col-4">
+            <label class="form-label text-secondary" style="font-size:12px">Serializer Out <span style="opacity:.5">(default for all sinks)</span></label>
+            <select class="form-select form-select-sm" id="wiz-serializer-out">
+              <option value="">— same as serializer in —</option>
+              <option value="json">json</option>
+              <option value="ndjson">ndjson</option>
+              <option value="csv">csv</option>
+              <option value="xml">xml</option>
+              <option value="text">text</option>
+              <option value="bytes">bytes</option>
+              <option value="avro">avro</option>
+              <option value="protobuf">protobuf</option>
+              <option value="msgpack">msgpack</option>
+              <option value="parquet">parquet</option>
+            </select>
+            <div class="form-text" style="font-size:10px;color:#6e7681">How to serialize records before writing — individual sinks can override this</div>
+          </div>
+        </div>
+        <div class="d-flex align-items-center mb-3">
+          <span class="text-secondary" style="font-size:13px">Add at least one sink. Use the YAML patch area for advanced nested sink config.</span>
+          <button class="btn btn-sm btn-outline-primary ms-auto" onclick="window._wizAddSink?.()">
+            <i class="bi bi-plus"></i> Add Sink
+          </button>
+        </div>
+        <div id="wiz-sinks-list"></div>
       </div>
     </div>
-    <div class="d-flex align-items-center mb-3">
-      <span class="text-secondary" style="font-size:13px">Add at least one sink.</span>
-      <button class="btn btn-sm btn-outline-primary ms-auto" onclick="window._wizAddSink?.()">
-        <i class="bi bi-plus"></i> Add Sink
-      </button>
-    </div>
-    <div id="wiz-sinks-list"></div>
   </div>
 
-  <!-- Step 5 — Review -->
-  <div id="wiz-step-5" class="wiz-page d-none">
+  <!-- Step 3 — Review -->
+  <div id="wiz-step-3" class="wiz-page d-none">
+    <div class="detail-card mb-3">
+      <div class="d-flex gap-2 flex-wrap align-items-center">
+        <div>
+          <div class="fw-semibold" style="font-size:14px">Refine Here Or Continue In Editor</div>
+          <div class="text-secondary" style="font-size:12px">
+            Review the generated YAML here. Use the editor for transforms, workers, alerts, kubernetes, DLQ, or more advanced connector configuration.
+          </div>
+        </div>
+        <button class="btn btn-sm btn-outline-primary ms-auto" onclick="window._wizOpenEditor?.()">
+          <i class="bi bi-pencil me-1"></i>Continue In Editor
+        </button>
+      </div>
+    </div>
     <div class="d-flex align-items-center gap-2 mb-2">
       <span class="fw-semibold text-light" style="font-size:13px">Pipeline YAML</span>
       <button class="btn btn-sm btn-outline-secondary ms-auto" onclick="window._wizDryRun?.()">
