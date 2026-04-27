@@ -1,6 +1,6 @@
 <!-- Top stat cards -->
 <div class="row g-3 mb-3" id="dash-stats">
-  <div class="col-3"><div class="stat-card">
+  <div class="col-12 col-md-6 col-xl-3"><div class="stat-card">
     <div class="d-flex align-items-center justify-content-between mb-1">
       <div class="stat-label">Total Pipelines</div>
       <span id="live-dot" title="Live — updates every 10s"
@@ -9,17 +9,17 @@
     <div class="stat-val" id="stat-total">—</div>
     <div class="stat-sub" id="stat-total-sub">loading…</div>
   </div></div>
-  <div class="col-3"><div class="stat-card">
+  <div class="col-12 col-md-6 col-xl-3"><div class="stat-card">
     <div class="stat-label">Active</div>
     <div class="stat-val" id="stat-running" style="color:#3fb950">—</div>
     <div class="stat-sub" id="stat-running-sub"></div>
   </div></div>
-  <div class="col-3"><div class="stat-card">
+  <div class="col-12 col-md-6 col-xl-3"><div class="stat-card">
     <div class="stat-label">Records Out <span style="font-weight:400;opacity:.6">(15m)</span></div>
     <div class="stat-val" id="stat-records">—</div>
     <div class="stat-sub" id="stat-records-sub"></div>
   </div></div>
-  <div class="col-3"><div class="stat-card">
+  <div class="col-12 col-md-6 col-xl-3"><div class="stat-card">
     <div class="stat-label">Errors <span style="font-weight:400;opacity:.6">(15m)</span></div>
     <div class="stat-val" id="stat-errors" style="color:#f85149">—</div>
     <div class="stat-sub" id="stat-errors-sub"></div>
@@ -30,9 +30,23 @@
 <div class="row g-3 mb-3">
   <div class="col-12">
     <div class="stat-card" style="padding:12px 16px">
-      <div class="d-flex align-items-center gap-3 mb-2">
-        <span class="stat-label mb-0">Records/5min — last hour</span>
-        <span class="text-secondary ms-auto" style="font-size:11px" id="spark-meta"></span>
+      <div class="d-flex align-items-center gap-3 mb-2 flex-wrap">
+        <span class="stat-label mb-0" id="spark-label">Records/5m — last hour</span>
+        <div class="dashboard-controls">
+          <label class="text-secondary" for="dash-period" style="font-size:11px">Period</label>
+          <select class="form-select form-select-sm" id="dash-period">
+            <option value="1h">1 hour</option>
+            <option value="6h">6 hours</option>
+            <option value="24h">24 hours</option>
+          </select>
+          <label class="text-secondary" for="dash-granularity" style="font-size:11px">Buckets</label>
+          <select class="form-select form-select-sm" id="dash-granularity">
+            <option value="5m">5 min</option>
+            <option value="15m">15 min</option>
+            <option value="1h">1 hour</option>
+          </select>
+        </div>
+        <span class="text-secondary" style="font-size:11px" id="spark-meta"></span>
       </div>
       <canvas id="dash-sparkline" height="48" style="width:100%;display:block"></canvas>
     </div>
@@ -40,36 +54,41 @@
 </div>
 
 <!-- Pipeline + runs tables -->
-<div class="row g-3">
-  <div class="col-7">
-    <div class="table-wrap">
+<div class="row g-3 align-items-stretch">
+  <div class="col-12 col-xl-7">
+    <div class="table-wrap overview-panel">
       <div class="table-head-row">
         <span class="table-head-title">Pipelines</span>
         <span class="count-pill" id="dash-pipeline-count"></span>
+        <span class="count-pill" id="dash-pipeline-window">last hour</span>
         <button class="btn btn-sm btn-link ms-auto text-secondary" onclick="navigate('pipelines')">Manage →</button>
         <button class="btn btn-sm btn-outline-primary" style="font-size:11px;padding:2px 8px" onclick="navigate('editor')"><i class="bi bi-plus"></i> New</button>
       </div>
-      <table class="table mb-0">
-        <thead><tr><th>Name</th><th>Type</th><th>Status</th><th>Last Run</th><th>Runs/hr</th><th></th></tr></thead>
-        <tbody id="dash-pipelines-body">
-          <tr><td colspan="6" class="text-secondary text-center py-4">Loading…</td></tr>
-        </tbody>
-      </table>
+      <div class="overview-panel-scroll">
+        <table class="table mb-0">
+          <thead><tr><th>Name</th><th>Status</th><th>Out/hr</th><th>Runs/hr</th><th>Errors</th><th></th></tr></thead>
+          <tbody id="dash-pipelines-body">
+            <tr><td colspan="6" class="text-secondary text-center py-4">Loading…</td></tr>
+          </tbody>
+        </table>
+      </div>
     </div>
   </div>
-  <div class="col-5">
-    <div class="table-wrap">
+  <div class="col-12 col-xl-5">
+    <div class="table-wrap overview-panel">
       <div class="table-head-row">
         <span class="table-head-title">Recent Runs</span>
         <span class="count-pill">last 10</span>
         <button class="btn btn-sm btn-link ms-auto text-secondary" onclick="navigate('runs')">View all →</button>
       </div>
-      <table class="table mb-0">
-        <thead><tr><th>Pipeline</th><th>Status</th><th>In</th><th>Out</th><th>Dur</th></tr></thead>
-        <tbody id="dash-runs-body">
-          <tr><td colspan="5" class="text-secondary text-center py-4">Loading…</td></tr>
-        </tbody>
-      </table>
+      <div class="overview-panel-scroll">
+        <table class="table mb-0">
+          <thead><tr><th>Pipeline</th><th>Status</th><th>In</th><th>Out</th><th>Dur</th></tr></thead>
+          <tbody id="dash-runs-body">
+            <tr><td colspan="5" class="text-secondary text-center py-4">Loading…</td></tr>
+          </tbody>
+        </table>
+      </div>
     </div>
   </div>
 </div>

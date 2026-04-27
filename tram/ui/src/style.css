@@ -197,6 +197,53 @@ body {
 .stat-label { font-size: 10px; font-weight: 600; color: var(--fg-muted); text-transform: uppercase; letter-spacing: .5px; margin-bottom: 6px; }
 .stat-val   { font-size: 28px; font-weight: 700; line-height: 1; margin-bottom: 4px; font-variant-numeric: tabular-nums; }
 .stat-sub   { font-size: 11px; color: var(--fg-muted); }
+.overview-panel { display: flex; flex-direction: column; height: 100%; }
+.overview-panel-scroll { flex: 1 1 auto; height: 420px; overflow: auto; }
+.dashboard-controls { margin-left: auto; display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.dashboard-controls .form-select { width: auto; min-width: 88px; }
+.cluster-strip {
+  display: grid;
+  gap: 12px;
+  grid-template-columns: repeat(auto-fit, minmax(190px, 1fr));
+}
+.cluster-strip-item {
+  min-width: 0;
+}
+.cluster-strip-item > .detail-card,
+.cluster-strip-item > .stat-card {
+  height: 100%;
+}
+.cluster-summary-card .stat-val { font-size: 24px; }
+.cluster-node-grid { display: grid; gap: 12px; grid-template-columns: repeat(auto-fit, minmax(280px, 1fr)); }
+.cluster-node-card { height: 100%; }
+.cluster-node-meta {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(120px, 1fr));
+  gap: 10px 14px;
+}
+.cluster-node-meta-label { font-size: 10px; font-weight: 600; color: var(--fg-muted); text-transform: uppercase; letter-spacing: .5px; }
+.cluster-node-meta-value { font-size: 13px; color: var(--fg); }
+.cluster-worker-detail-row td { background: rgba(255,255,255,.02); }
+.cluster-worker-expanded { padding: 6px 2px; }
+.cluster-worker-expanded-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+  gap: 10px 16px;
+}
+.cluster-pill-running {
+  background: #1a3328;
+  color: #3fb950;
+  border: 1px solid rgba(63,185,80,.25);
+  padding: 2px 8px;
+  border-radius: 10px;
+}
+.cluster-pill-neutral {
+  background: var(--bg-inset);
+  color: var(--fg-2);
+  border: 1px solid var(--border);
+  padding: 2px 8px;
+  border-radius: 10px;
+}
 
 /* ── Detail cards ────────────────────────────────────────────────────────── */
 .detail-card  { background: var(--bg-surface); border: 1px solid var(--border); border-radius: 8px; padding: 14px 16px; }
@@ -258,6 +305,10 @@ body {
 }
 .form-control:focus, .form-select:focus {
   background: var(--bg-inset); border-color: #388bfd; color: var(--fg); box-shadow: none;
+}
+
+@media (max-width: 991.98px) {
+  .overview-panel-scroll { height: auto; max-height: none; }
 }
 .form-label { font-size: 12px; font-weight: 600; color: var(--fg-2); }
 .form-text  { font-size: 11px; color: var(--fg-muted); }

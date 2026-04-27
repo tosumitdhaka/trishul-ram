@@ -1,13 +1,16 @@
 import { api } from '../api.js'
-import { relTime, fmtDur, fmtNum, statusBadge, schedBadge, esc, toast } from '../utils.js'
+import { fmtDur, fmtNum, statusBadge, esc, toast } from '../utils.js'
 
 const POLL_INTERVAL = 10_000  // 10 s
+const DEFAULT_STATS_PARAMS = { period: '1h', granularity: '5m' }
 
 let _pollTimer  = null
 let _runsCache  = null
+let _statsParams = loadStatsParams()
 
 export async function init() {
   if (_pollTimer) { clearInterval(_pollTimer); _pollTimer = null }
+  _wireControls()
 
   await _refresh()
 
@@ -20,12 +23,12 @@ export async function init() {
 async function _refresh() {
   try {
     const [stats, runs] = await Promise.all([
-      api.stats.get(),
+      api.stats.get(_statsParams),
       api.runs.list({ limit: 10 }),
     ])
     _runsCache = runs
     _renderStatCards(stats)
-    _renderSparkline(stats.sparkline || [])
+    _renderSparkline(stats)
     _renderPipelines(stats.per_pipeline || [])
     _renderRuns(runs)
     _setLiveDot(true)
@@ -37,9 +40,9 @@ async function _refresh() {
 
 async function _refreshStats() {
   try {
-    const stats = await api.stats.get()
+    const stats = await api.stats.get(_statsParams)
     _renderStatCards(stats)
-    _renderSparkline(stats.sparkline || [])
+    _renderSparkline(stats)
     _renderPipelines(stats.per_pipeline || [])
     _setLiveDot(true)
   } catch (_) {
@@ -65,11 +68,15 @@ function _renderStatCards(s) {
   }
   _set('stat-errors-sub',      `runs last hour: ${s.runs_last_hour ?? 0}`)
   _set('dash-pipeline-count',  `${s.pipelines_total ?? 0} pipelines`)
+  _set('dash-pipeline-window', 'last hour')
 }
 
 // ── Sparkline (Canvas API, no dependencies) ──────────────────────────────────
 
-function _renderSparkline(buckets) {
+function _renderSparkline(stats) {
+  const windowInfo = stats?.window || _statsParams
+  const chart = stats?.chart || {}
+  const buckets = chart.points || stats?.sparkline || []
   const canvas = document.getElementById('dash-sparkline')
   if (!canvas) return
   const ctx = canvas.getContext('2d')
@@ -83,8 +90,12 @@ function _renderSparkline(buckets) {
   canvas.style.height = H + 'px'
   ctx.scale(dpr, dpr)
   ctx.clearRect(0, 0, W, H)
+  _set('spark-label', `Records/${_granularityLabel(windowInfo.granularity)} — ${_periodLabel(windowInfo.period)}`)
 
-  if (!buckets.length) return
+  if (!buckets.length) {
+    _set('spark-meta', `0 total · ${windowInfo.bucket_count ?? 0} buckets`)
+    return
+  }
 
   const vals   = buckets.map(b => b.records_out || 0)
   const maxVal = Math.max(...vals, 1)
@@ -103,8 +114,8 @@ function _renderSparkline(buckets) {
     ctx.fill()
   })
 
-  const total = vals.reduce((a, b) => a + b, 0)
-  _set('spark-meta', total > 0 ? `${fmtNum(total)} records in last hour` : 'no records in last hour')
+  const total = chart.total ?? vals.reduce((a, b) => a + b, 0)
+  _set('spark-meta', `${fmtNum(total)} total · ${n} buckets`)
 }
 
 // ── Pipeline table ────────────────────────────────────────────────────────────
@@ -118,19 +129,22 @@ function _renderPipelines(perPipeline) {
   }
   tbody.innerHTML = perPipeline.map(p => {
     const isRunning = p.status === 'running' || p.status === 'scheduled'
+    const encodedName = JSON.stringify(p.name)
     const stopBtn  = `<button class="btn-flat-danger" title="Stop" ${isRunning ? '' : 'disabled style="opacity:.35"'}
-      onclick="event.stopPropagation();window._dashStop('${esc(p.name)}')"><i class="bi bi-stop-fill"></i></button>`
+      onclick="event.stopPropagation();window._dashStop(${encodedName})"><i class="bi bi-stop-fill"></i></button>`
     const startBtn = `<button class="btn-flat-primary" title="Start" ${isRunning ? 'disabled style="opacity:.35"' : ''}
-      onclick="event.stopPropagation();window._dashStart('${esc(p.name)}')"><i class="bi bi-play-fill"></i></button>`
-    const dlBtn    = `<button class="btn-flat" title="Download YAML" onclick="event.stopPropagation();window._dashDownload('${esc(p.name)}')"><i class="bi bi-download"></i></button>`
+      onclick="event.stopPropagation();window._dashStart(${encodedName})"><i class="bi bi-play-fill"></i></button>`
+    const dlBtn    = `<button class="btn-flat" title="Download YAML" onclick="event.stopPropagation();window._dashDownload(${encodedName})"><i class="bi bi-download"></i></button>`
     const errStyle = p.errors > 0 ? 'color:#f85149' : ''
-    return `<tr style="cursor:pointer" onclick="navigate('detail');window._detailPipeline='${esc(p.name)}'">
+    return `<tr style="cursor:pointer" onclick="window._dashOpenDetail(${encodedName})">
       <td class="fw-semibold">${esc(p.name)}</td>
       <td>${statusBadge(p.status)}</td>
       <td class="text-secondary" style="font-size:12px">${fmtNum(p.records_out)}</td>
       <td class="text-secondary" style="font-size:12px">${p.runs_last_hour}</td>
       <td class="text-secondary" style="font-size:12px;${errStyle}">${p.errors > 0 ? p.errors + ' err' : ''}</td>
-      <td class="text-end d-flex gap-1 justify-content-end">${startBtn}${stopBtn}${dlBtn}</td>
+      <td class="text-end">
+        <div class="d-flex gap-1 justify-content-end">${startBtn}${stopBtn}${dlBtn}</div>
+      </td>
     </tr>`
   }).join('')
 
@@ -177,6 +191,10 @@ window._dashStart = async (name) => {
   try { await api.pipelines.start(name); toast(`Started ${name}`); setTimeout(_refresh, 800) }
   catch (e) { toast(e.message, 'error') }
 }
+window._dashOpenDetail = (name) => {
+  window._detailPipeline = name
+  navigate('detail')
+}
 window._dashDownload = async (name) => {
   try {
     const p = await api.pipelines.get(name)
@@ -192,4 +210,54 @@ window._dashDownload = async (name) => {
 function _set(id, val) {
   const el = document.getElementById(id)
   if (el) el.textContent = val
+}
+
+function _wireControls() {
+  const periodEl = document.getElementById('dash-period')
+  const granularityEl = document.getElementById('dash-granularity')
+  if (!periodEl || !granularityEl) return
+
+  periodEl.value = _statsParams.period
+  granularityEl.value = _statsParams.granularity
+
+  periodEl.onchange = async () => {
+    _statsParams = { ..._statsParams, period: periodEl.value }
+    saveStatsParams()
+    await _refreshStats()
+  }
+  granularityEl.onchange = async () => {
+    _statsParams = { ..._statsParams, granularity: granularityEl.value }
+    saveStatsParams()
+    await _refreshStats()
+  }
+}
+
+function loadStatsParams() {
+  const period = localStorage.getItem('tram_dash_period') || DEFAULT_STATS_PARAMS.period
+  const granularity = localStorage.getItem('tram_dash_granularity') || DEFAULT_STATS_PARAMS.granularity
+  return {
+    period: ['1h', '6h', '24h'].includes(period) ? period : DEFAULT_STATS_PARAMS.period,
+    granularity: ['5m', '15m', '1h'].includes(granularity) ? granularity : DEFAULT_STATS_PARAMS.granularity,
+  }
+}
+
+function saveStatsParams() {
+  localStorage.setItem('tram_dash_period', _statsParams.period)
+  localStorage.setItem('tram_dash_granularity', _statsParams.granularity)
+}
+
+function _periodLabel(period) {
+  return {
+    '1h': 'last hour',
+    '6h': 'last 6 hours',
+    '24h': 'last 24 hours',
+  }[period] || 'selected window'
+}
+
+function _granularityLabel(granularity) {
+  return {
+    '5m': '5m',
+    '15m': '15m',
+    '1h': '1h',
+  }[granularity] || granularity || 'bucket'
 }
