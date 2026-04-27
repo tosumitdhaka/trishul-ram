@@ -28,6 +28,17 @@ async function reqText(path) {
   return res.text()
 }
 
+function normalizeDryRunResult(result) {
+  const issues = result?.issues || result?.errors || []
+  return {
+    ...result,
+    valid: result?.valid ?? (result?.status === 'ok'),
+    issues,
+    errors: result?.errors || issues,
+    warnings: result?.warnings || [],
+  }
+}
+
 async function req(path, options = {}) {
   const { baseUrl, apiKey } = getConfig()
   const headers = { ...options.headers }
@@ -65,6 +76,7 @@ export const api = {
     list:     ()           => req('/api/pipelines'),
     get:      (name)       => req(`/api/pipelines/${name}`),
     placement:(name)       => req(`/api/pipelines/${name}/placement`),
+    dryRun:   async (yaml) => normalizeDryRunResult(await req('/api/pipelines/dry-run', { method: 'POST', headers: { 'Content-Type': 'application/yaml' }, body: yaml })),
     create:   (yaml)       => req('/api/pipelines', { method: 'POST', headers: { 'Content-Type': 'text/plain' }, body: yaml }),
     update:   (name, yaml) => req(`/api/pipelines/${name}`, { method: 'PUT', headers: { 'Content-Type': 'application/yaml' }, body: yaml }),
     delete:   (name)       => req(`/api/pipelines/${name}`, { method: 'DELETE' }),
@@ -86,7 +98,7 @@ export const api = {
   // ── Schemas ────────────────────────────────────────────────────────────────
   schemas: {
     list:   ()          => req('/api/schemas'),
-    get:    (filepath)  => req(`/api/schemas/${filepath}`),
+    get:    (filepath)  => reqText(`/api/schemas/${filepath}`),
     delete: (filepath)  => req(`/api/schemas/${filepath}`, { method: 'DELETE' }),
     upload: (file, subdir) => {
       const fd = new FormData()
@@ -138,9 +150,13 @@ export const api = {
     list: () => req('/api/templates'),
   },
 
+  configSchema: {
+    get: () => req('/api/config/schema'),
+  },
+
   // ── Stats ──────────────────────────────────────────────────────────────────
   stats: {
-    get: () => req('/api/stats'),
+    get: (params = {}) => req('/api/stats?' + new URLSearchParams(params)),
   },
 
   // ── AI assist ──────────────────────────────────────────────────────────────

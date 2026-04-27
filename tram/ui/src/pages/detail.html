@@ -12,6 +12,7 @@
   <button class="btn-flat" title="Edit pipeline" onclick="window._detailEdit?.()"><i class="bi bi-pencil"></i></button>
   <button class="btn-flat" title="Download YAML" onclick="window._detailDownload?.()"><i class="bi bi-download"></i></button>
   <button class="btn-flat" title="Test Connectors" id="detail-test-btn" onclick="window._detailTestConnectors?.()"><i class="bi bi-plug"></i></button>
+  <button class="btn-flat" title="Refresh detail" id="detail-refresh-btn" onclick="window._detailRefresh?.()"><i class="bi bi-arrow-clockwise" id="detail-refresh-icon"></i></button>
   <button class="btn-flat ms-auto" onclick="navigate('pipelines')"><i class="bi bi-arrow-left me-1"></i></button>
 </div>
 
@@ -46,10 +47,10 @@
   <div class="d-flex gap-2 mb-3 align-items-center">
     <select class="form-select form-select-sm" style="width:130px" id="detail-runs-status" aria-label="Filter by status">
       <option value="">All status</option>
-      <option>success</option><option>failed</option><option>partial</option>
+      <option>success</option><option>failed</option><option>aborted</option>
     </select>
     <input type="date" class="form-control form-control-sm" style="width:150px" id="detail-runs-from" aria-label="From date"/>
-    <button class="btn-flat ms-auto" title="Refresh run history" onclick="window._detailRefreshRuns?.()"><i class="bi bi-arrow-clockwise"></i></button>
+    <button class="btn-flat ms-auto" title="Refresh run history" id="detail-runs-refresh-btn" onclick="window._detailRefreshRuns?.()"><i class="bi bi-arrow-clockwise" id="detail-runs-refresh-icon"></i></button>
     <button class="btn-flat" title="Export CSV" onclick="window._detailExportCsv?.()"><i class="bi bi-download"></i></button>
   </div>
   <div class="table-wrap">

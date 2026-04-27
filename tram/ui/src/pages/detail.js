@@ -4,6 +4,7 @@ import * as bootstrap from 'bootstrap'
 
 let _name = null
 let _activeYaml = null  // current active version YAML for diff comparison
+let _runMonitorToken = 0
 
 export async function init() {
   _name = window._detailPipeline
@@ -168,8 +169,29 @@ function renderRuns(runs) {
 }
 
 function wireActions(pipeline) {
-  window._detailEdit = () => { window._editorPipeline = _name; navigate('editor') }
-  window._detailRefreshRuns = async () => { try { await reloadRuns() } catch (e) { toast(e.message, 'error') } }
+  window._detailEdit = () => { window._editorReturn = 'detail'; window._editorPipeline = _name; navigate('editor') }
+  window._detailRefresh = async () => {
+    const btn = document.getElementById('detail-refresh-btn')
+    const icon = document.getElementById('detail-refresh-icon')
+    if (btn) btn.disabled = true
+    if (icon) icon.className = 'bi bi-arrow-clockwise spin'
+    try { await init() } catch (e) { toast(e.message, 'error') }
+    finally {
+      if (btn) btn.disabled = false
+      if (icon) icon.className = 'bi bi-arrow-clockwise'
+    }
+  }
+  window._detailRefreshRuns = async () => {
+    const btn = document.getElementById('detail-runs-refresh-btn')
+    const icon = document.getElementById('detail-runs-refresh-icon')
+    if (btn) btn.disabled = true
+    if (icon) icon.className = 'bi bi-arrow-clockwise spin'
+    try { await reloadRuns() } catch (e) { toast(e.message, 'error') }
+    finally {
+      if (btn) btn.disabled = false
+      if (icon) icon.className = 'bi bi-arrow-clockwise'
+    }
+  }
   const btn        = document.getElementById('detail-run-btn')
   const stopBtn    = document.getElementById('detail-pause-btn')
   const triggerBtn = document.getElementById('detail-trigger-btn')
@@ -178,8 +200,12 @@ function wireActions(pipeline) {
   const isManual = pipeline.schedule_type === 'manual'
   const isStream = pipeline.schedule_type === 'stream'
 
-  // Primary action: Start / Stop
-  if (isActive) {
+  // Primary action: Start / Stop for non-manual pipelines, Run Now for manual pipelines
+  if (isManual && !isActive) {
+    btn.innerHTML = '<i class="bi bi-lightning me-1"></i>Run Now'
+    btn.className = 'btn btn-sm btn-primary'
+    btn.onclick = () => window._detailTrigger?.()
+  } else if (isActive) {
     btn.innerHTML = '<i class="bi bi-stop-fill me-1"></i>Stop'
     btn.className = 'btn btn-sm btn-danger'
     btn.onclick = () => window._detailStop?.()
@@ -191,7 +217,7 @@ function wireActions(pipeline) {
 
   // "Run Now" — immediate one-shot trigger (hidden for stream, always available otherwise)
   if (triggerBtn) {
-    if (isStream) {
+    if (isStream || isManual) {
       triggerBtn.setAttribute('hidden', '')
     } else {
       triggerBtn.removeAttribute('hidden')
@@ -215,9 +241,15 @@ function wireActions(pipeline) {
   window._detailTrigger = async () => {
     if (triggerBtn) { triggerBtn.disabled = true; triggerBtn.innerHTML = '<i class="bi bi-hourglass me-1"></i>Running…' }
     try {
-      await api.pipelines.run(_name)
+      const result = await api.pipelines.run(_name)
       toast(`Triggered ${_name}`)
-      setTimeout(() => init(), 1200)
+      setTimeout(() => init(), 400)
+      if (result?.run_id) {
+        const monitorToken = ++_runMonitorToken
+        void _monitorTriggeredRun(result.run_id, monitorToken).catch((err) => {
+          toast(`Run monitor error: ${err.message}`, 'error')
+        })
+      }
     } catch (e) { toast(e.message, 'error') }
     finally {
       if (triggerBtn) { triggerBtn.disabled = false; triggerBtn.innerHTML = '<i class="bi bi-lightning me-1"></i>Run Now' }
@@ -594,4 +626,36 @@ function scheduleLabel(p) {
     return p.cron_expr
   }
   return p.schedule_type || '—'
+}
+
+async function _monitorTriggeredRun(runId, token) {
+  const startedAt = Date.now()
+  let terminalStatus = null
+
+  while (token === _runMonitorToken && document.getElementById('detail-run-btn')) {
+    if ((Date.now() - startedAt) > 120_000) break
+
+    await new Promise(resolve => setTimeout(resolve, 1500))
+
+    try {
+      const run = await api.runs.get(runId)
+      if (['success', 'failed', 'aborted'].includes(run.status)) {
+        terminalStatus = run.status
+        break
+      }
+    } catch (e) {
+      if (e.status !== 404) throw e
+    }
+  }
+
+  if (token !== _runMonitorToken || !document.getElementById('detail-run-btn')) return
+
+  try {
+    await init()
+    if (terminalStatus) {
+      toast(`Run ${terminalStatus}`)
+    }
+  } catch (e) {
+    toast(`Refresh error: ${e.message}`, 'error')
+  }
 }

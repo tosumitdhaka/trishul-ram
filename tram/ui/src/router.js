@@ -35,7 +35,7 @@ const meta = {
   runs:      { title: 'Run History',       sub: '' },
   schemas:   { title: 'Schemas',           sub: '' },
   mibs:      { title: 'MIB Modules',       sub: '' },
-  cluster:   { title: 'Workers',           sub: 'Worker pool status' },
+  cluster:   { title: 'Cluster',           sub: 'Runtime and worker status' },
   plugins:   { title: 'Plugins',           sub: '' },
   settings:  { title: 'Settings',          sub: 'Connection & daemon configuration' },
   templates: { title: 'Pipeline Templates', sub: 'Start from a pre-built example' },
@@ -63,6 +63,7 @@ export const router = {
 
   navigate(name, _params) {
     if (!pages[name]) name = 'dashboard'
+    if (name === 'wizard') name = 'editor'
 
     // Render HTML
     document.getElementById('content').innerHTML = pages[name]

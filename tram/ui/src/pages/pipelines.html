@@ -10,12 +10,14 @@
   </select>
   <div class="ms-auto d-flex align-items-center gap-2">
     <button class="btn-flat d-flex align-items-center gap-1" style="font-size:13px;color:#8b949e"
+            id="pl-refresh-btn"
             title="Refresh status" onclick="window._plRefresh?.()">
-      <i class="bi bi-arrow-clockwise" style="font-size:15px"></i>
+      <i class="bi bi-arrow-clockwise" id="pl-refresh-icon" style="font-size:15px"></i>
     </button>
     <button class="btn-flat d-flex align-items-center gap-1" style="font-size:13px;color:#8b949e"
+            id="pl-reload-btn"
             title="Reload pipelines" onclick="window._plReload?.()">
-      <i class="bi bi-arrow-repeat" style="font-size:15px"></i> Reload
+      <i class="bi bi-arrow-repeat" id="pl-reload-icon" style="font-size:15px"></i> Reload
     </button>
     <button class="btn btn-sm btn-secondary" title="Import pipeline YAML" onclick="document.getElementById('pl-import-input').click()">
       <i class="bi bi-upload me-1"></i>Import
@@ -25,10 +27,10 @@
       <i class="bi bi-collection me-1"></i>Templates
     </button>
     <div class="btn-group">
-      <button class="btn btn-sm btn-primary" onclick="navigate('wizard')">
-        <i class="bi bi-magic me-1"></i>Wizard
+      <button class="btn btn-sm btn-secondary" disabled title="Wizard temporarily disabled while schema-driven flow is refined">
+        <i class="bi bi-magic me-1"></i>Wizard Soon
       </button>
-      <button class="btn btn-sm btn-outline-primary" onclick="window._editorPipeline=null;window._editorYaml=null;navigate('editor')">
+      <button class="btn btn-sm btn-primary" onclick="window._editorPipeline=null;window._editorYaml=null;navigate('editor')">
         <i class="bi bi-pencil me-1"></i>YAML
       </button>
     </div>

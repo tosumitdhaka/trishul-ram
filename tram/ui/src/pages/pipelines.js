@@ -3,6 +3,7 @@ import { relTime, fmtNum, statusBadge, schedBadge, esc, toast } from '../utils.j
 
 let _all = []
 let _pollTimer = null
+let _runMonitorToken = 0
 
 export async function init() {
   if (_pollTimer) { clearInterval(_pollTimer); _pollTimer = null }
@@ -18,19 +19,44 @@ export async function init() {
     _openTemplates()
   })
   window._plRefresh = async () => {
-    const btn = document.querySelector('[onclick="window._plRefresh?.()"] i')
-    if (btn) btn.className = 'bi bi-arrow-clockwise spin'
+    const btn = document.getElementById('pl-refresh-btn')
+    const icon = document.getElementById('pl-refresh-icon')
+    if (btn) btn.disabled = true
+    if (icon) icon.className = 'bi bi-arrow-clockwise spin'
     try { await refresh() } catch (e) { toast(e.message, 'error') }
-    finally { if (btn) btn.className = 'bi bi-arrow-clockwise' }
+    finally {
+      if (btn) btn.disabled = false
+      if (icon) icon.className = 'bi bi-arrow-clockwise'
+    }
   }
   window._plReload  = async () => {
+    const btn = document.getElementById('pl-reload-btn')
+    const icon = document.getElementById('pl-reload-icon')
+    if (btn) btn.disabled = true
+    if (icon) icon.className = 'bi bi-arrow-repeat spin'
     try { await api.pipelines.reload(); toast('Pipelines reloaded'); _all = await api.pipelines.list(); renderTable(filtered()) }
     catch (e) { toast(e.message, 'error') }
+    finally {
+      if (btn) btn.disabled = false
+      if (icon) icon.className = 'bi bi-arrow-repeat'
+    }
   }
   window._plStart   = async (name) => { try { await api.pipelines.start(name);  toast(`Started ${name}`);  refresh() } catch (e) { toast(e.message, 'error') } }
   window._plStop    = async (name) => { try { await api.pipelines.stop(name);   toast(`Stopped ${name}`);  refresh() } catch (e) { toast(e.message, 'error') } }
-  window._plRun     = async (name) => { try { await api.pipelines.run(name);    toast(`Triggered ${name}`); setTimeout(refresh, 800) } catch (e) { toast(e.message, 'error') } }
-  window._plEdit    = (name) => { window._editorPipeline = name; navigate('editor') }
+  window._plRun     = async (name) => {
+    try {
+      const result = await api.pipelines.run(name)
+      toast(`Triggered ${name}`)
+      await refresh()
+      if (result?.run_id) {
+        const token = ++_runMonitorToken
+        void _monitorTriggeredRun(name, result.run_id, token).catch((err) => {
+          toast(`Run monitor error: ${err.message}`, 'error')
+        })
+      }
+    } catch (e) { toast(e.message, 'error') }
+  }
+  window._plEdit    = (name) => { window._editorReturn = 'pipelines'; window._editorPipeline = name; navigate('editor') }
   window._plDelete  = async (name) => {
     if (!confirm(`Delete pipeline "${name}"?`)) return
     try { await api.pipelines.delete(name); toast(`Deleted ${name}`); _all = _all.filter(p => p.name !== name); renderTable(filtered()) }
@@ -241,4 +267,32 @@ function renderTable(pipelines) {
       </td>
     </tr>`
   }).join('')
+}
+
+async function _monitorTriggeredRun(name, runId, token) {
+  const startedAt = Date.now()
+  let terminalStatus = null
+
+  while (token === _runMonitorToken && document.getElementById('pl-table')) {
+    if ((Date.now() - startedAt) > 120_000) break
+
+    await new Promise(resolve => setTimeout(resolve, 1500))
+
+    try {
+      const run = await api.runs.get(runId)
+      if (['success', 'failed', 'aborted'].includes(run.status)) {
+        terminalStatus = run.status
+        break
+      }
+    } catch (e) {
+      if (e.status !== 404) throw e
+    }
+  }
+
+  if (token !== _runMonitorToken || !document.getElementById('pl-table')) return
+
+  await refresh()
+  if (terminalStatus) {
+    toast(`${name}: ${terminalStatus}`)
+  }
 }

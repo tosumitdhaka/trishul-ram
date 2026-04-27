@@ -19,6 +19,19 @@ sinks:
 
 let _originalYaml = null  // YAML as loaded from server (for diff in edit mode)
 
+function _leaveEditor(pipelineName = null) {
+  const returnTo = window._editorReturn
+  window._editorReturn = null
+  window._editorYaml = null
+  window._editorPipeline = null
+  if (returnTo === 'detail' && pipelineName) {
+    window._detailPipeline = pipelineName
+    navigate('detail')
+    return
+  }
+  navigate('pipelines')
+}
+
 export async function init() {
   const ta       = document.getElementById('editor-textarea')
   const filename = document.getElementById('editor-filename')
@@ -55,13 +68,15 @@ export async function init() {
     }
   }
 
+  window._editorCancel = () => _leaveEditor(editName)
+
   // ── Save ───────────────────────────────────────────────────────────────────
   window._editorSave = async () => {
     const yaml = ta?.value?.trim()
     if (!yaml) { toast('Nothing to save', 'error'); return }
     if (editName && _originalYaml && yaml === _originalYaml.trim()) {
       toast('No changes — pipeline is already up to date')
-      navigate('pipelines')
+      _leaveEditor(editName)
       return
     }
     try {
@@ -69,12 +84,12 @@ export async function init() {
         await api.pipelines.update(editName, yaml)
         _originalYaml = yaml
         toast(`Saved ${editName}`)
+        _leaveEditor(editName)
       } else {
         await api.pipelines.create(yaml)
         toast('Pipeline created')
+        _leaveEditor()
       }
-      window._editorPipeline = null
-      navigate('pipelines')
     } catch (e) { toast(e.message, 'error') }
   }
 
@@ -135,18 +150,12 @@ export async function init() {
     const orig = btn?.innerHTML
     if (btn) btn.innerHTML = '<i class="bi bi-hourglass" style="font-size:15px"></i> Running…'
     try {
-      const { baseUrl, apiKey } = (await import('../api.js')).getConfig()
-      const headers = { 'Content-Type': 'application/yaml' }
-      if (apiKey) headers['X-API-Key'] = apiKey
-      const token = localStorage.getItem('tram_auth_token')
-      if (token && !apiKey) headers['Authorization'] = `Bearer ${token}`
-      const res = await fetch(`${baseUrl}/api/pipelines/dry-run`, {
-        method: 'POST', headers, body: yaml,
-      })
-      const json = res.ok ? await res.json() : null
-      if (!res.ok) throw new Error(json?.detail || res.statusText)
-      showDryRunResult(json)
+      showDryRunResult(await api.pipelines.dryRun(yaml))
     } catch (e) {
+      showDryRunResult({
+        valid: false,
+        issues: [e.message || 'Dry run request failed'],
+      })
       toast(`Dry run: ${e.message}`, 'error')
     } finally {
       if (btn && orig) btn.innerHTML = orig
@@ -387,12 +396,13 @@ function showDryRunResult(result) {
   div.id = 'dry-run-result'
   div.style.cssText = 'margin-top:12px;padding:12px;border-radius:6px;font-size:12px;font-family:monospace;background:#161b22;border:1px solid #30363d;color:#e6edf3;max-height:200px;overflow:auto'
   const ok = result.status === 'ok' || result.valid
+  const issues = result.errors || result.issues || []
   div.innerHTML = `<div style="color:${ok ? '#3fb950' : '#f85149'};margin-bottom:6px">${ok ? '✓ Dry run passed' : '✗ Dry run failed'}</div>`
   if (result.records_out !== undefined) {
     div.innerHTML += `<div>Records out: ${result.records_out}</div>`
   }
-  if (result.errors?.length) {
-    div.innerHTML += result.errors.map(e => `<div style="color:#f85149">${esc(e)}</div>`).join('')
+  if (issues.length) {
+    div.innerHTML += issues.map(e => `<div style="color:#f85149">${esc(e)}</div>`).join('')
     if (window._editorAiEnabled) {
       div.innerHTML += `<div class="d-flex gap-2 mt-2">
         <button class="btn btn-sm btn-outline-secondary" onclick="window._editorAiExplain?.()">
@@ -409,7 +419,7 @@ function showDryRunResult(result) {
     div.innerHTML += result.warnings.map(w => `<div style="color:#e3b341">${esc(w)}</div>`).join('')
   }
   const ta = document.getElementById('editor-textarea')
-  const lastErrors = result.errors || []
+  const lastErrors = issues
 
   window._editorAiExplain = async () => {
     const el = document.getElementById('editor-ai-explain-result')
