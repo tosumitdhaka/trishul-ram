@@ -8,7 +8,8 @@ KUBE_CONTEXT="${KUBE_CONTEXT:-kind-${CLUSTER_NAME}}"
 RELEASE_NAME="${RELEASE_NAME:-trishul-ram}"
 NAMESPACE="${NAMESPACE:-trishul-ram}"
 
-IMAGE_REPOSITORY="${IMAGE_REPOSITORY:-trishul-ram}"
+STANDALONE_IMAGE_REPOSITORY="${STANDALONE_IMAGE_REPOSITORY:-trishul-ram}"
+MANAGER_IMAGE_REPOSITORY="${MANAGER_IMAGE_REPOSITORY:-trishul-ram-manager}"
 WORKER_IMAGE_REPOSITORY="${WORKER_IMAGE_REPOSITORY:-trishul-ram-worker}"
 IMAGE_TAG="${IMAGE_TAG:-local-$(date -u +%Y%m%d%H%M%S)}"
 
@@ -19,19 +20,20 @@ usage() {
   cat <<EOF
 Usage: $(basename "$0") [--tag TAG] [--release NAME] [--namespace NS] [--cluster NAME]
 
-Build both TRAM images locally, load them into a kind cluster, and upgrade the
-existing Helm release using --reuse-values.
+Build all three TRAM images (standalone, manager, worker), load them into a kind
+cluster, and upgrade the existing Helm release using --reuse-values.
 
 Environment overrides:
-  CLUSTER_NAME             default: ${CLUSTER_NAME}
-  KUBE_CONTEXT             default: ${KUBE_CONTEXT}
-  RELEASE_NAME             default: ${RELEASE_NAME}
-  NAMESPACE                default: ${NAMESPACE}
-  IMAGE_REPOSITORY         default: ${IMAGE_REPOSITORY}
-  WORKER_IMAGE_REPOSITORY  default: ${WORKER_IMAGE_REPOSITORY}
-  IMAGE_TAG                default: generated UTC timestamp
-  CHART_PATH               default: ${CHART_PATH}
-  VALUES_FILE              optional extra values file to merge during upgrade
+  CLUSTER_NAME                  default: ${CLUSTER_NAME}
+  KUBE_CONTEXT                  default: ${KUBE_CONTEXT}
+  RELEASE_NAME                  default: ${RELEASE_NAME}
+  NAMESPACE                     default: ${NAMESPACE}
+  STANDALONE_IMAGE_REPOSITORY   default: ${STANDALONE_IMAGE_REPOSITORY}
+  MANAGER_IMAGE_REPOSITORY      default: ${MANAGER_IMAGE_REPOSITORY}
+  WORKER_IMAGE_REPOSITORY       default: ${WORKER_IMAGE_REPOSITORY}
+  IMAGE_TAG                     default: generated UTC timestamp
+  CHART_PATH                    default: ${CHART_PATH}
+  VALUES_FILE                   optional extra values file to merge during upgrade
 EOF
 }
 
@@ -66,7 +68,8 @@ while [[ $# -gt 0 ]]; do
   esac
 done
 
-MAIN_IMAGE="${IMAGE_REPOSITORY}:${IMAGE_TAG}"
+STANDALONE_IMAGE="${STANDALONE_IMAGE_REPOSITORY}:${IMAGE_TAG}"
+MANAGER_IMAGE="${MANAGER_IMAGE_REPOSITORY}:${IMAGE_TAG}"
 WORKER_IMAGE="${WORKER_IMAGE_REPOSITORY}:${IMAGE_TAG}"
 
 require_cmd() {
@@ -84,14 +87,18 @@ require_cmd helm
 echo "Using kube context: ${KUBE_CONTEXT}"
 kubectl config use-context "${KUBE_CONTEXT}" >/dev/null
 
-echo "Building manager image: ${MAIN_IMAGE}"
-docker build -t "${MAIN_IMAGE}" -f "${ROOT_DIR}/Dockerfile" "${ROOT_DIR}"
+echo "Building standalone image: ${STANDALONE_IMAGE}"
+docker build -t "${STANDALONE_IMAGE}" -f "${ROOT_DIR}/Dockerfile" "${ROOT_DIR}"
+
+echo "Building manager image: ${MANAGER_IMAGE}"
+docker build -t "${MANAGER_IMAGE}" -f "${ROOT_DIR}/Dockerfile.manager" "${ROOT_DIR}"
 
 echo "Building worker image: ${WORKER_IMAGE}"
 docker build -t "${WORKER_IMAGE}" -f "${ROOT_DIR}/Dockerfile.worker" "${ROOT_DIR}"
 
 echo "Loading images into kind cluster: ${CLUSTER_NAME}"
-kind load docker-image --name "${CLUSTER_NAME}" "${MAIN_IMAGE}"
+kind load docker-image --name "${CLUSTER_NAME}" "${STANDALONE_IMAGE}"
+kind load docker-image --name "${CLUSTER_NAME}" "${MANAGER_IMAGE}"
 kind load docker-image --name "${CLUSTER_NAME}" "${WORKER_IMAGE}"
 
 echo "Upgrading Helm release: ${RELEASE_NAME}"
@@ -100,8 +107,10 @@ HELM_ARGS=(
   --namespace "${NAMESPACE}"
   --create-namespace
   --reuse-values
-  --set image.repository="${IMAGE_REPOSITORY}"
+  --set image.repository="${STANDALONE_IMAGE_REPOSITORY}"
   --set image.tag="${IMAGE_TAG}"
+  --set manager.image.repository="${MANAGER_IMAGE_REPOSITORY}"
+  --set manager.image.tag="${IMAGE_TAG}"
   --set worker.image.repository="${WORKER_IMAGE_REPOSITORY}"
   --set worker.image.tag="${IMAGE_TAG}"
 )
@@ -127,7 +136,8 @@ fi
 
 echo
 echo "Deployment complete."
-echo "Manager image: ${MAIN_IMAGE}"
-echo "Worker image:  ${WORKER_IMAGE}"
-echo "Release:       ${RELEASE_NAME}"
-echo "Namespace:     ${NAMESPACE}"
+echo "Standalone image: ${STANDALONE_IMAGE}"
+echo "Manager image:    ${MANAGER_IMAGE}"
+echo "Worker image:     ${WORKER_IMAGE}"
+echo "Release:          ${RELEASE_NAME}"
+echo "Namespace:        ${NAMESPACE}"

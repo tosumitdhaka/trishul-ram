@@ -65,7 +65,7 @@ spec:
       {{- end }}
       containers:
         - name: tram
-          image: "{{ if .Values.image.registry }}{{ .Values.image.registry }}/{{ end }}{{ .Values.image.repository }}:{{ .Values.image.tag }}"
+          image: "{{ include "tram.managerImage" . }}"
           imagePullPolicy: {{ .Values.image.pullPolicy }}
           command: ["tram", "daemon"]
           ports:

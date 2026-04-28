@@ -1,21 +1,25 @@
-# Dockerfile — TRAM standalone image
+# Dockerfile.manager — TRAM manager image
 #
-# Single-node deployment: combines manager and worker roles in one container.
-# Use this for development, testing, or small single-node production deployments.
-# For distributed deployments use Dockerfile.manager + Dockerfile.worker instead.
+# Owns scheduling, persistence, schema/MIB management, and worker orchestration.
+# Does NOT execute pipelines directly — dispatches runs to worker pods.
 #
-# Includes all tested extras from both manager and worker images plus AI features.
-# Not yet tested (disabled; re-enable per image when validated):
-#   mqtt, amqp, nats, gnmi, influxdb, redis, elasticsearch, opensearch
+#   ✓  manager (apscheduler, sqlalchemy, DB drivers)
+#   ✓  k8s         — spawn/manage worker pods via Kubernetes API
+#   ✓  metrics      — Prometheus /metrics endpoint
+#   ✓  watch        — pipeline config hot-reload via watchdog
+#   ✓  mib          — pysmi: compile uploaded MIBs → shared volume
+#   ✓  protobuf_ser — grpcio-tools: compile uploaded .proto → shared volume
+#   ✓  asn1         — validate/cache .asn schemas uploaded via UI
+#   ✓  ai-anthropic / ai-openai — AI features are UI/API driven (manager-side)
+#   ✓  Web UI assets
+#
+#   ✗  kafka, snmp, avro, jmespath, sql, websocket, prometheus_rw — execution connectors
+#   ✗  protobuf runtime (worker-only)
 #
 # Stage 0  ui-builder  — builds tram-ui static assets (Node 20)
 # Stage 1  builder     — builds the Python wheel
 # Stage 2  mib-builder — downloads + compiles standard SNMP MIBs
-# Stage 3  runtime     — final image (wheel + compiled MIBs + UI assets)
-#
-# NOTE: Stage 2 requires internet access during `docker build`.
-#       If your build environment is air-gapped, place pre-compiled MIB .py
-#       files in a local mibs/ directory and COPY them directly instead.
+# Stage 3  runtime     — final image
 
 # ── Stage 0: build web UI ────────────────────────────────────────────────────
 FROM node:20-alpine AS ui-builder
@@ -40,9 +44,6 @@ FROM python:3.13-slim AS mib-builder
 
 RUN pip install --no-cache-dir "pysmi-lextudio>=1.1"
 
-# Download and compile the most commonly needed SNMP MIBs from mibs.pysnmp.com.
-# Failures are non-fatal: the stage succeeds even if some MIBs can't be fetched
-# (e.g. in air-gapped build environments).
 RUN python - <<'EOF'
 import os, sys
 os.makedirs("/mibs", exist_ok=True)
@@ -55,13 +56,13 @@ try:
     from pysmi.compiler import MibCompiler
 
     STANDARD_MIBS = [
-        "IANAifType-MIB",    # dependency of IF-MIB
-        "IF-MIB",            # interface statistics (ifDescr, ifOperStatus, ...)
-        "IP-MIB",            # IP routing / address table
-        "TCP-MIB",           # TCP connection table
-        "UDP-MIB",           # UDP listener table
-        "ENTITY-MIB",        # physical / logical entity inventory
-        "HOST-RESOURCES-MIB",# system resources (CPU, memory, storage, processes)
+        "IANAifType-MIB",
+        "IF-MIB",
+        "IP-MIB",
+        "TCP-MIB",
+        "UDP-MIB",
+        "ENTITY-MIB",
+        "HOST-RESOURCES-MIB",
     ]
 
     parser  = parserFactory()()
@@ -85,51 +86,45 @@ EOF
 # ── Stage 3: runtime image ────────────────────────────────────────────────────
 FROM python:3.13-slim
 
-# Non-root user
 RUN useradd -m -u 1000 -s /bin/bash tram
 
 WORKDIR /app
 
 # omniORBpy (CORBA) requires the omniORB shared runtime libraries
-# Package was renamed libomniorb4-2 → libomniorb4-3t64 in newer Debian
 RUN apt-get update && \
     ( apt-get install -y --no-install-recommends libomniorb4-3t64 libomnithread4 || \
       apt-get install -y --no-install-recommends libomniorb4-2 libomnithread4 ) && \
     rm -rf /var/lib/apt/lists/*
 
-# Standalone extras: union of manager + worker images plus AI features.
-# Excluded to keep the image lean (install individually as needed):
-#   parquet      — pyarrow (~150 MB):  pip install tram[parquet]
-#   s3           — boto3/botocore (~60 MB): pip install tram[s3]
-#   gcs          — google-cloud-storage (~50 MB): pip install tram[gcs]
-#   azure        — azure-storage-blob (~30 MB): pip install tram[azure]
-#   otel         — opentelemetry-sdk + OTLP exporter (~15 MB): pip install tram[otel]
-# Not yet tested (re-enable when validated):
-#   mqtt, amqp, nats, gnmi, influxdb, redis, elasticsearch, opensearch
+# Manager extras:
+#   manager      — apscheduler + sqlalchemy + DB drivers
+#   k8s          — worker pod orchestration
+#   metrics      — Prometheus /metrics
+#   watch        — pipeline config hot-reload
+#   mib          — pysmi MIB compilation
+#   protobuf_ser — grpcio-tools .proto compilation
+#   asn1         — .asn schema validation/caching
+#   ai-anthropic / ai-openai — UI/API-driven AI features
+#
+# Excluded: execution connectors (kafka, snmp, avro, jmespath, sql connector,
+#   websocket, prometheus_rw) — those belong in the worker image.
 # corba (omniORBpy) excluded: not on PyPI; install python3-omniorb via apt in a custom layer.
 COPY --from=builder /build/dist/*.whl .
 RUN whl=$(ls *.whl) && \
     pip install --no-cache-dir \
-        "${whl}[manager,worker,k8s,metrics,watch,mib,protobuf_ser,protobuf,asn1,kafka,snmp,avro,jmespath,sql,websocket,prometheus_rw,ai-anthropic,ai-openai]" && \
+        "${whl}[manager,k8s,metrics,watch,mib,protobuf_ser,asn1,ai-anthropic,ai-openai]" && \
     rm *.whl
 
-# Copy compiled MIBs from mib-builder stage
 COPY --from=mib-builder /mibs /mibs
-
-# Copy web UI static assets from ui-builder stage
 COPY --from=ui-builder /ui-src/dist /ui
-
-# Bundle pipeline templates (read-only reference examples, always available)
 COPY pipelines/ /tram-templates/
 
-# Create default pipeline, data, MIB, and schema directories; set ownership
 RUN mkdir -p /pipelines /data /data/mibs /mibs /schemas && \
     mkdir -p /home/tram/.tram && \
     chown -R tram:tram /pipelines /data /mibs /schemas /home/tram /app /ui
 
 USER tram
 
-# Health check
 HEALTHCHECK --interval=30s --timeout=10s --start-period=15s --retries=3 \
     CMD python -c "import urllib.request; urllib.request.urlopen('http://localhost:8765/api/health')" || exit 1
 
