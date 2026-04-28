@@ -15,20 +15,29 @@
   </div>
   <div class="col-4 d-flex flex-column gap-3">
     <div class="settings-card">
-      <div class="fw-semibold mb-3">Upload MIB File</div>
+      <div class="fw-semibold mb-3">Upload Raw MIB Source File</div>
       <div class="upload-zone mb-3" id="mib-drop-zone">
         <i class="bi bi-file-earmark-arrow-up fs-3 text-secondary"></i>
-        <div class="text-secondary mt-2">Drop <code>.mib</code> files or click to browse</div>
-        <input type="file" id="mib-file-input" style="display:none" multiple accept=".mib"/>
+        <div class="text-secondary mt-2">Drop raw MIB source files or click to browse</div>
+        <input type="file" id="mib-file-input" style="display:none" multiple />
       </div>
-      <button class="btn btn-primary btn-sm w-100" onclick="window._mibsUpload?.()">Upload &amp; Compile</button>
+      <div class="form-check form-switch mb-2">
+        <input class="form-check-input" type="checkbox" id="mib-upload-auto-fetch">
+        <label class="form-check-label text-secondary" for="mib-upload-auto-fetch" style="font-size:12px">
+          Try remote dependency fetch for missing imports
+        </label>
+      </div>
+      <div class="form-text mb-2">Supported source filenames: extensionless, <code>.mib</code>, <code>.my</code>, or <code>.txt</code>. Uploads compile against bundled base MIBs plus the local raw-source cache. Enable remote fetch only when missing imports are not already cached locally.</div>
+      <div class="form-text mb-2 d-none" id="mib-upload-status"></div>
+      <button class="btn btn-primary btn-sm w-100" id="mib-upload-btn" onclick="window._mibsUpload?.()">Upload &amp; Compile</button>
     </div>
     <div class="settings-card">
       <div class="fw-semibold mb-3">Download from mibs.pysnmp.com</div>
       <textarea class="form-control form-control-sm font-monospace mb-2" id="mib-download-names"
                 rows="4" placeholder="CISCO-ENTITY-FRU-CONTROL-MIB&#10;CISCO-TC-MIB&#10;JUNIPER-MIB"></textarea>
-      <div class="form-text mb-2">One MIB name per line. Dependencies auto-resolved.</div>
-      <button class="btn btn-secondary btn-sm w-100" onclick="window._mibsDownload?.()">Download &amp; Compile</button>
+      <div class="form-text mb-2">One MIB name per line. Requested MIBs are downloaded, compiled, and cached as raw ASN.1 sources for later local dependency resolution.</div>
+      <div class="form-text mb-2 d-none" id="mib-download-status"></div>
+      <button class="btn btn-secondary btn-sm w-100" id="mib-download-btn" onclick="window._mibsDownload?.()">Download &amp; Compile</button>
     </div>
   </div>
 </div>

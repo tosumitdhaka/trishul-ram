@@ -75,5 +75,5 @@ export function toast(msg, type = 'success') {
   el.style.cssText = `position:fixed;bottom:24px;right:24px;z-index:9999;padding:10px 16px;border-radius:6px;font-size:13px;color:#e6edf3;background:${type === 'error' ? '#3d1a1a' : '#1a3328'};border:1px solid ${type === 'error' ? '#f85149' : '#3fb950'};box-shadow:0 4px 12px rgba(0,0,0,.4);transition:opacity .3s`
   el.textContent = msg
   document.body.appendChild(el)
-  setTimeout(() => { el.style.opacity = '0'; setTimeout(() => el.remove(), 300) }, 2500)
+  setTimeout(() => { el.style.opacity = '0'; setTimeout(() => el.remove(), 300) }, 4000)
 }

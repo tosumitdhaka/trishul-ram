@@ -11,6 +11,7 @@
   <button class="btn-flat" title="Restart pipeline (stop + reschedule)" id="detail-restart-btn" onclick="window._detailRestart?.()"><i class="bi bi-arrow-clockwise"></i></button>
   <button class="btn-flat" title="Edit pipeline" onclick="window._detailEdit?.()"><i class="bi bi-pencil"></i></button>
   <button class="btn-flat" title="Download YAML" onclick="window._detailDownload?.()"><i class="bi bi-download"></i></button>
+  <button class="btn-flat" title="Open filtered run history" onclick="window._detailOpenRuns?.()"><i class="bi bi-clock-history"></i></button>
   <button class="btn-flat" title="Test Connectors" id="detail-test-btn" onclick="window._detailTestConnectors?.()"><i class="bi bi-plug"></i></button>
   <button class="btn-flat" title="Refresh detail" id="detail-refresh-btn" onclick="window._detailRefresh?.()"><i class="bi bi-arrow-clockwise" id="detail-refresh-icon"></i></button>
   <button class="btn-flat ms-auto" onclick="navigate('pipelines')"><i class="bi bi-arrow-left me-1"></i></button>
@@ -34,41 +35,15 @@
 </div>
 
 <ul class="nav nav-tabs mb-3" id="detail-tabs">
-  <li class="nav-item"><a class="nav-link active" href="#" data-tab="runs">Runs</a></li>
-  <li class="nav-item"><a class="nav-link" href="#" data-tab="versions">Versions</a></li>
+  <li class="nav-item"><a class="nav-link active" href="#" data-tab="versions">Versions</a></li>
   <li class="nav-item"><a class="nav-link" href="#" data-tab="config">Config</a></li>
   <li class="nav-item"><a class="nav-link" href="#" data-tab="alerts">Alerts</a></li>
 </ul>
 
 <!-- ── Tab panels ─────────────────────────────────────────────────────────── -->
 
-<!-- Runs panel -->
-<div id="tab-panel-runs" class="tab-panel">
-  <div class="d-flex gap-2 mb-3 align-items-center">
-    <select class="form-select form-select-sm" style="width:130px" id="detail-runs-status" aria-label="Filter by status">
-      <option value="">All status</option>
-      <option>success</option><option>failed</option><option>aborted</option>
-    </select>
-    <input type="date" class="form-control form-control-sm" style="width:150px" id="detail-runs-from" aria-label="From date"/>
-    <button class="btn-flat ms-auto" title="Refresh run history" id="detail-runs-refresh-btn" onclick="window._detailRefreshRuns?.()"><i class="bi bi-arrow-clockwise" id="detail-runs-refresh-icon"></i></button>
-    <button class="btn-flat" title="Export CSV" onclick="window._detailExportCsv?.()"><i class="bi bi-download"></i></button>
-  </div>
-  <div class="table-wrap">
-    <table class="table mb-0">
-      <thead><tr>
-        <th style="width:28px"></th>
-        <th>Run ID</th><th>Node</th><th>Started</th><th>Duration</th>
-        <th>In</th><th>Out</th><th>Skipped</th><th>DLQ</th><th>Status</th><th>Error</th>
-      </tr></thead>
-      <tbody id="detail-runs-body">
-        <tr><td colspan="11" class="text-secondary text-center py-4">Loading…</td></tr>
-      </tbody>
-    </table>
-  </div>
-</div>
-
 <!-- Versions panel -->
-<div id="tab-panel-versions" class="tab-panel d-none">
+<div id="tab-panel-versions" class="tab-panel">
   <div class="table-wrap">
     <table class="table mb-0">
       <thead><tr>

@@ -41,7 +41,7 @@ COPY tram/ ./tram/
 RUN pip install --no-cache-dir build && python -m build --wheel
 
 # ── Stage 1: download + compile standard SNMP MIBs ───────────────────────────
-FROM python:3.11-slim AS mib-builder
+FROM python:3.13-slim AS mib-builder
 
 RUN pip install --no-cache-dir "pysmi-lextudio>=1.1"
 
@@ -85,7 +85,7 @@ except Exception as exc:
 EOF
 
 # ── Stage 2: runtime image ────────────────────────────────────────────────────
-FROM python:3.11-slim
+FROM python:3.13-slim
 
 # Non-root user — same uid/gid as manager image so shared PVC files are compatible
 RUN useradd -m -u 1000 -s /bin/bash tram

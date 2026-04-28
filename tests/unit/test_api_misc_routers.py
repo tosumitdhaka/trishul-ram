@@ -7,12 +7,14 @@ import tempfile
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
+import pytest
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
 from tram.api.routers.mibs import router as mibs_router
 from tram.api.routers.templates import router as templates_router
 from tram.api.routers.webhooks import router as webhooks_router
+from tram.core.mib_compiler import MibCompileResult, MibSupportUnavailable, mib_source_dir
 
 # ── Webhooks ───────────────────────────────────────────────────────────────────
 
@@ -230,12 +232,17 @@ class TestMibs:
         with tempfile.TemporaryDirectory() as d:
             mib_file = Path(d, "IF-MIB.py")
             mib_file.write_text("# compiled")
+            source_dir = Path(mib_source_dir(d))
+            source_dir.mkdir(parents=True, exist_ok=True)
+            raw_file = source_dir / "IF-MIB.mib"
+            raw_file.write_text("IF-MIB DEFINITIONS ::= BEGIN END")
             app = _make_mibs_app()
             client = TestClient(app)
             with patch.dict(os.environ, {"TRAM_MIB_DIR": d}):
                 resp = client.delete("/api/mibs/IF-MIB")
             assert resp.status_code == 200
             assert not mib_file.exists()
+            assert not raw_file.exists()
 
     def test_get_existing_mib_by_dash_name(self):
         with tempfile.TemporaryDirectory() as d:
@@ -251,104 +258,212 @@ class TestMibs:
         with tempfile.TemporaryDirectory() as d:
             mib_file = Path(d, "IF_MIB.py")
             mib_file.write_text("# compiled underscore")
+            source_dir = Path(mib_source_dir(d))
+            source_dir.mkdir(parents=True, exist_ok=True)
+            raw_file = source_dir / "IF_MIB.my"
+            raw_file.write_text("IF-MIB DEFINITIONS ::= BEGIN END")
             app = _make_mibs_app()
             client = TestClient(app)
             with patch.dict(os.environ, {"TRAM_MIB_DIR": d}):
                 resp = client.delete("/api/mibs/IF-MIB")
         assert resp.status_code == 200
         assert not mib_file.exists()
+        assert not raw_file.exists()
 
     def test_upload_without_pysmi_returns_501(self):
-        import sys
         app = _make_mibs_app()
         client = TestClient(app, raise_server_exceptions=False)
-        with patch.dict(sys.modules, {"pysmi": None, "pysmi.compiler": None}):
-            resp = client.post(
-                "/api/mibs/upload",
-                files={"file": ("test.mib", b"MIB CONTENT", "text/plain")},
-            )
+        with tempfile.TemporaryDirectory() as d:
+            with patch.dict(os.environ, {"TRAM_MIB_DIR": d}):
+                with patch(
+                    "tram.api.routers.mibs.compile_mibs",
+                    side_effect=MibSupportUnavailable("MIB compilation requires pysmi"),
+                ):
+                    resp = client.post(
+                        "/api/mibs/upload",
+                        files={"file": ("test.mib", b"MIB CONTENT", "text/plain")},
+                    )
         assert resp.status_code == 501
 
     def test_upload_wrong_extension_returns_400(self):
         app = _make_mibs_app()
         client = TestClient(app, raise_server_exceptions=False)
-        # Mock pysmi as available
-        mock_pysmi = MagicMock()
-        import sys
-        with patch.dict(sys.modules, {
-            "pysmi": mock_pysmi,
-            "pysmi.codegen": mock_pysmi,
-            "pysmi.codegen.pysnmp": mock_pysmi,
-            "pysmi.compiler": mock_pysmi,
-            "pysmi.parser": mock_pysmi,
-            "pysmi.parser.smi": mock_pysmi,
-            "pysmi.reader": mock_pysmi,
-            "pysmi.searcher": mock_pysmi,
-            "pysmi.writer": mock_pysmi,
-        }):
-            resp = client.post(
-                "/api/mibs/upload",
-                files={"file": ("test.txt", b"MIB CONTENT", "text/plain")},
-            )
+        resp = client.post(
+            "/api/mibs/upload",
+            files={"file": ("test.yaml", b"MIB CONTENT", "text/plain")},
+        )
         assert resp.status_code == 400
 
-    def test_upload_success_returns_compiled_results(self):
+    def test_upload_success_returns_compiled_results_and_persists_source(self):
         app = _make_mibs_app()
         client = TestClient(app, raise_server_exceptions=False)
 
-        mock_codegen = MagicMock()
-        mock_codegen.baseMibs = ("SNMPv2-SMI",)
-        mock_codegen.fakeMibs = ("__FAKE__",)
-        mock_compiler = MagicMock()
-        mock_compiler.compile.return_value = {"TEST-MIB": "compiled"}
-
-        import sys
         with tempfile.TemporaryDirectory() as d:
-            with patch.dict(sys.modules, {
-                "pysmi": MagicMock(),
-                "pysmi.codegen": MagicMock(),
-                "pysmi.codegen.pysnmp": MagicMock(PySnmpCodeGen=MagicMock(return_value=mock_codegen)),
-                "pysmi.compiler": MagicMock(MibCompiler=MagicMock(return_value=mock_compiler)),
-                "pysmi.parser": MagicMock(),
-                "pysmi.parser.smi": MagicMock(parserFactory=lambda: (lambda: MagicMock())),
-                "pysmi.reader": MagicMock(FileReader=MagicMock()),
-                "pysmi.searcher": MagicMock(PyFileSearcher=MagicMock(), StubSearcher=MagicMock()),
-                "pysmi.writer": MagicMock(PyFileWriter=MagicMock()),
-            }):
+            with patch(
+                "tram.api.routers.mibs.compile_mibs",
+                return_value=MibCompileResult(
+                    results={"TEST-MIB": "compiled"},
+                    compiled=["TEST-MIB"],
+                    builtin_names={"SNMPv2-SMI"},
+                ),
+            ):
                 with patch.dict(os.environ, {"TRAM_MIB_DIR": d}):
                     resp = client.post(
                         "/api/mibs/upload",
                         files={"file": ("TEST-MIB.mib", b"TEST DEFINITIONS ::= BEGIN END", "text/plain")},
                     )
+                    source_path = Path(mib_source_dir(d), "TEST-MIB.mib")
+                    assert source_path.exists()
 
         assert resp.status_code == 200
         assert resp.json()["compiled"] == ["TEST-MIB"]
+
+    @pytest.mark.parametrize("filename", ["TEST-MIB", "TEST-MIB.my", "TEST-MIB.txt", "TEST-MIB.MIB"])
+    def test_upload_accepts_supported_source_filename_variants(self, filename):
+        app = _make_mibs_app()
+        client = TestClient(app, raise_server_exceptions=False)
+
+        with tempfile.TemporaryDirectory() as d:
+            with patch(
+                "tram.api.routers.mibs.compile_mibs",
+                return_value=MibCompileResult(
+                    results={"TEST-MIB": "compiled"},
+                    compiled=["TEST-MIB"],
+                    builtin_names={"SNMPv2-SMI"},
+                ),
+            ):
+                with patch.dict(os.environ, {"TRAM_MIB_DIR": d}):
+                    resp = client.post(
+                        "/api/mibs/upload",
+                        files={"file": (filename, b"TEST DEFINITIONS ::= BEGIN END", "text/plain")},
+                    )
+                    source_path = Path(mib_source_dir(d), Path(filename).name)
+                    assert source_path.exists()
+
+        assert resp.status_code == 200
+        assert resp.json()["compiled"] == ["TEST-MIB"]
+
+    def test_upload_classifies_builtin_local_and_unresolved_imports(self):
+        app = _make_mibs_app()
+        client = TestClient(app, raise_server_exceptions=False)
+
+        with tempfile.TemporaryDirectory() as d:
+            source_dir = Path(mib_source_dir(d))
+            source_dir.mkdir(parents=True, exist_ok=True)
+            Path(source_dir, "CISCO-SMI.mib").write_text("CISCO-SMI DEFINITIONS ::= BEGIN END")
+            with patch(
+                "tram.api.routers.mibs.compile_mibs",
+                return_value=MibCompileResult(
+                    results={"TEST-MIB": "failed"},
+                    compiled=[],
+                    builtin_names={"SNMPv2-SMI", "SNMPv2-TC"},
+                ),
+            ):
+                with patch.dict(os.environ, {"TRAM_MIB_DIR": d}):
+                    resp = client.post(
+                        "/api/mibs/upload",
+                        files={"file": ("TEST-MIB.mib", (
+                            b"TEST-MIB DEFINITIONS ::= BEGIN\n"
+                            b"\n"
+                            b"IMPORTS\n"
+                            b"    MODULE-IDENTITY FROM SNMPv2-SMI\n"
+                            b"    TEXTUAL-CONVENTION FROM SNMPv2-TC\n"
+                            b"    ciscoMgmt FROM CISCO-SMI\n"
+                            b"    foo FROM CUSTOM-MISSING-MIB;\n"
+                            b"\n"
+                            b"END\n"
+                        ), "text/plain")},
+                    )
+
+        assert resp.status_code == 200
+        body = resp.json()
+        assert body["builtin_imports"] == ["SNMPv2-SMI", "SNMPv2-TC"]
+        assert body["local_imports"] == ["CISCO-SMI"]
+        assert body["unresolved_imports"] == ["CUSTOM-MISSING-MIB"]
+        assert body["target_status"] == "unresolved_dependencies"
+
+    def test_upload_builtin_target_reports_builtin_available(self):
+        app = _make_mibs_app()
+        client = TestClient(app, raise_server_exceptions=False)
+
+        with tempfile.TemporaryDirectory() as d:
+            with patch(
+                "tram.api.routers.mibs.compile_mibs",
+                return_value=MibCompileResult(
+                    results={"INET-ADDRESS-MIB": "untouched"},
+                    compiled=[],
+                    builtin_names={"SNMPv2-SMI", "SNMPv2-TC", "INET-ADDRESS-MIB"},
+                ),
+            ):
+                with patch.dict(os.environ, {"TRAM_MIB_DIR": d}):
+                    resp = client.post(
+                        "/api/mibs/upload",
+                        files={"file": ("INET-ADDRESS-MIB.mib", (
+                            b"INET-ADDRESS-MIB DEFINITIONS ::= BEGIN\n"
+                            b"\n"
+                            b"IMPORTS\n"
+                            b"    MODULE-IDENTITY, mib-2, Unsigned32 FROM SNMPv2-SMI\n"
+                            b"    TEXTUAL-CONVENTION FROM SNMPv2-TC;\n"
+                            b"\n"
+                            b"END\n"
+                        ), "text/plain")},
+                    )
+
+        assert resp.status_code == 200
+        body = resp.json()
+        assert body["builtin_imports"] == ["SNMPv2-SMI", "SNMPv2-TC"]
+        assert body["unresolved_imports"] == []
+        assert body["target_status"] == "builtin_available"
+
+    def test_upload_with_resolve_missing_uses_source_store_as_remote_cache(self):
+        app = _make_mibs_app()
+        client = TestClient(app, raise_server_exceptions=False)
+
+        with tempfile.TemporaryDirectory() as d, tempfile.TemporaryDirectory() as bundled:
+            with patch(
+                "tram.api.routers.mibs.compile_mibs",
+                return_value=MibCompileResult(
+                    results={"TEST-MIB": "compiled"},
+                    compiled=["TEST-MIB"],
+                    builtin_names={"SNMPv2-SMI"},
+                ),
+            ) as mock_compile:
+                with patch.dict(
+                    os.environ,
+                    {"TRAM_MIB_DIR": d, "TRAM_MIB_BUNDLED_SOURCE_DIR": bundled},
+                ):
+                    resp = client.post(
+                        "/api/mibs/upload?resolve_missing=true",
+                        files={"file": ("TEST-MIB.mib", b"TEST DEFINITIONS ::= BEGIN END", "text/plain")},
+                    )
+
+        assert resp.status_code == 200
+        assert resp.json()["resolve_missing"] is True
+        assert mock_compile.call_args.kwargs["resolve_missing"] is True
+        assert mock_compile.call_args.kwargs["remote_cache_dir"] == mib_source_dir(d)
+        assert bundled in mock_compile.call_args.kwargs["source_dirs"]
 
     def test_download_success_returns_compiled_results(self):
         app = _make_mibs_app()
         client = TestClient(app, raise_server_exceptions=False)
 
-        mock_codegen = MagicMock()
-        mock_codegen.baseMibs = ("SNMPv2-SMI",)
-        mock_codegen.fakeMibs = ("__FAKE__",)
-        mock_compiler = MagicMock()
-        mock_compiler.compile.return_value = {"IF-MIB": "compiled"}
-
-        import sys
-        with tempfile.TemporaryDirectory() as d:
-            with patch.dict(sys.modules, {
-                "pysmi": MagicMock(),
-                "pysmi.codegen": MagicMock(),
-                "pysmi.codegen.pysnmp": MagicMock(PySnmpCodeGen=MagicMock(return_value=mock_codegen)),
-                "pysmi.compiler": MagicMock(MibCompiler=MagicMock(return_value=mock_compiler)),
-                "pysmi.parser": MagicMock(),
-                "pysmi.parser.smi": MagicMock(parserFactory=lambda: (lambda: MagicMock())),
-                "pysmi.reader": MagicMock(HttpReader=MagicMock()),
-                "pysmi.searcher": MagicMock(PyFileSearcher=MagicMock(), StubSearcher=MagicMock()),
-                "pysmi.writer": MagicMock(PyFileWriter=MagicMock()),
-            }):
-                with patch.dict(os.environ, {"TRAM_MIB_DIR": d}):
+        with tempfile.TemporaryDirectory() as d, tempfile.TemporaryDirectory() as bundled:
+            with patch(
+                "tram.api.routers.mibs.compile_mibs",
+                return_value=MibCompileResult(
+                    results={"IF-MIB": "compiled"},
+                    compiled=["IF-MIB"],
+                    builtin_names={"SNMPv2-SMI"},
+                ),
+            ) as mock_compile:
+                with patch.dict(
+                    os.environ,
+                    {"TRAM_MIB_DIR": d, "TRAM_MIB_BUNDLED_SOURCE_DIR": bundled},
+                ):
                     resp = client.post("/api/mibs/download", json={"names": ["IF-MIB"]})
 
         assert resp.status_code == 200
         assert resp.json()["compiled"] == ["IF-MIB"]
+        assert mock_compile.call_args.kwargs["resolve_missing"] is True
+        assert mock_compile.call_args.kwargs["remote_cache_dir"] == mib_source_dir(d)
+        assert bundled in mock_compile.call_args.kwargs["source_dirs"]

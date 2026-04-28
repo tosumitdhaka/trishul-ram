@@ -12,18 +12,28 @@ export function saveConfig(baseUrl, apiKey) {
   localStorage.setItem('tram_api_key',  apiKey)
 }
 
-async function reqText(path) {
-  const { baseUrl, apiKey } = getConfig()
-  const headers = {}
-  if (apiKey) headers['X-API-Key'] = apiKey
+function withAuthHeaders(headers = {}) {
+  const next = { ...headers }
+  const { apiKey } = getConfig()
+  if (apiKey) next['X-API-Key'] = apiKey
   const token = localStorage.getItem('tram_auth_token')
-  if (token && !apiKey) headers['Authorization'] = `Bearer ${token}`
+  if (token && !apiKey) next['Authorization'] = `Bearer ${token}`
+  return next
+}
+
+function errorFromResponse(text, fallback) {
+  let detail
+  try { detail = JSON.parse(text)?.detail } catch (_) { detail = null }
+  return new Error(detail || fallback)
+}
+
+async function reqText(path) {
+  const { baseUrl } = getConfig()
+  const headers = withAuthHeaders()
   const res = await fetch(`${baseUrl}${path}`, { headers })
   if (!res.ok) {
     const text = await res.text()
-    let detail
-    try { detail = JSON.parse(text)?.detail } catch (_) { detail = null }
-    throw Object.assign(new Error(detail || res.statusText), { status: res.status })
+    throw Object.assign(errorFromResponse(text, res.statusText), { status: res.status })
   }
   return res.text()
 }
@@ -40,11 +50,8 @@ function normalizeDryRunResult(result) {
 }
 
 async function req(path, options = {}) {
-  const { baseUrl, apiKey } = getConfig()
-  const headers = { ...options.headers }
-  if (apiKey) headers['X-API-Key'] = apiKey
-  const token = localStorage.getItem('tram_auth_token')
-  if (token && !apiKey) headers['Authorization'] = `Bearer ${token}`
+  const { baseUrl } = getConfig()
+  const headers = withAuthHeaders(options.headers)
   if (options.body && typeof options.body === 'object' && !(options.body instanceof FormData)) {
     headers['Content-Type'] = 'application/json'
     options = { ...options, body: JSON.stringify(options.body) }
@@ -55,6 +62,21 @@ async function req(path, options = {}) {
   const json = text ? JSON.parse(text) : null
   if (!res.ok) throw Object.assign(new Error(json?.detail || res.statusText), { status: res.status })
   return json
+}
+
+async function reqBlob(path, options = {}) {
+  const { baseUrl } = getConfig()
+  const headers = withAuthHeaders(options.headers)
+  if (options.body && typeof options.body === 'object' && !(options.body instanceof FormData)) {
+    headers['Content-Type'] = 'application/json'
+    options = { ...options, body: JSON.stringify(options.body) }
+  }
+  const res = await fetch(`${baseUrl}${path}`, { ...options, headers })
+  if (!res.ok) {
+    const text = await res.text()
+    throw Object.assign(errorFromResponse(text, res.statusText), { status: res.status })
+  }
+  return res.blob()
 }
 
 // ── Health & Meta ────────────────────────────────────────────────────────────
@@ -91,8 +113,9 @@ export const api = {
 
   // ── Runs ───────────────────────────────────────────────────────────────────
   runs: {
-    list: (params = {}) => req('/api/runs?' + new URLSearchParams(params)),
-    get:  (id)          => req(`/api/runs/${id}`),
+    list:      (params = {}) => req('/api/runs?' + new URLSearchParams(params)),
+    get:       (id)          => req(`/api/runs/${id}`),
+    exportCsv: (params = {}) => reqBlob('/api/runs?' + new URLSearchParams({ ...params, format: 'csv' })),
   },
 
   // ── Schemas ────────────────────────────────────────────────────────────────
@@ -113,10 +136,11 @@ export const api = {
     list:     ()        => req('/api/mibs'),
     delete:   (name)    => req(`/api/mibs/${name}`, { method: 'DELETE' }),
     download: (names)   => req('/api/mibs/download', { method: 'POST', body: { names } }),
-    upload:   (file)    => {
+    upload:   (file, { resolveMissing = false } = {}) => {
       const fd = new FormData()
       fd.append('file', file)
-      return req('/api/mibs/upload', { method: 'POST', body: fd })
+      const qs = resolveMissing ? '?resolve_missing=true' : ''
+      return req(`/api/mibs/upload${qs}`, { method: 'POST', body: fd })
     },
   },
 

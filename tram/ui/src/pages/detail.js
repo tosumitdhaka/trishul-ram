@@ -1,5 +1,5 @@
-import { api, getConfig } from '../api.js'
-import { relTime, fmtDur, fmtNum, statusBadge, schedBadge, esc, toast } from '../utils.js'
+import { api } from '../api.js'
+import { relTime, fmtNum, statusBadge, esc, toast } from '../utils.js'
 import * as bootstrap from 'bootstrap'
 
 let _name = null
@@ -14,16 +14,15 @@ export async function init() {
   if (sub) sub.textContent = _name
 
   try {
-    const [pipeline, runs, placement] = await Promise.all([
+    const [pipeline, placement] = await Promise.all([
       api.pipelines.get(_name),
-      api.runs.list({ pipeline: _name, limit: 50 }),
       api.pipelines.placement(_name).catch((e) => (e.status === 404 ? null : Promise.reject(e))),
     ])
     _activeYaml = pipeline.yaml || null
     renderCards(pipeline)
-    renderRuns(runs)
     renderPlacement(placement)
     wireActions(pipeline)
+    loadVersions()
   } catch (e) {
     toast(`Detail error: ${e.message}`, 'error')
   }
@@ -37,16 +36,11 @@ export async function init() {
       document.querySelectorAll('.tab-panel').forEach(p => p.classList.add('d-none'))
       const t = tab.dataset.tab
       document.getElementById(`tab-panel-${t}`)?.classList.remove('d-none')
-      if (t === 'runs')     reloadRuns()
       if (t === 'versions') loadVersions()
       if (t === 'config')   loadConfig()
       if (t === 'alerts')   loadAlerts()
     })
   })
-
-  // Run filter
-  document.getElementById('detail-runs-status')?.addEventListener('change', reloadRuns)
-  document.getElementById('detail-runs-from')?.addEventListener('change',   reloadRuns)
 }
 
 function renderCards(p) {
@@ -110,83 +104,18 @@ function renderPlacement(placement) {
     </div>`
 }
 
-function renderRuns(runs) {
-  const tbody = document.getElementById('detail-runs-body')
-  if (!tbody) return
-  if (!runs.length) {
-    tbody.innerHTML = '<tr><td colspan="11" class="text-secondary text-center py-4">No runs yet</td></tr>'
-    return
-  }
-  const rows = []
-  runs.forEach((r, i) => {
-    const hasDetail = r.error || r.dlq_count > 0 || (r.errors && r.errors.length > 0)
-    const chevron = hasDetail
-      ? `<button class="btn-flat" style="padding:0 2px;font-size:11px" title="Show log" onclick="window._runToggleLog(${i})">
-           <i class="bi bi-chevron-right" id="run-chev-${i}"></i>
-         </button>`
-      : ''
-    rows.push(`<tr id="run-row-${i}">
-      <td style="width:28px">${chevron}</td>
-      <td class="mono" style="font-size:11px">${esc(String(r.run_id || r.id || '').slice(0,8))}</td>
-      <td class="text-secondary">${esc(r.node || '—')}</td>
-      <td class="text-secondary">${r.started_at ? relTime(r.started_at) : '—'}</td>
-      <td class="text-secondary">${fmtDur(r.started_at, r.finished_at)}</td>
-      <td class="num-in">${fmtNum(r.records_in)}</td>
-      <td class="num-out">${fmtNum(r.records_out)}</td>
-      <td class="text-secondary">${fmtNum(r.records_skipped)}</td>
-      <td class="text-secondary">${fmtNum(r.dlq_count)}</td>
-      <td>${statusBadge(r.status)}</td>
-      <td class="text-secondary" style="font-size:11px;max-width:200px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="${esc(r.error||'')}">${esc(r.error || '')}</td>
-    </tr>`)
-  })
-  tbody.innerHTML = rows.join('')
-
-  window._runToggleLog = (i) => {
-    const existingLog = document.getElementById(`run-log-${i}`)
-    const chev = document.getElementById(`run-chev-${i}`)
-    if (existingLog) {
-      existingLog.remove()
-      if (chev) { chev.classList.remove('bi-chevron-down'); chev.classList.add('bi-chevron-right') }
-      return
-    }
-    const r = runs[i]
-    const lines = [...(r.errors || [])]
-    if (r.error && !lines.includes(r.error)) lines.unshift(r.error)
-    let content
-    if (lines.length) {
-      content = lines.map(e => `<div style="color:#f85149;padding:1px 0"><i class="bi bi-x-circle me-1" style="font-size:10px"></i>${esc(e)}</div>`).join('')
-    } else if (r.dlq_count > 0) {
-      content = `<div class="text-secondary">${r.dlq_count} record(s) sent to DLQ — no inline error messages captured</div>`
-    } else {
-      content = '<div class="text-secondary">No error details available</div>'
-    }
-    const logRow = document.createElement('tr')
-    logRow.id = `run-log-${i}`
-    logRow.innerHTML = `<td></td><td colspan="10" style="background:#161b22;padding:8px 12px;font-size:11px;font-family:monospace">${content}</td>`
-    document.getElementById(`run-row-${i}`)?.after(logRow)
-    if (chev) { chev.classList.remove('bi-chevron-right'); chev.classList.add('bi-chevron-down') }
-  }
-}
-
 function wireActions(pipeline) {
   window._detailEdit = () => { window._editorReturn = 'detail'; window._editorPipeline = _name; navigate('editor') }
+  window._detailOpenRuns = () => {
+    window._runsFilters = { pipeline: _name }
+    navigate('runs')
+  }
   window._detailRefresh = async () => {
     const btn = document.getElementById('detail-refresh-btn')
     const icon = document.getElementById('detail-refresh-icon')
     if (btn) btn.disabled = true
     if (icon) icon.className = 'bi bi-arrow-clockwise spin'
     try { await init() } catch (e) { toast(e.message, 'error') }
-    finally {
-      if (btn) btn.disabled = false
-      if (icon) icon.className = 'bi bi-arrow-clockwise'
-    }
-  }
-  window._detailRefreshRuns = async () => {
-    const btn = document.getElementById('detail-runs-refresh-btn')
-    const icon = document.getElementById('detail-runs-refresh-icon')
-    if (btn) btn.disabled = true
-    if (icon) icon.className = 'bi bi-arrow-clockwise spin'
-    try { await reloadRuns() } catch (e) { toast(e.message, 'error') }
     finally {
       if (btn) btn.disabled = false
       if (icon) icon.className = 'bi bi-arrow-clockwise'
@@ -303,38 +232,6 @@ function wireActions(pipeline) {
     } catch (e) { toast(e.message, 'error') }
   }
 
-  window._detailExportCsv = async () => {
-    try {
-      const { baseUrl, apiKey } = getConfig()
-      const token = localStorage.getItem('tram_auth_token')
-      const params = new URLSearchParams({ pipeline: _name, format: 'csv', limit: '1000' })
-      const headers = {}
-      if (apiKey) headers['X-API-Key'] = apiKey
-      else if (token) headers['Authorization'] = `Bearer ${token}`
-      const res = await fetch(`${baseUrl}/api/runs?${params.toString()}`, { headers })
-      if (!res.ok) throw new Error(await res.text() || res.statusText)
-      const blob = await res.blob()
-      const a = document.createElement('a')
-      a.href = URL.createObjectURL(blob)
-      a.download = `${_name}-runs.csv`
-      a.click()
-      URL.revokeObjectURL(a.href)
-    } catch (e) {
-      toast(`CSV export error: ${e.message}`, 'error')
-    }
-  }
-}
-
-async function reloadRuns() {
-  const status = document.getElementById('detail-runs-status')?.value || ''
-  const from   = document.getElementById('detail-runs-from')?.value   || ''
-  const params = { pipeline: _name, limit: 100 }
-  if (status) params.status = status
-  if (from)   params.from_dt = new Date(`${from}T00:00:00`).toISOString()
-  try {
-    const runs = await api.runs.list(params)
-    renderRuns(runs)
-  } catch (e) { toast(e.message, 'error') }
 }
 
 async function loadVersions() {
