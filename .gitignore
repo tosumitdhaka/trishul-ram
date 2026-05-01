@@ -46,7 +46,17 @@ output/
 CLAUDE.md
 AGENTS.md
 .codex
+.claude
 
 # Temp files
-tmp/*
+tmp/
 
+# Ruff files
+.ruff_cache/
+
+# Playwright files
+.playwright-mcp/
+
+Docker
+.docker/
+CLAUDE.md
