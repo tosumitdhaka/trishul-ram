@@ -111,12 +111,12 @@ unconfirmed work lives in the backlog at the bottom.
 
 > Follows v1.3.2 backend work. Scope is intentionally UI-heavy: revalidate every page against the shipped API and remove contract drift.
 
-- [ ] **Full UI/backend contract audit** — verify every page, action, filter, export, and status badge against current API fields and route behavior
-- [ ] **Cluster and placement UX** — finalize stream placement, slot health, stale/degraded/reconciling states, and manager-vs-standalone presentation
-- [ ] **Metrics/stats UX sync** — align dashboard, cluster streams, run history, and Prometheus guidance with the actual manager/worker vs standalone stats model
-- [ ] **Pipeline detail completeness** — schedule, alert, run-history, versioning, placement, and error-policy views all reflect current backend fields without fallback mismatches
-- [ ] **Plugin/templates/settings pages revalidation** — remove stale assumptions, ensure live API-backed rendering, and verify empty/error states
-- [ ] **Responsive/browser pass** — light/dark mode, mobile/tablet layout, console-clean build, and page-level smoke checks
+- [x] **Full UI/backend contract audit** — verify every page, action, filter, export, and status badge against current API fields and route behavior
+- [x] **Cluster and placement UX** — finalize stream placement, slot health, stale/degraded/reconciling states, and manager-vs-standalone presentation
+- [x] **Metrics/stats UX sync** — align dashboard, cluster streams, run history, and Prometheus guidance with the actual manager/worker vs standalone stats model
+- [x] **Pipeline detail completeness** — schedule, alert, run-history, versioning, placement, and error-policy views all reflect current backend fields without fallback mismatches
+- [x] **Plugin/templates/settings pages revalidation** — remove stale assumptions, ensure live API-backed rendering, and verify empty/error states
+- [x] **Responsive/browser pass** — light/dark mode, mobile/tablet layout, console-clean build, and page-level smoke checks
 
 ---
 

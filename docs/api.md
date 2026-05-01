@@ -37,7 +37,7 @@ Readiness probe. Returns 200 once startup is complete, 503 if DB or scheduler is
 Build and version information.
 
 ```json
-{"version": "1.3.0", "build_time": "2026-04-17T15:00:00+00:00", "python_version": "3.12.0"}
+{"version": "1.3.3", "build_time": "2026-05-01T12:00:00+00:00", "python_version": "3.13.0"}
 ```
 
 ### GET /api/plugins

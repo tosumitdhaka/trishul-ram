@@ -142,7 +142,7 @@ message WriteRequest { repeated TimeSeries timeseries = 1; }
         path = self.config.get("path", "prom-rw").lstrip("/")
         return {"ok": True, "latency_ms": None, "detail": f"Local HTTP listener at /webhooks/{path}"}
 
-    def read(self) -> Generator[tuple[bytes, dict], None, None]:
+    def read(self) -> Generator[tuple[bytes, dict]]:
         self._check_deps()
 
         import queue

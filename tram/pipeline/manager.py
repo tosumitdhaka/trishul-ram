@@ -91,6 +91,7 @@ class PipelineManager:
         config: PipelineConfig,
         replace: bool = False,
         yaml_text: str | None = None,
+        save_version: bool = True,
     ) -> PipelineState:
         """Register a pipeline configuration."""
         if config.name in self._pipelines and not replace:
@@ -111,7 +112,7 @@ class PipelineManager:
                 state.last_run_status = recent[0].status.value
 
         # Persist version if yaml_text provided
-        if yaml_text and self._db:
+        if yaml_text and self._db and save_version:
             self._db.save_pipeline_version(config.name, yaml_text)
 
         return state
@@ -225,6 +226,12 @@ class PipelineManager:
         yaml_text = self.get_version_yaml(name, version)
         config = load_pipeline_from_yaml(yaml_text)
 
+        if self._db is None:
+            raise RuntimeError("Persistence not configured (no TramDB)")
+
+        self._db.activate_pipeline_version(name, version)
+        self._db.save_pipeline(name, yaml_text, source="api")
+
         # Re-register (replace)
-        self.register(config, replace=True, yaml_text=yaml_text)
+        self.register(config, replace=True, yaml_text=yaml_text, save_version=False)
         return config

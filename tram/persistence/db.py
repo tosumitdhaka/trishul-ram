@@ -273,7 +273,7 @@ class TramDB:
                         "bytes_in": result.bytes_in,
                         "bytes_out": result.bytes_out,
                         "error": result.error,
-                        "node_id": self._node_id,
+                        "node_id": result.node_id or self._node_id,
                         "dlq_count": result.dlq_count,
                         "errors_json": _json.dumps(result.errors) if result.errors else None,
                     },
@@ -349,8 +349,21 @@ class TramDB:
     # ── Pipeline versions ──────────────────────────────────────────────────
 
     def save_pipeline_version(self, name: str, yaml_content: str) -> int:
-        """Save a new pipeline version; deactivate previous. Returns new version number."""
+        """Save a new pipeline version unless it matches the active version.
+
+        Returns the active/new version number.
+        """
         with self._engine.begin() as conn:
+            active = conn.execute(
+                text(
+                    "SELECT version, yaml_content FROM pipeline_versions "
+                    "WHERE name = :name AND is_active = 1 ORDER BY version DESC LIMIT 1"
+                ),
+                {"name": name},
+            ).mappings().fetchone()
+            if active is not None and active["yaml_content"] == yaml_content:
+                return int(active["version"])
+
             row = conn.execute(
                 text("SELECT COALESCE(MAX(version), 0) FROM pipeline_versions WHERE name = :name"),
                 {"name": name},
@@ -376,6 +389,32 @@ class TramDB:
                 },
             )
         return next_version
+
+    def activate_pipeline_version(self, name: str, version: int) -> str:
+        """Mark an existing version active and return its YAML content."""
+        with self._engine.begin() as conn:
+            row = conn.execute(
+                text(
+                    "SELECT yaml_content FROM pipeline_versions "
+                    "WHERE name = :name AND version = :version"
+                ),
+                {"name": name, "version": version},
+            ).mappings().fetchone()
+            if row is None:
+                raise KeyError(f"Pipeline '{name}' version {version} not found")
+
+            conn.execute(
+                text("UPDATE pipeline_versions SET is_active = 0 WHERE name = :name"),
+                {"name": name},
+            )
+            conn.execute(
+                text(
+                    "UPDATE pipeline_versions SET is_active = 1 "
+                    "WHERE name = :name AND version = :version"
+                ),
+                {"name": name, "version": version},
+            )
+        return row["yaml_content"]
 
     def get_pipeline_versions(self, name: str) -> list[dict]:
         with self._engine.connect() as conn:

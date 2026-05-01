@@ -55,7 +55,7 @@ class WebSocketSource(BaseSource):
         except Exception as exc:
             raise RuntimeError(f"WebSocket TCP probe failed: {exc}")
 
-    def read(self) -> Generator[tuple[bytes, dict], None, None]:
+    def read(self) -> Generator[tuple[bytes, dict]]:
         try:
             import websockets  # noqa: F401
         except ImportError as exc:

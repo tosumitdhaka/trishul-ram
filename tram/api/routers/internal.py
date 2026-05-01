@@ -20,6 +20,7 @@ router = APIRouter(include_in_schema=False)
 class RunCompletePayload(BaseModel):
     run_id: str
     pipeline_name: str
+    worker_id: str | None = None
     status: str         # success | error | failed
     records_in: int = 0
     records_out: int = 0
@@ -76,6 +77,7 @@ async def run_complete(payload: RunCompletePayload, request: Request) -> dict:
     controller.on_worker_run_complete(
         run_id=payload.run_id,
         pipeline_name=payload.pipeline_name,
+        worker_id=payload.worker_id,
         status=payload.status,
         records_in=payload.records_in,
         records_out=payload.records_out,

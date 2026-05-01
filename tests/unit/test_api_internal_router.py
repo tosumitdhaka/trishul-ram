@@ -31,6 +31,7 @@ class TestRunCompleteEndpoint:
         resp = client.post("/api/internal/run-complete", json={
             "run_id": "abc123",
             "pipeline_name": "my-pipe",
+            "worker_id": "worker-2",
             "status": "success",
             "records_in": 100,
             "records_out": 95,
@@ -46,6 +47,7 @@ class TestRunCompleteEndpoint:
         ctrl.on_worker_run_complete.assert_called_once_with(
             run_id="abc123",
             pipeline_name="my-pipe",
+            worker_id="worker-2",
             status="success",
             records_in=100,
             records_out=95,
@@ -65,6 +67,7 @@ class TestRunCompleteEndpoint:
         client.post("/api/internal/run-complete", json={
             "run_id": "r2",
             "pipeline_name": "p",
+            "worker_id": "w0",
             "status": "error",
             "records_in": 0,
             "records_out": 0,
@@ -83,6 +86,7 @@ class TestRunCompleteEndpoint:
         client.post("/api/internal/run-complete", json={
             "run_id": "r3",
             "pipeline_name": "p",
+            "worker_id": "w0",
             "status": "success",
         })
 
@@ -99,10 +103,12 @@ class TestRunCompleteEndpoint:
         client.post("/api/internal/run-complete", json={
             "run_id": "r4",
             "pipeline_name": "p",
+            "worker_id": "w0",
             "status": "success",
         })
 
         _, kwargs = ctrl.on_worker_run_complete.call_args
+        assert kwargs["worker_id"] == "w0"
         assert kwargs["started_at"] is None
         assert kwargs["finished_at"] is None
 

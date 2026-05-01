@@ -26,9 +26,9 @@ function setOnline(ready, meta) {
   const text = document.getElementById('health-text')
   const port = document.getElementById('health-port')
   const icon = document.getElementById('health-icon')
-  if (dot)  { dot.style.background = '#3fb950'; dot.style.boxShadow = '0 0 5px #3fb950' }
+  setIndicatorState(dot, 'online')
   if (text) text.textContent = 'Daemon online'
-  if (icon) { icon.style.background = '#3fb950'; icon.style.boxShadow = '0 0 5px #3fb950' }
+  setIndicatorState(icon, 'online')
 
   try {
     const url = new URL(localStorage.getItem('tram_base_url') || 'http://localhost:8765')
@@ -52,9 +52,15 @@ function setOffline() {
   const dot  = document.getElementById('health-dot')
   const text = document.getElementById('health-text')
   const icon = document.getElementById('health-icon')
-  if (dot)  { dot.style.background = '#f85149'; dot.style.boxShadow = 'none' }
+  setIndicatorState(dot, 'offline')
   if (text) text.textContent = 'Daemon offline'
-  if (icon) { icon.style.background = '#f85149'; icon.style.boxShadow = 'none' }
+  setIndicatorState(icon, 'offline')
   const set = (id) => { const el = document.getElementById(id); if (el) el.textContent = '—' }
   ;['hc-status','hc-scheduler','hc-db','hc-pipelines','hc-version'].forEach(set)
+}
+
+function setIndicatorState(el, state) {
+  if (!el) return
+  el.classList.remove('is-online', 'is-offline')
+  el.classList.add(state === 'online' ? 'is-online' : 'is-offline')
 }

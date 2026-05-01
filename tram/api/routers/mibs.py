@@ -20,6 +20,7 @@ from tram.core.mib_compiler import (
     compile_mibs,
     delete_mib_artifacts,
     is_supported_mib_source_filename,
+    list_mib_source_files,
     mib_candidates,
     mib_source_dir,
     mib_source_module_name,
@@ -99,25 +100,97 @@ def _classify_imports(
     }
 
 
+def _mib_key(name: str) -> str:
+    return min(mib_candidates(name))
+
+
+def _scan_compiled_entries(mib_dir: str) -> dict[str, dict]:
+    entries: dict[str, dict] = {}
+    if not os.path.isdir(mib_dir):
+        return entries
+
+    for fname in sorted(os.listdir(mib_dir)):
+        if not fname.endswith(".py") or fname.startswith("_"):
+            continue
+        stem = fname[:-3]
+        key = _mib_key(stem)
+        path = os.path.join(mib_dir, fname)
+        entries[key] = {
+            "name": stem,
+            "file": fname,
+            "size_bytes": os.path.getsize(path),
+        }
+    return entries
+
+
+def _scan_source_entries(*, include_bundled: bool, mib_dir: str) -> dict[str, dict]:
+    source_dir = mib_source_dir(mib_dir)
+    source_roots: list[tuple[str, str]] = [("local", source_dir)]
+    if include_bundled:
+        source_roots.extend(("bundled", path) for path in bundled_mib_source_dirs())
+
+    entries: dict[str, dict] = {}
+    for origin, root in source_roots:
+        if not os.path.isdir(root):
+            continue
+        for path in list_mib_source_files(root, recursive=True):
+            mib_name = mib_source_module_name(path.name)
+            if mib_name is None:
+                continue
+            key = _mib_key(mib_name)
+            current = entries.get(key)
+            if current and current["origin"] == "local":
+                continue
+            entries[key] = {
+                "name": mib_name,
+                "file": str(path.relative_to(root)),
+                "size_bytes": path.stat().st_size,
+                "origin": origin,
+                "path": path,
+            }
+    return entries
+
+
 # ── GET /api/mibs ────────────────────────────────────────────────────────────
 
 
 @router.get("")
 def list_mibs() -> list[dict]:
-    """List all compiled MIB modules available in TRAM_MIB_DIR."""
+    """List locally managed MIB modules with raw/compiled artifact visibility.
+
+    The page intentionally focuses on the local managed set:
+    - raw ASN.1 sources in the local source store
+    - compiled Python modules in TRAM_MIB_DIR
+
+    Bundled readonly base MIBs are not listed on their own to avoid flooding
+    the UI, but their raw source is surfaced as a fallback when a listed local
+    module also exists in the bundled source tree.
+    """
     mib_dir = _mib_dir()
-    if not os.path.isdir(mib_dir):
-        return []
-    entries = []
-    for fname in sorted(os.listdir(mib_dir)):
-        if fname.endswith(".py") and not fname.startswith("_"):
-            fpath = os.path.join(mib_dir, fname)
-            entries.append({
-                "name": fname[:-3],   # strip .py
-                "file": fname,
-                "size_bytes": os.path.getsize(fpath),
-            })
-    return entries
+    compiled_entries = _scan_compiled_entries(mib_dir)
+    local_source_entries = _scan_source_entries(include_bundled=False, mib_dir=mib_dir)
+    source_entries_with_fallback = _scan_source_entries(include_bundled=True, mib_dir=mib_dir)
+
+    keys = sorted(set(compiled_entries) | set(local_source_entries))
+    rows: list[dict] = []
+    for key in keys:
+        compiled = compiled_entries.get(key)
+        raw = source_entries_with_fallback.get(key)
+        display_name = (
+            (local_source_entries.get(key) or raw or compiled or {}).get("name")
+            or key
+        )
+        rows.append({
+            "name": display_name,
+            "raw_available": raw is not None,
+            "raw_file": raw["file"] if raw else None,
+            "raw_size_bytes": raw["size_bytes"] if raw else None,
+            "raw_origin": raw["origin"] if raw else None,
+            "compiled_available": compiled is not None,
+            "compiled_file": compiled["file"] if compiled else None,
+            "compiled_size_bytes": compiled["size_bytes"] if compiled else None,
+        })
+    return rows
 
 
 # ── POST /api/mibs/upload ────────────────────────────────────────────────────
@@ -265,6 +338,24 @@ def download_mibs(body: MibDownloadRequest) -> dict:
         "mib_source_dir": source_dir,
         "results": compile_result.results,
     }
+
+
+# ── GET /api/mibs/{mib_name}/source ──────────────────────────────────────────
+
+
+@router.get("/{mib_name}/source")
+def get_mib_source(mib_name: str):
+    """Return raw ASN.1 source for a MIB module when available."""
+    from fastapi.responses import PlainTextResponse
+
+    mib_dir = _mib_dir()
+    source_entries = _scan_source_entries(include_bundled=True, mib_dir=mib_dir)
+    entry = source_entries.get(_mib_key(mib_name))
+    if entry is None:
+        raise HTTPException(status_code=404, detail=f"Raw MIB source '{mib_name}' not found")
+
+    path = entry["path"]
+    return PlainTextResponse(path.read_text(encoding="utf-8", errors="replace"))
 
 
 # ── GET /api/mibs/{mib_name} ─────────────────────────────────────────────────

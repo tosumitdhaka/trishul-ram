@@ -1,5 +1,5 @@
 import { api } from '../api.js'
-import { esc, toast } from '../utils.js'
+import { bindDataActions, esc, toast } from '../utils.js'
 
 const CATEGORY_META = {
   sources: { icon: 'box-arrow-in-right', title: 'Sources' },
@@ -32,9 +32,21 @@ function _normalizeDetails(plugins) {
 }
 
 export async function init() {
-  window._pluginsFilter = _render
   const body = document.getElementById('plugins-body')
   if (!body) return
+  document.getElementById('plugins-search')?.addEventListener('input', _render)
+  bindDataActions(body, {
+    'toggle-section': (button) => {
+      const key = button.dataset.key
+      _openState[key] = !(_openState[key] ?? false)
+      _render()
+    },
+    'toggle-row': (button) => {
+      const stateKey = `${button.dataset.key}:${button.dataset.name}`
+      _openState[stateKey] = !(_openState[stateKey] ?? false)
+      _render()
+    },
+  })
 
   try {
     const plugins = await api.plugins()
@@ -67,7 +79,10 @@ function _render() {
 
     return `
       <div class="detail-card mb-3">
-        <button class="btn-flat w-100 text-start d-flex align-items-center gap-2" onclick="window._pluginsToggle('${key}')">
+        <button class="btn-flat plugins-section-toggle w-100 text-start d-flex align-items-center gap-2"
+                type="button"
+                data-action="toggle-section"
+                data-key="${esc(key)}">
           <i class="bi bi-${meta.icon} text-secondary"></i>
           <span class="fw-semibold">${meta.title}</span>
           <span class="count-pill">${items.length}</span>
@@ -81,16 +96,6 @@ function _render() {
 
   if (total) total.textContent = `${totalCount} visible`
   body.innerHTML = totalCount ? html : (document.getElementById('plugins-empty-template')?.innerHTML || '')
-
-  window._pluginsToggle = (key) => {
-    _openState[key] = !(_openState[key] ?? false)
-    _render()
-  }
-  window._pluginsToggleRow = (key, name) => {
-    const stateKey = `${key}:${name}`
-    _openState[stateKey] = !(_openState[stateKey] ?? false)
-    _render()
-  }
 }
 
 function _matches(item, query) {
@@ -110,13 +115,13 @@ function _matches(item, query) {
 function _renderSectionRows(items, key) {
   return `
     <div class="table-responsive">
-      <table class="table table-sm mb-0" style="font-size:12px">
+      <table class="table table-sm mb-0 plugins-table">
         <thead>
           <tr>
-            <th style="width:180px">Plugin</th>
-            <th style="width:320px">Summary</th>
+            <th class="plugins-col-plugin">Plugin</th>
+            <th class="plugins-col-summary">Summary</th>
             <th>Config Highlights</th>
-            <th class="text-end" style="width:90px"></th>
+            <th class="text-end plugins-col-action"></th>
           </tr>
         </thead>
         <tbody>
@@ -129,8 +134,6 @@ function _renderSectionRows(items, key) {
 function _renderRow(item, key) {
   const stateKey = `${key}:${item.name}`
   const open = _openState[stateKey] ?? false
-  const encodedKey = JSON.stringify(key)
-  const encodedName = JSON.stringify(item.name)
   const toggleLabel = open ? 'Collapse plugin details' : 'Expand plugin details'
   return `
     <tr>
@@ -141,22 +144,28 @@ function _renderRow(item, key) {
         ${_chipLine('Common optional', item.common_optional_fields)}
       </td>
       <td class="text-end align-middle">
-        <button class="btn-flat" title="${toggleLabel}" aria-label="${toggleLabel}" onclick='window._pluginsToggleRow(${encodedKey}, ${encodedName})'>
+        <button class="btn-flat"
+                type="button"
+                title="${toggleLabel}"
+                aria-label="${toggleLabel}"
+                data-action="toggle-row"
+                data-key="${esc(key)}"
+                data-name="${esc(item.name)}">
           <i class="bi bi-chevron-${open ? 'down' : 'right'}"></i>
         </button>
       </td>
     </tr>
     ${open ? `
-      <tr>
-        <td colspan="4" style="background:rgba(255,255,255,0.02)">
+      <tr class="plugins-row-detail">
+        <td colspan="4">
           <div class="py-2">
             ${item.description ? `<div class="mb-2 text-secondary">${esc(item.description)}</div>` : '<div class="mb-2 text-secondary">No additional description available.</div>'}
-            <div class="d-flex flex-wrap gap-3" style="font-size:12px">
+            <div class="plugins-detail-meta">
               <div><span class="text-secondary">Class:</span> <span class="mono">${esc(item.class_name || 'n/a')}</span></div>
               <div><span class="text-secondary">Schema fields:</span> ${item.field_count}</div>
             </div>
             <div class="mt-3">
-              <div class="text-secondary text-uppercase mb-2" style="font-size:10px;letter-spacing:.08em">Available Fields</div>
+              <div class="plugins-field-heading mb-2">Available Fields</div>
               ${_renderFieldDetails(item.fields || [])}
             </div>
           </div>
@@ -177,12 +186,12 @@ function _renderFieldDetails(fields) {
   }
   return `
     <div class="table-responsive">
-      <table class="table table-sm mb-0" style="font-size:12px">
+      <table class="table table-sm mb-0 plugins-table">
         <thead>
           <tr>
-            <th style="width:180px">Field</th>
-            <th style="width:140px">Type</th>
-            <th style="width:100px">Required</th>
+            <th class="plugins-col-plugin">Field</th>
+            <th class="plugins-col-type">Type</th>
+            <th class="plugins-col-required">Required</th>
             <th>Default</th>
           </tr>
         </thead>

@@ -9,6 +9,51 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ---
 
+## [1.3.3] — 2026-05-01
+
+### Added
+
+**Overview and cluster operator visibility**
+- Dashboard overview now exposes split 15-minute Records In/Out and Bytes In/Out cards, a bytes-processed load chart, chart metric toggle, bucket tooltip, and manual refresh affordance
+- Cluster now surfaces runtime-first summary cards, merged input/output traffic cards, processed records/bytes totals per worker, and live records/bytes in/out metrics in both the summary row and worker details
+
+**Shared UI/runtime helpers**
+- Shared triggered-run monitoring now backs dashboard, pipelines, and detail lifecycle actions
+- Shared YAML diff rendering now backs both detail and editor version/result flows instead of separate page-local implementations
+
+### Changed
+
+**Shell, routing, and templates**
+- Hash navigation now preserves browser-history semantics; `#templates` canonicalizes through Pipelines with the templates modal active, and `#wizard` returns to Pipelines while the wizard stays intentionally disabled
+- The old dedicated Templates page was removed; template browsing is consolidated into the Pipelines modal and aligned to the shared modal/button system
+- Login/bootstrap flow no longer flashes protected-page unauthorized errors on fresh-session deep links
+
+**Pipeline detail, editor, and settings surfaces**
+- Pipeline detail now opens on `Runs` by default, uses a streamlined header/tool layout, and presents version history through a shared scrollable compare/view/copy/download/rollback workflow
+- Version history semantics were tightened so duplicate identical YAML versions are suppressed and rollback re-activates the existing historical version instead of cloning it
+- Editor, diff, dry-run, connector-test, and AI result surfaces now use theme-safe shared cards/panels instead of page-local dark-only treatments
+- Settings remains configuration-focused while live runtime daemon state moved into Cluster
+
+### Fixed
+
+**Runtime truth and action feedback**
+- Stopped manual pipelines now consistently surface `Run now` instead of `Start` across overview and detail flows
+- Manual/batch trigger attempts with no healthy workers now record an actionable failed run with `No healthy workers available for dispatch` instead of only flipping pipeline state
+- Pipeline action feedback now reflects backend truth (`started`, `already active`, `manual`, `disabled in YAML`) rather than optimistic success toasts
+- Detail version-YAML caching is now scoped per pipeline, preventing cross-pipeline bleed between version viewers and compare flows
+
+**Supporting pages and assets**
+- Schemas and MIBs pages gained search and cleaner shared styling; MIB management now persists raw ASN.1 source files alongside compiled artifacts for later dependency-resolving compiles
+- Runs export/filter behavior is aligned to the backend contract, and noisy repeated skip-note rendering was reduced in the shared runs table
+- Cluster worker assignment display now follows current controller truth instead of stale worker-pool history
+
+### Validated
+
+- Full manual validation completed across the active UI surface in both manager and standalone modes
+- Local release validation completed for `1.3.3`: `ruff check .`, full `pytest tests/ -q`, and `cd tram/ui && npm run build`
+
+---
+
 ## [1.3.2] — 2026-04-21
 
 ### Added
@@ -1353,7 +1398,8 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 ---
 
 <!-- Comparison links -->
-[Unreleased]: https://github.com/tosumitdhaka/trishul-ram/compare/v1.3.2...HEAD
+[Unreleased]: https://github.com/tosumitdhaka/trishul-ram/compare/v1.3.3...HEAD
+[1.3.3]: https://github.com/tosumitdhaka/trishul-ram/compare/v1.3.2...v1.3.3
 [1.3.2]: https://github.com/tosumitdhaka/trishul-ram/compare/v1.3.1...v1.3.2
 [1.3.1]: https://github.com/tosumitdhaka/trishul-ram/compare/v1.3.0...v1.3.1
 [1.3.0]: https://github.com/tosumitdhaka/trishul-ram/compare/v1.2.3...v1.3.0

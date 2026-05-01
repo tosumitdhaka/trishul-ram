@@ -66,6 +66,18 @@ def test_node_id_defaults_empty_when_not_set(tmp_path):
     d.close()
 
 
+def test_explicit_run_node_id_overrides_db_default(db):
+    run = _run(run_id="worker-run")
+    run.node_id = "tram-worker-2"
+    db.save_run(run)
+    from sqlalchemy import text
+    with db._engine.connect() as conn:
+        row = conn.execute(
+            text("SELECT node_id FROM run_history WHERE run_id = 'worker-run'")
+        ).mappings().fetchone()
+    assert row["node_id"] == "tram-worker-2"
+
+
 # ── dlq_count persisted and round-tripped ─────────────────────────────────────
 
 

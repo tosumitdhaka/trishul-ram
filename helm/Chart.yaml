@@ -2,8 +2,8 @@ apiVersion: v2
 name: trishul-ram
 description: TRAM — Trishul Real-time Aggregation & Mediation
 type: application
-version: 1.3.2
-appVersion: "1.3.2"
+version: 1.3.3
+appVersion: "1.3.3"
 keywords:
   - data-pipeline
   - adapter

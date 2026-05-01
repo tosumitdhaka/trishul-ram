@@ -9,8 +9,8 @@ from datetime import UTC, datetime
 from fastapi import APIRouter, Request
 
 from tram import __version__
-from tram.api.routers._stream_views import build_cluster_streams
 from tram.api.config_schema import SCHEMA_FIELDS
+from tram.api.routers._stream_views import build_cluster_streams
 from tram.registry.registry import _serializers, _sinks, _sources, _transforms, list_plugins
 
 router = APIRouter()

@@ -13,8 +13,8 @@ from tram.core.exceptions import (
     PipelineAlreadyExistsError,
     PipelineNotFoundError,
 )
-from tram.pipeline.loader import load_pipeline_from_yaml, scan_pipeline_dir
 from tram.pipeline.linter import lint
+from tram.pipeline.loader import load_pipeline_from_yaml, scan_pipeline_dir
 
 logger = logging.getLogger(__name__)
 
@@ -258,11 +258,28 @@ async def start_pipeline(name: str, request: Request) -> dict:
         raise HTTPException(status_code=404, detail=str(exc))
 
     try:
-        controller.start_pipeline(name)
+        start_status = controller.start_pipeline(name)
     except Exception as exc:
         raise HTTPException(status_code=500, detail=str(exc))
 
-    return {"name": name, "status": "started"}
+    state = controller.get(name)
+    if start_status == "disabled":
+        detail = (
+            f"Pipeline '{name}' is disabled in YAML."
+            + (
+                " It can only be triggered manually until enabled."
+                if state.config.schedule.type != "stream"
+                else " Enable it in config before starting."
+            )
+        )
+    elif start_status == "manual":
+        detail = f"Pipeline '{name}' uses a manual schedule. Use Run Now instead."
+    elif start_status == "already_running":
+        detail = f"Pipeline '{name}' is already active."
+    else:
+        detail = f"Pipeline '{name}' started."
+
+    return {"name": name, "status": start_status, "detail": detail}
 
 
 @router.post("/{name}/stop")
@@ -483,34 +500,33 @@ async def rollback_pipeline(
     version: int = Query(..., description="Version number to restore"),
 ) -> dict:
     """Restore a pipeline to a previously saved version."""
-    manager = request.app.state.manager
-    scheduler = request.app.state.scheduler
+    controller = request.app.state.controller
 
     try:
-        state = manager.get(name)
+        state = controller.get(name)
     except PipelineNotFoundError as exc:
         raise HTTPException(status_code=404, detail=str(exc))
 
-    # Stop if running
-    if state.status == "running":
+    was_active = state.status in ("running", "scheduled")
+
+    if was_active:
         try:
-            scheduler.stop_pipeline(name)
+            controller.stop_pipeline(name)
         except Exception as exc:
             logger.warning("Error stopping pipeline before rollback: %s", exc)
 
     try:
-        new_config = manager.rollback(name, version)
+        new_config = controller.rollback(name, version)
     except KeyError as exc:
         raise HTTPException(status_code=404, detail=str(exc))
     except RuntimeError as exc:
         raise HTTPException(status_code=503, detail=str(exc))
 
-    new_state = manager.get(name)
+    new_state = controller.get(name)
 
-    # Restart if was running
-    if new_config.enabled and new_config.schedule.type != "manual":
+    if was_active and new_config.enabled and new_config.schedule.type != "manual":
         try:
-            scheduler.start_pipeline(name)
+            controller.start_pipeline(name)
         except Exception as exc:
             logger.warning("Could not restart pipeline after rollback: %s", exc)
 

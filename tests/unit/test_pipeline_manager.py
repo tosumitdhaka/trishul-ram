@@ -202,6 +202,25 @@ class TestPipelineManagerWithDB:
         mgr.register(_config(), yaml_text=_MINIMAL_YAML)
         db.save_pipeline_version.assert_called_once_with("my-pipe", _MINIMAL_YAML)
 
+    def test_register_can_skip_version_save(self):
+        db = self._make_db()
+        mgr = PipelineManager(db=db)
+        mgr.register(_config(), yaml_text=_MINIMAL_YAML, save_version=False)
+        db.save_pipeline_version.assert_not_called()
+
+    def test_rollback_activates_existing_version_without_saving_new_one(self):
+        db = self._make_db()
+        db.get_pipeline_version.return_value = _MINIMAL_YAML
+        mgr = PipelineManager(db=db)
+
+        config = mgr.rollback("my-pipe", 2)
+
+        assert config.name == "my-pipe"
+        db.activate_pipeline_version.assert_called_once_with("my-pipe", 2)
+        db.save_pipeline.assert_called_once_with("my-pipe", _MINIMAL_YAML, source="api")
+        db.save_pipeline_version.assert_not_called()
+        assert mgr.get("my-pipe").yaml_text == _MINIMAL_YAML
+
     def test_record_run_saves_to_db(self):
         db = self._make_db()
         mgr = PipelineManager(db=db)

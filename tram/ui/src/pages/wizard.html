@@ -1,45 +1,44 @@
 <div class="wizard-wrap">
 
-  <!-- Step indicator -->
   <div class="wiz-steps mb-4" id="wiz-steps">
     <div class="wiz-step active" data-step="1"><span class="wiz-num">1</span><span class="wiz-lbl">Basics</span></div>
     <div class="wiz-step" data-step="2"><span class="wiz-num">2</span><span class="wiz-lbl">Wiring</span></div>
     <div class="wiz-step" data-step="3"><span class="wiz-num">3</span><span class="wiz-lbl">Review</span></div>
   </div>
 
-  <!-- Step 1 — Pipeline Info -->
   <div id="wiz-step-1" class="wiz-page">
-    <!-- AI describe section -->
-    <div id="wiz-ai-section" class="mb-4 p-3 rounded" style="background:var(--bg-surface);border:1px solid var(--border)">
+    <div id="wiz-ai-section" class="mb-4 p-3 rounded editor-ai-shell wizard-ai-shell">
       <div class="d-flex align-items-center gap-2 mb-2">
-        <i class="bi bi-stars" style="color:#8b949e"></i>
-        <span class="fw-semibold text-light" style="font-size:13px">Describe your pipeline (AI assist)</span>
-        <span class="ms-auto text-secondary" style="font-size:11px" id="wiz-ai-model"></span>
+        <i class="bi bi-stars editor-ai-accent"></i>
+        <span class="editor-ai-title">Describe your pipeline (AI assist)</span>
+        <span class="ms-auto text-secondary editor-ai-model" id="wiz-ai-model"></span>
       </div>
-      <textarea id="wiz-ai-prompt" rows="2" class="form-control form-control-sm mb-2" style="background:#0d1117;color:#e6edf3;border-color:#30363d;resize:none"
+      <textarea id="wiz-ai-prompt" rows="2" class="form-control form-control-sm mb-2 editor-ai-input wizard-ai-prompt"
         placeholder="e.g. Poll SFTP every 5 minutes, parse CSV, rename columns, push to Kafka topic pm-raw"></textarea>
-      <button class="btn btn-sm btn-outline-secondary" id="wiz-ai-gen-btn" onclick="window._wizAiGenerate?.()">
-        <i class="bi bi-stars me-1"></i>Generate with AI
-      </button>
-      <span id="wiz-ai-status" class="ms-2 text-secondary" style="font-size:12px"></span>
-      <div id="wiz-ai-unconfigured" class="d-none mt-2 p-2 rounded" style="background:var(--bg-surface);border:1px solid #3d3020;font-size:11px;color:#d29922">
-        <i class="bi bi-exclamation-triangle me-1"></i>AI not configured — <a href="#" onclick="navigate('settings')" style="color:#d29922">open Settings</a> to add your API key.
+      <div class="d-flex align-items-center gap-2 flex-wrap">
+        <button class="btn btn-sm editor-ai-action" id="wiz-ai-gen-btn" type="button">
+          <i class="bi bi-stars me-1"></i>Generate with AI
+        </button>
+        <span id="wiz-ai-status" class="editor-ai-status" aria-live="polite"></span>
+      </div>
+      <div id="wiz-ai-unconfigured" class="d-none mt-2 p-2 rounded editor-ai-warning">
+        <i class="bi bi-exclamation-triangle me-1"></i>AI not configured — <a href="#" id="wiz-ai-settings-link" class="editor-ai-warning-link">open Settings</a> to add your API key.
       </div>
     </div>
 
     <div class="row g-3">
       <div class="col-6">
-        <label class="form-label text-secondary" style="font-size:12px">Pipeline Name <span style="color:#f85149">*</span></label>
+        <label class="form-label wizard-field-label" for="wiz-name">Pipeline Name <span class="wizard-required">*</span></label>
         <input type="text" class="form-control form-control-sm" id="wiz-name" placeholder="e.g. sftp-to-kafka" autocomplete="off">
-        <div class="form-text" style="font-size:10px;color:#6e7681">Letters, numbers, `_` and `-` only</div>
+        <div class="form-text wizard-field-hint">Letters, numbers, `_` and `-` only</div>
       </div>
       <div class="col-6">
-        <label class="form-label text-secondary" style="font-size:12px">Description <span style="opacity:.5">(optional)</span></label>
+        <label class="form-label wizard-field-label" for="wiz-desc">Description <span class="wizard-optional">(optional)</span></label>
         <input type="text" class="form-control form-control-sm" id="wiz-desc" placeholder="What does this pipeline do?">
       </div>
       <div class="col-4">
-        <label class="form-label text-secondary" style="font-size:12px">Schedule Type <span style="color:#f85149">*</span></label>
-        <select class="form-select form-select-sm" id="wiz-sched-type" onchange="window._wizSchedChange?.()">
+        <label class="form-label wizard-field-label" for="wiz-sched-type">Schedule Type <span class="wizard-required">*</span></label>
+        <select class="form-select form-select-sm" id="wiz-sched-type">
           <option value="interval">Interval — runs every N seconds/minutes/hours</option>
           <option value="cron">Cron — standard cron expression</option>
           <option value="stream">Stream — continuous, runs until stopped</option>
@@ -47,9 +46,9 @@
         </select>
       </div>
       <div class="col-4" id="wiz-interval-row">
-        <label class="form-label text-secondary" style="font-size:12px">Run every</label>
+        <label class="form-label wizard-field-label" for="wiz-interval-val">Run every</label>
         <div class="d-flex gap-2">
-          <input type="number" class="form-control form-control-sm" id="wiz-interval-val" value="5" min="1" style="width:80px" aria-label="Interval value">
+          <input type="number" class="form-control form-control-sm wizard-small-input" id="wiz-interval-val" value="5" min="1" aria-label="Interval value">
           <select class="form-select form-select-sm" id="wiz-interval-unit" aria-label="Interval unit">
             <option value="60">minutes</option>
             <option value="1">seconds</option>
@@ -58,12 +57,12 @@
         </div>
       </div>
       <div class="col-4 d-none" id="wiz-cron-row">
-        <label class="form-label text-secondary" style="font-size:12px">Cron expression</label>
+        <label class="form-label wizard-field-label" for="wiz-cron-expr">Cron expression</label>
         <input type="text" class="form-control form-control-sm font-monospace" id="wiz-cron-expr" placeholder="*/5 * * * *">
-        <div class="form-text" style="font-size:10px;color:#6e7681">min hour day month weekday (UTC)</div>
+        <div class="form-text wizard-field-hint">min hour day month weekday (UTC)</div>
       </div>
       <div class="col-4">
-        <label class="form-label text-secondary" style="font-size:12px">On Error</label>
+        <label class="form-label wizard-field-label" for="wiz-on-error">On Error</label>
         <select class="form-select form-select-sm" id="wiz-on-error">
           <option value="continue">continue — skip failed records, keep running</option>
           <option value="abort">abort — halt pipeline on first error</option>
@@ -71,42 +70,40 @@
       </div>
     </div>
     <div class="mt-3">
-      <a href="#" class="text-secondary" style="font-size:12px" onclick="window._editorPipeline=null;window._editorYaml=null;navigate('editor');return false">
+      <a href="#" class="wizard-link" id="wiz-open-blank-editor-link">
         <i class="bi bi-pencil me-1"></i>Advanced: open blank YAML editor instead
       </a>
     </div>
   </div>
 
-  <!-- Step 2 — Source & Sinks -->
   <div id="wiz-step-2" class="wiz-page d-none">
     <div class="detail-card mb-3">
-      <div class="fw-semibold mb-1" style="font-size:14px">Wizard Scope</div>
-      <div class="text-secondary" style="font-size:13px">
+      <div class="wizard-section-title mb-1">Wizard Scope</div>
+      <div class="wizard-section-note">
         This step covers common source and sink wiring from backend schema truth.
         Use the final review step to hand off into the editor for transforms, workers, alerts, kubernetes, DLQ, or deeper nested config.
       </div>
     </div>
     <div class="row g-3">
       <div class="col-4">
-        <label class="form-label text-secondary" style="font-size:12px">Source Type <span style="color:#f85149">*</span></label>
-        <select class="form-select form-select-sm" id="wiz-src-type" onchange="window._wizRenderSrcFields?.()">
+        <label class="form-label wizard-field-label" for="wiz-src-type">Source Type <span class="wizard-required">*</span></label>
+        <select class="form-select form-select-sm" id="wiz-src-type">
           <option value="">— select —</option>
         </select>
-        <div class="form-text" style="font-size:10px;color:#6e7681">Where records are read from</div>
+        <div class="form-text wizard-field-hint">Where records are read from</div>
       </div>
       <div class="col-8"></div>
       <div class="col-12" id="wiz-src-fields"></div>
-      <div class="col-12 d-flex align-items-center gap-2">
-        <button class="btn btn-sm btn-outline-secondary" onclick="window._wizTestSrc?.()">
+      <div class="col-12 wizard-inline-row">
+        <button class="btn btn-sm btn-outline-secondary" id="wiz-test-src-btn" type="button">
           <i class="bi bi-plug me-1"></i>Test Connection
         </button>
-        <span id="wiz-src-test-result" style="font-size:12px"></span>
+        <span id="wiz-src-test-result" class="wizard-inline-status" aria-live="polite"></span>
       </div>
-      <!-- Serializer In -->
-      <div class="col-12 pt-2" style="border-top:1px solid #30363d">
+      <div class="col-12 wizard-divider-top">
         <div class="row g-3">
           <div class="col-4">
-            <label class="form-label text-secondary" style="font-size:12px">Serializer In</label>
+            <label class="form-label wizard-field-label" for="wiz-serializer">Serializer In</label>
             <select class="form-select form-select-sm" id="wiz-serializer">
               <option value="json">json — JSON objects or arrays</option>
               <option value="ndjson">ndjson — newline-delimited JSON</option>
@@ -119,14 +116,14 @@
               <option value="msgpack">msgpack — MessagePack binary</option>
               <option value="parquet">parquet — Apache Parquet</option>
             </select>
-            <div class="form-text" style="font-size:10px;color:#6e7681">How to deserialize bytes from the source into records</div>
+            <div class="form-text wizard-field-hint">How to deserialize bytes from the source into records</div>
           </div>
         </div>
       </div>
-      <div class="col-12 pt-3 mt-2" style="border-top:1px solid #30363d">
-        <div class="row g-3 mb-3 pb-3" style="border-bottom:1px solid #30363d">
+      <div class="col-12 wizard-divider-strong">
+        <div class="row g-3 wizard-divider-bottom mb-3">
           <div class="col-4">
-            <label class="form-label text-secondary" style="font-size:12px">Serializer Out <span style="opacity:.5">(default for all sinks)</span></label>
+            <label class="form-label wizard-field-label" for="wiz-serializer-out">Serializer Out <span class="wizard-optional">(default for all sinks)</span></label>
             <select class="form-select form-select-sm" id="wiz-serializer-out">
               <option value="">— same as serializer in —</option>
               <option value="json">json</option>
@@ -140,12 +137,12 @@
               <option value="msgpack">msgpack</option>
               <option value="parquet">parquet</option>
             </select>
-            <div class="form-text" style="font-size:10px;color:#6e7681">How to serialize records before writing — individual sinks can override this</div>
+            <div class="form-text wizard-field-hint">How to serialize records before writing — individual sinks can override this</div>
           </div>
         </div>
-        <div class="d-flex align-items-center mb-3">
-          <span class="text-secondary" style="font-size:13px">Add at least one sink. Use the YAML patch area for advanced nested sink config.</span>
-          <button class="btn btn-sm btn-outline-primary ms-auto" onclick="window._wizAddSink?.()">
+        <div class="wizard-add-sink-row">
+          <span class="wizard-section-note">Add at least one sink. Use the YAML patch area for advanced nested sink config.</span>
+          <button class="btn btn-sm btn-outline-primary ms-auto" id="wiz-add-sink-btn" type="button">
             <i class="bi bi-plus"></i> Add Sink
           </button>
         </div>
@@ -154,37 +151,34 @@
     </div>
   </div>
 
-  <!-- Step 3 — Review -->
   <div id="wiz-step-3" class="wiz-page d-none">
     <div class="detail-card mb-3">
       <div class="d-flex gap-2 flex-wrap align-items-center">
         <div>
-          <div class="fw-semibold" style="font-size:14px">Refine Here Or Continue In Editor</div>
-          <div class="text-secondary" style="font-size:12px">
+          <div class="wizard-section-title">Refine Here Or Continue In Editor</div>
+          <div class="wizard-review-note">
             Review the generated YAML here. Use the editor for transforms, workers, alerts, kubernetes, DLQ, or more advanced connector configuration.
           </div>
         </div>
-        <button class="btn btn-sm btn-outline-primary ms-auto" onclick="window._wizOpenEditor?.()">
+        <button class="btn btn-sm btn-outline-primary ms-auto" id="wiz-open-editor-btn" type="button">
           <i class="bi bi-pencil me-1"></i>Continue In Editor
         </button>
       </div>
     </div>
     <div class="d-flex align-items-center gap-2 mb-2">
-      <span class="fw-semibold text-light" style="font-size:13px">Pipeline YAML</span>
-      <button class="btn btn-sm btn-outline-secondary ms-auto" onclick="window._wizDryRun?.()">
+      <span class="wizard-review-title">Pipeline YAML</span>
+      <button class="btn btn-sm btn-outline-secondary ms-auto" id="wiz-dry-run-btn" type="button">
         <i class="bi bi-lightning me-1"></i>Dry Run
       </button>
     </div>
-    <textarea id="wiz-yaml-preview" class="font-monospace w-100 mb-3"
-      style="background:#161b22;color:#e6edf3;border:1px solid #30363d;border-radius:6px;padding:12px;font-size:12px;min-height:340px;resize:vertical"></textarea>
+    <textarea id="wiz-yaml-preview" class="font-monospace w-100 mb-3 wizard-yaml-preview"></textarea>
     <div id="wiz-dryrun-result"></div>
   </div>
 
-  <!-- Navigation -->
-  <div class="d-flex gap-2 mt-4 pt-3" style="border-top:1px solid #30363d">
-    <button class="btn btn-sm btn-secondary d-none" id="wiz-back-btn" onclick="window._wizBack?.()">← Back</button>
-    <button class="btn btn-sm btn-primary ms-auto" id="wiz-next-btn" onclick="window._wizNext?.()">Next →</button>
-    <button class="btn btn-sm btn-primary d-none" id="wiz-save-btn" onclick="window._wizSave?.()">
+  <div class="d-flex gap-2 wizard-nav">
+    <button class="btn btn-sm btn-secondary d-none" id="wiz-back-btn" type="button">← Back</button>
+    <button class="btn btn-sm btn-primary ms-auto" id="wiz-next-btn" type="button">Next →</button>
+    <button class="btn btn-sm btn-primary d-none" id="wiz-save-btn" type="button">
       <i class="bi bi-check-lg me-1"></i>Save Pipeline
     </button>
   </div>

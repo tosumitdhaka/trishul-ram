@@ -98,6 +98,7 @@ def _post_run_complete(
     callback_url: str,
     run_id: str,
     pipeline_name: str,
+    worker_id: str,
     status: str,
     records_in: int,
     records_out: int,
@@ -115,6 +116,7 @@ def _post_run_complete(
     payload = {
         "run_id": run_id,
         "pipeline_name": pipeline_name,
+        "worker_id": worker_id,
         "status": status,
         "records_in": records_in,
         "records_out": records_out,
@@ -362,7 +364,7 @@ def create_worker_app(worker_id: str = "", manager_url: str = "", stats_interval
                     executor.stream_run(config, active_run.stop_event, stats=active_run.stats)
                     stats_snapshot = _final_stats_snapshot(active_run)
                     _post_run_complete(
-                        callback_url, req.run_id, req.pipeline_name,
+                        callback_url, req.run_id, req.pipeline_name, state.worker_id,
                         "success",
                         int(stats_snapshot["records_in"]),
                         int(stats_snapshot["records_out"]),
@@ -384,7 +386,7 @@ def create_worker_app(worker_id: str = "", manager_url: str = "", stats_interval
                         },
                     )
                     _post_run_complete(
-                        callback_url, req.run_id, req.pipeline_name,
+                        callback_url, req.run_id, req.pipeline_name, state.worker_id,
                         "error", 0, 0, 0, 0, str(exc),
                         started_at=active_run.started_at,
                         finished_at=datetime.now(UTC).isoformat(),
@@ -421,7 +423,7 @@ def create_worker_app(worker_id: str = "", manager_url: str = "", stats_interval
                         # manager-side on_worker_run_complete removes the store entry.
                         _post_stats(active_run.stats_url, payload)
                     _post_run_complete(
-                        callback_url, req.run_id, req.pipeline_name,
+                        callback_url, req.run_id, req.pipeline_name, state.worker_id,
                         result.status.value,
                         result.records_in,
                         result.records_out,
@@ -443,7 +445,7 @@ def create_worker_app(worker_id: str = "", manager_url: str = "", stats_interval
                         },
                     )
                     _post_run_complete(
-                        callback_url, req.run_id, req.pipeline_name,
+                        callback_url, req.run_id, req.pipeline_name, state.worker_id,
                         "error", 0, 0, 0, 0, str(exc),
                         started_at=active_run.started_at,
                         finished_at=datetime.now(UTC).isoformat(),

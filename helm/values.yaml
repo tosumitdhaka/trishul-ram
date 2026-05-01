@@ -63,7 +63,7 @@ manager:
   ##   image:
   ##     registry: ghcr.io
   ##     repository: trishul/trishul-ram-manager
-  ##     tag: "1.3.2"
+  ##     tag: "1.3.3"
   image:
     registry: ""
     repository: trishul-ram-manager
@@ -92,7 +92,7 @@ worker:
   ##   image:
   ##     registry: ghcr.io
   ##     repository: trishul/trishul-ram-worker
-  ##     tag: "1.3.1"
+  ##     tag: "1.3.3"
   image:
     registry: ""
     repository: trishul-ram-worker

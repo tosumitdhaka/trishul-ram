@@ -2,7 +2,11 @@ from __future__ import annotations
 
 from datetime import UTC, datetime
 
-from tram.connectors.file_sink_common import file_state_key, render_filename, validate_template_tokens
+from tram.connectors.file_sink_common import (
+    file_state_key,
+    render_filename,
+    validate_template_tokens,
+)
 
 
 def _opened_at() -> datetime:

@@ -2,9 +2,9 @@
 
 from __future__ import annotations
 
-from tram.api.config_schema import SCHEMA_LINES
-
 from fastapi import APIRouter
+
+from tram.api.config_schema import SCHEMA_LINES
 
 router = APIRouter()
 
@@ -73,7 +73,7 @@ EXPRESSION SYNTAX (used in add_field.fields, filter_rows.condition, sink.conditi
 
 
     # ── Sources ───────────────────────────────────────────────────────────────
-    available_sources = plugins.get("sources", list(_SCHEMA["source"].keys()))
+    available_sources = plugins.get("sources", list(SCHEMA_LINES["source"].keys()))
     detected_sources  = _detect_types(prompt, available_sources)
 
     source_lines = ["SOURCES:"]
@@ -85,7 +85,7 @@ EXPRESSION SYNTAX (used in add_field.fields, filter_rows.condition, sink.conditi
     sections.append("\n".join(source_lines))
 
     # ── Sinks ─────────────────────────────────────────────────────────────────
-    available_sinks  = plugins.get("sinks", list(_SCHEMA["sink"].keys()))
+    available_sinks  = plugins.get("sinks", list(SCHEMA_LINES["sink"].keys()))
     detected_sinks   = _detect_types(prompt, available_sinks)
 
     sink_lines = ["SINKS:"]
@@ -97,10 +97,10 @@ EXPRESSION SYNTAX (used in add_field.fields, filter_rows.condition, sink.conditi
     sections.append("\n".join(sink_lines))
 
     # ── Serializers (full, always — they're compact) ──────────────────────────
-    available_sers = plugins.get("serializers", list(_SCHEMA["serializer"].keys()))
+    available_sers = plugins.get("serializers", list(SCHEMA_LINES["serializer"].keys()))
     ser_lines = ["SERIALIZERS (serializer_in and serializer_out must use these as {type: <name>}):"]
     for t in sorted(available_sers):
-        lines = _SCHEMA["serializer"].get(t, [])
+        lines = SCHEMA_LINES["serializer"].get(t, [])
         if lines:
             ser_lines.append(f"  {t}:\n" + "\n".join("  " + ln for ln in lines))
         else:
@@ -108,10 +108,10 @@ EXPRESSION SYNTAX (used in add_field.fields, filter_rows.condition, sink.conditi
     sections.append("\n".join(ser_lines))
 
     # ── Transforms (full, always — they're compact) ───────────────────────────
-    available_transforms = plugins.get("transforms", list(_SCHEMA["transform"].keys()))
+    available_transforms = plugins.get("transforms", list(SCHEMA_LINES["transform"].keys()))
     tr_lines = ["TRANSFORMS (each item in the transforms list):"]
     for t in sorted(available_transforms):
-        lines = _SCHEMA["transform"].get(t, [])
+        lines = SCHEMA_LINES["transform"].get(t, [])
         if lines:
             tr_lines.append(f"  {t}:\n" + "\n".join("  " + ln for ln in lines))
         else:

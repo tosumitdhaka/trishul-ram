@@ -95,8 +95,9 @@ Update only the docs affected by the change:
 ### 3. Documentation Sync
 - [ ] `README.md` and `docs/index.md` quick-start examples still use `latest`
 - [ ] Production examples pin a concrete release tag where appropriate
-- [ ] `helm/values.yaml` default `image.tag` matches `X.Y.Z`
-- [ ] `helm/values.yaml` default `worker.image.tag` matches `X.Y.Z` when worker image is set explicitly
+- [ ] `helm/values-template.yaml` generic release `image.tag` matches `X.Y.Z`
+- [ ] `helm/values.yaml` kind/dev profile tags are updated only when intentionally moving the local deployment baseline
+- [ ] Explicit `manager.image.tag` / `worker.image.tag` examples or comments match `X.Y.Z` when shown
 - [ ] Auth docs still match implementation (`TRAM_AUTH_USERS`, bootstrap behavior, DB password storage)
 - [ ] Feature/version tables still match actual release history
 
@@ -175,7 +176,45 @@ Releases to track the shipped version explicitly.
 
 - CI and release workflows currently trigger on pushes to `main`; tag creation is not required to publish artifacts.
 - `release.yml` already publishes `latest`; do not use a separate Git tag named `latest`.
+- A successful `./scripts/deploy-kind-tram-dev.sh --tag <tag>` run for the release candidate can stand in for separate local Docker build checks and the Helm install-path sanity check, because it already builds images, loads them into kind, and performs a live `helm upgrade --install`; still record `helm dependency update helm/` and `helm lint helm/` explicitly.
 - Keep this file procedural. Release history belongs in `docs/changelog.md`.
+
+## v1.3.3 Status — 2026-05-01
+
+This section records the current known status of the `1.3.3` release pass.
+
+### Completed
+- [x] `pyproject.toml` version bumped to `1.3.3`
+- [x] `helm/Chart.yaml` `version` and `appVersion` bumped to `1.3.3`
+- [x] `helm/values-template.yaml` generic release tag bumped to `1.3.3`
+- [x] Release-facing docs updated for `1.3.3` (`docs/changelog.md`, `docs/index.md`, `docs/deployment.md`, `docs/roadmap.md`, `docs/api.md`)
+- [x] CI/release workflow alignment rechecked:
+  - [x] `.github/workflows/ci.yml` uses Python `3.13` and still runs `ruff check .` plus `pytest tests/unit/ tests/integration/`
+  - [x] `.github/workflows/release.yml` uses Python `3.13`, reads the version from `pyproject.toml`, runs `helm dependency update helm/`, publishes versioned and `latest` image tags, and still requires `GHCR_TOKEN`
+- [x] Full local source-level validation completed in the current environment:
+  - [x] `ruff check .`
+  - [x] `pytest tests/unit/ -v -o log_cli=false`
+  - [x] `pytest tests/integration/ -v -o log_cli=false`
+  - [x] `pytest tests/ --cov=tram --cov-fail-under=75 -o log_cli=false`
+  - [x] `cd tram/ui && npm run build`
+- [x] Helm dependency and chart lint validation completed:
+  - [x] `helm dependency update helm/`
+  - [x] `helm lint helm/`
+- [x] Example-pipeline validation completed:
+  - [x] `tram validate pipelines/*.yaml` passed for all `32` bundled YAMLs
+  - [x] Representative dry-runs passed for `pipelines/minimal.yaml`, `pipelines/multi-format-fanout.yaml`, and `pipelines/webhook-alarm-fanout.yaml`
+  - [x] `/api/templates` endpoint behavior is covered by the passing unit API suite (`tests/unit/test_api_misc_routers.py`)
+- [x] Existing live kind deploy validation via `./scripts/deploy-kind-tram-dev.sh` is accepted as the release proof for local Docker image build + Helm upgrade/install behavior
+
+### Intentionally Retained
+- [x] `helm/values.yaml` remains the active kind/dev deployment profile with local image tags; the generic release baseline is `helm/values-template.yaml`
+- [x] The current local `.venv` remains on Python `3.12`, so installed `tram` package metadata is not the source of truth for `1.3.3`; source files, tests, and docs are updated, but runtime version reporting in this venv is intentionally not used as release evidence
+
+### Still Open
+- [ ] Local `/api/meta` verification from a bumped runtime instance remains blocked in the current `.venv` because installed package metadata still reports the previously installed version
+- [ ] Release commit/push to `main` is not recorded here yet
+- [ ] Post-push artifact verification is not recorded here yet
+- [ ] Optional Git tag / GitHub Release status is not recorded here yet
 
 ## v1.3.1 Status — 2026-04-20
 

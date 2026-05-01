@@ -14,8 +14,8 @@ from fastapi.staticfiles import StaticFiles
 from tram import __version__
 from tram.api.routers import (
     ai,
-    auth,
     ai_docs,
+    auth,
     connectors,
     health,
     internal,

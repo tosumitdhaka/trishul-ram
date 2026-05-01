@@ -9,8 +9,6 @@ import mibsHtml      from './pages/mibs.html?raw'
 import clusterHtml   from './pages/cluster.html?raw'
 import pluginsHtml   from './pages/plugins.html?raw'
 import settingsHtml  from './pages/settings.html?raw'
-import templatesHtml from './pages/templates.html?raw'
-import wizardHtml    from './pages/wizard.html?raw'
 
 const pages = {
   dashboard: dashboardHtml,
@@ -23,8 +21,6 @@ const pages = {
   cluster:   clusterHtml,
   plugins:   pluginsHtml,
   settings:  settingsHtml,
-  templates: templatesHtml,
-  wizard:    wizardHtml,
 }
 
 const meta = {
@@ -38,8 +34,6 @@ const meta = {
   cluster:   { title: 'Cluster',           sub: 'Runtime and worker status' },
   plugins:   { title: 'Plugins',           sub: '' },
   settings:  { title: 'Settings',          sub: 'Connection & daemon configuration' },
-  templates: { title: 'Pipeline Templates', sub: 'Start from a pre-built example' },
-  wizard:    { title: 'New Pipeline',        sub: 'Setup wizard' },
 }
 
 // Page init hooks
@@ -54,54 +48,88 @@ const inits = {
   cluster:   () => import('./pages/cluster.js').then(m => m.init?.()),
   plugins:   () => import('./pages/plugins.js').then(m => m.init?.()),
   settings:  () => import('./pages/settings.js').then(m => m.init?.()),
-  templates: () => import('./pages/templates.js').then(m => m.init?.()),
-  wizard:    () => import('./pages/wizard.js').then(m => m.init?.()),
+}
+
+function resolveRoute(name) {
+  const requested = String(name || 'dashboard').trim() || 'dashboard'
+
+  if (requested === 'templates') {
+    window._openPipelinesTemplatesModal = true
+    return { page: 'pipelines', replace: true }
+  }
+
+  if (requested === 'wizard') {
+    return { page: 'pipelines', replace: true }
+  }
+
+  if (!pages[requested]) {
+    return { page: 'dashboard', replace: requested !== 'dashboard' }
+  }
+
+  return { page: requested, replace: false }
 }
 
 export const router = {
   current: null,
 
-  navigate(name, _params) {
-    if (!pages[name]) name = 'dashboard'
-    if (name === 'wizard') name = 'editor'
+  _render(page) {
+    if (!pages[page]) page = 'dashboard'
+
+    if (window._tramAuthPending) {
+      return
+    }
 
     // Render HTML
-    document.getElementById('content').innerHTML = pages[name]
+    document.getElementById('content').innerHTML = pages[page]
 
     // Update topbar
-    const m = meta[name] || {}
-    document.getElementById('tb-title').textContent = m.title || name
+    const m = meta[page] || {}
+    document.getElementById('tb-title').textContent = m.title || page
     document.getElementById('tb-sub').textContent   = m.sub   || ''
 
     // Update sidebar active link
     document.querySelectorAll('#sidebar .nav-link').forEach(a => {
-      a.classList.toggle('active', a.dataset.page === name ||
-        (name === 'detail'    && a.dataset.page === 'pipelines') ||
-        (name === 'editor'    && a.dataset.page === 'pipelines') ||
-        (name === 'wizard'    && a.dataset.page === 'pipelines') ||
-        (name === 'templates' && a.dataset.page === 'templates'))
+      a.classList.toggle('active', a.dataset.page === page ||
+        (page === 'detail' && a.dataset.page === 'pipelines') ||
+        (page === 'editor' && a.dataset.page === 'pipelines'))
     })
-
-    // Update hash without triggering another hashchange
-    if (window.location.hash.slice(1) !== name) {
-      history.replaceState(null, '', `#${name}`)
-    }
-
-    this.current = name
+    this.current = page
 
     // Run page-specific init (lazy, best-effort)
-    inits[name]?.().catch(() => {})
+    inits[page]?.().catch(() => {})
+  },
+
+  navigate(name, options = {}) {
+    const { page, replace: routeReplace } = resolveRoute(name)
+    const replace = Boolean(options.replace || routeReplace)
+    const targetHash = `#${page}`
+
+    if (window.location.hash !== targetHash) {
+      if (replace) {
+        history.replaceState(null, '', targetHash)
+      } else if (!options.fromHashChange) {
+        window.location.hash = page
+        return
+      }
+    }
+
+    if (window._tramAuthPending) {
+      this.current = page
+      return
+    }
+
+    this._render(page)
   },
 
   init() {
     // Handle hash navigation
     window.addEventListener('hashchange', () => {
       const page = window.location.hash.slice(1) || 'dashboard'
-      this.navigate(page)
+      this.navigate(page, { fromHashChange: true })
     })
 
     // Initial page from hash or default
     const initial = window.location.hash.slice(1) || 'dashboard'
-    this.navigate(initial)
+    this.navigate(initial, { fromHashChange: true })
   },
 }

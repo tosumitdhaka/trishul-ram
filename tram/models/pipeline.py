@@ -4,7 +4,8 @@ from __future__ import annotations
 
 from typing import Annotated, Any, Literal
 
-from pydantic import AliasChoices, BaseModel as PydanticBaseModel, Field, field_validator, model_validator
+from pydantic import AliasChoices, Field, field_validator, model_validator
+from pydantic import BaseModel as PydanticBaseModel
 
 
 class BaseModel(PydanticBaseModel):

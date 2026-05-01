@@ -14,7 +14,7 @@ from fastapi.testclient import TestClient
 from tram.api.routers.mibs import router as mibs_router
 from tram.api.routers.templates import router as templates_router
 from tram.api.routers.webhooks import router as webhooks_router
-from tram.core.mib_compiler import MibCompileResult, MibSupportUnavailable, mib_source_dir
+from tram.core.mib_compiler import MibCompileResult, MibSupportUnavailable
 
 # ── Webhooks ───────────────────────────────────────────────────────────────────
 
@@ -205,20 +205,45 @@ class TestMibs:
         assert resp.status_code == 200
         assert resp.json() == []
 
-    def test_list_returns_py_files(self):
+    def test_list_returns_local_source_and_compiled_artifacts(self):
         with tempfile.TemporaryDirectory() as d:
             Path(d, "IF-MIB.py").write_text("# compiled")
+            source_dir = Path(d) / "sources"
+            source_dir.mkdir(parents=True, exist_ok=True)
+            Path(source_dir, "IF-MIB.mib").write_text("IF-MIB DEFINITIONS ::= BEGIN END")
             Path(d, "OTHER.txt").write_text("ignore")
             Path(d, "_private.py").write_text("skip")
             app = _make_mibs_app()
             client = TestClient(app)
-            with patch.dict(os.environ, {"TRAM_MIB_DIR": d}):
+            with patch.dict(os.environ, {"TRAM_MIB_DIR": d, "TRAM_MIB_SOURCE_DIR": str(source_dir)}):
                 resp = client.get("/api/mibs")
         assert resp.status_code == 200
-        names = [e["name"] for e in resp.json()]
-        assert "IF-MIB" in names
-        assert "OTHER" not in names
-        assert "_private" not in names
+        rows = {e["name"]: e for e in resp.json()}
+        assert "IF-MIB" in rows
+        assert rows["IF-MIB"]["raw_available"] is True
+        assert rows["IF-MIB"]["raw_file"] == "IF-MIB.mib"
+        assert rows["IF-MIB"]["raw_origin"] == "local"
+        assert rows["IF-MIB"]["compiled_available"] is True
+        assert rows["IF-MIB"]["compiled_file"] == "IF-MIB.py"
+        assert "OTHER" not in rows
+        assert "_private" not in rows
+
+    def test_list_does_not_include_bundled_only_mibs(self):
+        with tempfile.TemporaryDirectory() as d, tempfile.TemporaryDirectory() as bundled, tempfile.TemporaryDirectory() as source_dir:
+            Path(bundled, "SNMPv2-SMI.mib").write_text("SNMPv2-SMI DEFINITIONS ::= BEGIN END")
+            app = _make_mibs_app()
+            client = TestClient(app)
+            with patch.dict(
+                os.environ,
+                {
+                    "TRAM_MIB_DIR": d,
+                    "TRAM_MIB_SOURCE_DIR": source_dir,
+                    "TRAM_MIB_BUNDLED_SOURCE_DIR": bundled,
+                },
+            ):
+                resp = client.get("/api/mibs")
+        assert resp.status_code == 200
+        assert resp.json() == []
 
     def test_delete_nonexistent_returns_404(self):
         with tempfile.TemporaryDirectory() as d:
@@ -232,13 +257,13 @@ class TestMibs:
         with tempfile.TemporaryDirectory() as d:
             mib_file = Path(d, "IF-MIB.py")
             mib_file.write_text("# compiled")
-            source_dir = Path(mib_source_dir(d))
+            source_dir = Path(d) / "sources"
             source_dir.mkdir(parents=True, exist_ok=True)
             raw_file = source_dir / "IF-MIB.mib"
             raw_file.write_text("IF-MIB DEFINITIONS ::= BEGIN END")
             app = _make_mibs_app()
             client = TestClient(app)
-            with patch.dict(os.environ, {"TRAM_MIB_DIR": d}):
+            with patch.dict(os.environ, {"TRAM_MIB_DIR": d, "TRAM_MIB_SOURCE_DIR": str(source_dir)}):
                 resp = client.delete("/api/mibs/IF-MIB")
             assert resp.status_code == 200
             assert not mib_file.exists()
@@ -254,17 +279,60 @@ class TestMibs:
         assert resp.status_code == 200
         assert "# compiled underscore" in resp.text
 
+    def test_get_existing_mib_source_by_dash_name(self):
+        with tempfile.TemporaryDirectory() as d:
+            source_dir = Path(d) / "sources"
+            source_dir.mkdir(parents=True, exist_ok=True)
+            Path(source_dir, "IF_MIB.my").write_text("IF-MIB DEFINITIONS ::= BEGIN END")
+            app = _make_mibs_app()
+            client = TestClient(app)
+            with patch.dict(os.environ, {"TRAM_MIB_DIR": d, "TRAM_MIB_SOURCE_DIR": str(source_dir)}):
+                resp = client.get("/api/mibs/IF-MIB/source")
+        assert resp.status_code == 200
+        assert "IF-MIB DEFINITIONS" in resp.text
+
+    def test_get_bundled_mib_source_fallback(self):
+        with tempfile.TemporaryDirectory() as d, tempfile.TemporaryDirectory() as bundled, tempfile.TemporaryDirectory() as source_dir:
+            Path(d, "IF-MIB.py").write_text("# compiled")
+            Path(bundled, "IF-MIB.mib").write_text("IF-MIB DEFINITIONS ::= BEGIN END")
+            app = _make_mibs_app()
+            client = TestClient(app)
+            with patch.dict(
+                os.environ,
+                {
+                    "TRAM_MIB_DIR": d,
+                    "TRAM_MIB_SOURCE_DIR": source_dir,
+                    "TRAM_MIB_BUNDLED_SOURCE_DIR": bundled,
+                },
+            ):
+                resp = client.get("/api/mibs/IF-MIB/source")
+                listing = client.get("/api/mibs")
+        assert resp.status_code == 200
+        assert "IF-MIB DEFINITIONS" in resp.text
+        assert listing.status_code == 200
+        rows = {e["name"]: e for e in listing.json()}
+        assert rows["IF-MIB"]["raw_available"] is True
+        assert rows["IF-MIB"]["raw_origin"] == "bundled"
+
+    def test_get_missing_mib_source_returns_404(self):
+        with tempfile.TemporaryDirectory() as d, tempfile.TemporaryDirectory() as source_dir:
+            app = _make_mibs_app()
+            client = TestClient(app, raise_server_exceptions=False)
+            with patch.dict(os.environ, {"TRAM_MIB_DIR": d, "TRAM_MIB_SOURCE_DIR": source_dir}):
+                resp = client.get("/api/mibs/IF-MIB/source")
+        assert resp.status_code == 404
+
     def test_delete_existing_mib_normalizes_dash_to_underscore(self):
         with tempfile.TemporaryDirectory() as d:
             mib_file = Path(d, "IF_MIB.py")
             mib_file.write_text("# compiled underscore")
-            source_dir = Path(mib_source_dir(d))
+            source_dir = Path(d) / "sources"
             source_dir.mkdir(parents=True, exist_ok=True)
             raw_file = source_dir / "IF_MIB.my"
             raw_file.write_text("IF-MIB DEFINITIONS ::= BEGIN END")
             app = _make_mibs_app()
             client = TestClient(app)
-            with patch.dict(os.environ, {"TRAM_MIB_DIR": d}):
+            with patch.dict(os.environ, {"TRAM_MIB_DIR": d, "TRAM_MIB_SOURCE_DIR": str(source_dir)}):
                 resp = client.delete("/api/mibs/IF-MIB")
         assert resp.status_code == 200
         assert not mib_file.exists()
@@ -307,12 +375,13 @@ class TestMibs:
                     builtin_names={"SNMPv2-SMI"},
                 ),
             ):
-                with patch.dict(os.environ, {"TRAM_MIB_DIR": d}):
+                source_dir = Path(d) / "sources"
+                with patch.dict(os.environ, {"TRAM_MIB_DIR": d, "TRAM_MIB_SOURCE_DIR": str(source_dir)}):
                     resp = client.post(
                         "/api/mibs/upload",
                         files={"file": ("TEST-MIB.mib", b"TEST DEFINITIONS ::= BEGIN END", "text/plain")},
                     )
-                    source_path = Path(mib_source_dir(d), "TEST-MIB.mib")
+                    source_path = source_dir / "TEST-MIB.mib"
                     assert source_path.exists()
 
         assert resp.status_code == 200
@@ -332,12 +401,13 @@ class TestMibs:
                     builtin_names={"SNMPv2-SMI"},
                 ),
             ):
-                with patch.dict(os.environ, {"TRAM_MIB_DIR": d}):
+                source_dir = Path(d) / "sources"
+                with patch.dict(os.environ, {"TRAM_MIB_DIR": d, "TRAM_MIB_SOURCE_DIR": str(source_dir)}):
                     resp = client.post(
                         "/api/mibs/upload",
                         files={"file": (filename, b"TEST DEFINITIONS ::= BEGIN END", "text/plain")},
                     )
-                    source_path = Path(mib_source_dir(d), Path(filename).name)
+                    source_path = source_dir / Path(filename).name
                     assert source_path.exists()
 
         assert resp.status_code == 200
@@ -348,7 +418,7 @@ class TestMibs:
         client = TestClient(app, raise_server_exceptions=False)
 
         with tempfile.TemporaryDirectory() as d:
-            source_dir = Path(mib_source_dir(d))
+            source_dir = Path(d) / "sources"
             source_dir.mkdir(parents=True, exist_ok=True)
             Path(source_dir, "CISCO-SMI.mib").write_text("CISCO-SMI DEFINITIONS ::= BEGIN END")
             with patch(
@@ -359,7 +429,7 @@ class TestMibs:
                     builtin_names={"SNMPv2-SMI", "SNMPv2-TC"},
                 ),
             ):
-                with patch.dict(os.environ, {"TRAM_MIB_DIR": d}):
+                with patch.dict(os.environ, {"TRAM_MIB_DIR": d, "TRAM_MIB_SOURCE_DIR": str(source_dir)}):
                     resp = client.post(
                         "/api/mibs/upload",
                         files={"file": ("TEST-MIB.mib", (
@@ -395,7 +465,8 @@ class TestMibs:
                     builtin_names={"SNMPv2-SMI", "SNMPv2-TC", "INET-ADDRESS-MIB"},
                 ),
             ):
-                with patch.dict(os.environ, {"TRAM_MIB_DIR": d}):
+                source_dir = Path(d) / "sources"
+                with patch.dict(os.environ, {"TRAM_MIB_DIR": d, "TRAM_MIB_SOURCE_DIR": str(source_dir)}):
                     resp = client.post(
                         "/api/mibs/upload",
                         files={"file": ("INET-ADDRESS-MIB.mib", (
@@ -430,7 +501,11 @@ class TestMibs:
             ) as mock_compile:
                 with patch.dict(
                     os.environ,
-                    {"TRAM_MIB_DIR": d, "TRAM_MIB_BUNDLED_SOURCE_DIR": bundled},
+                    {
+                        "TRAM_MIB_DIR": d,
+                        "TRAM_MIB_SOURCE_DIR": str(Path(d) / "sources"),
+                        "TRAM_MIB_BUNDLED_SOURCE_DIR": bundled,
+                    },
                 ):
                     resp = client.post(
                         "/api/mibs/upload?resolve_missing=true",
@@ -440,7 +515,7 @@ class TestMibs:
         assert resp.status_code == 200
         assert resp.json()["resolve_missing"] is True
         assert mock_compile.call_args.kwargs["resolve_missing"] is True
-        assert mock_compile.call_args.kwargs["remote_cache_dir"] == mib_source_dir(d)
+        assert mock_compile.call_args.kwargs["remote_cache_dir"] == str(Path(d) / "sources")
         assert bundled in mock_compile.call_args.kwargs["source_dirs"]
 
     def test_download_success_returns_compiled_results(self):
@@ -458,12 +533,16 @@ class TestMibs:
             ) as mock_compile:
                 with patch.dict(
                     os.environ,
-                    {"TRAM_MIB_DIR": d, "TRAM_MIB_BUNDLED_SOURCE_DIR": bundled},
+                    {
+                        "TRAM_MIB_DIR": d,
+                        "TRAM_MIB_SOURCE_DIR": str(Path(d) / "sources"),
+                        "TRAM_MIB_BUNDLED_SOURCE_DIR": bundled,
+                    },
                 ):
                     resp = client.post("/api/mibs/download", json={"names": ["IF-MIB"]})
 
         assert resp.status_code == 200
         assert resp.json()["compiled"] == ["IF-MIB"]
         assert mock_compile.call_args.kwargs["resolve_missing"] is True
-        assert mock_compile.call_args.kwargs["remote_cache_dir"] == mib_source_dir(d)
+        assert mock_compile.call_args.kwargs["remote_cache_dir"] == str(Path(d) / "sources")
         assert bundled in mock_compile.call_args.kwargs["source_dirs"]

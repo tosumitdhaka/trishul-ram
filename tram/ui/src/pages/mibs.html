@@ -1,12 +1,17 @@
 <div class="row g-3">
   <div class="col-8">
+    <div class="page-toolbar">
+      <input class="form-control form-control-sm page-toolbar-search" id="mibs-search"
+             placeholder="Search managed MIBs…"/>
+      <span class="page-toolbar-count" id="mibs-filter-status"></span>
+    </div>
     <div class="table-wrap">
       <div class="table-head-row">
-        <span class="table-head-title">Compiled MIB Modules</span>
+        <span class="table-head-title">Managed MIB Modules</span>
         <span class="count-pill" id="mibs-count"></span>
       </div>
       <table class="table mb-0">
-        <thead><tr><th>NAME</th><th>FILE</th><th>SIZE</th><th class="text-end">ACTIONS</th></tr></thead>
+        <thead><tr><th>NAME</th><th>RAW SOURCE</th><th>COMPILED</th><th class="text-end">ACTIONS</th></tr></thead>
         <tbody id="mibs-body">
           <tr><td colspan="4" class="text-secondary text-center py-4">Loading…</td></tr>
         </tbody>
@@ -19,17 +24,17 @@
       <div class="upload-zone mb-3" id="mib-drop-zone">
         <i class="bi bi-file-earmark-arrow-up fs-3 text-secondary"></i>
         <div class="text-secondary mt-2">Drop raw MIB source files or click to browse</div>
-        <input type="file" id="mib-file-input" style="display:none" multiple />
+        <input type="file" id="mib-file-input" class="hidden-file-input" multiple />
       </div>
       <div class="form-check form-switch mb-2">
         <input class="form-check-input" type="checkbox" id="mib-upload-auto-fetch">
-        <label class="form-check-label text-secondary" for="mib-upload-auto-fetch" style="font-size:12px">
+        <label class="form-check-label text-secondary table-cell-compact" for="mib-upload-auto-fetch">
           Try remote dependency fetch for missing imports
         </label>
       </div>
       <div class="form-text mb-2">Supported source filenames: extensionless, <code>.mib</code>, <code>.my</code>, or <code>.txt</code>. Uploads compile against bundled base MIBs plus the local raw-source cache. Enable remote fetch only when missing imports are not already cached locally.</div>
       <div class="form-text mb-2 d-none" id="mib-upload-status"></div>
-      <button class="btn btn-primary btn-sm w-100" id="mib-upload-btn" onclick="window._mibsUpload?.()">Upload &amp; Compile</button>
+      <button class="btn btn-primary btn-sm w-100" id="mib-upload-btn">Upload &amp; Compile</button>
     </div>
     <div class="settings-card">
       <div class="fw-semibold mb-3">Download from mibs.pysnmp.com</div>
@@ -37,7 +42,7 @@
                 rows="4" placeholder="CISCO-ENTITY-FRU-CONTROL-MIB&#10;CISCO-TC-MIB&#10;JUNIPER-MIB"></textarea>
       <div class="form-text mb-2">One MIB name per line. Requested MIBs are downloaded, compiled, and cached as raw ASN.1 sources for later local dependency resolution.</div>
       <div class="form-text mb-2 d-none" id="mib-download-status"></div>
-      <button class="btn btn-secondary btn-sm w-100" id="mib-download-btn" onclick="window._mibsDownload?.()">Download &amp; Compile</button>
+      <button class="btn btn-secondary btn-sm w-100" id="mib-download-btn">Download &amp; Compile</button>
     </div>
   </div>
 </div>

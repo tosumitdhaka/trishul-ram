@@ -9,7 +9,7 @@ title: TRAM Documentation
 
 Lightweight, container-native Python daemon for telecom data pipeline orchestration.
 
-**Version:** 1.3.2 | **Status:** Production-ready | **Python:** 3.11+
+**Version:** 1.3.3 | **Status:** Production-ready | **Python:** 3.13+
 
 ---
 
@@ -38,6 +38,7 @@ Lightweight, container-native Python daemon for telecom data pipeline orchestrat
 
 - **[Pipeline Controller Design](pipeline-controller-design.md)** - Historical design notes for the v1.1.x controller transition; current manager/worker architecture is documented in `architecture.md`
 - **[Roadmap](roadmap.md)** - Planned features and version checklist
+- **[v1.3.3 Plan](v1.3.3_plan.md)** - Completed UI revalidation, shared-system consolidation, and release-close record for `1.3.3`
 - **Archive**
   - **[v1.3.2 Plan](archive/v1.3.2-plan.md)** - Archived consolidated `1.3.2` design and implementation plan covering stats parity, multi-worker UDP streams, ASN.1 flattening, CDR record shaping, and batch resilience
   - **[v1.3.1 Plan](archive/v1.3.1-plan.md)** - Archived planning document for the `1.3.1` implementation slice set
@@ -74,7 +75,7 @@ curl http://localhost:8765/api/ready
 
 ### Kubernetes (Helm)
 
-Quick-start examples below use `latest`. For production, pin `image.tag` to a specific release such as `1.3.2`.
+Quick-start examples below use `latest`. For production, pin `image.tag` to a specific release such as `1.3.3`.
 
 ```bash
 # Standalone mode (SQLite, single pod)
@@ -181,6 +182,7 @@ docs/
 ├── transforms.md                 # Transform reference
 ├── pipeline-controller-design.md # Historical v1.1.x controller design notes
 ├── roadmap.md                    # Planned features and version checklist
+├── v1.3.3_plan.md                # Current 1.3.3 release record and UI validation plan
 ├── changelog.md                  # Full release history
 ├── checklist.md                  # Development checklist
 └── archive/                      # Archived version-specific design and planning docs
@@ -203,7 +205,15 @@ docs/
 
 See [changelog.md](changelog.md) for detailed release notes.
 
-**Current Release:** v1.3.2 (2026-04-21)
+**Current Release:** v1.3.3 (2026-05-01)
+- Full UI revalidation completed across Dashboard, Pipelines, Detail, Editor, Runs, Cluster, Templates, Settings, MIBs, Schemas, and Plugins in both manager and standalone mode
+- Dashboard overview now uses shared records/bytes in/out cards, a bytes-processed load chart with metric toggle and bucket tooltip, contextual `Run now` handling for manual pipelines, and manual refresh
+- Cluster now presents runtime state first, merged input/output traffic summaries, per-worker processed records/bytes totals, and clearer active pipeline/live metric truth
+- Shell, route aliases, and shared renderers were consolidated: `#templates` now resolves through Pipelines, hash navigation preserves browser history, login boot no longer flashes unauthorized errors, and shared YAML diff/run-monitor helpers back the main flows
+- Pipeline detail/version flows were tightened with version dedupe, scoped version YAML caching, rollback correctness, shared compare/view/download tooling, and visible failed-run reasons for no-worker batch dispatch
+- Schemas/MIBs/template/settings surfaces were normalized onto the shared UI system, including search, theme-safe modal/result chrome, and raw-source-aware MIB management
+
+**v1.3.2** (2026-04-21)
 - Standalone live stats: local stream runs now feed `StatsStore` so `/api/pipelines/{name}/placement` returns a live single-slot view in standalone mode
 - Manager operational metrics: 8 new `tram_mgr_*` Prometheus series for dispatch, redispatch, reconcile actions, placement status, worker health, and callback receipt; `/metrics` is process-local
 - UDP multi-worker streams: `syslog` and `snmp_trap` sources work in manager mode with `kubernetes: enabled: true`; per-pipeline NodePort Services; `count: N` uses manual Endpoints pinned to dispatched workers; L012 enforces the kubernetes requirement
@@ -231,4 +241,4 @@ See [changelog.md](changelog.md) for detailed release notes.
 
 ---
 
-*Last updated: 2026-04-23*
+*Last updated: 2026-05-01*

@@ -1,17 +1,17 @@
-<div class="d-flex align-items-center gap-3 mb-3 flex-wrap">
+<div class="page-toolbar">
   <div>
     <div class="fw-semibold">Registered backend plugins from the live daemon</div>
-    <div class="text-secondary" style="font-size:12px">Live registry view with config summaries derived from backend schema.</div>
+    <div class="text-secondary table-cell-compact">Live registry view with config summaries derived from backend schema.</div>
   </div>
-  <input class="form-control form-control-sm ms-auto" id="plugins-search" placeholder="Search plugins…" style="width:240px" oninput="window._pluginsFilter?.()"/>
+  <input class="form-control form-control-sm page-toolbar-search ms-auto" id="plugins-search" placeholder="Search plugins…"/>
   <span class="count-pill" id="plugins-total-count"></span>
 </div>
 
 <div class="row g-3 mb-3" id="plugins-summary">
-  <div class="col-12 col-md-6 col-xl-3"><div class="detail-card"><div class="text-secondary" style="font-size:12px">Sources</div><div class="fs-4 fw-semibold" id="plugins-count-sources">0</div></div></div>
-  <div class="col-12 col-md-6 col-xl-3"><div class="detail-card"><div class="text-secondary" style="font-size:12px">Sinks</div><div class="fs-4 fw-semibold" id="plugins-count-sinks">0</div></div></div>
-  <div class="col-12 col-md-6 col-xl-3"><div class="detail-card"><div class="text-secondary" style="font-size:12px">Serializers</div><div class="fs-4 fw-semibold" id="plugins-count-serializers">0</div></div></div>
-  <div class="col-12 col-md-6 col-xl-3"><div class="detail-card"><div class="text-secondary" style="font-size:12px">Transforms</div><div class="fs-4 fw-semibold" id="plugins-count-transforms">0</div></div></div>
+  <div class="col-12 col-md-6 col-xl-3"><div class="stat-card stat-card-tight"><div class="stat-label">Sources</div><div class="stat-val plugins-stat-value" id="plugins-count-sources">0</div></div></div>
+  <div class="col-12 col-md-6 col-xl-3"><div class="stat-card stat-card-tight"><div class="stat-label">Sinks</div><div class="stat-val plugins-stat-value" id="plugins-count-sinks">0</div></div></div>
+  <div class="col-12 col-md-6 col-xl-3"><div class="stat-card stat-card-tight"><div class="stat-label">Serializers</div><div class="stat-val plugins-stat-value" id="plugins-count-serializers">0</div></div></div>
+  <div class="col-12 col-md-6 col-xl-3"><div class="stat-card stat-card-tight"><div class="stat-label">Transforms</div><div class="stat-val plugins-stat-value" id="plugins-count-transforms">0</div></div></div>
 </div>
 
 <div id="plugins-body">
