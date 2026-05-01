@@ -1,5 +1,10 @@
 import { api } from '../api.js'
-import { esc, toast } from '../utils.js'
+import { bindDataActions, esc, setStatusMessage, toast } from '../utils.js'
+import {
+  renderCodeOnlyDiffLine,
+  renderDiffStats,
+  renderSideBySideYamlDiff,
+} from '../yaml_diff.js'
 
 const TEMPLATE = `name: my-pipeline
 source:
@@ -18,18 +23,46 @@ sinks:
 `
 
 let _originalYaml = null  // YAML as loaded from server (for diff in edit mode)
+let _editorPlugins = null
+let _editName = null
+let _textarea = null
+let _aiEnabled = false
+let _lastDryRunErrors = []
+
+function _leaveEditor(pipelineName = null) {
+  const returnTo = window._editorReturn
+  window._editorReturn = null
+  window._editorYaml = null
+  window._editorPipeline = null
+  if (returnTo === 'detail' && pipelineName) {
+    window._detailPipeline = pipelineName
+    navigate('detail')
+    return
+  }
+  if (returnTo && returnTo !== 'detail') {
+    navigate(returnTo)
+    return
+  }
+  navigate('pipelines')
+}
 
 export async function init() {
   const ta       = document.getElementById('editor-textarea')
-  const filename = document.getElementById('editor-filename')
+  const titleEl  = document.getElementById('editor-title')
   const editName = window._editorPipeline
   const isEdit   = Boolean(editName)
+  _textarea = ta
+  _editName = editName
+  _originalYaml = null
+  _aiEnabled = false
+  _lastDryRunErrors = []
+  _bindEditorActions()
 
   // ── Mode-specific UI setup ─────────────────────────────────────────────────
   if (isEdit) {
-    if (filename) filename.textContent = `${editName}.yaml`
+    if (titleEl) titleEl.textContent = editName
     const saveLabel = document.getElementById('editor-save-label')
-    if (saveLabel) saveLabel.textContent = 'Update Pipeline'
+    if (saveLabel) saveLabel.textContent = 'Save'
     const diffBtn = document.getElementById('editor-diff-btn')
     if (diffBtn) diffBtn.removeAttribute('hidden')
 
@@ -43,130 +76,14 @@ export async function init() {
       if (ta) ta.value = TEMPLATE
     }
   } else {
+    document.getElementById('editor-diff-btn')?.setAttribute('hidden', '')
     const preloaded = window._editorYaml
     window._editorYaml = null
+    if (titleEl) titleEl.textContent = 'New Pipeline'
     if (preloaded) {
       if (ta) ta.value = preloaded
-      const nameMatch = preloaded.match(/^\s*name:\s*(\S+)/m)
-      if (filename) filename.textContent = nameMatch ? `${nameMatch[1]}.yaml` : 'new-pipeline.yaml'
     } else {
-      if (filename) filename.textContent = 'new-pipeline.yaml'
       if (ta) ta.value = TEMPLATE
-    }
-  }
-
-  // ── Save ───────────────────────────────────────────────────────────────────
-  window._editorSave = async () => {
-    const yaml = ta?.value?.trim()
-    if (!yaml) { toast('Nothing to save', 'error'); return }
-    if (editName && _originalYaml && yaml === _originalYaml.trim()) {
-      toast('No changes — pipeline is already up to date')
-      navigate('pipelines')
-      return
-    }
-    try {
-      if (editName) {
-        await api.pipelines.update(editName, yaml)
-        _originalYaml = yaml
-        toast(`Saved ${editName}`)
-      } else {
-        await api.pipelines.create(yaml)
-        toast('Pipeline created')
-      }
-      window._editorPipeline = null
-      navigate('pipelines')
-    } catch (e) { toast(e.message, 'error') }
-  }
-
-  // ── Copy YAML ──────────────────────────────────────────────────────────────
-  window._editorCopy = async () => {
-    const yaml = ta?.value
-    if (!yaml) return
-    try {
-      await navigator.clipboard.writeText(yaml)
-      const btn = document.querySelector('[onclick="window._editorCopy?.()"]')
-      if (btn) {
-        const orig = btn.innerHTML
-        btn.innerHTML = '<i class="bi bi-clipboard-check" style="font-size:15px"></i>'
-        setTimeout(() => { btn.innerHTML = orig }, 1500)
-      }
-    } catch (_) {
-      toast('Copy failed — use Ctrl+A / Ctrl+C', 'error')
-    }
-  }
-
-  // ── Diff vs saved (inline toggle below editor) ────────────────────────────
-  window._editorDiffSaved = () => {
-    const existing = document.getElementById('editor-inline-diff')
-    if (existing) { existing.remove(); return }   // second click hides it
-
-    const current = ta?.value || ''
-    const saved   = _originalYaml || ''
-
-    const wrap = document.createElement('div')
-    wrap.id = 'editor-inline-diff'
-    wrap.style.cssText = 'margin-top:8px;border:1px solid #30363d;border-radius:6px;overflow:hidden'
-    wrap.innerHTML = `
-      <div style="display:flex;align-items:center;padding:5px 12px;background:#161b22;border-bottom:1px solid #30363d">
-        <i class="bi bi-file-diff me-2" style="color:#8b949e"></i>
-        <span style="font-size:12px;color:#e6edf3">Changes vs saved</span>
-        <span id="inline-diff-stats" class="ms-2" style="font-size:11px"></span>
-        <button style="margin-left:auto;background:none;border:none;color:#8b949e;cursor:pointer;padding:0 4px;font-size:14px" onclick="document.getElementById('editor-inline-diff')?.remove()">✕</button>
-      </div>
-      <div style="display:flex;height:280px">
-        <div style="flex:1;min-width:0;display:flex;flex-direction:column;border-right:1px solid #30363d">
-          <div style="padding:3px 12px;font-size:10px;color:#8b949e;background:#161b22;border-bottom:1px solid #21262d">Saved</div>
-          <div id="inline-diff-left"  style="flex:1;overflow:auto;padding:8px 12px;background:#161b22;font-size:11px;font-family:monospace;white-space:pre"></div>
-        </div>
-        <div style="flex:1;min-width:0;display:flex;flex-direction:column">
-          <div style="padding:3px 12px;font-size:10px;color:#8b949e;background:#161b22;border-bottom:1px solid #21262d">Current</div>
-          <div id="inline-diff-right" style="flex:1;overflow:auto;padding:8px 12px;background:#161b22;font-size:11px;font-family:monospace;white-space:pre"></div>
-        </div>
-      </div>`
-    document.querySelector('.editor-wrap')?.appendChild(wrap)
-    _renderEditorDiff(saved, current)
-  }
-
-  // ── Dry run ────────────────────────────────────────────────────────────────
-  window._editorDryRun = async () => {
-    const yaml = ta?.value?.trim()
-    if (!yaml) { toast('Nothing to dry-run', 'error'); return }
-    const btn = document.querySelector('[onclick="window._editorDryRun?.()"]')
-    const orig = btn?.innerHTML
-    if (btn) btn.innerHTML = '<i class="bi bi-hourglass" style="font-size:15px"></i> Running…'
-    try {
-      const { baseUrl, apiKey } = (await import('../api.js')).getConfig()
-      const headers = { 'Content-Type': 'application/yaml' }
-      if (apiKey) headers['X-API-Key'] = apiKey
-      const token = localStorage.getItem('tram_auth_token')
-      if (token && !apiKey) headers['Authorization'] = `Bearer ${token}`
-      const res = await fetch(`${baseUrl}/api/pipelines/dry-run`, {
-        method: 'POST', headers, body: yaml,
-      })
-      const json = res.ok ? await res.json() : null
-      if (!res.ok) throw new Error(json?.detail || res.statusText)
-      showDryRunResult(json)
-    } catch (e) {
-      toast(`Dry run: ${e.message}`, 'error')
-    } finally {
-      if (btn && orig) btn.innerHTML = orig
-    }
-  }
-
-  // ── Test connectors ────────────────────────────────────────────────────────
-  window._editorTestConnectors = async () => {
-    const yaml = ta?.value?.trim()
-    if (!yaml) { toast('Nothing to test', 'error'); return }
-    const btn = document.querySelector('[onclick="window._editorTestConnectors?.()"]')
-    const orig = btn?.innerHTML
-    if (btn) btn.innerHTML = '<i class="bi bi-hourglass" style="font-size:15px"></i>'
-    try {
-      const result = await api.connectors.testPipeline(yaml)
-      showConnectorTestResult(result)
-    } catch (e) {
-      toast(`Test error: ${e.message}`, 'error')
-    } finally {
-      if (btn && orig) btn.innerHTML = orig
     }
   }
 
@@ -182,6 +99,29 @@ export async function init() {
       ta.value = ta.value.slice(0, start) + '  ' + ta.value.slice(end)
       ta.selectionStart = ta.selectionEnd = start + 2
     }
+  })
+}
+
+function _bindEditorActions() {
+  const wrap = document.querySelector('.editor-wrap')
+  bindDataActions(wrap, {
+    'close-diff': () => {
+      document.getElementById('editor-inline-diff')?.remove()
+    },
+    'ai-explain': () => { void _editorAiExplain() },
+    'ai-fix': () => { void _editorAiFix() },
+  })
+  document.getElementById('editor-copy-btn')?.addEventListener('click', () => { void _editorCopy() })
+  document.getElementById('editor-diff-btn')?.addEventListener('click', _editorDiffSaved)
+  document.getElementById('editor-cancel-btn')?.addEventListener('click', () => _leaveEditor(_editName))
+  document.getElementById('editor-test-btn')?.addEventListener('click', () => { void _editorTestConnectors() })
+  document.getElementById('editor-dry-run-btn')?.addEventListener('click', () => { void _editorDryRun() })
+  document.getElementById('editor-save-btn')?.addEventListener('click', () => { void _editorSave() })
+  document.getElementById('editor-ai-gen-btn')?.addEventListener('click', () => { void _editorAiGenerate() })
+  document.getElementById('editor-ai-mod-btn')?.addEventListener('click', () => { void _editorAiModify() })
+  document.getElementById('editor-open-settings-link')?.addEventListener('click', (event) => {
+    event.preventDefault()
+    navigate('settings')
   })
 }
 
@@ -212,11 +152,9 @@ async function _checkAI(isEdit) {
       if (genBtn)   genBtn.disabled = true
       if (modBtn)   modBtn.disabled = true
     }
-    window._editorAiEnabled = status.enabled
+    _aiEnabled = Boolean(status.enabled)
   } catch (_) {}
 }
-
-let _editorPlugins = null
 
 async function _getPlugins() {
   if (_editorPlugins) return _editorPlugins
@@ -225,132 +163,70 @@ async function _getPlugins() {
 }
 
 // ── AI: Generate (new pipeline) ──────────────────────────────────────────────
-window._editorAiGenerate = async () => {
+async function _editorAiGenerate() {
   const prompt = document.getElementById('editor-ai-prompt')?.value.trim()
   if (!prompt) { toast('Enter a description first', 'error'); return }
   const btn = document.getElementById('editor-ai-gen-btn')
-  const statusEl = document.getElementById('editor-ai-status')
-  const ta = document.getElementById('editor-textarea')
   if (btn) btn.disabled = true
-  if (statusEl) statusEl.textContent = 'Generating…'
+  setStatusMessage('editor-ai-status', 'Generating…', 'info')
   try {
     const plugins = await _getPlugins()
     const r = await api.ai.suggest({ mode: 'generate', prompt, plugins })
     if (!r.yaml) throw new Error('No YAML returned')
-    if (ta) ta.value = r.yaml
-    if (statusEl) statusEl.textContent = ''
+    if (_textarea) _textarea.value = r.yaml
+    setStatusMessage('editor-ai-status', '', 'muted')
     toast('YAML generated — review and save')
   } catch (e) {
     toast(`AI error: ${e.message}`, 'error')
-    if (statusEl) statusEl.textContent = ''
+    setStatusMessage('editor-ai-status', '', 'muted')
   } finally {
     if (btn) btn.disabled = false
   }
 }
 
 // ── AI: Modify (existing pipeline) ───────────────────────────────────────────
-window._editorAiModify = async () => {
+async function _editorAiModify() {
   const instruction = document.getElementById('editor-ai-instruction')?.value.trim()
   if (!instruction) { toast('Enter an instruction first', 'error'); return }
   const btn = document.getElementById('editor-ai-mod-btn')
-  const statusEl = document.getElementById('editor-ai-status')
-  const ta = document.getElementById('editor-textarea')
-  const yaml = ta?.value?.trim()
+  const yaml = _textarea?.value?.trim()
   if (!yaml) { toast('Editor is empty', 'error'); return }
   if (btn) btn.disabled = true
-  if (statusEl) statusEl.textContent = 'Modifying…'
+  setStatusMessage('editor-ai-status', 'Modifying…', 'info')
   try {
     const plugins = await _getPlugins()
     const r = await api.ai.suggest({ mode: 'modify', yaml, instruction, plugins })
     if (!r.yaml) throw new Error('No YAML returned')
-    if (ta) ta.value = r.yaml
-    if (statusEl) statusEl.textContent = ''
+    if (_textarea) _textarea.value = r.yaml
+    setStatusMessage('editor-ai-status', '', 'muted')
     // Refresh inline diff if already open, otherwise open it
     document.getElementById('editor-inline-diff')?.remove()
-    window._editorDiffSaved?.()
+    _editorDiffSaved()
     toast('Pipeline modified — review the diff and save')
   } catch (e) {
     toast(`AI error: ${e.message}`, 'error')
-    if (statusEl) statusEl.textContent = ''
+    setStatusMessage('editor-ai-status', '', 'muted')
   } finally {
     if (btn) btn.disabled = false
   }
 }
 
-// ── Diff rendering (editor) ───────────────────────────────────────────────────
-function _myersDiff(a, b) {
-  const m = a.length, n = b.length
-  const max = m + n
-  const v = new Array(2 * max + 1).fill(0)
-  const trace = []
-  for (let d = 0; d <= max; d++) {
-    trace.push([...v])
-    for (let k = -d; k <= d; k += 2) {
-      let x = (k === -d || (k !== d && v[k - 1 + max] < v[k + 1 + max]))
-        ? v[k + 1 + max] : v[k - 1 + max] + 1
-      let y = x - k
-      while (x < m && y < n && a[x] === b[y]) { x++; y++ }
-      v[k + max] = x
-      if (x >= m && y >= n) return _backtrack(trace, a, b, max)
-    }
-  }
-  return _backtrack(trace, a, b, max)
-}
-
-function _backtrack(trace, a, b, max) {
-  const result = []
-  let x = a.length, y = b.length
-  for (let d = trace.length - 1; d >= 0; d--) {
-    const v = trace[d]
-    const k = x - y
-    const prevK = (k === -d || (k !== d && v[k - 1 + max] < v[k + 1 + max])) ? k + 1 : k - 1
-    const prevX = v[prevK + max]
-    const prevY = prevX - prevK
-    while (x > prevX && y > prevY) { result.unshift({ type: 'equal', line: a[x - 1] }); x--; y-- }
-    if (d > 0) {
-      if (x > prevX) { result.unshift({ type: 'delete', line: a[x - 1] }); x-- }
-      else            { result.unshift({ type: 'insert', line: b[y - 1] }); y-- }
-    }
-  }
-  return result
-}
-
 function _renderEditorDiff(oldYaml, newYaml) {
-  const hunks = _myersDiff(oldYaml.split('\n'), newYaml.split('\n'))
-  const blank = `<div style="background:#0d1117"> </div>`
-  let leftHtml = '', rightHtml = '', adds = 0, dels = 0
-  for (const h of hunks) {
-    const line = esc(h.line)
-    if (h.type === 'equal') {
-      const eq = `<div style="color:#8b949e">  ${line}</div>`
-      leftHtml  += eq
-      rightHtml += eq
-    } else if (h.type === 'delete') {
-      leftHtml  += `<div style="background:#3d1a1a;color:#ff7b72">- ${line}</div>`
-      rightHtml += blank
-      dels++
-    } else {
-      leftHtml  += blank
-      rightHtml += `<div style="background:#1a3328;color:#3fb950">+ ${line}</div>`
-      adds++
-    }
-  }
   const leftPane  = document.getElementById('inline-diff-left')
   const rightPane = document.getElementById('inline-diff-right')
-  if (leftPane)  leftPane.innerHTML  = leftHtml  || '<div style="opacity:.4">— empty —</div>'
-  if (rightPane) rightPane.innerHTML = rightHtml || '<div style="opacity:.4">— empty —</div>'
-
-  if (leftPane && rightPane) {
-    leftPane.onscroll  = () => { rightPane.scrollTop = leftPane.scrollTop }
-    rightPane.onscroll = () => { leftPane.scrollTop  = rightPane.scrollTop }
-  }
-
   const stats = document.getElementById('inline-diff-stats')
-  if (stats) {
-    stats.innerHTML = (adds === 0 && dels === 0)
-      ? '<span style="color:#8b949e">no changes</span>'
-      : `<span style="color:#3fb950">+${adds}</span> <span style="color:#ff7b72">−${dels}</span>`
-  }
+  renderSideBySideYamlDiff(oldYaml, newYaml, {
+    leftPane,
+    rightPane,
+    statsEl: stats,
+    renderLine: (_lineNo, line, type) => renderCodeOnlyDiffLine(line, type, 'editor-inline-diff'),
+    renderStats: (adds, dels) => renderDiffStats(adds, dels, {
+      muted: 'editor-inline-diff-stat-muted',
+      insert: 'editor-inline-diff-stat-insert',
+      delete: 'editor-inline-diff-stat-delete',
+    }),
+    emptyLine: '<div class="editor-inline-diff-empty">— empty —</div>',
+  })
 }
 
 // ── Connector test result ─────────────────────────────────────────────────────
@@ -359,22 +235,25 @@ function showConnectorTestResult(result) {
   if (existing) existing.remove()
   const div = document.createElement('div')
   div.id = 'connector-test-result'
-  div.style.cssText = 'margin-top:12px;padding:12px;border-radius:6px;font-size:12px;font-family:monospace;background:#161b22;border:1px solid #30363d;color:#e6edf3'
 
   const renderOne = (label, r) => {
     const ok = r?.ok
-    const color = ok ? '#3fb950' : '#f85149'
     const icon  = ok ? '✓' : '✗'
     const msg   = ok ? (r.detail || 'OK') : (r.error || 'failed')
     const lat   = r?.latency_ms != null ? ` (${r.latency_ms}ms)` : ''
-    return `<div><span style="color:${color}">${icon} ${esc(label)}</span> — ${esc(msg)}${lat}</div>`
+    return `<div class="editor-status-line ${ok ? 'success' : 'error'}">${icon} ${esc(label)} — ${esc(msg)}${lat}</div>`
   }
 
   let html = ''
   if (result.source) html += renderOne(`source (${result.source.type})`, result.source)
   for (const s of (result.sinks || [])) html += renderOne(`sink (${s.type})`, s)
-  if (result.error) html += `<div style="color:#f85149">${esc(result.error)}</div>`
-  div.innerHTML = html || '<div style="color:#6e7681">No connectors found in YAML</div>'
+  if (result.error) html += `<div class="editor-status-line error">${esc(result.error)}</div>`
+  div.className = 'editor-status-panel'
+  div.innerHTML = `
+    <div class="editor-status-panel-header">Connector Test</div>
+    <div class="editor-status-panel-body">
+      ${html || '<div class="editor-status-line muted">No connectors found in YAML</div>'}
+    </div>`
   document.querySelector('.editor-wrap')?.appendChild(div)
 }
 
@@ -385,57 +264,166 @@ function showDryRunResult(result) {
 
   const div = document.createElement('div')
   div.id = 'dry-run-result'
-  div.style.cssText = 'margin-top:12px;padding:12px;border-radius:6px;font-size:12px;font-family:monospace;background:#161b22;border:1px solid #30363d;color:#e6edf3;max-height:200px;overflow:auto'
   const ok = result.status === 'ok' || result.valid
-  div.innerHTML = `<div style="color:${ok ? '#3fb950' : '#f85149'};margin-bottom:6px">${ok ? '✓ Dry run passed' : '✗ Dry run failed'}</div>`
+  const issues = result.errors || result.issues || []
+  _lastDryRunErrors = issues
+  div.className = 'editor-status-panel'
+  div.innerHTML = `
+    <div class="editor-status-panel-header">Dry Run</div>
+    <div class="editor-status-panel-body editor-status-panel-body-scroll">
+      <div class="editor-status-line ${ok ? 'success' : 'error'}">${ok ? '✓ Dry run passed' : '✗ Dry run failed'}</div>
+    </div>`
+  const body = div.querySelector('.editor-status-panel-body')
   if (result.records_out !== undefined) {
-    div.innerHTML += `<div>Records out: ${result.records_out}</div>`
+    body.innerHTML += `<div class="editor-status-line">Records out: ${result.records_out}</div>`
   }
-  if (result.errors?.length) {
-    div.innerHTML += result.errors.map(e => `<div style="color:#f85149">${esc(e)}</div>`).join('')
-    if (window._editorAiEnabled) {
-      div.innerHTML += `<div class="d-flex gap-2 mt-2">
-        <button class="btn btn-sm btn-outline-secondary" onclick="window._editorAiExplain?.()">
+  if (issues.length) {
+    body.innerHTML += issues.map(e => `<div class="editor-status-line error">${esc(e)}</div>`).join('')
+    if (_aiEnabled) {
+      body.innerHTML += `<div class="d-flex gap-2 mt-2">
+        <button class="btn btn-sm btn-outline-secondary" type="button" data-action="ai-explain">
           <i class="bi bi-stars me-1"></i>Explain
         </button>
-        <button class="btn btn-sm btn-outline-secondary" onclick="window._editorAiFix?.()">
+        <button class="btn btn-sm btn-outline-secondary" type="button" data-action="ai-fix">
           <i class="bi bi-wrench me-1"></i>AI Fix
         </button>
       </div>
-      <div id="editor-ai-explain-result" class="mt-2 text-secondary" style="font-size:11px"></div>`
+      <div id="editor-ai-explain-result" class="mt-2 editor-inline-status"></div>`
     }
   }
   if (result.warnings?.length) {
-    div.innerHTML += result.warnings.map(w => `<div style="color:#e3b341">${esc(w)}</div>`).join('')
+    body.innerHTML += result.warnings.map(w => `<div class="editor-status-line warning">${esc(w)}</div>`).join('')
   }
-  const ta = document.getElementById('editor-textarea')
-  const lastErrors = result.errors || []
-
-  window._editorAiExplain = async () => {
-    const el = document.getElementById('editor-ai-explain-result')
-    if (el) el.textContent = 'Explaining…'
-    try {
-      const r = await api.ai.suggest({ mode: 'explain', error: lastErrors[0], yaml: ta?.value })
-      if (el) el.innerHTML = `<em>${esc(r.explanation || '')}</em>`
-    } catch (e) {
-      if (el) el.textContent = `Could not explain: ${e.message}`
-    }
-  }
-
-  window._editorAiFix = async () => {
-    const el = document.getElementById('editor-ai-explain-result')
-    if (el) el.textContent = 'Fixing…'
-    try {
-      const plugins = await _getPlugins()
-      const r = await api.ai.suggest({ mode: 'fix', error: lastErrors[0], yaml: ta?.value, plugins })
-      if (!r.yaml) throw new Error('No YAML returned')
-      if (ta) ta.value = r.yaml
-      if (el) el.textContent = ''
-      toast('YAML fixed — review the changes')
-    } catch (e) {
-      if (el) el.textContent = `Could not fix: ${e.message}`
-    }
-  }
-
   document.querySelector('.editor-wrap')?.appendChild(div)
+}
+
+async function _editorSave() {
+  const yaml = _textarea?.value?.trim()
+  if (!yaml) { toast('Nothing to save', 'error'); return }
+  if (_editName && _originalYaml && yaml === _originalYaml.trim()) {
+    toast('No changes — pipeline is already up to date')
+    _leaveEditor(_editName)
+    return
+  }
+  try {
+    if (_editName) {
+      await api.pipelines.update(_editName, yaml)
+      _originalYaml = yaml
+      toast(`Saved ${_editName}`)
+      _leaveEditor(_editName)
+    } else {
+      await api.pipelines.create(yaml)
+      toast('Pipeline created')
+      _leaveEditor()
+    }
+  } catch (e) {
+    toast(e.message, 'error')
+  }
+}
+
+async function _editorCopy() {
+  const yaml = _textarea?.value
+  if (!yaml) return
+  const btn = document.getElementById('editor-copy-btn')
+  try {
+    await navigator.clipboard.writeText(yaml)
+    if (btn) {
+      const orig = btn.innerHTML
+      btn.innerHTML = '<i class="bi bi-clipboard-check"></i>'
+      setTimeout(() => { btn.innerHTML = orig }, 1500)
+    }
+  } catch (_) {
+    toast('Copy failed — use Ctrl+A / Ctrl+C', 'error')
+  }
+}
+
+function _editorDiffSaved() {
+  const existing = document.getElementById('editor-inline-diff')
+  if (existing) { existing.remove(); return }
+
+  const wrap = document.createElement('div')
+  wrap.id = 'editor-inline-diff'
+  wrap.className = 'editor-inline-diff'
+  wrap.innerHTML = `
+    <div class="editor-inline-diff-bar">
+      <i class="bi bi-file-diff"></i>
+      <span class="editor-inline-diff-title">Changes vs saved</span>
+      <span id="inline-diff-stats" class="ms-2 editor-inline-diff-stats"></span>
+      <button class="editor-inline-diff-close" type="button" data-action="close-diff">✕</button>
+    </div>
+    <div class="editor-inline-diff-panels">
+      <div class="editor-inline-diff-pane">
+        <div class="editor-inline-diff-pane-header">Saved</div>
+        <div id="inline-diff-left" class="editor-inline-diff-pane-body"></div>
+      </div>
+      <div class="editor-inline-diff-pane">
+        <div class="editor-inline-diff-pane-header">Current</div>
+        <div id="inline-diff-right" class="editor-inline-diff-pane-body"></div>
+      </div>
+    </div>`
+  document.querySelector('.editor-wrap')?.appendChild(wrap)
+  _renderEditorDiff(_originalYaml || '', _textarea?.value || '')
+}
+
+async function _editorDryRun() {
+  const yaml = _textarea?.value?.trim()
+  if (!yaml) { toast('Nothing to dry-run', 'error'); return }
+  const btn = document.getElementById('editor-dry-run-btn')
+  const orig = btn?.innerHTML
+  if (btn) btn.innerHTML = '<i class="bi bi-hourglass"></i><span>Running…</span>'
+  try {
+    showDryRunResult(await api.pipelines.dryRun(yaml))
+  } catch (e) {
+    showDryRunResult({
+      valid: false,
+      issues: [e.message || 'Dry run request failed'],
+    })
+    toast(`Dry run: ${e.message}`, 'error')
+  } finally {
+    if (btn && orig) btn.innerHTML = orig
+  }
+}
+
+async function _editorTestConnectors() {
+  const yaml = _textarea?.value?.trim()
+  if (!yaml) { toast('Nothing to test', 'error'); return }
+  const btn = document.getElementById('editor-test-btn')
+  const orig = btn?.innerHTML
+  if (btn) btn.innerHTML = '<i class="bi bi-hourglass"></i><span>Testing…</span>'
+  try {
+    const result = await api.connectors.testPipeline(yaml)
+    showConnectorTestResult(result)
+  } catch (e) {
+    toast(`Test error: ${e.message}`, 'error')
+  } finally {
+    if (btn && orig) btn.innerHTML = orig
+  }
+}
+
+async function _editorAiExplain() {
+  const el = document.getElementById('editor-ai-explain-result')
+  if (!_lastDryRunErrors.length || !el) return
+  setStatusMessage(el, 'Explaining…', 'info')
+  try {
+    const r = await api.ai.suggest({ mode: 'explain', error: _lastDryRunErrors[0], yaml: _textarea?.value })
+    el.innerHTML = `<em>${esc(r.explanation || '')}</em>`
+  } catch (e) {
+    setStatusMessage(el, `Could not explain: ${e.message}`, 'error')
+  }
+}
+
+async function _editorAiFix() {
+  const el = document.getElementById('editor-ai-explain-result')
+  if (!_lastDryRunErrors.length || !el) return
+  setStatusMessage(el, 'Fixing…', 'info')
+  try {
+    const plugins = await _getPlugins()
+    const r = await api.ai.suggest({ mode: 'fix', error: _lastDryRunErrors[0], yaml: _textarea?.value, plugins })
+    if (!r.yaml) throw new Error('No YAML returned')
+    if (_textarea) _textarea.value = r.yaml
+    setStatusMessage(el, '', 'muted')
+    toast('YAML fixed — review the changes')
+  } catch (e) {
+    setStatusMessage(el, `Could not fix: ${e.message}`, 'error')
+  }
 }

@@ -1,16 +1,18 @@
-<div class="d-flex gap-2 mb-3 align-items-center">
-  <select class="form-select form-select-sm" style="width:200px" id="runs-pipeline" aria-label="Filter by pipeline">
+<div class="page-toolbar">
+  <select class="form-select form-select-sm page-toolbar-filter-lg" id="runs-pipeline" aria-label="Filter by pipeline">
     <option value="">All pipelines</option>
   </select>
-  <select class="form-select form-select-sm" style="width:130px" id="runs-status" aria-label="Filter by status">
+  <select class="form-select form-select-sm page-toolbar-filter-sm" id="runs-status" aria-label="Filter by status">
     <option value="">All status</option>
-    <option>success</option><option>failed</option><option>partial</option>
+    <option value="success">Success</option>
+    <option value="failed">Failed</option>
+    <option value="aborted">Aborted</option>
   </select>
-  <input type="date" class="form-control form-control-sm" style="width:150px" id="runs-from" aria-label="From date"/>
-  <button class="btn-flat ms-auto" title="Refresh" onclick="window._runsRefresh?.()">
-    <i class="bi bi-arrow-clockwise"></i>
+  <input type="date" class="form-control form-control-sm page-toolbar-date" id="runs-from" aria-label="From date"/>
+  <button class="btn-flat ms-auto" id="runs-refresh-btn" title="Refresh" type="button">
+    <i class="bi bi-arrow-clockwise" id="runs-refresh-icon"></i>
   </button>
-  <button class="btn-flat" title="Export CSV" onclick="window._runsExport?.()">
+  <button class="btn-flat" id="runs-export-btn" title="Export CSV" type="button">
     <i class="bi bi-download"></i>
   </button>
 </div>
@@ -22,11 +24,11 @@
   </div>
   <table class="table mb-0">
     <thead><tr>
-      <th></th><th>Run ID</th><th>Pipeline</th><th>Node</th>
-      <th>Started</th><th>Dur</th><th>In</th><th>Out</th><th>Skipped</th><th>DLQ</th><th>Status</th>
+      <th>Run ID</th><th>Pipeline</th><th>Node</th>
+      <th>Started</th><th>Dur</th><th>In</th><th>Out</th><th>Skipped</th><th>DLQ</th><th>Status</th><th>Issues</th><th></th>
     </tr></thead>
     <tbody id="runs-body">
-      <tr><td colspan="11" class="text-secondary text-center py-4">Loading…</td></tr>
+      <tr><td colspan="12" class="text-secondary text-center py-4">Loading…</td></tr>
     </tbody>
   </table>
 </div>

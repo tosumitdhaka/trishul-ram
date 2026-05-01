@@ -7,8 +7,10 @@ CLUSTER_NAME="${CLUSTER_NAME:-tram-dev}"
 KUBE_CONTEXT="${KUBE_CONTEXT:-kind-${CLUSTER_NAME}}"
 RELEASE_NAME="${RELEASE_NAME:-trishul-ram}"
 NAMESPACE="${NAMESPACE:-trishul-ram}"
+MODE="${MODE:-manager}"
 
-IMAGE_REPOSITORY="${IMAGE_REPOSITORY:-trishul-ram}"
+STANDALONE_IMAGE_REPOSITORY="${STANDALONE_IMAGE_REPOSITORY:-trishul-ram}"
+MANAGER_IMAGE_REPOSITORY="${MANAGER_IMAGE_REPOSITORY:-trishul-ram-manager}"
 WORKER_IMAGE_REPOSITORY="${WORKER_IMAGE_REPOSITORY:-trishul-ram-worker}"
 IMAGE_TAG="${IMAGE_TAG:-local-$(date -u +%Y%m%d%H%M%S)}"
 
@@ -17,26 +19,38 @@ VALUES_FILE="${VALUES_FILE:-}"
 
 usage() {
   cat <<EOF
-Usage: $(basename "$0") [--tag TAG] [--release NAME] [--namespace NS] [--cluster NAME]
+Usage: $(basename "$0") [--mode MODE] [--tag TAG] [--release NAME] [--namespace NS] [--cluster NAME]
 
-Build both TRAM images locally, load them into a kind cluster, and upgrade the
-existing Helm release using --reuse-values.
+Build TRAM images, load them into a kind cluster, and upgrade the Helm release.
+
+Modes:
+  manager     Build manager + worker images; deploy with manager.enabled=true.
+              Workers execute pipelines; manager owns scheduling and persistence.
+              (default)
+  standalone  Build standalone image only; deploy with manager.enabled=false.
+              Single-node deployment — manager and worker in one container.
 
 Environment overrides:
-  CLUSTER_NAME             default: ${CLUSTER_NAME}
-  KUBE_CONTEXT             default: ${KUBE_CONTEXT}
-  RELEASE_NAME             default: ${RELEASE_NAME}
-  NAMESPACE                default: ${NAMESPACE}
-  IMAGE_REPOSITORY         default: ${IMAGE_REPOSITORY}
-  WORKER_IMAGE_REPOSITORY  default: ${WORKER_IMAGE_REPOSITORY}
-  IMAGE_TAG                default: generated UTC timestamp
-  CHART_PATH               default: ${CHART_PATH}
-  VALUES_FILE              optional extra values file to merge during upgrade
+  MODE                          default: ${MODE}
+  CLUSTER_NAME                  default: ${CLUSTER_NAME}
+  KUBE_CONTEXT                  default: ${KUBE_CONTEXT}
+  RELEASE_NAME                  default: ${RELEASE_NAME}
+  NAMESPACE                     default: ${NAMESPACE}
+  STANDALONE_IMAGE_REPOSITORY   default: ${STANDALONE_IMAGE_REPOSITORY}
+  MANAGER_IMAGE_REPOSITORY      default: ${MANAGER_IMAGE_REPOSITORY}
+  WORKER_IMAGE_REPOSITORY       default: ${WORKER_IMAGE_REPOSITORY}
+  IMAGE_TAG                     default: generated UTC timestamp
+  CHART_PATH                    default: ${CHART_PATH}
+  VALUES_FILE                   optional extra values file to merge during upgrade
 EOF
 }
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
+    --mode)
+      MODE="$2"
+      shift 2
+      ;;
     --tag)
       IMAGE_TAG="$2"
       shift 2
@@ -66,7 +80,13 @@ while [[ $# -gt 0 ]]; do
   esac
 done
 
-MAIN_IMAGE="${IMAGE_REPOSITORY}:${IMAGE_TAG}"
+if [[ "${MODE}" != "manager" && "${MODE}" != "standalone" ]]; then
+  echo "Invalid mode: ${MODE}. Must be 'manager' or 'standalone'." >&2
+  exit 2
+fi
+
+STANDALONE_IMAGE="${STANDALONE_IMAGE_REPOSITORY}:${IMAGE_TAG}"
+MANAGER_IMAGE="${MANAGER_IMAGE_REPOSITORY}:${IMAGE_TAG}"
 WORKER_IMAGE="${WORKER_IMAGE_REPOSITORY}:${IMAGE_TAG}"
 
 require_cmd() {
@@ -81,30 +101,54 @@ require_cmd kind
 require_cmd kubectl
 require_cmd helm
 
+DEPLOY_START=$(date +%s)
+
+echo "Mode:              ${MODE}"
 echo "Using kube context: ${KUBE_CONTEXT}"
 kubectl config use-context "${KUBE_CONTEXT}" >/dev/null
 
-echo "Building manager image: ${MAIN_IMAGE}"
-docker build -t "${MAIN_IMAGE}" -f "${ROOT_DIR}/Dockerfile" "${ROOT_DIR}"
+if [[ "${MODE}" == "standalone" ]]; then
+  echo "Building standalone image: ${STANDALONE_IMAGE}"
+  docker build -t "${STANDALONE_IMAGE}" -f "${ROOT_DIR}/Dockerfile" "${ROOT_DIR}"
 
-echo "Building worker image: ${WORKER_IMAGE}"
-docker build -t "${WORKER_IMAGE}" -f "${ROOT_DIR}/Dockerfile.worker" "${ROOT_DIR}"
+  echo "Loading image into kind cluster: ${CLUSTER_NAME}"
+  kind load docker-image --name "${CLUSTER_NAME}" "${STANDALONE_IMAGE}"
+else
+  echo "Building manager image: ${MANAGER_IMAGE}"
+  docker build -t "${MANAGER_IMAGE}" -f "${ROOT_DIR}/Dockerfile.manager" "${ROOT_DIR}"
 
-echo "Loading images into kind cluster: ${CLUSTER_NAME}"
-kind load docker-image --name "${CLUSTER_NAME}" "${MAIN_IMAGE}"
-kind load docker-image --name "${CLUSTER_NAME}" "${WORKER_IMAGE}"
+  echo "Building worker image: ${WORKER_IMAGE}"
+  docker build -t "${WORKER_IMAGE}" -f "${ROOT_DIR}/Dockerfile.worker" "${ROOT_DIR}"
+
+  echo "Loading images into kind cluster: ${CLUSTER_NAME}"
+  kind load docker-image --name "${CLUSTER_NAME}" "${MANAGER_IMAGE}"
+  kind load docker-image --name "${CLUSTER_NAME}" "${WORKER_IMAGE}"
+fi
 
 echo "Upgrading Helm release: ${RELEASE_NAME}"
-HELM_ARGS=(
-  upgrade --install "${RELEASE_NAME}" "${CHART_PATH}"
-  --namespace "${NAMESPACE}"
-  --create-namespace
-  --reuse-values
-  --set image.repository="${IMAGE_REPOSITORY}"
-  --set image.tag="${IMAGE_TAG}"
-  --set worker.image.repository="${WORKER_IMAGE_REPOSITORY}"
-  --set worker.image.tag="${IMAGE_TAG}"
-)
+if [[ "${MODE}" == "standalone" ]]; then
+  HELM_ARGS=(
+    upgrade --install "${RELEASE_NAME}" "${CHART_PATH}"
+    --namespace "${NAMESPACE}"
+    --create-namespace
+    --reuse-values
+    --set manager.enabled=false
+    --set image.repository="${STANDALONE_IMAGE_REPOSITORY}"
+    --set image.tag="${IMAGE_TAG}"
+  )
+else
+  HELM_ARGS=(
+    upgrade --install "${RELEASE_NAME}" "${CHART_PATH}"
+    --namespace "${NAMESPACE}"
+    --create-namespace
+    --reuse-values
+    --set manager.enabled=true
+    --set manager.image.repository="${MANAGER_IMAGE_REPOSITORY}"
+    --set manager.image.tag="${IMAGE_TAG}"
+    --set worker.image.repository="${WORKER_IMAGE_REPOSITORY}"
+    --set worker.image.tag="${IMAGE_TAG}"
+  )
+fi
 
 if [[ -n "${VALUES_FILE}" ]]; then
   HELM_ARGS+=(--values "${VALUES_FILE}")
@@ -113,21 +157,35 @@ fi
 helm "${HELM_ARGS[@]}"
 
 echo "Waiting for rollout in namespace: ${NAMESPACE}"
-if kubectl get "statefulset/${RELEASE_NAME}-manager" -n "${NAMESPACE}" >/dev/null 2>&1; then
-  kubectl rollout status "statefulset/${RELEASE_NAME}-manager" -n "${NAMESPACE}" --timeout=5m
-elif kubectl get "deployment/${RELEASE_NAME}-manager" -n "${NAMESPACE}" >/dev/null 2>&1; then
-  kubectl rollout status "deployment/${RELEASE_NAME}-manager" -n "${NAMESPACE}" --timeout=5m
+if [[ "${MODE}" == "standalone" ]]; then
+  if kubectl get "statefulset/${RELEASE_NAME}" -n "${NAMESPACE}" >/dev/null 2>&1; then
+    kubectl rollout status "statefulset/${RELEASE_NAME}" -n "${NAMESPACE}" --timeout=5m
+  fi
+else
+  if kubectl get "statefulset/${RELEASE_NAME}-manager" -n "${NAMESPACE}" >/dev/null 2>&1; then
+    kubectl rollout status "statefulset/${RELEASE_NAME}-manager" -n "${NAMESPACE}" --timeout=5m
+  elif kubectl get "deployment/${RELEASE_NAME}-manager" -n "${NAMESPACE}" >/dev/null 2>&1; then
+    kubectl rollout status "deployment/${RELEASE_NAME}-manager" -n "${NAMESPACE}" --timeout=5m
+  fi
+
+  if kubectl get "statefulset/${RELEASE_NAME}-worker" -n "${NAMESPACE}" >/dev/null 2>&1; then
+    kubectl rollout status "statefulset/${RELEASE_NAME}-worker" -n "${NAMESPACE}" --timeout=5m
+  fi
 fi
 
-if kubectl get "statefulset/${RELEASE_NAME}-worker" -n "${NAMESPACE}" >/dev/null 2>&1; then
-  kubectl rollout status "statefulset/${RELEASE_NAME}-worker" -n "${NAMESPACE}" --timeout=5m
-elif kubectl get "statefulset/${RELEASE_NAME}" -n "${NAMESPACE}" >/dev/null 2>&1; then
-  kubectl rollout status "statefulset/${RELEASE_NAME}" -n "${NAMESPACE}" --timeout=5m
-fi
+DEPLOY_END=$(date +%s)
+DEPLOY_SECS=$((DEPLOY_END - DEPLOY_START))
+DEPLOY_TIME=$(printf "%dm%02ds" $((DEPLOY_SECS / 60)) $((DEPLOY_SECS % 60)))
 
 echo
 echo "Deployment complete."
-echo "Manager image: ${MAIN_IMAGE}"
-echo "Worker image:  ${WORKER_IMAGE}"
-echo "Release:       ${RELEASE_NAME}"
-echo "Namespace:     ${NAMESPACE}"
+echo "Time:    ${DEPLOY_TIME}"
+echo "Mode:    ${MODE}"
+if [[ "${MODE}" == "standalone" ]]; then
+  echo "Image:   ${STANDALONE_IMAGE}"
+else
+  echo "Manager: ${MANAGER_IMAGE}"
+  echo "Worker:  ${WORKER_IMAGE}"
+fi
+echo "Release:   ${RELEASE_NAME}"
+echo "Namespace: ${NAMESPACE}"

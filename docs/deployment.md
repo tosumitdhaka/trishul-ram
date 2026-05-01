@@ -18,9 +18,12 @@ All configuration is via environment variables (12-factor).
 | `TRAM_HOST` | `0.0.0.0` | API server bind address |
 | `TRAM_PORT` | `8765` | API server port |
 | `TRAM_PIPELINE_DIR` | `./pipelines` | Directory scanned for pipeline YAMLs at startup |
+| `TRAM_STATE_DIR` | _(empty)_ | Optional shared runtime state root (advanced); most features still use their own explicit directories such as DB, schemas, and MIB stores |
 | `TRAM_DB_URL` | _(empty)_ | SQLAlchemy database URL (see below); if empty, uses `TRAM_DB_PATH` |
 | `TRAM_DB_PATH` | `~/.tram/tram.db` | SQLite file path (used when `TRAM_DB_URL` is unset) |
 | `TRAM_NODE_ID` | hostname | Node identifier stored in run_history for multi-node tracing |
+| `TRAM_WORKER_ID` | hostname | Worker agent identifier reported to the manager and `/agent/*` APIs (worker mode only) |
+| `TRAM_POD_NAMESPACE` | _(auto-detected)_ | Advanced Kubernetes namespace override used by per-pipeline Service management when service-account/downward-API detection is unavailable |
 | `TRAM_SHUTDOWN_TIMEOUT_SECONDS` | `30` | Seconds to drain in-flight runs before forced stop |
 | `TRAM_API_URL` | `http://localhost:8765` | Daemon URL used by CLI proxy commands |
 | `TRAM_LOG_LEVEL` | `INFO` | Log level: DEBUG, INFO, WARNING, ERROR |
@@ -44,12 +47,18 @@ All configuration is via environment variables (12-factor).
 | `TRAM_OTEL_SERVICE` | `tram` | Service name reported to OTel collector |
 | `TRAM_WATCH_PIPELINES` | `false` | Watch `TRAM_PIPELINE_DIR` for YAML changes and auto-reload pipelines |
 | `TRAM_MIB_DIR` | `/mibs` | Directory containing compiled pysnmp MIB `.py` files; standard MIBs baked into Docker image at build time (v1.0.3) |
+| `TRAM_MIB_SOURCE_DIR` | sibling `mib-sources` beside `TRAM_MIB_DIR` | Directory containing persisted raw ASN.1 MIB source files uploaded/downloaded at runtime; used for local dependency resolution during later compiles |
+| `TRAM_MIB_BUNDLED_SOURCE_DIR` | `/mib-sources` | Read-only bundled ASN.1 MIB source directories consulted during compile/dependency resolution; separate multiple paths with the OS path separator |
 | `TRAM_SCHEMA_DIR` | `/schemas` | Directory containing serialization schema files (`.proto`, `.avsc`, `.asn`, etc.); managed via `POST /api/schemas/upload` (v1.0.3) |
 | `TRAM_SCHEMA_REGISTRY_URL` | _(empty)_ | Base URL of an external Confluent-compatible schema registry; enables `/api/schemas/registry/*` proxy and serves as the default `schema_registry_url` for Avro/Protobuf serializers (v1.0.4) |
 | `TRAM_SCHEMA_REGISTRY_USERNAME` | _(empty)_ | Basic-auth username for the external schema registry; used as default when not set in pipeline YAML (v1.0.4) |
 | `TRAM_SCHEMA_REGISTRY_PASSWORD` | _(empty)_ | Basic-auth password for the external schema registry; used as default when not set in pipeline YAML (v1.0.4) |
 | `TRAM_UI_DIR` | `/ui` | Directory containing built tram-ui static assets; set to empty string to disable the web UI without rebuilding the image (v1.0.8) |
 | `TRAM_TEMPLATES_DIR` | `/tram-templates` | Directory containing bundled pipeline templates served by `/api/templates` (v1.1.0) |
+| `TRAM_AI_PROVIDER` | `anthropic` | AI assist provider: `anthropic` \| `openai` \| `bedrock` |
+| `TRAM_AI_API_KEY` | _(empty)_ | API key/token for AI assist; empty disables AI endpoints in practice |
+| `TRAM_AI_MODEL` | provider default | Optional AI model override; defaults to `claude-haiku-4-5-20251001`, `gpt-4o-mini`, or `us.anthropic.claude-sonnet-4-6` depending on provider |
+| `TRAM_AI_BASE_URL` | _(empty)_ | Optional base URL override for the selected provider endpoint (for example an OpenAI-compatible gateway, Anthropic-compatible endpoint, or Bedrock proxy) |
 | `TRAM_MODE` | `standalone` | Deployment mode: `standalone` \| `manager` \| `worker` (v1.2.0) |
 | `TRAM_WORKER_URLS` | _(empty)_ | Explicit comma-separated worker agent URLs; when set, manager uses this list instead of replica-based headless DNS discovery (v1.2.0) |
 | `TRAM_WORKER_REPLICAS` | `0` | Number of worker StatefulSet replicas used for headless-DNS discovery; `0` disables replica-based discovery (set on manager pod, v1.2.0) |
@@ -58,6 +67,7 @@ All configuration is via environment variables (12-factor).
 | `TRAM_WORKER_PORT` | `8766` | Port that worker pods listen on (v1.2.0) |
 | `TRAM_WORKER_INGRESS_PORT` | `8767` | Public ingress port on worker pods for `/webhooks/*` push traffic (v1.3.0) |
 | `TRAM_MANAGER_URL` | _(empty)_ | Manager base URL used by worker pods for run-complete callbacks (v1.2.0) |
+| `TRAM_DATA_DIR` | `/data` | Base directory for worker-synced schemas and custom MIBs in worker mode; if overridden, keep `TRAM_SCHEMA_DIR` and `TRAM_MIB_DIR` under the same root |
 | `TRAM_STATS_INTERVAL` | `30` | Seconds between worker periodic stats reports; also controls `PlacementReconciler` tick interval (`min(TRAM_STATS_INTERVAL, 10)s`) and stale-slot threshold (`3 × interval`) (v1.3.0) |
 
 ### Database backends (v0.7.0)
@@ -150,7 +160,7 @@ If you are upgrading from the older manager `Deployment`, set `manager.persisten
 
 ```dockerfile
 # Build with Dockerfile.worker (no UI assets, no manager deps)
-docker build -f Dockerfile.worker -t trishul-ram-worker:1.3.1 .
+docker build -f Dockerfile.worker -t trishul-ram-worker:1.3.3 .
 ```
 
 The worker image exposes port `8766` for the internal agent API and port `8767` for ingress-only webhook traffic. Kubernetes liveness/readiness probes stay on `/agent/health` over port `8766`.
@@ -254,37 +264,46 @@ sink:
 The Docker image includes pre-compiled versions of the most commonly needed SNMP MIBs:
 `IF-MIB`, `ENTITY-MIB`, `HOST-RESOURCES-MIB`, `IP-MIB`, `TCP-MIB`, `UDP-MIB`, `IANAifType-MIB`.
 
-SNMP connectors automatically look for MIBs in `TRAM_MIB_DIR` (`/mibs`) without any pipeline-level configuration.
+SNMP connectors automatically look for compiled Python MIB modules in `TRAM_MIB_DIR` (`/mibs`) without any pipeline-level configuration.
+
+Runtime MIB management keeps both forms:
+- compiled pysnmp modules in `TRAM_MIB_DIR`
+- raw ASN.1 source files in `TRAM_MIB_SOURCE_DIR` (defaults to a sibling `mib-sources` directory beside `TRAM_MIB_DIR`)
+
+Manager and standalone images also ship with a bundled raw-source cache at `/mib-sources` (`TRAM_MIB_BUNDLED_SOURCE_DIR`) so later vendor compiles can resolve common base imports locally before reaching out to the network.
 
 **Add more MIBs at runtime:**
 
 ```bash
 # Via CLI (requires tram[mib])
-tram mib download CISCO-ENTITY-FRU-CONTROL-MIB --out /mibs
+tram mib download CISCO-ENTITY-FRU-CONTROL-MIB --out /mibs --source-store /mib-sources
 
 # Via REST API
 curl -X POST http://localhost:8765/api/mibs/download \
   -H "Content-Type: application/json" \
   -d '{"names": ["CISCO-ENTITY-FRU-CONTROL-MIB"]}'
 
-# Upload a local .mib file
+# Upload a local ASN.1 MIB source file (.mib, .my, .txt, or extensionless)
 curl -X POST http://localhost:8765/api/mibs/upload \
   -F "file=@/path/to/MY-CUSTOM-MIB.mib"
 
-# List compiled MIBs
+# List managed MIBs (raw + compiled visibility)
 curl http://localhost:8765/api/mibs
 ```
 
-**Compile a directory of .mib files:**
+**Compile a directory of ASN.1 MIB source files:**
 
 ```bash
-tram mib compile /path/to/vendor-mibs/ --out /mibs
+tram mib compile /path/to/vendor-mibs/ --out /mibs --source-store /mib-sources
 ```
 
-**Air-gapped environments** — copy pre-compiled MIB `.py` files into the image:
+Supported upload/compile source filenames are extensionless names plus `.mib`, `.my`, and `.txt`.
+
+**Air-gapped environments** — copy pre-compiled MIB `.py` files into the image and optionally seed raw source files for future local dependency resolution:
 
 ```dockerfile
-FROM ghcr.io/tosumitdhaka/trishul-ram:1.3.1
+FROM ghcr.io/tosumitdhaka/trishul-ram:1.3.3
+COPY vendor-mib-sources/ /mib-sources/
 COPY compiled-mibs/*.py /mibs/
 ```
 
@@ -329,7 +348,7 @@ curl -X DELETE http://localhost:8765/api/schemas/cisco/GenericRecord.proto
 **Mount host directory** for development (read-write):
 
 ```bash
-docker run -v ./schemas:/schemas tram:1.3.1
+docker run -v ./schemas:/schemas tram:1.3.3
 ```
 
 ## Schema Registry Integration (v1.0.4)
@@ -452,7 +471,7 @@ Mount a volume at `/data` (or set `TRAM_DB_URL`) to persist run history and pipe
 
 ### Installed extras in the default image
 
-The default `tram:1.3.1` image installs (`clickhouse` added in v1.0.4):
+The default `tram:1.3.3` image installs (`clickhouse` added in v1.0.4):
 
 `kafka`, `opensearch`, `snmp`, `avro`, `protobuf_ser`, `msgpack_ser`, `mqtt`, `amqp`, `nats`,
 `gnmi`, `jmespath`, `sql`, `influxdb`, `redis`, `websocket`, `elasticsearch`, `metrics`,
@@ -472,7 +491,7 @@ The following extras are **excluded by default** to keep the image lean. Extend 
 | `otel` | only needed when `TRAM_OTEL_ENDPOINT` is set; no-op fallback when absent | ~15 MB |
 
 ```dockerfile
-FROM ghcr.io/tosumitdhaka/trishul-ram:1.3.1
+FROM ghcr.io/tosumitdhaka/trishul-ram:1.3.3
 RUN pip install "tram[parquet,s3,gcs,azure,otel]"
 ```
 
@@ -486,11 +505,11 @@ docker compose up
 
 ## Kubernetes — Helm (recommended)
 
-TRAM ships a production-ready Helm chart in `helm/`. Published to GHCR OCI on every release tag.
+TRAM ships a production-ready Helm chart in `helm/`. The release workflow publishes it to GHCR OCI from the main release branch flow.
 
 ### Install
 
-Quick-start examples below use `latest`. For production, pin `image.tag` and worker image tags to a specific release such as `1.3.2`.
+Quick-start examples below use `latest`. For production, pin `image.tag` and worker image tags to a specific release such as `1.3.3`.
 
 ```bash
 # Add chart from OCI registry
@@ -513,7 +532,7 @@ helm upgrade tram oci://ghcr.io/tosumitdhaka/charts/trishul-ram \
 | Value | Default | Description |
 |-------|---------|-------------|
 | `image.repository` | `ghcr.io/tosumitdhaka/trishul-ram` | Docker image repository |
-| `image.tag | "1.3.1"` | Image tag |
+| `image.tag | "1.3.3"` | Image tag |
 | `replicaCount` | `1` | Replicas for the standalone StatefulSet; not used when `manager.enabled=true` |
 | `manager.enabled` | `false` | `true` = manager+worker mode (manager StatefulSet + worker StatefulSet); `false` = standalone StatefulSet |
 | `worker.replicas` | `3` | Number of worker StatefulSet replicas (only when `manager.enabled=true`) |
@@ -554,7 +573,7 @@ helm upgrade tram oci://ghcr.io/tosumitdhaka/charts/trishul-ram \
 ```bash
 helm install tram oci://ghcr.io/tosumitdhaka/charts/trishul-ram \
   --namespace tram --create-namespace \
-  --set image.tag=1.3.1
+  --set image.tag=1.3.3
 ```
 
 A single-replica `StatefulSet` with pod name `tram-0` runs the full daemon. A `PersistentVolumeClaim` (`data-tram-0`) is auto-provisioned via `volumeClaimTemplates` and mounted at `/data`. SQLite run history, API-uploaded schemas (`/data/schemas`), and runtime MIBs (`/data/mibs`) all share this single PVC and survive pod restarts. Standard MIBs baked into the image at `/mibs` remain available alongside any runtime-downloaded ones.
@@ -568,11 +587,11 @@ SQLite on a `ReadWriteOnce` PVC is sufficient — only one manager pod ever writ
 ```bash
 helm install tram oci://ghcr.io/tosumitdhaka/charts/trishul-ram \
   --namespace tram --create-namespace \
-  --set image.tag=1.3.1 \
+  --set image.tag=1.3.3 \
   --set manager.enabled=true \
   --set worker.replicas=3 \
   --set worker.image.repository=trishul-ram-worker \
-  --set worker.image.tag=1.3.1 \
+  --set worker.image.tag=1.3.3 \
   --set apiKey=mysecret
 ```
 
@@ -606,7 +625,7 @@ PostgreSQL is **optional** in manager+worker mode — SQLite on the manager's RW
 ```bash
 helm install tram oci://ghcr.io/tosumitdhaka/charts/trishul-ram \
   --namespace tram --create-namespace \
-  --set image.tag=1.3.1 \
+  --set image.tag=1.3.3 \
   --set manager.enabled=true \
   --set worker.replicas=3 \
   --set postgresql.enabled=true
@@ -639,7 +658,7 @@ Then install/upgrade TRAM with shared storage enabled:
 ```bash
 helm upgrade trishul-ram helm/ \
   --namespace trishul-ram \
-  --set image.tag=1.3.1 \
+  --set image.tag=1.3.3 \
   --set manager.enabled=true \
   --set worker.replicas=3 \
   --set manager.persistence.enabled=true \
@@ -732,7 +751,7 @@ spec:
     spec:
       containers:
       - name: tram
-        image: ghcr.io/tosumitdhaka/trishul-ram:1.3.1
+        image: ghcr.io/tosumitdhaka/trishul-ram:1.3.3
         command: ["tram", "daemon"]
         ports:
         - containerPort: 8765

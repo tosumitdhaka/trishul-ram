@@ -80,6 +80,27 @@ class PlacementReconciler:
         candidates.sort(key=self._worker_pool.load_score)
         return candidates[0]
 
+    @staticmethod
+    def _live_worker_key(item: dict) -> str | None:
+        worker_key = item.get("worker_id") or item.get("worker_url")
+        return str(worker_key) if worker_key else None
+
+    def _find_live_slot(
+        self,
+        placement: dict,
+        slot: dict,
+        live_by_run_id: dict[str, dict],
+        live_by_pipeline_worker: dict[tuple[str, str], dict],
+    ) -> dict | None:
+        current_run_id = str(slot.get("current_run_id", "") or "")
+        if current_run_id and current_run_id in live_by_run_id:
+            return live_by_run_id[current_run_id]
+
+        worker_key = slot.get("worker_id") or slot.get("worker_url")
+        if not worker_key:
+            return None
+        return live_by_pipeline_worker.get((placement["pipeline_name"], str(worker_key)))
+
     def start(self) -> None:
         self._stop.clear()
         self._thread = threading.Thread(
@@ -103,11 +124,46 @@ class PlacementReconciler:
 
     def run_once(self) -> None:
         now = datetime.now(UTC)
+        live_streams = list(self._worker_pool.live_streams() or [])
+        live_by_run_id = {
+            str(item.get("run_id")): item
+            for item in live_streams
+            if item.get("run_id")
+        }
+        live_by_pipeline_worker: dict[tuple[str, str], dict] = {}
+        for item in live_streams:
+            pipeline_name = str(item.get("pipeline_name", "") or "")
+            worker_key = self._live_worker_key(item)
+            if pipeline_name and worker_key:
+                live_by_pipeline_worker[(pipeline_name, worker_key)] = item
+
         for placement in self._controller.get_active_broadcast_placements():
             placement_group_id = placement["placement_group_id"]
             placement_changed = False
 
             for slot in placement["slots"]:
+                live_item = self._find_live_slot(
+                    placement,
+                    slot,
+                    live_by_run_id,
+                    live_by_pipeline_worker,
+                )
+                if live_item is not None:
+                    live_run_id = str(live_item.get("run_id", "") or "")
+                    if live_run_id and slot.get("current_run_id") != live_run_id:
+                        slot["current_run_id"] = live_run_id
+                        placement_changed = True
+                    if live_item.get("worker_url") and slot.get("worker_url") != live_item.get("worker_url"):
+                        slot["worker_url"] = live_item.get("worker_url")
+                        placement_changed = True
+                    if live_item.get("worker_id") and slot.get("worker_id") != live_item.get("worker_id"):
+                        slot["worker_id"] = live_item.get("worker_id")
+                        placement_changed = True
+                    if slot.get("status") != "running":
+                        slot["status"] = "running"
+                        placement_changed = True
+                    continue
+
                 current_run_id = str(slot.get("current_run_id", ""))
                 stats = self._stats_store.get_by_run_id(current_run_id) if current_run_id else None
                 if self._awaiting_first_stats(now, placement, slot, stats):

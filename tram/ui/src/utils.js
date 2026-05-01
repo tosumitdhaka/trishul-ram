@@ -26,6 +26,34 @@ export function fmtNum(n) {
   return Number(n).toLocaleString()
 }
 
+export function fmtBytes(value) {
+  if (value === null || value === undefined) return '—'
+  const bytes = Number(value)
+  if (!Number.isFinite(bytes)) return '—'
+  const abs = Math.abs(bytes)
+  if (abs < 1024) return `${fmtNum(Math.round(bytes))} B`
+
+  const units = ['KB', 'MB', 'GB', 'TB', 'PB']
+  let scaled = abs
+  let unitIndex = -1
+  while (scaled >= 1024 && unitIndex < units.length - 1) {
+    scaled /= 1024
+    unitIndex += 1
+  }
+
+  const sign = bytes < 0 ? '-' : ''
+  const precision = scaled >= 10 ? 0 : 1
+  return `${sign}${scaled.toFixed(precision)} ${units[unitIndex]}`
+}
+
+export function fmtRate(value) {
+  return `${fmtNum(Math.round(value || 0))}/s`
+}
+
+export function fmtBytesRate(value) {
+  return `${fmtBytes(value || 0)}/s`
+}
+
 export function statusBadge(status) {
   const cls = {
     running:   'badge-running has-dot running',
@@ -70,10 +98,76 @@ export function esc(str) {
   return String(str ?? '').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;')
 }
 
+export function bindDataActions(root, handlers = {}) {
+  if (!root) return
+  if (root._tramActionListener) {
+    root.removeEventListener('click', root._tramActionListener)
+  }
+  const listener = (event) => {
+    const target = event.target.closest('[data-action]')
+    if (!target || !root.contains(target)) return
+    const handler = handlers[target.dataset.action]
+    if (!handler) return
+    handler(target, event)
+  }
+  root.addEventListener('click', listener)
+  root._tramActionListener = listener
+}
+
+export function downloadBlob(filename, blob) {
+  const url = URL.createObjectURL(blob)
+  const a = document.createElement('a')
+  a.href = url
+  a.download = filename
+  a.click()
+  setTimeout(() => URL.revokeObjectURL(url), 1000)
+}
+
+export function downloadText(filename, text, mime = 'text/plain;charset=utf-8') {
+  downloadBlob(filename, new Blob([text], { type: mime }))
+}
+
+export function getSavedPollIntervalMs(defaultSeconds = 10) {
+  const raw = parseInt(localStorage.getItem('tram_poll_interval') || String(defaultSeconds), 10)
+  const seconds = Number.isFinite(raw) && raw > 0 ? raw : defaultSeconds
+  return seconds * 1000
+}
+
+const STATUS_TONES = ['muted', 'info', 'success', 'warning', 'error']
+
+export function setStatusMessage(target, message = '', tone = 'muted') {
+  const el = typeof target === 'string' ? document.getElementById(target) : target
+  if (!el) return
+  el.textContent = message
+  el.classList.add('ui-status')
+  STATUS_TONES.forEach(value => el.classList.remove(`ui-status-${value}`))
+  el.classList.add(`ui-status-${STATUS_TONES.includes(tone) ? tone : 'muted'}`)
+}
+
 export function toast(msg, type = 'success') {
   const el = document.createElement('div')
-  el.style.cssText = `position:fixed;bottom:24px;right:24px;z-index:9999;padding:10px 16px;border-radius:6px;font-size:13px;color:#e6edf3;background:${type === 'error' ? '#3d1a1a' : '#1a3328'};border:1px solid ${type === 'error' ? '#f85149' : '#3fb950'};box-shadow:0 4px 12px rgba(0,0,0,.4);transition:opacity .3s`
+  el.className = `tram-toast tram-toast-${type || 'success'}`
   el.textContent = msg
   document.body.appendChild(el)
-  setTimeout(() => { el.style.opacity = '0'; setTimeout(() => el.remove(), 300) }, 2500)
+  requestAnimationFrame(() => el.classList.add('is-visible'))
+  setTimeout(() => {
+    el.classList.remove('is-visible')
+    el.classList.add('is-leaving')
+    setTimeout(() => el.remove(), 300)
+  }, 4000)
+}
+
+export function pipelineStartFeedback(name, result = {}) {
+  const status = result?.status || 'started'
+  const detail = result?.detail
+  if (status === 'disabled') {
+    return { message: detail || `Pipeline '${name}' is disabled in YAML.`, type: 'error' }
+  }
+  if (status === 'manual') {
+    return { message: detail || `Pipeline '${name}' uses a manual schedule. Use Run Now instead.`, type: 'info' }
+  }
+  if (status === 'already_running') {
+    return { message: detail || `Pipeline '${name}' is already active.`, type: 'info' }
+  }
+  return { message: detail || `Started ${name}`, type: 'success' }
 }

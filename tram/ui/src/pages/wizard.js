@@ -1,491 +1,444 @@
 import { api } from '../api.js'
-import { esc, toast } from '../utils.js'
+import { bindDataActions, esc, setStatusMessage, toast } from '../utils.js'
 
-// ── State ─────────────────────────────────────────────────────────────────────
 let _step = 1
 let _plugins = {}
-let _state = {
-  name: '', description: '', scheduleType: 'interval',
-  intervalSeconds: 300, cronExpr: '', onError: 'continue',
-  serializer: 'json', serializerOut: '',
-  source: { type: '', fields: {} },
-  transforms: [],
-  sinks: [],
+let _schema = { sources: {}, sinks: {}, serializers: {}, transforms: {} }
+let _state = _defaultState()
+
+function _defaultState() {
+  return {
+    name: '',
+    description: '',
+    scheduleType: 'interval',
+    intervalSeconds: 300,
+    cronExpr: '',
+    onError: 'continue',
+    serializer: 'json',
+    serializerOut: '',
+    source: { type: '', fields: {}, extraYaml: '' },
+    transforms: [],
+    sinks: [],
+  }
 }
 
-// ── Field schema for common connectors ────────────────────────────────────────
-const ARRAY_FIELDS = new Set(['brokers', 'hosts', 'servers', 'topics', 'oids', 'group_by'])
-
-const FIELD_SCHEMA = {
-  // Sources
-  kafka:         [
-    {k:'brokers',      lbl:'Brokers',       ph:'kafka:9092',          req:true, hint:'Comma-separated list of broker host:port'},
-    {k:'topic',        lbl:'Topic',         ph:'my-topic',            req:true, hint:'Kafka topic to consume'},
-    {k:'group_id',     lbl:'Group ID',      ph:'tram-consumer',                 hint:'Consumer group — omit for auto-generated'},
-    {k:'auto_offset_reset', lbl:'Offset Reset', type:'select', opts:['latest','earliest'], hint:'Where to start if no committed offset exists'},
-  ],
-  rest:          [
-    {k:'url',       lbl:'URL',      ph:'https://api.example.com/data', req:true, hint:'Full URL to poll each interval'},
-    {k:'method',    lbl:'Method',   type:'select', opts:['GET','POST','PUT'],    hint:'HTTP method for the request'},
-    {k:'auth_type', lbl:'Auth',     type:'select', opts:['none','basic','bearer'], hint:'Authentication scheme'},
-    {k:'username',  lbl:'Username',                                              hint:'Used for basic auth'},
-    {k:'password',  lbl:'Password', type:'password',                             hint:'Used for basic auth or bearer token value'},
-  ],
-  local:         [
-    {k:'path',         lbl:'Directory',    ph:'/data/input', req:true, hint:'Directory to scan for input files'},
-    {k:'file_pattern', lbl:'File Pattern', ph:'*.json',                hint:'Glob filter e.g. *.json, *.csv — blank matches all'},
-    {k:'recursive',    lbl:'Recursive',    type:'select', opts:['false','true'], hint:'Also scan subdirectories'},
-  ],
-  sftp:          [
-    {k:'host',             lbl:'Host',             req:true,            hint:'SFTP server hostname or IP'},
-    {k:'port',             lbl:'Port',             ph:'22',             hint:'SSH port, default 22'},
-    {k:'username',         lbl:'Username',         req:true,            hint:'SSH login username'},
-    {k:'password',         lbl:'Password',         type:'password',     hint:'SSH password — provide this OR private_key_path, not both'},
-    {k:'private_key_path', lbl:'Private Key Path', ph:'~/.ssh/id_rsa',  hint:'Path to SSH private key file — alternative to password auth'},
-    {k:'remote_path',      lbl:'Remote Path',      ph:'/data', req:true, hint:'Remote directory to list for files'},
-    {k:'file_pattern',     lbl:'File Pattern',     ph:'*.csv',          hint:'Glob filter applied to remote filenames'},
-  ],
-  s3:            [
-    {k:'bucket',               lbl:'Bucket',      req:true,                       hint:'S3 bucket name'},
-    {k:'prefix',               lbl:'Prefix',      ph:'',                          hint:'Key prefix / folder — leave blank for bucket root'},
-    {k:'endpoint_url',         lbl:'Endpoint URL',ph:'http://minio:9000',         hint:'Override for MinIO or other S3-compatible stores'},
-    {k:'aws_access_key_id',    lbl:'Access Key',                                  hint:'Leave blank to use IAM role / environment credentials'},
-    {k:'aws_secret_access_key',lbl:'Secret Key',  type:'password',                hint:'AWS secret access key'},
-  ],
-  sql:           [
-    {k:'connection_url', lbl:'Connection URL', ph:'postgresql+psycopg2://user:pass@host/db', req:true, hint:'SQLAlchemy connection URL — supports PostgreSQL, MySQL, SQLite'},
-    {k:'query',          lbl:'SQL Query',      type:'textarea', ph:'SELECT * FROM table',    req:true, hint:'Full SELECT query executed each interval — use WHERE to filter new rows'},
-  ],
-  mqtt:          [
-    {k:'host',     lbl:'Host',     req:true,             hint:'MQTT broker hostname or IP'},
-    {k:'port',     lbl:'Port',     ph:'1883',             hint:'Broker port — use 8883 for TLS'},
-    {k:'topic',    lbl:'Topic',    req:true,             hint:'Topic or wildcard e.g. sensors/# or home/+/temp'},
-    {k:'username', lbl:'Username',                       hint:'Leave blank if broker has no auth'},
-    {k:'password', lbl:'Password', type:'password',      hint:'MQTT broker password'},
-  ],
-  nats:          [
-    {k:'servers', lbl:'Servers', ph:'nats://localhost:4222', req:true, hint:'Comma-separated NATS server URLs'},
-    {k:'subject', lbl:'Subject', req:true,                            hint:'NATS subject — supports wildcards e.g. telemetry.>'},
-  ],
-  influxdb:      [
-    {k:'url',   lbl:'URL',        ph:'http://localhost:8086', req:true, hint:'InfluxDB base URL'},
-    {k:'token', lbl:'Token',      req:true, type:'password',           hint:'Auth token from InfluxDB UI → Data → Tokens'},
-    {k:'org',   lbl:'Org',        req:true,                            hint:'Organisation name as shown in InfluxDB UI'},
-    {k:'query', lbl:'Flux Query', type:'textarea', req:true, ph:'from(bucket:"my-bucket") |> range(start: -1h)', hint:'Flux query — always include range() to bound the time window'},
-  ],
-  redis:         [
-    {k:'host', lbl:'Host',        req:true, ph:'redis',  hint:'Redis server hostname or IP'},
-    {k:'port', lbl:'Port',        ph:'6379',             hint:'Redis port, default 6379'},
-    {k:'key',  lbl:'Key/Channel', req:true,              hint:'Key name for GET/LRANGE or channel name for SUBSCRIBE'},
-  ],
-  syslog:        [
-    {k:'host', lbl:'Listen Host', ph:'0.0.0.0', hint:'Address to bind — use 0.0.0.0 to accept from any interface'},
-    {k:'port', lbl:'Port',        ph:'514',      hint:'UDP/TCP port — default 514; use 5514 to avoid needing root'},
-  ],
-  webhook:       [
-    {k:'path', lbl:'Path', req:true, ph:'/webhook/my-hook', hint:'URL path suffix — must start with /webhook/; TRAM registers this as a POST endpoint'},
-  ],
-  ftp:           [
-    {k:'host',        lbl:'Host',        req:true,          hint:'FTP server hostname or IP'},
-    {k:'port',        lbl:'Port',        ph:'21',           hint:'FTP control port, default 21'},
-    {k:'username',    lbl:'Username',                       hint:'FTP login username (blank = anonymous)'},
-    {k:'password',    lbl:'Password',    type:'password',   hint:'FTP password'},
-    {k:'remote_path', lbl:'Remote Path', ph:'/', req:true,  hint:'Remote directory to list for files'},
-  ],
-  gcs:           [
-    {k:'bucket',           lbl:'Bucket',          req:true,                    hint:'GCS bucket name'},
-    {k:'prefix',           lbl:'Prefix',          ph:'',                       hint:'Object prefix / folder — leave blank for bucket root'},
-    {k:'credentials_file', lbl:'Credentials JSON',ph:'/secrets/sa.json',       hint:'Path to service-account JSON — omit to use Application Default Credentials'},
-  ],
-  azure_blob:    [
-    {k:'connection_string', lbl:'Connection String', req:true, hint:'From Azure Portal → Storage Account → Access keys → Connection string'},
-    {k:'container',         lbl:'Container',         req:true, hint:'Blob container name'},
-  ],
-  elasticsearch: [
-    {k:'hosts',          lbl:'Hosts',          ph:'http://es:9200',     req:true, hint:'Comma-separated Elasticsearch node URLs'},
-    {k:'index_template', lbl:'Index Template', ph:'pm-{timestamp}',    req:true, hint:'Index name — supports {timestamp} date substitution'},
-  ],
-  clickhouse:    [
-    {k:'host',     lbl:'Host',     req:true,          hint:'ClickHouse server hostname or IP'},
-    {k:'port',     lbl:'Port',     ph:'9000',         hint:'Native TCP port, default 9000 (use 8123 for HTTP interface)'},
-    {k:'database', lbl:'Database', req:true,          hint:'Target database name'},
-    {k:'user',     lbl:'User',                        hint:'ClickHouse username (default: default)'},
-    {k:'password', lbl:'Password', type:'password',   hint:'ClickHouse password'},
-  ],
-  // Sinks (overlap with sources + sink-specific)
-  opensearch:    [
-    {k:'hosts',    lbl:'Hosts',           ph:'http://opensearch:9200', req:true, hint:'Comma-separated OpenSearch node URLs'},
-    {k:'index',    lbl:'Index Template',  ph:'pm-%Y.%m.%d',           req:true, hint:'Index pattern — supports strftime e.g. logs-%Y.%m.%d'},
-    {k:'username', lbl:'Username',                                               hint:'Basic auth username (if security plugin enabled)'},
-    {k:'password', lbl:'Password',        type:'password',                       hint:'Basic auth password'},
-  ],
-  ves:           [
-    {k:'url',    lbl:'VES URL', req:true, hint:'VES collector endpoint URL'},
-    {k:'domain', lbl:'Domain', ph:'fault', hint:'VES domain: fault, measurement, heartbeat, log, etc.'},
-  ],
-  snmp_trap:     [
-    {k:'host', lbl:'Target Host', req:true,   hint:'Host to send SNMP traps to'},
-    {k:'port', lbl:'Port',        ph:'162',   hint:'SNMP trap port, default 162'},
-  ],
-  amqp:          [
-    {k:'url',         lbl:'AMQP URL',    req:true, ph:'amqp://user:pass@rabbit:5672/', hint:'Full AMQP connection URL including credentials and vhost'},
-    {k:'exchange',    lbl:'Exchange',                                                   hint:'Exchange name — leave blank for the default exchange'},
-    {k:'routing_key', lbl:'Routing Key',                                                hint:'Message routing key for the exchange'},
-  ],
-  websocket:     [
-    {k:'url',              lbl:'WebSocket URL', req:true, ph:'ws://host:8080/stream', hint:'WebSocket endpoint URL — use ws:// for plain or wss:// for TLS'},
-    {k:'ping_interval',    lbl:'Ping Interval', ph:'20',                              hint:'Seconds between keep-alive pings — 0 to disable'},
-    {k:'reconnect',        lbl:'Auto-reconnect', type:'select', opts:['true','false'], hint:'Automatically reconnect on disconnect'},
-    {k:'reconnect_delay',  lbl:'Reconnect Delay', ph:'5',                             hint:'Seconds to wait before attempting reconnection'},
-  ],
-  gnmi:          [
-    {k:'host',          lbl:'Host',          req:true,                              hint:'gNMI target hostname or IP (router, switch, or NOS)'},
-    {k:'port',          lbl:'Port',          ph:'57400',                            hint:'gNMI port — default 57400 (Cisco IOS-XR, Junos, OpenConfig)'},
-    {k:'username',      lbl:'Username',                                             hint:'gNMI auth username'},
-    {k:'password',      lbl:'Password',      type:'password',                       hint:'gNMI auth password'},
-    {k:'tls',           lbl:'TLS',           type:'select', opts:['true','false'],  hint:'Enable TLS — most devices require TLS; set false only for lab/insecure targets'},
-    {k:'tls_ca',        lbl:'CA Cert',       ph:'/certs/ca.pem',                   hint:'Path to CA certificate file for TLS verification — omit to skip verification'},
-    {k:'_subscriptions',lbl:'Subscriptions (one XPath per line)', type:'textarea', ph:'/interfaces/interface[name=*]/state\n/system/cpu', hint:'One gNMI XPath subscription path per line — TRAM wraps each in a SAMPLE subscription with a 10s interval'},
-  ],
-  snmp_poll:     [
-    {k:'host',      lbl:'Host',        req:true,                              hint:'SNMP agent hostname or IP'},
-    {k:'port',      lbl:'Port',        ph:'161',                              hint:'SNMP agent port — default 161'},
-    {k:'community', lbl:'Community',   ph:'public',                           hint:'SNMP v1/v2c community string'},
-    {k:'version',   lbl:'Version',     type:'select', opts:['2c','1','3'],    hint:'SNMP version — use 2c for most devices; 3 for USM auth/priv'},
-    {k:'oids',      lbl:'OIDs',        req:true, ph:'1.3.6.1.2.1.1.1.0',     hint:'Comma-separated OIDs to GET or WALK e.g. 1.3.6.1.2.1.1.1.0, sysDescr.0'},
-    {k:'operation', lbl:'Operation',   type:'select', opts:['get','walk'],    hint:'GET fetches exact OIDs; WALK traverses the subtree'},
-  ],
-  prometheus_rw: [
-    {k:'path',   lbl:'Path',   ph:'prom-rw', hint:'URL path segment — Prometheus scrapes POST to /webhooks/{path}; configure remote_write in prometheus.yml'},
-    {k:'secret', lbl:'Secret',              hint:'Optional bearer token that Prometheus must send in the Authorization header'},
-  ],
-  corba:         [
-    {k:'naming_service', lbl:'Naming Service', ph:'corbaloc:iiop:192.168.1.1:2809/NameService', hint:'CORBA Naming Service corbaloc URI — mutually exclusive with IOR string'},
-    {k:'ior',            lbl:'IOR String',     ph:'IOR:0000...',                                 hint:'Direct IOR string for the target object — use when Naming Service is unavailable'},
-    {k:'object_name',    lbl:'Object Name',    ph:'PM/PMCollect',                                hint:'Slash-separated path in the Naming Service e.g. PM/PMCollect (used with naming_service)'},
-    {k:'operation',      lbl:'Operation',      req:true,                                         hint:'CORBA operation name to invoke via DII e.g. getPMData'},
-    {k:'timeout_seconds',lbl:'Timeout (s)',    ph:'30',                                          hint:'ORB-level request timeout in seconds'},
-  ],
-}
-
-// ── Transform field schema ────────────────────────────────────────────────────
-const TRANSFORM_FIELDS = {
-  rename:           [{k:'_kv_fields', lbl:'Fields (one per line: old: new)', type:'textarea', req:true, ph:'old_name: new_name\nsrc: source', hint:'Each line maps an old field name to a new name — only listed fields are renamed'}],
-  cast:             [{k:'_kv_fields', lbl:'Fields (one per line: name: type)', type:'textarea', req:true, ph:'count: int\nvalue: float\nactive: bool', hint:'Types: str, int, float, bool, datetime — values that cannot be cast are kept as-is'}],
-  add_field:        [{k:'_kv_fields', lbl:'Fields (one per line: name: value)', type:'textarea', req:true, ph:'env: prod\nregion: us-east-1', hint:'Injects static fields into every record — use {existing_field} in the value for interpolation'}],
-  drop:             [{k:'_list_fields', lbl:'Fields to drop', ph:'col1, col2', req:true, hint:'Comma-separated field names to remove from each record'}],
-  filter:           [{k:'condition', lbl:'Condition', ph:"status == 'active'", req:true, hint:"Python expression — record fields are available as variables e.g. count > 0 or type == 'alarm'"}],
-  value_map:        [
-    {k:'field',       lbl:'Field',                              req:true, hint:'Field whose value will be looked up and replaced'},
-    {k:'_kv_mapping', lbl:'Mapping (one per line: from: to)',   type:'textarea', req:true, ph:'active: 1\ninactive: 0\nunknown: -1', hint:'Each line is a source_value: replacement_value pair — unmatched values are left unchanged unless default is set'},
-    {k:'default',     lbl:'Default',                                      hint:'Value to use when no mapping matches — leave blank to keep original'},
-  ],
-  regex_extract:    [
-    {k:'field',   lbl:'Source Field',  req:true, hint:'Field containing the string to match against'},
-    {k:'pattern', lbl:'Regex Pattern', req:true, hint:'Python regex — use a named group (?P<name>...) or single capture group'},
-    {k:'target',  lbl:'Target Field',  req:true, hint:'Field to write the captured value into'},
-  ],
-  jmespath:         [{k:'_kv_fields', lbl:'Fields (one per line: target: expression)', type:'textarea', req:true, ph:'result: data.items[0].value\nhost: metadata.host', hint:'Each line maps a target field name to a JMESPath expression evaluated against the record'}],
-  timestamp_normalize: [
-    {k:'_list_fields',  lbl:'Fields to normalize', ph:'ts, created_at', req:true, hint:'Comma-separated field names containing timestamps to normalize'},
-    {k:'input_format',  lbl:'Input Format', ph:'%Y-%m-%dT%H:%M:%S',                hint:'strptime format string — omit for auto-detection of ISO 8601 / epoch'},
-  ],
-  template:         [{k:'_kv_fields', lbl:'Fields (one per line: target: template)', type:'textarea', req:true, ph:'label: {{name}}-{{env}}\npath: /data/{{date}}', hint:'Each line renders a Jinja2-style template into the named target field — reference record fields with {{field_name}}'}],
-  mask:             [{k:'_list_fields', lbl:'Fields to mask', ph:'password, token, api_key', req:true, hint:'Comma-separated field names — values are replaced with *** (or hashed/partially masked depending on mode)'}],
-  limit:            [{k:'count', lbl:'Max Records', req:true, hint:'Maximum number of records to pass through — excess records are dropped'}],
-  deduplicate:      [{k:'_list_fields', lbl:'Key Fields', ph:'id, timestamp', req:true, hint:'Comma-separated fields that together form the deduplication key — duplicate combinations are dropped'}],
-  sort:             [
-    {k:'_list_fields', lbl:'Sort Fields', ph:'timestamp, id', req:true, hint:'Comma-separated fields to sort by — applied in order (first field primary, second secondary, etc.)'},
-    {k:'reverse',      lbl:'Reverse',     type:'select', opts:['false','true'], hint:'Sort descending when true'},
-  ],
-  flatten:          [{k:'separator', lbl:'Separator', ph:'_', hint:'Character used to join nested key names e.g. parent.child → parent_child'}],
-  explode:          [{k:'field', lbl:'Array Field', req:true, hint:'Field containing an array — each element becomes a separate record; other fields are copied into each output record'}],
-  unnest:           [{k:'field', lbl:'Nested Field', req:true, hint:'Nested object field whose keys are merged (unnested) into the parent record — the original nested field is removed'}],
-  aggregate:        [
-    {k:'group_by',        lbl:'Group By Fields',   ph:'host, region',             hint:'Comma-separated fields to group records by — leave blank to aggregate all records together'},
-    {k:'_kv_operations',  lbl:'Operations (one per line: output: op:source_field)', type:'textarea', req:true, ph:'total_rx: sum:rx_bytes\nsamples: count:rx_bytes\navg_val: avg:value', hint:'Shorthand: output_field: op:source_field — ops: sum, avg, min, max, count, first, last. count needs any field name e.g. count:id'},
-    {k:'window_seconds',  lbl:'Window (s)',                                        hint:'Flush aggregated records every N seconds — omit to aggregate across all records in the batch'},
-  ],
-  enrich:           [
-    {k:'lookup_file',  lbl:'Lookup File',  req:true,          hint:'Path to a CSV or JSON lookup file — each row keyed by the join field'},
-    {k:'join_key',     lbl:'Join Key',     req:true,          hint:'Field in the record whose value is used to look up the matching row in the file'},
-    {k:'lookup_key',   lbl:'Lookup Key',   ph:'id',           hint:'Column name in the lookup file to match against — defaults to the join_key name'},
-    {k:'lookup_format',lbl:'Format',       type:'select', opts:['csv','json'], hint:'Format of the lookup file'},
-  ],
-  validate:         [{k:'schema_file', lbl:'Schema File', req:true, hint:'Path to a JSON Schema file — records failing validation are sent to DLQ or dropped depending on on_invalid setting'}],
-}
-
-// ── Init ──────────────────────────────────────────────────────────────────────
 export async function init() {
   _step = 1
-  _state = {
-    name: '', description: '', scheduleType: 'interval',
-    intervalSeconds: 300, cronExpr: '', onError: 'continue',
-    serializer: 'json', serializerOut: '',
-    source: { type: '', fields: {} }, transforms: [], sinks: [],
-  }
+  _plugins = {}
+  _schema = { sources: {}, sinks: {}, serializers: {}, transforms: {} }
+  _state = _defaultState()
 
-  // Pre-fill from window._wizardState if set (e.g. from template deploy)
   if (window._wizardState) {
-    Object.assign(_state, window._wizardState)
+    _state = { ..._state, ...window._wizardState }
     window._wizardState = null
   }
 
+  _wireActions()
   _showStep(1)
-  _wireNav()
-  await _loadPlugins()
-  await _checkAI()
+  _hydrateInfo()
+
+  await Promise.all([_loadPluginsAndSchema(), _checkAI()])
+  _populateSelections()
+  _renderSourceFields()
+  _renderSinksList()
 }
 
-async function _loadPlugins() {
+async function _loadPluginsAndSchema() {
   try {
-    _plugins = await api.plugins()
+    const [plugins, schema] = await Promise.all([
+      api.plugins().catch(() => ({ sources: [], sinks: [], serializers: [], transforms: [] })),
+      api.configSchema.get().catch(() => ({ sources: {}, sinks: {}, serializers: {}, transforms: {} })),
+    ])
+    _plugins = plugins || { sources: [], sinks: [], serializers: [], transforms: [] }
+    _schema = schema || { sources: {}, sinks: {}, serializers: {}, transforms: {} }
   } catch (_) {
-    _plugins = { sources: [], sinks: [], transforms: [], serializers: [] }
+    _plugins = { sources: [], sinks: [], serializers: [], transforms: [] }
+    _schema = { sources: {}, sinks: {}, serializers: {}, transforms: {} }
   }
-  // Populate source dropdown
-  const sel = document.getElementById('wiz-src-type')
-  if (!sel) return
-  const sources = _plugins.sources || []
-  sel.innerHTML = '<option value="">— select —</option>' +
-    sources.map(t => `<option value="${esc(t)}"${_state.source.type === t ? ' selected' : ''}>${esc(t)}</option>`).join('')
-  if (_state.source.type) window._wizRenderSrcFields?.()
-  // Restore serializer selection if pre-filled
-  const serSel = document.getElementById('wiz-serializer')
-  if (serSel && _state.serializer) serSel.value = _state.serializer
 }
 
 async function _checkAI() {
   try {
-    const status  = await api.ai.status()
+    const status = await api.ai.status()
     const modelEl = document.getElementById('wiz-ai-model')
     const uncfgEl = document.getElementById('wiz-ai-unconfigured')
-    const genBtn  = document.getElementById('wiz-ai-gen-btn')
+    const genBtn = document.getElementById('wiz-ai-gen-btn')
 
     if (status.enabled) {
-      if (modelEl)  modelEl.textContent = `${status.provider} / ${status.model}`
-      if (uncfgEl)  uncfgEl.classList.add('d-none')
-      if (genBtn)   genBtn.disabled = false
+      if (modelEl) modelEl.textContent = `${status.provider} / ${status.model}`
+      if (uncfgEl) uncfgEl.classList.add('d-none')
+      if (genBtn) genBtn.disabled = false
     } else {
-      if (modelEl)  modelEl.textContent = ''
-      if (uncfgEl)  uncfgEl.classList.remove('d-none')
-      if (genBtn)   genBtn.disabled = true
+      if (modelEl) modelEl.textContent = ''
+      if (uncfgEl) uncfgEl.classList.remove('d-none')
+      if (genBtn) genBtn.disabled = true
     }
   } catch (_) {}
 }
 
-// ── Step navigation ───────────────────────────────────────────────────────────
-function _wireNav() {
-  window._wizBack  = _goBack
-  window._wizNext  = _goNext
-  window._wizSave  = _save
-  window._wizSchedChange = _schedChange
-  window._wizRenderSrcFields = () => _renderConnectorFields('wiz-src-fields', 'wiz-src-type', _state.source.fields)
-  window._wizTestSrc = _testSrc
-  window._wizAddTransform = _addTransform
-  window._wizAddSink = _addSink
-  window._wizDryRun = _dryRun
-  window._wizAiGenerate = _aiGenerate
+function _wireActions() {
+  document.getElementById('wiz-back-btn')?.addEventListener('click', _goBack)
+  document.getElementById('wiz-next-btn')?.addEventListener('click', _goNext)
+  document.getElementById('wiz-save-btn')?.addEventListener('click', () => { void _save() })
+  document.getElementById('wiz-sched-type')?.addEventListener('change', _schedChange)
+  document.getElementById('wiz-src-type')?.addEventListener('change', _renderSourceFields)
+  document.getElementById('wiz-test-src-btn')?.addEventListener('click', () => { void _testSrc() })
+  document.getElementById('wiz-add-sink-btn')?.addEventListener('click', _addSink)
+  document.getElementById('wiz-dry-run-btn')?.addEventListener('click', () => { void _dryRun() })
+  document.getElementById('wiz-ai-gen-btn')?.addEventListener('click', () => { void _aiGenerate() })
+  document.getElementById('wiz-open-editor-btn')?.addEventListener('click', _openEditor)
+  document.getElementById('wiz-open-blank-editor-link')?.addEventListener('click', _openBlankEditor)
+  document.getElementById('wiz-ai-settings-link')?.addEventListener('click', (event) => {
+    event.preventDefault()
+    navigate('settings')
+  })
+
+  const sinksList = document.getElementById('wiz-sinks-list')
+  bindDataActions(sinksList, {
+    'delete-sink': (button) => {
+      _deleteSink(parseInt(button.dataset.index || '', 10))
+    },
+    'test-sink': (button) => {
+      void _testSink(parseInt(button.dataset.index || '', 10))
+    },
+  })
+  if (sinksList?._wizardChangeListener) {
+    sinksList.removeEventListener('change', sinksList._wizardChangeListener)
+  }
+  const changeListener = (event) => {
+    const typeSelect = event.target.closest('.wiz-s-type')
+    if (!typeSelect || !sinksList?.contains(typeSelect)) return
+    const index = parseInt(typeSelect.closest('.wiz-sink-card')?.dataset.index || '', 10)
+    if (!Number.isFinite(index)) return
+    _handleSinkTypeChange(index, typeSelect.value)
+  }
+  sinksList?.addEventListener('change', changeListener)
+  if (sinksList) sinksList._wizardChangeListener = changeListener
 }
 
 function _showStep(n) {
   _step = n
-  for (let i = 1; i <= 5; i++) {
+  for (let i = 1; i <= 3; i++) {
     document.getElementById(`wiz-step-${i}`)?.classList.toggle('d-none', i !== n)
   }
-  document.querySelectorAll('#wiz-steps .wiz-step').forEach(el => {
-    const s = parseInt(el.dataset.step)
-    el.classList.toggle('active',    s === n)
-    el.classList.toggle('done',      s < n)
-    el.classList.toggle('upcoming',  s > n)
+  document.querySelectorAll('#wiz-steps .wiz-step').forEach((el) => {
+    const step = parseInt(el.dataset.step || '0', 10)
+    el.classList.toggle('active', step === n)
+    el.classList.toggle('done', step < n)
+    el.classList.toggle('upcoming', step > n)
   })
-  const backBtn = document.getElementById('wiz-back-btn')
-  const nextBtn = document.getElementById('wiz-next-btn')
-  const saveBtn = document.getElementById('wiz-save-btn')
-  if (backBtn) backBtn.classList.toggle('d-none', n === 1)
-  if (nextBtn) nextBtn.classList.toggle('d-none', n === 5)
-  if (saveBtn) saveBtn.classList.toggle('d-none', n !== 5)
+  document.getElementById('wiz-back-btn')?.classList.toggle('d-none', n === 1)
+  document.getElementById('wiz-next-btn')?.classList.toggle('d-none', n === 3)
+  document.getElementById('wiz-save-btn')?.classList.toggle('d-none', n !== 3)
 
-  if (n === 4) _renderSinksList()
-  if (n === 5) _buildReviewYaml()
+  if (n === 2) _renderSinksList()
+  if (n === 3) _buildReviewYaml()
 }
 
-function _schedChange() {
-  const type = document.getElementById('wiz-sched-type')?.value
-  document.getElementById('wiz-interval-row')?.classList.toggle('d-none', type !== 'interval')
-  document.getElementById('wiz-cron-row')?.classList.toggle('d-none', type !== 'cron')
+function _goBack() {
+  if (_step > 1) _showStep(_step - 1)
 }
-
-function _goBack() { if (_step > 1) _showStep(_step - 1) }
 
 function _goNext() {
   if (!_collectStep(_step)) return
   _showStep(_step + 1)
 }
 
-// ── Step data collection ──────────────────────────────────────────────────────
+function _hydrateInfo() {
+  _setInput('wiz-name', _state.name)
+  _setInput('wiz-desc', _state.description)
+  _setInput('wiz-sched-type', _state.scheduleType)
+  _setInput('wiz-on-error', _state.onError)
+  _setInput('wiz-cron-expr', _state.cronExpr)
+  const intervalVal = Math.max(1, Math.round((_state.intervalSeconds || 300) / 60))
+  _setInput('wiz-interval-val', intervalVal)
+  _setInput('wiz-interval-unit', '60')
+  _schedChange()
+}
+
+function _populateSelections() {
+  _populateSelect('wiz-src-type', _availableTypeOptions('sources'), _state.source.type, true)
+  _populateSelect('wiz-serializer', _availableTypeOptions('serializers'), _state.serializer, false)
+  _populateSelect('wiz-serializer-out', _availableTypeOptions('serializers'), _state.serializerOut, true)
+}
+
+function _availableTypeOptions(category) {
+  const pluginItems = Array.isArray(_plugins[category]) ? _plugins[category] : []
+  const schemaItems = Object.keys(_schema[category] || {})
+  if (!pluginItems.length) return schemaItems.sort()
+  return pluginItems.filter(item => schemaItems.includes(item)).sort()
+}
+
+function _populateSelect(id, options, selected, withBlank) {
+  const el = document.getElementById(id)
+  if (!el) return
+  const current = selected || ''
+  const blank = withBlank ? '<option value="">— select —</option>' : ''
+  el.innerHTML = blank + options.map((option) => (
+    `<option value="${esc(option)}"${option === current ? ' selected' : ''}>${esc(option)}</option>`
+  )).join('')
+  if (!withBlank && options.length && !current) {
+    el.value = options.includes('json') ? 'json' : options[0]
+  } else if (current) {
+    el.value = current
+  }
+}
+
+function _schedChange() {
+  const type = document.getElementById('wiz-sched-type')?.value || 'interval'
+  document.getElementById('wiz-interval-row')?.classList.toggle('d-none', type !== 'interval')
+  document.getElementById('wiz-cron-row')?.classList.toggle('d-none', type !== 'cron')
+}
+
 function _collectStep(n) {
   if (n === 1) {
-    const name = document.getElementById('wiz-name')?.value.trim()
+    const name = (document.getElementById('wiz-name')?.value || '').trim()
     if (!name) { toast('Pipeline name is required', 'error'); return false }
-    if (!/^[a-zA-Z0-9_-]+$/.test(name)) { toast('Name must be alphanumeric with hyphens/underscores', 'error'); return false }
-    _state.name          = name
-    _state.description   = document.getElementById('wiz-desc')?.value.trim() || ''
-    _state.scheduleType  = document.getElementById('wiz-sched-type')?.value || 'interval'
-    _state.onError       = document.getElementById('wiz-on-error')?.value || 'continue'
-    const val  = parseInt(document.getElementById('wiz-interval-val')?.value) || 5
-    const unit = parseInt(document.getElementById('wiz-interval-unit')?.value) || 60
+    if (!/^[a-zA-Z0-9_-]+$/.test(name)) {
+      toast('Name must be alphanumeric with hyphens/underscores', 'error')
+      return false
+    }
+    _state.name = name
+    _state.description = (document.getElementById('wiz-desc')?.value || '').trim()
+    _state.scheduleType = document.getElementById('wiz-sched-type')?.value || 'interval'
+    _state.onError = document.getElementById('wiz-on-error')?.value || 'continue'
+    _state.cronExpr = (document.getElementById('wiz-cron-expr')?.value || '').trim()
+    const val = parseInt(document.getElementById('wiz-interval-val')?.value || '5', 10) || 5
+    const unit = parseInt(document.getElementById('wiz-interval-unit')?.value || '60', 10) || 60
     _state.intervalSeconds = val * unit
-    _state.cronExpr = document.getElementById('wiz-cron-expr')?.value.trim() || ''
-  } else if (n === 2) {
-    const type = document.getElementById('wiz-src-type')?.value
-    if (!type) { toast('Select a source type', 'error'); return false }
-    _state.source.type  = type
-    _state.source.fields = _collectConnectorFields('wiz-src-fields')
-    _state.serializer   = document.getElementById('wiz-serializer')?.value || 'json'
-  } else if (n === 3) {
-    _collectTransforms()
-  } else if (n === 4) {
-    _state.serializerOut = document.getElementById('wiz-serializer-out')?.value || ''
-    if (!_collectSinks()) return false
+    return true
   }
+
+  if (n === 2) {
+    const type = document.getElementById('wiz-src-type')?.value || ''
+    if (!type) { toast('Select a source type', 'error'); return false }
+    const model = _schema.sources[type]
+    const collected = _collectModelFields('wiz-src-fields', model)
+    _state.source = {
+      type,
+      fields: collected.fields,
+      extraYaml: collected.extraYaml,
+    }
+    _state.serializer = document.getElementById('wiz-serializer')?.value || 'json'
+    _state.serializerOut = document.getElementById('wiz-serializer-out')?.value || ''
+    return _collectSinks()
+  }
+
   return true
 }
 
-// ── Connector field rendering ─────────────────────────────────────────────────
-function _renderConnectorFields(containerId, typeSelId, existingFields = {}) {
-  const container = document.getElementById(containerId)
+function _renderSourceFields() {
+  const container = document.getElementById('wiz-src-fields')
   if (!container) return
-  const type = document.getElementById(typeSelId)?.value
-  if (!type) { container.innerHTML = ''; return }
-  const schema = FIELD_SCHEMA[type]
-  if (!schema) {
-    container.innerHTML = `<div class="col-12"><label class="form-label text-secondary" style="font-size:12px">Config fields (YAML key: value, one per line)</label><textarea class="form-control form-control-sm font-monospace" id="${containerId}-freeform" rows="5" style="background:#0d1117;color:#e6edf3;border-color:#30363d">${_freeformFromFields(existingFields)}</textarea></div>`
+  const type = document.getElementById('wiz-src-type')?.value || _state.source.type
+  if (!type) {
+    container.innerHTML = ''
     return
   }
-  container.innerHTML = `<div class="row g-2">${schema.map(f => _fieldHtml(f, existingFields[f.k] || '', containerId)).join('')}</div>`
+  const model = _schema.sources[type]
+  const sourceState = _state.source.type === type ? _state.source : { type, fields: {}, extraYaml: '' }
+  container.innerHTML = _renderModelFieldsHtml('source', type, model, sourceState)
 }
 
-function _fieldHtml(f, val, prefix) {
-  const id = `${prefix}-${f.k}`
-  const label = `<label class="form-label text-secondary mb-1" style="font-size:12px">${esc(f.lbl)}${f.req ? ' <span style="color:#f85149">*</span>' : ''}</label>`
-  const hint = f.hint ? `<div class="form-text" style="font-size:10px;color:#6e7681">${esc(f.hint)}</div>` : ''
-  if (f.type === 'select') {
-    return `<div class="col-4">${label}<select class="form-select form-select-sm" id="${id}" style="background:#161b22;color:#e6edf3;border-color:#30363d">${f.opts.map(o => `<option${val===o?' selected':''}>${o}</option>`).join('')}</select>${hint}</div>`
+function _renderModelFieldsHtml(category, type, model, statePart) {
+  const fields = Array.isArray(model?.fields) ? model.fields : []
+  if (!model || !fields.length) {
+    const fallback = model
+      ? 'No simple fields available here. Use advanced YAML below or continue in the editor.'
+      : `Schema unavailable for ${esc(type)}. Use the YAML editor for this connector.`
+    return `
+      <div class="wizard-schema-note">${fallback}</div>
+      <div class="wizard-extra-yaml-block mt-3">
+        <label class="form-label wizard-field-label">Advanced YAML Patch <span class="wizard-optional">(optional)</span></label>
+        <textarea class="form-control form-control-sm font-monospace wizard-code-input"
+          data-extra-yaml="true" rows="4"
+          placeholder="Add nested or unsupported fields here, relative to this block. Example:\nsubscriptions:\n  - path: /interfaces/interface/state">${esc(statePart.extraYaml || '')}</textarea>
+        <div class="form-text wizard-field-hint">This block is inserted under the current ${esc(type)} section with indentation preserved.</div>
+      </div>`
   }
-  if (f.type === 'textarea') {
-    return `<div class="col-12">${label}<textarea class="form-control form-control-sm font-monospace" id="${id}" rows="3" placeholder="${esc(f.ph||'')}" style="background:#0d1117;color:#e6edf3;border-color:#30363d;resize:none">${esc(val)}</textarea>${hint}</div>`
+
+  const supported = fields.filter(field => field.kind !== 'complex')
+  const omitted = fields.filter(field => field.kind === 'complex')
+  const required = supported.filter(field => field.required)
+  const optional = supported.filter(field => !field.required)
+  const sections = []
+
+  if (required.length) {
+    sections.push(`
+      <div class="col-12">
+        <div class="wizard-field-group-title">Required</div>
+        <div class="row g-2">${required.map(field => _fieldHtml(category, type, field, statePart.fields?.[field.name])).join('')}</div>
+      </div>`)
   }
-  const inputType = f.type === 'password' ? 'password' : 'text'
-  return `<div class="col-4">${label}<input type="${inputType}" class="form-control form-control-sm" id="${id}" placeholder="${esc(f.ph||'')}" value="${esc(val)}" style="background:#161b22;color:#e6edf3;border-color:#30363d">${hint}</div>`
+
+  if (optional.length) {
+    sections.push(`
+      <div class="col-12 mt-2">
+        <div class="wizard-field-group-title">Optional</div>
+        <div class="row g-2">${optional.map(field => _fieldHtml(category, type, field, statePart.fields?.[field.name])).join('')}</div>
+      </div>`)
+  }
+
+  const fieldsHtml = supported.length
+    ? `<div class="row g-2">${sections.join('')}</div>`
+    : '<div class="wizard-schema-note">No simple fields available here. Use advanced YAML below or continue in the editor.</div>'
+
+  const omittedHtml = omitted.length
+    ? `<div class="wizard-omitted-note">
+         Advanced fields omitted from the wizard: ${omitted.map(field => esc(field.name)).join(', ')}.
+         Use the YAML patch below or continue in the editor.
+       </div>`
+    : ''
+
+  return `
+    ${fieldsHtml}
+    ${omittedHtml}
+    <div class="wizard-extra-yaml-block mt-3">
+      <label class="form-label wizard-field-label">Advanced YAML Patch <span class="wizard-optional">(optional)</span></label>
+      <textarea class="form-control form-control-sm font-monospace wizard-code-input"
+        data-extra-yaml="true" rows="4"
+        placeholder="Add nested or unsupported fields here, relative to this block. Example:\nsubscriptions:\n  - path: /interfaces/interface/state">${esc(statePart.extraYaml || '')}</textarea>
+      <div class="form-text wizard-field-hint">This block is inserted under the current ${esc(type)} section with indentation preserved.</div>
+    </div>`
 }
 
-function _collectConnectorFields(containerId) {
+function _fieldHtml(category, type, field, value) {
+  const id = `${category}-${type}-${field.name}`
+  const label = `<label class="form-label wizard-field-label mb-1" for="${id}">${esc(_labelize(field.name))}${field.required ? ' <span class="wizard-required">*</span>' : ''}</label>`
+  const defaultText = field.default !== null && field.default !== undefined && field.default !== '' ? ` · default ${String(field.default)}` : ''
+  const hint = `<div class="form-text wizard-field-hint">${esc(field.type)}${esc(defaultText)}</div>`
+  const stringValue = _valueForInput(field, value)
+  const widthClass = _fieldWidthClass(field)
+
+  if (field.kind === 'select') {
+    return `<div class="${widthClass}">${label}
+      <select class="form-select form-select-sm" id="${id}" data-field-name="${field.name}" data-field-kind="${field.kind}">
+        ${field.choices.map(choice => `<option value="${esc(choice)}"${choice === stringValue ? ' selected' : ''}>${esc(choice)}</option>`).join('')}
+      </select>${hint}</div>`
+  }
+
+  if (field.kind === 'boolean') {
+    return `<div class="${widthClass}">${label}
+      <select class="form-select form-select-sm" id="${id}" data-field-name="${field.name}" data-field-kind="${field.kind}">
+        <option value="true"${stringValue === 'true' ? ' selected' : ''}>true</option>
+        <option value="false"${stringValue === 'false' ? ' selected' : ''}>false</option>
+      </select>${hint}</div>`
+  }
+
+  if (field.kind === 'list' || field.kind === 'map' || field.multiline) {
+    const placeholder = field.kind === 'map'
+      ? 'key: value'
+      : field.kind === 'list'
+        ? 'one item per line or comma-separated'
+        : ''
+    return `<div class="col-12">${label}
+      <textarea class="form-control form-control-sm font-monospace wizard-code-input" id="${id}" data-field-name="${field.name}" data-field-kind="${field.kind}" rows="3"
+        placeholder="${placeholder}">${esc(stringValue)}</textarea>${hint}</div>`
+  }
+
+  const inputType = field.secret ? 'password' : field.kind === 'integer' || field.kind === 'number' ? 'number' : 'text'
+  return `<div class="${widthClass}">${label}
+    <input type="${inputType}" class="form-control form-control-sm" id="${id}" data-field-name="${field.name}" data-field-kind="${field.kind}" value="${esc(stringValue)}">${hint}</div>`
+}
+
+function _labelize(name) {
+  return String(name || '')
+    .split('_')
+    .filter(Boolean)
+    .map(part => part.charAt(0).toUpperCase() + part.slice(1))
+    .join(' ')
+}
+
+function _fieldWidthClass(field) {
+  if (field.secret) return 'col-12 col-md-6'
+  if (field.kind === 'number' || field.kind === 'integer' || field.kind === 'boolean' || field.kind === 'select') {
+    return 'col-12 col-md-4'
+  }
+  if (field.name.endsWith('_file') || field.name.endsWith('_path') || field.name.includes('template')) {
+    return 'col-12 col-md-8'
+  }
+  return 'col-12 col-md-6'
+}
+
+function _valueForInput(field, value) {
+  if (value === null || value === undefined) {
+    if (field.default === null || field.default === undefined) return field.kind === 'boolean' ? 'false' : ''
+    if (Array.isArray(field.default)) return field.default.join('\n')
+    if (typeof field.default === 'object') return Object.entries(field.default).map(([key, itemValue]) => `${key}: ${itemValue}`).join('\n')
+    return String(field.default)
+  }
+  if (Array.isArray(value)) return value.join('\n')
+  if (typeof value === 'object') return Object.entries(value).map(([key, itemValue]) => `${key}: ${itemValue}`).join('\n')
+  return String(value)
+}
+
+function _collectModelFields(containerId, model) {
   const container = document.getElementById(containerId)
-  if (!container) return {}
-  const freeform = container.querySelector(`#${containerId}-freeform`)
-  if (freeform) return _fieldsFromFreeform(freeform.value)
-  const fields = {}
-  container.querySelectorAll('input,select,textarea').forEach(el => {
-    const k = el.id.replace(`${containerId}-`, '')
-    if (el.value.trim()) fields[k] = el.value.trim()
-  })
-  return fields
-}
+  const fields = Array.isArray(model?.fields) ? model.fields : []
+  if (!container || !model) return { fields: {}, extraYaml: '' }
 
-function _freeformFromFields(fields) {
-  return Object.entries(fields).map(([k,v]) => `${k}: ${v}`).join('\n')
-}
-
-function _fieldsFromFreeform(text) {
-  const fields = {}
-  for (const line of text.split('\n')) {
-    const idx = line.indexOf(':')
-    if (idx < 0) continue
-    const k = line.slice(0, idx).trim()
-    const v = line.slice(idx + 1).trim()
-    if (k) fields[k] = v
-  }
-  return fields
-}
-
-// ── Source test ───────────────────────────────────────────────────────────────
-async function _testSrc() {
-  const type = document.getElementById('wiz-src-type')?.value
-  if (!type) { toast('Select a source type first', 'error'); return }
-  const fields = _collectConnectorFields('wiz-src-fields')
-  const resultEl = document.getElementById('wiz-src-test-result')
-  if (resultEl) resultEl.textContent = 'Testing…'
-  try {
-    const r = await api.connectors.test(type, fields)
-    if (resultEl) {
-      resultEl.style.color = r.ok ? '#3fb950' : '#f85149'
-      resultEl.textContent = r.ok
-        ? `✓ ${r.detail || 'OK'}${r.latency_ms != null ? ` (${r.latency_ms}ms)` : ''}`
-        : `✗ ${r.error || 'failed'}`
+  const collected = {}
+  fields.filter(field => field.kind !== 'complex').forEach((field) => {
+    const el = container.querySelector(`[data-field-name="${field.name}"]`)
+    if (!el) return
+    const parsed = _parseFieldValue(field, el.value)
+    if (parsed !== undefined && parsed !== null && !(Array.isArray(parsed) && !parsed.length)) {
+      if (!(typeof parsed === 'string' && parsed === '')) {
+        collected[field.name] = parsed
+      }
     }
-  } catch (e) {
-    if (resultEl) { resultEl.style.color = '#f85149'; resultEl.textContent = `✗ ${e.message}` }
-  }
-}
-
-// ── Transforms ────────────────────────────────────────────────────────────────
-function _addTransform() {
-  _state.transforms.push({ type: 'filter', fields: { condition: '' } })
-  _renderTransformsList()
-}
-
-function _collectTransforms() {
-  const list = document.getElementById('wiz-transforms-list')
-  if (!list) return
-  _state.transforms = []
-  list.querySelectorAll('.wiz-transform-card').forEach((card, i) => {
-    const type = card.querySelector('.wiz-t-type')?.value
-    if (!type) return
-    const fields = _collectConnectorFields(`wiz-tf-${i}`)
-    _state.transforms.push({ type, fields })
   })
+  const extraYaml = (container.querySelector('[data-extra-yaml="true"]')?.value || '').trim()
+  return { fields: collected, extraYaml }
 }
 
-function _renderTransformsList() {
-  const list = document.getElementById('wiz-transforms-list')
-  if (!list) return
-  if (!_state.transforms.length) {
-    list.innerHTML = '<div class="text-secondary text-center py-3" style="font-size:13px">No transforms — click "Add Transform" or click Next to skip.</div>'
-    return
+function _parseFieldValue(field, raw) {
+  const value = String(raw || '').trim()
+  if (!value) return undefined
+  if (field.kind === 'boolean') return value === 'true'
+  if (field.kind === 'integer') return Number.parseInt(value, 10)
+  if (field.kind === 'number') return Number(value)
+  if (field.kind === 'list') {
+    return value.split('\n').flatMap(line => line.split(',')).map(item => item.trim()).filter(Boolean)
   }
-  const allTransforms = _plugins.transforms || Object.keys(TRANSFORM_FIELDS)
-  list.innerHTML = _state.transforms.map((t, i) => `
-    <div class="wiz-transform-card mb-3 p-3 rounded" style="background:#161b22;border:1px solid #30363d">
-      <div class="d-flex gap-2 align-items-center mb-2">
-        <select class="form-select form-select-sm wiz-t-type" style="width:180px;background:#0d1117;color:#e6edf3;border-color:#30363d"
-                onchange="window._wizChangeTransformType?.(${i}, this.value)">
-          ${allTransforms.map(tt => `<option value="${tt}"${t.type===tt?' selected':''}>${tt}</option>`).join('')}
-        </select>
-        <button class="btn-flat-danger ms-auto" onclick="window._wizDeleteTransform?.(${i})"><i class="bi bi-trash"></i></button>
-      </div>
-      <div id="wiz-tf-${i}" class="row g-2">
-        ${(TRANSFORM_FIELDS[t.type] || [{k:'_yaml',lbl:'Config (YAML key: value)',type:'textarea',ph:'field: value'}]).map(f => _fieldHtml(f, t.fields?.[f.k] || '', `wiz-tf-${i}`)).join('')}
-      </div>
-    </div>`).join('')
+  if (field.kind === 'map') {
+    const result = {}
+    value.split('\n').forEach((line) => {
+      const idx = line.indexOf(':')
+      if (idx < 0) return
+      const key = line.slice(0, idx).trim()
+      const itemValue = line.slice(idx + 1).trim()
+      if (key) result[key] = itemValue
+    })
+    return Object.keys(result).length ? result : undefined
+  }
+  return value
+}
 
-  window._wizDeleteTransform = (i) => {
-    _collectTransforms()
-    _state.transforms.splice(i, 1)
-    _renderTransformsList()
-  }
-  window._wizChangeTransformType = (i, type) => {
-    _collectTransforms()
-    _state.transforms[i].type = type
-    _state.transforms[i].fields = {}
-    _renderTransformsList()
+async function _testSrc() {
+  const type = document.getElementById('wiz-src-type')?.value || ''
+  if (!type) { toast('Select a source type first', 'error'); return }
+  const resultEl = document.getElementById('wiz-src-test-result')
+  setStatusMessage(resultEl, 'Testing…', 'info')
+  try {
+    const model = _schema.sources[type]
+    const { fields } = _collectModelFields('wiz-src-fields', model)
+    const result = await api.connectors.test(type, fields)
+    setStatusMessage(
+      resultEl,
+      result.ok
+        ? `✓ ${result.detail || 'OK'}${result.latency_ms != null ? ` (${result.latency_ms}ms)` : ''}`
+        : `✗ ${result.error || 'failed'}`,
+      result.ok ? 'success' : 'error',
+    )
+  } catch (e) {
+    setStatusMessage(resultEl, `✗ ${e.message}`, 'error')
   }
 }
 
-// ── Sinks ─────────────────────────────────────────────────────────────────────
 function _addSink() {
   _collectSinks()
-  _state.sinks.push({ type: '', fields: {}, serializer_out: '', condition: '' })
+  _state.sinks.push({ type: '', fields: {}, serializer_out: '', condition: '', extraYaml: '' })
   _renderSinksList()
 }
 
@@ -493,239 +446,232 @@ function _collectSinks() {
   const list = document.getElementById('wiz-sinks-list')
   if (!list) return true
   const updated = []
-  let ok = true
-  list.querySelectorAll('.wiz-sink-card').forEach((card, i) => {
-    const type = card.querySelector('.wiz-s-type')?.value
-    const fields = _collectConnectorFields(`wiz-sk-${i}`)
-    const serializer_out = card.querySelector(`.wiz-s-ser`)?.value || ''
-    const condition      = card.querySelector(`.wiz-s-cond`)?.value.trim() || ''
-    updated.push({ type: type || '', fields, serializer_out, condition })
+  list.querySelectorAll('.wiz-sink-card').forEach((card, index) => {
+    const type = card.querySelector('.wiz-s-type')?.value || ''
+    const model = _schema.sinks[type]
+    const collected = _collectModelFields(`wiz-sk-${index}`, model)
+    updated.push({
+      type,
+      fields: collected.fields,
+      serializer_out: card.querySelector('.wiz-s-ser')?.value || '',
+      condition: (card.querySelector('.wiz-s-cond')?.value || '').trim(),
+      extraYaml: collected.extraYaml,
+    })
   })
   _state.sinks = updated
-  return ok
+  if (!_state.sinks.some(sink => sink.type)) {
+    toast('Add at least one sink', 'error')
+    return false
+  }
+  return true
 }
 
 function _renderSinksList() {
   const list = document.getElementById('wiz-sinks-list')
   if (!list) return
   if (!_state.sinks.length) {
-    list.innerHTML = '<div class="text-secondary text-center py-3" style="font-size:13px">No sinks — click "Add Sink".</div>'
+    list.innerHTML = '<div class="wizard-empty-note">No sinks yet. Add one or continue in the editor for advanced pipelines.</div>'
     return
   }
-  const allSinks = _plugins.sinks || []
-  const serializers = _plugins.serializers || ['json','csv','xml','ndjson','bytes','text']
-  list.innerHTML = _state.sinks.map((s, i) => `
-    <div class="wiz-sink-card mb-3 p-3 rounded" style="background:#161b22;border:1px solid #30363d">
-      <div class="d-flex gap-2 align-items-center mb-2">
-        <select class="form-select form-select-sm wiz-s-type" style="width:180px;background:#0d1117;color:#e6edf3;border-color:#30363d"
-                onchange="window._wizChangeSinkType?.(${i}, this.value)">
-          <option value="">— select —</option>
-          ${allSinks.map(st => `<option value="${st}"${s.type===st?' selected':''}>${st}</option>`).join('')}
-        </select>
-        <select class="form-select form-select-sm wiz-s-ser" style="width:120px;background:#0d1117;color:#e6edf3;border-color:#30363d">
-          <option value="">default ser.</option>
-          ${serializers.map(sr => `<option value="${sr}"${s.serializer_out===sr?' selected':''}>${sr}</option>`).join('')}
-        </select>
-        <button class="btn btn-sm btn-outline-secondary" onclick="window._wizTestSink?.(${i})">
-          <i class="bi bi-plug"></i> Test
-        </button>
-        <span id="wiz-sk-test-${i}" style="font-size:11px"></span>
-        <button class="btn-flat-danger ms-auto" onclick="window._wizDeleteSink?.(${i})"><i class="bi bi-trash"></i></button>
-      </div>
-      <div id="wiz-sk-${i}" class="row g-2">
-        ${s.type ? (FIELD_SCHEMA[s.type] || []).map(f => _fieldHtml(f, s.fields?.[f.k] || '', `wiz-sk-${i}`)).join('') : ''}
-      </div>
-      <div class="mt-2">
-        <input type="text" class="form-control form-control-sm wiz-s-cond font-monospace" placeholder="Condition (optional): records_out > 0" value="${esc(s.condition||'')}" style="background:#0d1117;color:#e6edf3;border-color:#30363d;font-size:11px">
-      </div>
-    </div>`).join('')
 
-  window._wizDeleteSink = (i) => { _collectSinks(); _state.sinks.splice(i, 1); _renderSinksList() }
-  window._wizChangeSinkType = (i, type) => {
-    _collectSinks()
-    _state.sinks[i].type = type
-    _state.sinks[i].fields = {}
-    _renderSinksList()
-  }
-  window._wizTestSink = async (i) => {
-    _collectSinks()
-    const s = _state.sinks[i]
-    if (!s?.type) return
-    const resEl = document.getElementById(`wiz-sk-test-${i}`)
-    if (resEl) resEl.textContent = '…'
-    try {
-      const r = await api.connectors.test(s.type, s.fields)
-      if (resEl) {
-        resEl.style.color = r.ok ? '#3fb950' : '#f85149'
-        resEl.textContent = r.ok ? `✓${r.latency_ms != null ? ` ${r.latency_ms}ms` : ''}` : `✗ ${r.error||'fail'}`
-      }
-    } catch (e) { if (resEl) { resEl.style.color='#f85149'; resEl.textContent=`✗ ${e.message}` } }
+  const sinkTypes = _availableTypeOptions('sinks')
+  const serializerTypes = _availableTypeOptions('serializers')
+  list.innerHTML = _state.sinks.map((sink, index) => {
+    const model = sink.type ? _schema.sinks[sink.type] : null
+    return `
+      <div class="wizard-sink-card mb-3" data-index="${index}">
+        <div class="wizard-sink-toolbar">
+          <select class="form-select form-select-sm wiz-s-type wizard-sink-type">
+            <option value="">— select —</option>
+            ${sinkTypes.map(type => `<option value="${esc(type)}"${sink.type === type ? ' selected' : ''}>${esc(type)}</option>`).join('')}
+          </select>
+          <select class="form-select form-select-sm wiz-s-ser wizard-sink-serializer">
+            <option value="">default ser.</option>
+            ${serializerTypes.map(type => `<option value="${esc(type)}"${sink.serializer_out === type ? ' selected' : ''}>${esc(type)}</option>`).join('')}
+          </select>
+          <button class="btn btn-sm btn-outline-secondary" type="button" data-action="test-sink" data-index="${index}">
+            <i class="bi bi-plug"></i> Test
+          </button>
+          <span id="wiz-sk-test-${index}" class="wizard-inline-status" aria-live="polite"></span>
+          <button class="btn-flat-danger ms-auto" type="button" data-action="delete-sink" data-index="${index}">
+            <i class="bi bi-trash"></i>
+          </button>
+        </div>
+        <div id="wiz-sk-${index}">
+          ${sink.type ? _renderModelFieldsHtml('sink', sink.type, model, sink) : '<div class="wizard-schema-note">Select a sink type to continue.</div>'}
+        </div>
+        <div class="mt-2">
+          <label class="form-label wizard-field-label mb-1">Condition <span class="wizard-optional">(optional)</span></label>
+          <input type="text" class="form-control form-control-sm wiz-s-cond font-monospace wizard-sink-condition" value="${esc(sink.condition || '')}"
+            placeholder="status == 'ok'">
+        </div>
+      </div>`
+  }).join('')
+}
+
+function _deleteSink(index) {
+  if (!Number.isFinite(index)) return
+  _collectSinks()
+  _state.sinks.splice(index, 1)
+  _renderSinksList()
+}
+
+function _handleSinkTypeChange(index, type) {
+  if (!Number.isFinite(index)) return
+  _collectSinks()
+  _state.sinks[index] = { type, fields: {}, serializer_out: '', condition: '', extraYaml: '' }
+  _renderSinksList()
+}
+
+async function _testSink(index) {
+  if (!Number.isFinite(index)) return
+  _collectSinks()
+  const sink = _state.sinks[index]
+  if (!sink?.type) return
+  const resultEl = document.getElementById(`wiz-sk-test-${index}`)
+  setStatusMessage(resultEl, 'Testing…', 'info')
+  try {
+    const result = await api.connectors.test(sink.type, sink.fields)
+    setStatusMessage(
+      resultEl,
+      result.ok
+        ? `✓${result.latency_ms != null ? ` ${result.latency_ms}ms` : ''}`
+        : `✗ ${result.error || 'fail'}`,
+      result.ok ? 'success' : 'error',
+    )
+  } catch (e) {
+    setStatusMessage(resultEl, `✗ ${e.message}`, 'error')
   }
 }
 
-// ── YAML builder ──────────────────────────────────────────────────────────────
 function buildYaml(state) {
   const lines = []
   lines.push(`name: ${state.name}`)
-  if (state.description) lines.push(`description: "${state.description.replace(/"/g, '\\"')}"`)
-  lines.push(`schedule:`)
+  if (state.description) lines.push(`description: ${_yamlScalar(state.description)}`)
+  lines.push('schedule:')
   lines.push(`  type: ${state.scheduleType}`)
-  if (state.scheduleType === 'interval' && state.intervalSeconds)
-    lines.push(`  interval_seconds: ${state.intervalSeconds}`)
-  if (state.scheduleType === 'cron' && state.cronExpr)
-    lines.push(`  cron: "${state.cronExpr}"`)
-  if (state.onError && state.onError !== 'continue')
-    lines.push(`on_error: ${state.onError}`)
-  lines.push(`source:`)
+  if (state.scheduleType === 'interval') lines.push(`  interval_seconds: ${state.intervalSeconds}`)
+  if (state.scheduleType === 'cron' && state.cronExpr) lines.push(`  cron: ${_yamlScalar(state.cronExpr)}`)
+  if (state.onError && state.onError !== 'continue') lines.push(`on_error: ${state.onError}`)
+
+  lines.push('source:')
   lines.push(`  type: ${state.source.type}`)
-  for (const [k, v] of Object.entries(state.source.fields || {})) {
-    if (k === '_subscriptions' && v) {
-      const paths = String(v).split('\n').map(s => s.trim()).filter(Boolean)
-      if (paths.length) {
-        lines.push('  subscriptions:')
-        for (const p of paths) {
-          lines.push(`    - path: ${p}`)
-          lines.push(`      mode: SAMPLE`)
-          lines.push(`      sample_interval: 10000000000`)
-        }
-      }
-    } else if (v || v === 0) {
-      lines.push(..._yamlField(k, v, 2))
-    }
-  }
-  if (state.serializer && state.serializer !== 'bytes') {
-    lines.push(`serializer_in:`)
+  _emitFields(lines, state.source.fields, 2)
+  _appendExtraYaml(lines, state.source.extraYaml, 2)
+
+  if (state.serializer) {
+    lines.push('serializer_in:')
     lines.push(`  type: ${state.serializer}`)
   }
-  if (state.transforms?.length) {
-    lines.push(`transforms:`)
-    for (const t of state.transforms) {
-      lines.push(`  - type: ${t.type}`)
-      for (const [k, v] of Object.entries(t.fields || {})) {
-        if (!v && v !== 0) continue
-        if (k === '_kv_fields') {
-          lines.push(`    fields:`)
-          for (const line of String(v).split('\n')) {
-            const idx = line.indexOf(':')
-            if (idx < 0) continue
-            const fk = line.slice(0, idx).trim()
-            const fv = line.slice(idx + 1).trim()
-            if (fk) lines.push(`      ${fk}: ${_yamlVal(fv)}`)
-          }
-        } else if (k === '_kv_mapping') {
-          lines.push(`    mapping:`)
-          for (const line of String(v).split('\n')) {
-            const idx = line.indexOf(':')
-            if (idx < 0) continue
-            const fk = line.slice(0, idx).trim()
-            const fv = line.slice(idx + 1).trim()
-            if (fk) lines.push(`      ${fk}: ${_yamlVal(fv)}`)
-          }
-        } else if (k === '_kv_operations') {
-          lines.push(`    operations:`)
-          for (const line of String(v).split('\n')) {
-            if (line.trim()) lines.push(`      ${line}`)
-          }
-        } else if (k === '_list_fields') {
-          const items = String(v).split(',').map(s => s.trim()).filter(Boolean)
-          if (items.length) {
-            lines.push(`    fields:`)
-            for (const item of items) lines.push(`      - ${_yamlVal(item)}`)
-          }
-        } else {
-          lines.push(..._yamlField(k, v, 4))
-        }
-      }
-    }
-  }
+
   if (state.serializerOut) {
-    lines.push(`serializer_out:`)
+    lines.push('serializer_out:')
     lines.push(`  type: ${state.serializerOut}`)
   }
-  if (state.sinks?.length) {
-    lines.push(`sinks:`)
-    for (const s of state.sinks) {
-      if (!s.type) continue
-      lines.push(`  - type: ${s.type}`)
-      for (const [k, v] of Object.entries(s.fields || {}))
-        if (v || v === 0) lines.push(..._yamlField(k, v, 4))
-      if (s.serializer_out) {
-        lines.push(`    serializer_out:`)
-        lines.push(`      type: ${s.serializer_out}`)
-      }
-      if (s.condition) lines.push(`    condition: "${s.condition.replace(/"/g, '\\"')}"`)
-    }
+
+  if (state.transforms?.length) {
+    lines.push('transforms:')
+    state.transforms.forEach((transform) => {
+      lines.push(`  - type: ${transform.type}`)
+      _emitFields(lines, transform.fields || {}, 4)
+    })
   }
+
+  if (state.sinks.length) {
+    lines.push('sinks:')
+    state.sinks.filter(sink => sink.type).forEach((sink) => {
+      lines.push(`  - type: ${sink.type}`)
+      _emitFields(lines, sink.fields, 4)
+      if (sink.serializer_out) {
+        lines.push('    serializer_out:')
+        lines.push(`      type: ${sink.serializer_out}`)
+      }
+      if (sink.condition) lines.push(`    condition: ${_yamlScalar(sink.condition)}`)
+      _appendExtraYaml(lines, sink.extraYaml, 4)
+    })
+  }
+
   return lines.join('\n')
 }
 
-function _yamlField(k, v, indent) {
+function _emitFields(lines, fields, indent) {
+  Object.entries(fields || {}).forEach(([key, value]) => {
+    _emitField(lines, key, value, indent)
+  })
+}
+
+function _emitField(lines, key, value, indent) {
+  if (value === undefined || value === null || value === '') return
   const pad = ' '.repeat(indent)
-  if (ARRAY_FIELDS.has(k)) {
-    const items = String(v).split(',').map(s => s.trim()).filter(Boolean)
-    if (items.length === 1) return [`${pad}${k}: ${_yamlVal(items[0])}`]
-    return [`${pad}${k}:`, ...items.map(i => `${pad}  - ${_yamlVal(i)}`)]
+  if (Array.isArray(value)) {
+    if (!value.length) return
+    lines.push(`${pad}${key}:`)
+    value.forEach((item) => {
+      if (typeof item === 'object' && item !== null) {
+        lines.push(`${pad}  -`)
+        Object.entries(item).forEach(([childKey, childValue]) => _emitField(lines, childKey, childValue, indent + 4))
+      } else {
+        lines.push(`${pad}  - ${_yamlScalar(item)}`)
+      }
+    })
+    return
   }
-  if (String(v).includes('\n')) {
-    // multiline textarea (e.g. SQL query, Flux query)
-    return [`${pad}${k}: |`, ...String(v).split('\n').map(l => `${pad}  ${l}`)]
+  if (typeof value === 'object') {
+    if (!Object.keys(value).length) return
+    lines.push(`${pad}${key}:`)
+    Object.entries(value).forEach(([childKey, childValue]) => _emitField(lines, childKey, childValue, indent + 2))
+    return
   }
-  return [`${pad}${k}: ${_yamlVal(v)}`]
+  lines.push(`${pad}${key}: ${_yamlScalar(value)}`)
 }
 
-function _yamlVal(v) {
-  if (v === 'true' || v === 'false') return v
-  if (!isNaN(String(v)) && String(v).trim() !== '') return v
-  if (/[:{}\[\],&*#?|<>=!%@`"']/.test(String(v)) || String(v).startsWith(' '))
-    return `"${String(v).replace(/\\/g, '\\\\').replace(/"/g, '\\"')}"`
-  return v
+function _appendExtraYaml(lines, extraYaml, indent) {
+  const text = (extraYaml || '').trim()
+  if (!text) return
+  const pad = ' '.repeat(indent)
+  text.split('\n').forEach((line) => {
+    lines.push(line.trim() ? `${pad}${line}` : '')
+  })
 }
 
-// ── Step 5: review ────────────────────────────────────────────────────────────
+function _yamlScalar(value) {
+  if (typeof value === 'boolean') return value ? 'true' : 'false'
+  if (typeof value === 'number') return String(value)
+  const str = String(value)
+  if (/^-?\d+(\.\d+)?$/.test(str)) return str
+  if (/^(true|false|null)$/i.test(str)) return str.toLowerCase()
+  return `"${str.replace(/\\/g, '\\\\').replace(/"/g, '\\"')}"`
+}
+
 function _buildReviewYaml() {
-  const ta = document.getElementById('wiz-yaml-preview')
-  if (!ta) return
-  // Collect current step 4 state before building
-  _collectSinks()
-  ta.value = buildYaml(_state)
+  const textarea = document.getElementById('wiz-yaml-preview')
+  if (!textarea) return
+  _collectStep(2)
+  textarea.value = buildYaml(_state)
 }
 
 async function _dryRun() {
   const yaml = document.getElementById('wiz-yaml-preview')?.value?.trim()
   if (!yaml) return
   const resultEl = document.getElementById('wiz-dryrun-result')
-  if (resultEl) resultEl.innerHTML = '<span class="text-secondary" style="font-size:12px">Running…</span>'
+  if (resultEl) {
+    resultEl.innerHTML = _renderStatusPanel('Dry Run', '<div class="editor-status-line muted">Running…</div>', true)
+  }
   try {
-    const { baseUrl } = (await import('../api.js')).getConfig()
-    const token = localStorage.getItem('tram_auth_token')
-    const headers = { 'Content-Type': 'application/yaml' }
-    if (token) headers['Authorization'] = `Bearer ${token}`
-    const res = await fetch(`${baseUrl}/api/pipelines/dry-run`, { method: 'POST', headers, body: yaml })
-    const json = await res.json()
+    const json = await api.pipelines.dryRun(yaml)
     if (!resultEl) return
     const ok = json.status === 'ok' || json.valid
-    let html = `<div style="font-size:12px;padding:10px;border-radius:4px;background:${ok?'#1a3328':'#3d1a1a'};border:1px solid ${ok?'#3fb950':'#f85149'}">`
-    html += `<div style="color:${ok?'#3fb950':'#f85149'};margin-bottom:4px">${ok ? '✓ Dry run passed' : '✗ Dry run failed'}</div>`
-    if (json.errors?.length) {
-      html += json.errors.map(e => `<div style="color:#f85149">${esc(e)}</div>`).join('')
-      html += `<button class="btn btn-sm btn-outline-secondary mt-2" onclick="window._wizExplainError?.(${JSON.stringify(json.errors[0]).replace(/"/g,'"')})"><i class="bi bi-stars me-1"></i>Explain</button>`
-      html += `<div id="wiz-ai-explain" class="mt-2 text-secondary" style="font-size:11px"></div>`
-    }
-    if (json.warnings?.length) html += json.warnings.map(w => `<div style="color:#e3b341">${esc(w)}</div>`).join('')
-    html += '</div>'
-    resultEl.innerHTML = html
-    window._wizExplainError = async (errMsg) => {
-      const el = document.getElementById('wiz-ai-explain')
-      if (el) el.textContent = 'Explaining…'
-      try {
-        const r = await api.ai.suggest({ mode: 'explain', error: errMsg, yaml: document.getElementById('wiz-yaml-preview')?.value })
-        if (el) el.innerHTML = `<em>${esc(r.explanation || '')}</em>`
-      } catch (e) {
-        if (el) el.textContent = `Could not explain: ${e.message}`
-      }
-    }
+    const issues = json.errors || json.issues || []
+    const lines = [
+      `<div class="editor-status-line ${ok ? 'success' : 'error'}">${ok ? '✓ Dry run passed' : '✗ Dry run failed'}</div>`,
+      ...issues.map(issue => `<div class="editor-status-line error">${esc(issue)}</div>`),
+      ...(json.warnings || []).map(warning => `<div class="editor-status-line warning">${esc(warning)}</div>`),
+    ]
+    resultEl.innerHTML = _renderStatusPanel('Dry Run', lines.join(''), true)
   } catch (e) {
-    if (resultEl) resultEl.innerHTML = `<div style="color:#f85149;font-size:12px">Error: ${esc(e.message)}</div>`
+    if (resultEl) {
+      resultEl.innerHTML = _renderStatusPanel('Dry Run', `<div class="editor-status-line error">${esc(e.message)}</div>`, true)
+    }
   }
 }
 
@@ -746,28 +692,55 @@ async function _save() {
   }
 }
 
-// ── AI generation ─────────────────────────────────────────────────────────────
 async function _aiGenerate() {
-  const prompt = document.getElementById('wiz-ai-prompt')?.value.trim()
+  const prompt = (document.getElementById('wiz-ai-prompt')?.value || '').trim()
   if (!prompt) { toast('Enter a description first', 'error'); return }
   const btn = document.getElementById('wiz-ai-gen-btn')
-  const status = document.getElementById('wiz-ai-status')
   if (btn) btn.disabled = true
-  if (status) status.textContent = 'Generating…'
+  setStatusMessage('wiz-ai-status', 'Generating…', 'info')
   try {
-    const r = await api.ai.suggest({ mode: 'generate', prompt, plugins: _plugins })
-    if (!r.yaml) throw new Error('No YAML returned')
-    // Jump to step 5 with the generated YAML
-    _state.name = _state.name || 'ai-generated'
-    _showStep(5)
-    const ta = document.getElementById('wiz-yaml-preview')
-    if (ta) ta.value = r.yaml
-    if (status) status.textContent = ''
+    const result = await api.ai.suggest({ mode: 'generate', prompt, plugins: _plugins })
+    if (!result.yaml) throw new Error('No YAML returned')
+    _showStep(3)
+    const textarea = document.getElementById('wiz-yaml-preview')
+    if (textarea) textarea.value = result.yaml
+    setStatusMessage('wiz-ai-status', '', 'muted')
     toast('YAML generated — review and save')
   } catch (e) {
     toast(`AI error: ${e.message}`, 'error')
-    if (status) status.textContent = ''
+    setStatusMessage('wiz-ai-status', '', 'muted')
   } finally {
     if (btn) btn.disabled = false
   }
+}
+
+function _openEditor() {
+  if (_step >= 2) _collectStep(2)
+  const yaml = buildYaml(_state)
+  window._editorPipeline = null
+  window._editorYaml = yaml
+  navigate('editor')
+  toast('Wizard handed off to editor for advanced configuration')
+}
+
+function _openBlankEditor(event) {
+  event.preventDefault()
+  window._editorPipeline = null
+  window._editorYaml = null
+  navigate('editor')
+}
+
+function _setInput(id, value) {
+  const el = document.getElementById(id)
+  if (el && value !== undefined && value !== null) el.value = value
+}
+
+function _renderStatusPanel(title, content, scrollable = false) {
+  return `
+    <div class="editor-status-panel">
+      <div class="editor-status-panel-header">${title}</div>
+      <div class="editor-status-panel-body${scrollable ? ' editor-status-panel-body-scroll' : ''}">
+        ${content}
+      </div>
+    </div>`
 }

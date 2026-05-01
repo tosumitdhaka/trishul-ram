@@ -14,6 +14,7 @@ from fastapi.staticfiles import StaticFiles
 from tram import __version__
 from tram.api.routers import (
     ai,
+    ai_docs,
     auth,
     connectors,
     health,
@@ -275,10 +276,12 @@ def create_app(config: AppConfig | None = None) -> FastAPI:
     app.include_router(metrics_router.router)
     app.include_router(mibs.router)
     app.include_router(schemas.router)
+    app.include_router(schemas.config_router)
     app.include_router(auth.router)
     app.include_router(templates.router)
     app.include_router(stats.router)
     app.include_router(connectors.router)
+    app.include_router(ai_docs.router)
     app.include_router(ai.router)
     app.include_router(internal.router)
 

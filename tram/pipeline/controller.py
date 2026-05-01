@@ -23,7 +23,7 @@ import uuid
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Literal
 
 from tram.core.context import RunResult, RunStatus
 from tram.pipeline.executor import PipelineExecutor
@@ -175,7 +175,7 @@ class PipelineController:
         for name, yaml_text in self._db.get_all_pipelines():
             try:
                 config = load_pipeline_from_yaml(yaml_text)
-                self.manager.register(config, yaml_text=yaml_text)
+                self.manager.register(config, yaml_text=yaml_text, save_version=False)
                 if name in stopped_names:
                     self.manager.set_status(name, "stopped")
                     continue
@@ -213,10 +213,16 @@ class PipelineController:
 
     def update(self, name: str, yaml_text: str) -> PipelineState:
         """Update an existing pipeline's YAML. Restarts if it was running/scheduled."""
+        state = self.manager.get(name)
+        if state.yaml_text == yaml_text:
+            if self._db is not None:
+                self._db.save_pipeline(name, yaml_text, source="api")
+            logger.info("Update skipped — identical YAML", extra={"pipeline": name})
+            return state
+
         from tram.pipeline.loader import load_pipeline_from_yaml
 
         config = load_pipeline_from_yaml(yaml_text)
-        state = self.manager.get(name)
         was_active = state.status in ("scheduled", "running")
 
         self._stop_execution(name)
@@ -240,21 +246,27 @@ class PipelineController:
             self._db.delete_pipeline(name)
         logger.info("Deleted pipeline", extra={"pipeline": name})
 
-    def start_pipeline(self, name: str) -> None:
-        """Start a stopped/errored pipeline. Clears stopped flag and schedules."""
+    def start_pipeline(self, name: str) -> Literal["started", "already_running", "disabled", "manual"]:
+        """Start a stopped/errored pipeline and report what actually happened."""
         state = self.manager.get(name)
-        if state.status == "running":
+        if state.status in ("running", "scheduled"):
             logger.debug("start_pipeline: already running", extra={"pipeline": name})
-            return
+            return "already_running"
 
         if self._db is not None:
             self._db.start_pipeline_flag(name)
 
         if not state.config.enabled:
             self.manager.set_status(name, "stopped")
-            return
+            return "disabled"
+
+        if state.config.schedule.type == "manual":
+            self.manager.set_status(name, "stopped")
+            logger.debug("start_pipeline: manual pipeline not auto-scheduled", extra={"pipeline": name})
+            return "manual"
 
         self._do_schedule(name)
+        return "started"
 
     def stop_pipeline(self, name: str) -> None:
         """Stop a pipeline and mark it so it won't auto-restart."""
@@ -464,9 +476,23 @@ class PipelineController:
                 callback_url=callback_url,
             )
             if worker_url is None:
+                failure_time = datetime.now(UTC)
+                error = "No healthy workers available for dispatch"
                 logger.error("Batch dispatch failed: no healthy workers",
                              extra={"pipeline": pipeline_name, "run_id": run_id})
-                self.manager.set_status(pipeline_name, "error")
+                result = RunResult(
+                    run_id=run_id,
+                    pipeline_name=pipeline_name,
+                    status=RunStatus.FAILED,
+                    started_at=failure_time,
+                    finished_at=failure_time,
+                    records_in=0,
+                    records_out=0,
+                    records_skipped=0,
+                    error=error,
+                    node_id=self._node_id,
+                )
+                self._finalize_batch_result(pipeline_name, result)
                 from tram.metrics.registry import MGR_DISPATCH_TOTAL
                 MGR_DISPATCH_TOTAL.labels(pipeline=pipeline_name, result="no_workers").inc()
             else:
@@ -584,6 +610,9 @@ class PipelineController:
         lease_started_at = lease.started_at if lease is not None else (
             state.last_run or datetime.now(UTC)
         )
+        lease_node_id = self._node_id
+        if lease is not None and self._worker_pool is not None:
+            lease_node_id = self._worker_pool.worker_id_for_url(lease.worker_url) or self._node_id
 
         result = RunResult(
             run_id=lease_run_id,
@@ -595,7 +624,7 @@ class PipelineController:
             records_out=0,
             records_skipped=0,
             error=error,
-            node_id=self._node_id,
+            node_id=lease_node_id,
         )
         self._finalize_batch_result(pipeline_name, result)
         return True
@@ -604,6 +633,7 @@ class PipelineController:
         self,
         run_id: str,
         pipeline_name: str,
+        worker_id: str | None,
         status: str,
         records_in: int,
         records_out: int,
@@ -638,6 +668,8 @@ class PipelineController:
         if isinstance(finished_at, str):
             finished_at = datetime.fromisoformat(finished_at)
 
+        result_node_id = worker_id or self._node_id
+
         result = RunResult(
             run_id=run_id,
             pipeline_name=pipeline_name,
@@ -650,7 +682,7 @@ class PipelineController:
             bytes_in=bytes_in,
             bytes_out=bytes_out,
             error=error,
-            node_id=self._node_id,
+            node_id=result_node_id,
             errors=errors or [],
         )
 

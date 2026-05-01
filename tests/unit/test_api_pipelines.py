@@ -156,6 +156,64 @@ class TestGetPipelinePlacement:
         assert data["slots"][0]["stats"]["stale"] is False
         assert data["slots"][0]["stats"]["bytes_in_per_sec"] == 100.0
 
+    def test_returns_live_broadcast_placement_when_manager_stats_are_missing(self):
+        stream_yaml = """\
+name: test-pipe
+schedule:
+  type: stream
+source:
+  type: webhook
+  path: /ingest
+serializer_in:
+  type: json
+sinks:
+  - type: local
+    path: /tmp/out
+"""
+        state = _make_state(yaml_text=stream_yaml)
+        app = _make_app()
+        app.state.controller.get.return_value = state
+        app.state.controller.get_active_broadcast_placements.return_value = [{
+            "placement_group_id": "pg1",
+            "pipeline_name": "test-pipe",
+            "status": "running",
+            "target_count": "all",
+            "started_at": datetime.now(UTC),
+            "slots": [{
+                "worker_index": 0,
+                "worker_id": "w0",
+                "worker_url": "http://worker-0:8766",
+                "run_id_prefix": "pg1-w0",
+                "current_run_id": "pg1-w0",
+                "status": "running",
+                "restart_count": 0,
+            }],
+        }]
+        app.state.controller._worker_pool = MagicMock()
+        app.state.controller._worker_pool.live_streams.return_value = [{
+            "worker_url": "http://worker-0:8766",
+            "worker_id": "w0",
+            "pipeline_name": "test-pipe",
+            "run_id": "pg1-w0",
+            "schedule_type": "stream",
+            "uptime_seconds": 5.0,
+            "stats": {
+                "records_in": 20,
+                "records_out": 10,
+                "bytes_in": 200,
+                "bytes_out": 100,
+            },
+        }]
+        client = TestClient(app)
+
+        resp = client.get("/api/pipelines/test-pipe/placement")
+
+        assert resp.status_code == 200
+        data = resp.json()
+        assert data["active_slots"] == 1
+        assert data["records_out_per_sec"] == 2.0
+        assert data["slots"][0]["stats"]["stale"] is False
+
     def test_includes_stale_slot_with_zeroed_per_sec(self):
         state = _make_state()
         app = _make_app()
@@ -360,17 +418,67 @@ class TestDryRun:
         resp = client.post("/api/pipelines/dry-run", json={"yaml_text": ""})
         assert resp.status_code == 400
 
+    def test_serializer_in_rejects_unknown_nested_keys(self):
+        app = _make_app()
+        client = TestClient(app, raise_server_exceptions=False)
+        bad_yaml = """\
+name: test-pipe
+schedule:
+  type: manual
+source:
+  type: local
+  path: /tmp/in
+serializer_in:
+  type: json
+  transforms:
+    - type: rename
+      fields:
+        old_name: new_name
+sinks:
+  - type: local
+    path: /tmp/out
+"""
+        resp = client.post("/api/pipelines/dry-run", json={"yaml_text": bad_yaml})
+        assert resp.status_code == 200
+        assert resp.json()["valid"] is False
+        assert any("serializer_in" in issue for issue in resp.json()["issues"])
+
 
 class TestLifecycle:
     def test_start_pipeline(self):
         state = _make_state()
         app = _make_app()
         app.state.controller.get.return_value = state
+        app.state.controller.start_pipeline.return_value = "started"
         client = TestClient(app)
         resp = client.post("/api/pipelines/test-pipe/start")
         assert resp.status_code == 200
         assert resp.json()["status"] == "started"
+        assert resp.json()["detail"] == "Pipeline 'test-pipe' started."
         app.state.controller.start_pipeline.assert_called_once_with("test-pipe")
+
+    def test_start_pipeline_disabled_returns_config_feedback(self):
+        state = _make_state()
+        app = _make_app()
+        app.state.controller.get.return_value = state
+        app.state.controller.start_pipeline.return_value = "disabled"
+        client = TestClient(app)
+        resp = client.post("/api/pipelines/test-pipe/start")
+        assert resp.status_code == 200
+        assert resp.json()["status"] == "disabled"
+        assert "disabled in YAML" in resp.json()["detail"]
+        assert "triggered manually" in resp.json()["detail"]
+
+    def test_start_pipeline_manual_returns_run_now_feedback(self):
+        state = _make_state()
+        app = _make_app()
+        app.state.controller.get.return_value = state
+        app.state.controller.start_pipeline.return_value = "manual"
+        client = TestClient(app)
+        resp = client.post("/api/pipelines/test-pipe/start")
+        assert resp.status_code == 200
+        assert resp.json()["status"] == "manual"
+        assert resp.json()["detail"] == "Pipeline 'test-pipe' uses a manual schedule. Use Run Now instead."
 
     def test_start_not_found_returns_404(self):
         app = _make_app()
@@ -531,6 +639,38 @@ class TestVersions:
         client = TestClient(app, raise_server_exceptions=False)
         resp = client.get("/api/pipelines/test-pipe/versions/99")
         assert resp.status_code == 404
+
+
+class TestRollback:
+    def test_rollback_uses_controller_and_restarts_only_when_previously_active(self):
+        current_state = _make_state(name="interval-pipe", status="scheduled", yaml_text=_INTERVAL_YAML)
+        rolled_state = _make_state(name="interval-pipe", status="stopped", yaml_text=_INTERVAL_YAML)
+        app = _make_app()
+        app.state.controller.get.side_effect = [current_state, rolled_state]
+        app.state.controller.rollback.return_value = load_pipeline_from_yaml(_INTERVAL_YAML)
+
+        client = TestClient(app)
+        resp = client.post("/api/pipelines/interval-pipe/rollback?version=1")
+
+        assert resp.status_code == 200
+        app.state.controller.stop_pipeline.assert_called_once_with("interval-pipe")
+        app.state.controller.rollback.assert_called_once_with("interval-pipe", 1)
+        app.state.controller.start_pipeline.assert_called_once_with("interval-pipe")
+
+    def test_rollback_keeps_stopped_pipeline_stopped(self):
+        current_state = _make_state(status="stopped")
+        rolled_state = _make_state(status="stopped")
+        app = _make_app()
+        app.state.controller.get.side_effect = [current_state, rolled_state]
+        app.state.controller.rollback.return_value = load_pipeline_from_yaml(_MINIMAL_YAML)
+
+        client = TestClient(app)
+        resp = client.post("/api/pipelines/test-pipe/rollback?version=2")
+
+        assert resp.status_code == 200
+        app.state.controller.stop_pipeline.assert_not_called()
+        app.state.controller.rollback.assert_called_once_with("test-pipe", 2)
+        app.state.controller.start_pipeline.assert_not_called()
 
 
 class TestReload:

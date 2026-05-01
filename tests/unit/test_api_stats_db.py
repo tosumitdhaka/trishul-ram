@@ -54,7 +54,14 @@ def _make_app_with_db(states=None, db=None):
     return app
 
 
-def _make_run(status=RunStatus.SUCCESS, records_in=10, records_out=8, age_seconds=30):
+def _make_run(
+    status=RunStatus.SUCCESS,
+    records_in=10,
+    records_out=8,
+    bytes_in=1024,
+    bytes_out=768,
+    age_seconds=30,
+):
     finished = datetime.now(UTC) - timedelta(seconds=age_seconds)
     started = finished - timedelta(seconds=1)
     return RunResult(
@@ -64,6 +71,8 @@ def _make_run(status=RunStatus.SUCCESS, records_in=10, records_out=8, age_second
         records_in=records_in,
         records_out=records_out,
         records_skipped=0,
+        bytes_in=bytes_in,
+        bytes_out=bytes_out,
         started_at=started,
         finished_at=finished,
     )
@@ -126,31 +135,44 @@ class TestDbCount:
 
 class TestDbAgg:
     def test_sqlite_dialect_runs_query(self):
-        db, conn = _make_db_mock(fetchone_val=(100, 90, 2, 1.5))
+        db, conn = _make_db_mock(fetchone_val=(100, 90, 4096, 2048, 2, 1.5))
         result = _db_agg(db, datetime.now(UTC) - timedelta(hours=1))
         assert result["records_in"] == 100
         assert result["records_out"] == 90
+        assert result["bytes_in"] == 4096
+        assert result["bytes_out"] == 2048
         assert result["errors"] == 2
         assert result["avg_duration_s"] == 1.5
 
     def test_postgresql_dialect(self):
-        db, conn = _make_db_mock(fetchone_val=(50, 40, 0, None))
+        db, conn = _make_db_mock(fetchone_val=(50, 40, 1024, 512, 0, None))
         db._engine.dialect.name = "postgresql"
         result = _db_agg(db, datetime.now(UTC) - timedelta(hours=1))
         assert result["records_in"] == 50
+        assert result["bytes_in"] == 1024
+        assert result["bytes_out"] == 512
         assert result["avg_duration_s"] is None
 
     def test_mysql_dialect(self):
-        db, conn = _make_db_mock(fetchone_val=(10, 9, 1, 2.0))
+        db, conn = _make_db_mock(fetchone_val=(10, 9, 200, 180, 1, 2.0))
         db._engine.dialect.name = "mysql"
         result = _db_agg(db, datetime.now(UTC) - timedelta(hours=1))
         assert result["records_in"] == 10
+        assert result["bytes_in"] == 200
+        assert result["bytes_out"] == 180
 
     def test_none_row_returns_zeros(self):
         db, conn = _make_db_mock()
         conn.execute.return_value.fetchone.return_value = None
         result = _db_agg(db, datetime.now(UTC))
-        assert result == {"records_in": 0, "records_out": 0, "errors": 0, "avg_duration_s": None}
+        assert result == {
+            "records_in": 0,
+            "records_out": 0,
+            "bytes_in": 0,
+            "bytes_out": 0,
+            "errors": 0,
+            "avg_duration_s": None,
+        }
 
 
 class TestDbPerPipeline:
@@ -181,8 +203,14 @@ class TestDbSparkline:
     def test_returns_12_buckets(self):
         db, conn = _make_db_mock()
         conn.execute.return_value.fetchall.return_value = []
-        result = _db_sparkline(db, datetime.now(UTC) - timedelta(hours=1))
+        result = _db_sparkline(
+            db,
+            datetime.now(UTC) - timedelta(hours=1),
+            bucket_count=12,
+            minutes=5,
+        )
         assert len(result) == 12
+        assert all("bytes_processed" in bucket for bucket in result)
 
 
 # ── Bucket sparkline edge cases ────────────────────────────────────────────
@@ -190,29 +218,65 @@ class TestDbSparkline:
 
 class TestBucketSparkline:
     def test_empty_rows_returns_zeros(self):
-        result = _bucket_sparkline([], datetime.now(UTC) - timedelta(hours=1), buckets=12, minutes=5)
+        result = _bucket_sparkline(
+            [],
+            datetime.now(UTC) - timedelta(hours=1),
+            bucket_count=12,
+            minutes=5,
+        )
         assert len(result) == 12
         assert all(b["records_out"] == 0 for b in result)
+        assert all(b["bytes_processed"] == 0 for b in result)
 
     def test_recent_records_go_into_last_bucket(self):
         now = datetime.now(UTC)
         recent_ts = (now - timedelta(seconds=30)).isoformat()
-        rows = [(recent_ts, 5)]
-        result = _bucket_sparkline(rows, now - timedelta(hours=1), buckets=12, minutes=5)
+        rows = [(recent_ts, 5, 200, 300)]
+        result = _bucket_sparkline(
+            rows,
+            now - timedelta(hours=1),
+            bucket_count=12,
+            minutes=5,
+        )
         # Last bucket (index 11) should have the records
         assert result[11]["records_out"] == 5
+        assert result[11]["bytes_processed"] == 500
+
+    def test_legacy_rows_default_bytes_processed_to_zero(self):
+        now = datetime.now(UTC)
+        recent_ts = (now - timedelta(seconds=30)).isoformat()
+        result = _bucket_sparkline(
+            [(recent_ts, 5)],
+            now - timedelta(hours=1),
+            bucket_count=12,
+            minutes=5,
+        )
+        assert result[11]["records_out"] == 5
+        assert result[11]["bytes_processed"] == 0
 
     def test_naive_ts_handled(self):
         now = datetime.now(UTC)
         naive_ts = (datetime.now(UTC).replace(tzinfo=None) - timedelta(seconds=30)).isoformat()
-        rows = [(naive_ts, 3)]
-        result = _bucket_sparkline(rows, now - timedelta(hours=1), buckets=12, minutes=5)
+        rows = [(naive_ts, 3, 10, 20)]
+        result = _bucket_sparkline(
+            rows,
+            now - timedelta(hours=1),
+            bucket_count=12,
+            minutes=5,
+        )
         # Should not raise, bucket 11 gets the record
         assert sum(b["records_out"] for b in result) == 3
+        assert sum(b["bytes_processed"] for b in result) == 30
 
     def test_invalid_ts_is_skipped(self):
-        result = _bucket_sparkline([("not-a-date", 10)], datetime.now(UTC), buckets=12, minutes=5)
+        result = _bucket_sparkline(
+            [("not-a-date", 10, 20, 30)],
+            datetime.now(UTC),
+            bucket_count=12,
+            minutes=5,
+        )
         assert all(b["records_out"] == 0 for b in result)
+        assert all(b["bytes_processed"] == 0 for b in result)
 
 
 # ── mem_agg edge cases ─────────────────────────────────────────────────────
@@ -226,12 +290,16 @@ class TestMemAgg:
         run.started_at = "invalid-date"  # will cause exception in fromisoformat
         run.records_in = 10
         run.records_out = 8
+        run.bytes_in = 100
+        run.bytes_out = 80
         run.status = MagicMock()
         run.status.value = "success"
         since = datetime.now(UTC) - timedelta(minutes=1)
         result = _mem_agg([run], since)
         # Should not raise; avg_duration_s is None or 0 depending on exception
         assert "avg_duration_s" in result
+        assert result["bytes_in"] == 100
+        assert result["bytes_out"] == 80
 
 
 # ── Full stats endpoint with DB ────────────────────────────────────────────
@@ -244,7 +312,7 @@ class TestStatsWithDB:
         count_result = MagicMock()
         count_result.fetchone.return_value = (5,)
         agg_result = MagicMock()
-        agg_result.fetchone.return_value = (100, 90, 2, 1.5)
+        agg_result.fetchone.return_value = (100, 90, 4096, 2048, 2, 1.5)
         per_pipe_result = MagicMock()
         per_pipe_result.fetchall.return_value = []
         sparkline_result = MagicMock()
@@ -273,3 +341,6 @@ class TestStatsWithDB:
         data = r.json()
         assert "pipelines_total" in data
         assert "runs_today" in data
+        assert data["bytes_in_last_15m"] == 4096
+        assert data["bytes_out_last_15m"] == 2048
+        assert data["chart"]["metric"] == "bytes_processed"

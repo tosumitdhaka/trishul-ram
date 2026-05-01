@@ -20,12 +20,15 @@ import os
 from fastapi import APIRouter, File, HTTPException, Query, Request, UploadFile
 from fastapi.responses import PlainTextResponse, Response
 
+from tram.api.config_schema import build_config_schema_payload
+
 logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/api/schemas", tags=["schemas"])
+config_router = APIRouter(tags=["config"])
 
 # Extensions accepted for upload
-_ALLOWED_EXT = {".proto", ".avsc", ".json", ".xsd", ".yaml", ".yml", ".asn"}
+_ALLOWED_EXT = {".proto", ".avsc", ".json", ".xsd", ".yaml", ".yml", ".asn", ".asn1"}
 
 # Human-readable schema type by extension
 _EXT_TO_TYPE = {
@@ -36,7 +39,14 @@ _EXT_TO_TYPE = {
     ".yaml":  "yaml",
     ".yml":   "yaml",
     ".asn":   "asn1",
+    ".asn1":  "asn1",
 }
+
+
+@config_router.get("/api/config/schema")
+async def get_config_schema() -> dict:
+    """Return backend-generated config schema metadata for UI-driven forms."""
+    return build_config_schema_payload()
 
 
 # ── Helpers ──────────────────────────────────────────────────────────────────

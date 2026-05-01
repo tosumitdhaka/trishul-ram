@@ -458,67 +458,101 @@ pipeline:
 
 @mib_app.command("compile")
 def mib_compile(
-    source_mib: Path = typer.Argument(..., help="Path to .mib source file or directory containing .mib files"),
+    source_mib: Path = typer.Argument(
+        ...,
+        help="Path to a MIB source file or directory containing supported MIB source files",
+    ),
     out: Path = typer.Option(
         Path("./compiled_mibs"), "--out", "-o", help="Output directory for compiled .py files"
     ),
+    source_store: Path | None = typer.Option(
+        None,
+        "--source-store",
+        help="Directory used to cache raw ASN.1 MIB source files for later dependency resolution",
+    ),
 ):
-    """Compile raw .mib text file(s) to Python format for use with tram[snmp].
+    """Compile raw ASN.1 MIB source file(s) to Python format for use with tram[snmp].
 
-    Accepts a single .mib file or a directory.  When a directory is supplied,
-    all .mib files found directly inside it are compiled in one pass so that
-    cross-file imports resolve correctly.
+    Accepts a single supported source file (extensionless, ``.mib``, ``.my``,
+    or ``.txt``) or a directory. When a directory is supplied, all supported
+    source files found directly inside it are compiled in one pass so that
+    cross-file imports resolve correctly. Source files are also cached into the
+    raw-source store so later vendor MIB compiles can reuse local dependencies.
 
     Requires the tram[mib] optional extra.
     """
-    try:
-        from pysmi.codegen.pysnmp import PySnmpCodeGen
-        from pysmi.compiler import MibCompiler
-        from pysmi.parser.smi import parserFactory
-        from pysmi.reader import FileReader
-        from pysmi.searcher import PyFileSearcher, StubSearcher
-        from pysmi.writer import PyFileWriter
-    except ImportError:
-        err_console.print(
-            "[red]pysmi is required for MIB compilation.[/red]\n"
-            "  Install with: [bold]pip install tram[mib][/bold]"
-        )
-        raise typer.Exit(1)
+    from tram.core.mib_compiler import (
+        SUPPORTED_MIB_SOURCE_FILE_HINT,
+        MibCompileFailure,
+        MibSupportUnavailable,
+        bundled_mib_source_dirs,
+        compile_mibs,
+        is_supported_mib_source_filename,
+        list_mib_source_files,
+        mib_source_dir,
+        mib_source_module_name,
+        persist_mib_source,
+    )
 
     if not source_mib.exists():
         err_console.print(f"[red]Path not found:[/red] {source_mib}")
         raise typer.Exit(1)
 
     out.mkdir(parents=True, exist_ok=True)
+    source_store = source_store or Path(mib_source_dir(str(out)))
+    source_store.mkdir(parents=True, exist_ok=True)
 
     # Collect MIB names and source directory
     if source_mib.is_dir():
-        mib_files = list(source_mib.glob("*.mib"))
+        mib_files = list_mib_source_files(source_mib)
         if not mib_files:
-            err_console.print(f"[yellow]No .mib files found in {source_mib}[/yellow]")
+            err_console.print(f"[yellow]No supported MIB source files found in {source_mib}[/yellow]")
             raise typer.Exit(0)
         mib_src_dir = str(source_mib)
-        mib_names = [f.stem for f in mib_files]
-        console.print(f"Found {len(mib_names)} .mib file(s) in [bold]{source_mib}[/bold]")
+        mib_names = list(
+            dict.fromkeys(
+                name
+                for name in (mib_source_module_name(f.name) for f in mib_files)
+                if name
+            )
+        )
+        console.print(f"Found {len(mib_files)} MIB source file(s) in [bold]{source_mib}[/bold]")
     else:
+        if not is_supported_mib_source_filename(source_mib.name):
+            err_console.print(
+                "[red]Unsupported MIB source filename:[/red] "
+                f"{source_mib.name} (expected {SUPPORTED_MIB_SOURCE_FILE_HINT})"
+            )
+            raise typer.Exit(1)
         mib_src_dir = str(source_mib.parent)
-        mib_names = [source_mib.stem]
+        mib_name = mib_source_module_name(source_mib.name)
+        assert mib_name is not None
+        mib_names = [mib_name]
+        mib_files = [source_mib]
 
-    parser = parserFactory()()
-    codegen = PySnmpCodeGen()
-    writer = PyFileWriter(str(out))
+    for mib_file in mib_files:
+        persist_mib_source(str(source_store), mib_file.name, mib_file.read_bytes())
 
-    compiler = MibCompiler(parser, codegen, writer)
-    compiler.addSources(FileReader(mib_src_dir))
-    compiler.addSearchers(PyFileSearcher(str(out)))
-    compiler.addSearchers(StubSearcher(*(PySnmpCodeGen.baseMibs + PySnmpCodeGen.fakeMibs)))
+    try:
+        compile_result = compile_mibs(
+            mib_names,
+            str(out),
+            source_dirs=[mib_src_dir, str(source_store), *bundled_mib_source_dirs()],
+        )
+    except MibSupportUnavailable as exc:
+        err_console.print(f"[red]{exc}[/red]")
+        raise typer.Exit(1)
+    except MibCompileFailure as exc:
+        err_console.print(f"[red]Compilation failed:[/red] {exc}")
+        raise typer.Exit(1)
 
-    results = compiler.compile(*mib_names)
-    for name, status in results.items():
+    for name, status in compile_result.results.items():
         color = "green" if status == "compiled" else "yellow"
         console.print(f"  [{color}]{status}[/{color}] {name}")
-    compiled_count = sum(1 for s in results.values() if s == "compiled")
-    console.print(f"[green]✓[/green] Compiled {compiled_count} MIB module(s) → {out}")
+    console.print(
+        f"[green]✓[/green] Compiled {len(compile_result.compiled)} MIB module(s) → {out}\n"
+        f"Raw ASN.1 source cache → [bold]{source_store}[/bold]"
+    )
 
 
 @mib_app.command("download")
@@ -527,52 +561,56 @@ def mib_download(
     out: Path = typer.Option(
         Path("/mibs"), "--out", "-o", help="Output directory for compiled .py files"
     ),
+    source_store: Path | None = typer.Option(
+        None,
+        "--source-store",
+        help="Directory used to cache downloaded raw ASN.1 MIB source files",
+    ),
 ):
     """Download and compile MIB modules from mibs.pysnmp.com.
 
     Downloads the named MIB modules (plus any dependencies) from the public
-    mibs.pysnmp.com repository and compiles them to Python format.
+    mibs.pysnmp.com repository, compiles them to Python format, and caches the
+    raw ASN.1 sources locally for later offline/local dependency resolution.
 
     Requires the tram[mib] optional extra and internet access.
 
     Example:
         tram mib download IF-MIB ENTITY-MIB HOST-RESOURCES-MIB --out /mibs
     """
-    try:
-        from pysmi.codegen.pysnmp import PySnmpCodeGen
-        from pysmi.compiler import MibCompiler
-        from pysmi.parser.smi import parserFactory
-        from pysmi.reader import HttpReader
-        from pysmi.searcher import PyFileSearcher, StubSearcher
-        from pysmi.writer import PyFileWriter
-    except ImportError:
-        err_console.print(
-            "[red]pysmi is required for MIB download.[/red]\n"
-            "  Install with: [bold]pip install tram[mib][/bold]"
-        )
-        raise typer.Exit(1)
+    from tram.core.mib_compiler import (
+        MibCompileFailure,
+        MibSupportUnavailable,
+        bundled_mib_source_dirs,
+        compile_mibs,
+        mib_source_dir,
+    )
 
     out.mkdir(parents=True, exist_ok=True)
+    source_store = source_store or Path(mib_source_dir(str(out)))
+    source_store.mkdir(parents=True, exist_ok=True)
 
     console.print(f"Downloading {len(names)} MIB module(s) from mibs.pysnmp.com → [bold]{out}[/bold]")
 
-    parser = parserFactory()()
-    codegen = PySnmpCodeGen()
-    writer = PyFileWriter(str(out))
-
-    compiler = MibCompiler(parser, codegen, writer)
-    compiler.addSources(HttpReader("https://mibs.pysnmp.com/asn1/@mib@"))
-    compiler.addSearchers(PyFileSearcher(str(out)))
-    compiler.addSearchers(StubSearcher(*(PySnmpCodeGen.baseMibs + PySnmpCodeGen.fakeMibs)))
-
     try:
-        results = compiler.compile(*names)
-    except Exception as exc:
+        compile_result = compile_mibs(
+            names,
+            str(out),
+            source_dirs=[str(source_store), *bundled_mib_source_dirs()],
+            resolve_missing=True,
+            remote_cache_dir=str(source_store),
+        )
+    except MibSupportUnavailable as exc:
+        err_console.print(f"[red]{exc}[/red]")
+        raise typer.Exit(1)
+    except MibCompileFailure as exc:
         err_console.print(f"[red]Download failed:[/red] {exc}")
         raise typer.Exit(1)
 
-    for name, status in results.items():
+    for name, status in compile_result.results.items():
         color = "green" if status == "compiled" else "yellow"
         console.print(f"  [{color}]{status}[/{color}] {name}")
-    compiled_count = sum(1 for s in results.values() if s == "compiled")
-    console.print(f"[green]✓[/green] Downloaded and compiled {compiled_count} MIB module(s) → {out}")
+    console.print(
+        f"[green]✓[/green] Downloaded and compiled {len(compile_result.compiled)} MIB module(s) → {out}\n"
+        f"Raw ASN.1 source cache → [bold]{source_store}[/bold]"
+    )

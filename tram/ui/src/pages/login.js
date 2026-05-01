@@ -1,40 +1,32 @@
-import { getConfig } from '../api.js'
+import { api } from '../api.js'
+import { setStatusMessage } from '../utils.js'
 
 export async function init() {
+  const form = document.getElementById('login-form')
   const userInput = document.getElementById('login-user')
   const passInput = document.getElementById('login-pass')
   const errEl     = document.getElementById('login-error')
   const btn       = document.getElementById('login-btn')
 
-  // Submit on Enter key in either field
-  ;[userInput, passInput].forEach(el => {
-    el?.addEventListener('keydown', e => { if (e.key === 'Enter') window._loginSubmit?.() })
-  })
-
-  window._loginSubmit = async () => {
+  async function submitLogin() {
     const username = userInput?.value?.trim()
     const password = passInput?.value || ''
     if (!username) { showErr('Enter a username'); return }
 
     btn.disabled = true
     btn.textContent = 'Signing in…'
-    if (errEl) errEl.style.display = 'none'
+    clearErr()
 
     try {
-      const { baseUrl } = getConfig()
-      const res = await fetch(`${baseUrl}/api/auth/login`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ username, password }),
-      })
-      const data = await res.json()
-      if (!res.ok) throw new Error(data.detail || 'Login failed')
+      const data = await api.auth.login(username, password)
       localStorage.setItem('tram_auth_token', data.token)
       localStorage.setItem('tram_auth_user', data.username)
       // Show the main shell and navigate to dashboard
-      document.getElementById('app-shell').style.display = ''
-      document.getElementById('login-overlay').style.display = 'none'
-      window.navigate('dashboard')
+      window._tramAuthPending = false
+      document.getElementById('app-shell').hidden = false
+      document.getElementById('login-overlay').hidden = true
+      document.getElementById('logout-btn').hidden = false
+      window.navigate(window.location.hash.slice(1) || 'dashboard')
     } catch (e) {
       showErr(e.message)
     } finally {
@@ -43,7 +35,20 @@ export async function init() {
     }
   }
 
+  form?.addEventListener('submit', async (event) => {
+    event.preventDefault()
+    await submitLogin()
+  })
+
   function showErr(msg) {
-    if (errEl) { errEl.textContent = msg; errEl.style.display = '' }
+    if (!errEl) return
+    errEl.classList.remove('d-none')
+    setStatusMessage(errEl, msg, 'error')
+  }
+
+  function clearErr() {
+    if (!errEl) return
+    errEl.classList.add('d-none')
+    setStatusMessage(errEl, '', 'error')
   }
 }

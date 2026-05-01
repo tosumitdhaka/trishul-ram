@@ -22,4 +22,4 @@ pipeline:
       filename_template: "{source_filename}.csv"
       serializer_out:
         type: csv
-        include_header: true
+        has_header: true

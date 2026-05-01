@@ -12,7 +12,14 @@ from tram.api.routers.stats import router
 from tram.core.context import RunResult, RunStatus
 
 
-def _make_run(status=RunStatus.SUCCESS, records_in=10, records_out=8, age_seconds=30):
+def _make_run(
+    status=RunStatus.SUCCESS,
+    records_in=10,
+    records_out=8,
+    bytes_in=1024,
+    bytes_out=768,
+    age_seconds=30,
+):
     """Build a minimal RunResult with finished_at relative to now."""
     finished = datetime.now(UTC) - timedelta(seconds=age_seconds)
     started = finished - timedelta(seconds=1)
@@ -23,6 +30,8 @@ def _make_run(status=RunStatus.SUCCESS, records_in=10, records_out=8, age_second
         records_in=records_in,
         records_out=records_out,
         records_skipped=0,
+        bytes_in=bytes_in,
+        bytes_out=bytes_out,
         started_at=started,
         finished_at=finished,
     )
@@ -57,6 +66,10 @@ class TestStatsInMemory:
         assert data["pipelines_total"] == 0
         assert data["runs_today"] == 0
         assert data["records_in_last_15m"] == 0
+        assert data["bytes_in_last_15m"] == 0
+        assert data["bytes_out_last_15m"] == 0
+        assert data["chart"]["metric"] == "bytes_processed"
+        assert data["chart"]["total"] == 0
 
     def test_pipeline_counts_by_status(self):
         states = [
@@ -84,6 +97,12 @@ class TestStatsInMemory:
         assert data["runs_today"] == 1
         assert data["records_in_last_15m"] == 10
         assert data["records_out_last_15m"] == 8
+        assert data["bytes_in_last_15m"] == 1024
+        assert data["bytes_out_last_15m"] == 768
+        assert data["chart"]["metric"] == "bytes_processed"
+        assert data["chart"]["total"] == 1792
+        assert data["chart"]["points"][-1]["bytes_processed"] == 1792
+        assert data["sparkline"][-1]["records_out"] == 8
 
     def test_old_runs_not_counted_in_15m(self):
         old_run = _make_run(age_seconds=3600)  # 1 hour ago, outside 15m window
@@ -109,6 +128,10 @@ class TestStatsInMemory:
         client = TestClient(app)
         data = client.get("/api/stats").json()
         assert len(data["sparkline"]) == 12
+        assert data["window"]["period"] == "1h"
+        assert data["window"]["granularity"] == "5m"
+        assert len(data["chart"]["points"]) == 12
+        assert all("bytes_processed" in point for point in data["chart"]["points"])
 
     def test_error_runs_counted(self):
         err_run = _make_run(status=RunStatus.FAILED, age_seconds=60)
@@ -117,3 +140,16 @@ class TestStatsInMemory:
         client = TestClient(app)
         data = client.get("/api/stats").json()
         assert data["errors_last_15m"] == 1  # 60s ago is within 15m
+
+    def test_custom_period_and_granularity_change_bucket_count(self):
+        run = _make_run(age_seconds=30)
+        state = _make_state("p1", runs=[run])
+        app = _make_app(states=[state])
+        client = TestClient(app)
+        data = client.get("/api/stats?period=6h&granularity=15m").json()
+        assert data["window"]["period"] == "6h"
+        assert data["window"]["granularity"] == "15m"
+        assert data["window"]["bucket_count"] == 24
+        assert len(data["sparkline"]) == 24
+        assert len(data["chart"]["points"]) == 24
+        assert data["chart"]["points"][-1]["bucket_start"] is not None

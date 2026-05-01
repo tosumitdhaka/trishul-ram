@@ -40,7 +40,7 @@ class WebhookSource(BaseSource):
         path = self.config.get("path", "").lstrip("/")
         return {"ok": True, "latency_ms": None, "detail": f"Local HTTP listener at /webhooks/{path}"}
 
-    def read(self) -> Generator[tuple[bytes, dict], None, None]:
+    def read(self) -> Generator[tuple[bytes, dict]]:
         from tram.connectors.webhook import _WEBHOOK_SECRETS
 
         q: queue.SimpleQueue = queue.SimpleQueue()

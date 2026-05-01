@@ -10,7 +10,7 @@ from pathlib import Path
 from string import Formatter
 
 _FORMATTER = Formatter()
-_ROLLING_TOKENS = {"timestamp", "epoch", "epoch_m", "part", "index"}
+_ROLLING_TOKENS = {"timestamp", "epoch", "epoch_m", "epoch_ms", "part", "index"}
 
 
 @dataclass
@@ -81,12 +81,14 @@ def build_filename_vars(
     source_name = Path(source_filename)
     epoch = int(opened_at.timestamp())
     epoch_m = int(opened_at.timestamp() * 1000)
+    epoch_ms = epoch_m
     part = format_part_index(part_index, max_index)
     return {
         "pipeline": meta.get("pipeline_name", "tram"),
         "timestamp": opened_at.strftime("%Y%m%dT%H%M%S"),
         "epoch": epoch,
         "epoch_m": epoch_m,
+        "epoch_ms": epoch_ms,
         "part": part,
         "index": part,
         "run_timestamp": meta.get("run_timestamp", ""),
@@ -120,6 +122,25 @@ def extract_field_paths(template: str) -> list[str]:
         if field_name and field_name.startswith("field.") and field_name[6:] not in paths:
             paths.append(field_name[6:])
     return paths
+
+
+def validate_template_tokens(template: str) -> list[str]:
+    allowed_tokens = set(
+        build_filename_vars(
+            opened_at=datetime.now(UTC),
+            part_index=1,
+            max_index=1,
+            meta={},
+        ).keys()
+    )
+    issues: list[str] = []
+    for _, field_name, _, _ in _FORMATTER.parse(template):
+        if not field_name or field_name.startswith("field."):
+            continue
+        if field_name in allowed_tokens:
+            continue
+        issues.append(f"unknown template token '{field_name}'")
+    return issues
 
 
 def file_state_key(template: str, *, meta: dict) -> tuple[tuple[str, str], ...]:
@@ -194,7 +215,7 @@ def render_filename(
 
 
 def ensure_rolling_token(template: str, *, logger: logging.Logger, sink_name: str) -> str:
-    if "{part}" in template or "{index}" in template or "{epoch_m}" in template:
+    if "{part}" in template or "{index}" in template or "{epoch_m}" in template or "{epoch_ms}" in template:
         return template
     path = Path(template)
     if path.suffix:

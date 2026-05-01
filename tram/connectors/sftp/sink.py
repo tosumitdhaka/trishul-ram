@@ -31,7 +31,7 @@ class SFTPSink(BaseSink):
     - ``{pipeline}``        — pipeline name (from meta or config)
     - ``{timestamp}``       — UTC file-open timestamp
     - ``{epoch}``          — UTC file-open epoch seconds
-    - ``{epoch_m}``        — UTC file-open epoch milliseconds
+    - ``{epoch_m}`` / ``{epoch_ms}`` — UTC file-open epoch milliseconds
     - ``{part}`` / ``{index}`` — rolling file part number
     - ``{source_filename}`` — original source filename (from meta)
     """

@@ -170,6 +170,11 @@ class TestUploadSchema:
         assert resp.status_code == 200
         assert resp.json()["type"] == "xml"
 
+    def test_upload_asn1_schema(self, client):
+        resp = _upload(client, "MyModule DEFINITIONS ::= BEGIN END", "spec.asn1")
+        assert resp.status_code == 200
+        assert resp.json()["type"] == "asn1"
+
     def test_upload_to_subdir(self, client, schema_dir):
         resp = _upload(client, 'syntax = "proto3";', "Rec.proto", subdir="cisco")
         assert resp.status_code == 200

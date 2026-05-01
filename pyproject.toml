@@ -4,17 +4,16 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "tram"
-version = "1.3.2"
+version = "1.3.3"
 description = "Trishul Real-time Aggregation & Mediation — telecom data pipeline daemon"
 readme = "README.md"
-requires-python = ">=3.11"
+requires-python = ">=3.13"
 license = {file = "LICENSE"}
 keywords = ["telecom", "data-pipeline", "sftp", "pm", "fm", "etl"]
 classifiers = [
     "Development Status :: 5 - Production/Stable",
     "License :: OSI Approved :: Apache Software License",
-    "Programming Language :: Python :: 3.11",
-    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
 ]
 
 dependencies = [
@@ -36,14 +35,12 @@ dependencies = [
 [project.optional-dependencies]
 # ── Deployment profiles ────────────────────────────────────────────────────
 #
-# manager  — everything the manager/standalone pod needs on top of base.
-#            Adds APScheduler (scheduling), SQLAlchemy (persistence), and
-#            the two most common DB drivers.  Install for any pod that owns
-#            the scheduler and writes run history to the database.
+# manager    — scheduling (APScheduler), persistence (SQLAlchemy + DB drivers).
+#              Install on any pod that owns the scheduler and writes run history.
 #
-# worker   — semantic marker; base dependencies are already sufficient for
-#            the worker execution plane.  Add connector extras as needed,
-#            e.g. pip install tram[worker,kafka,snmp,avro]
+# worker     — semantic marker; base dependencies are sufficient for the worker
+#              execution plane. Add connector/serializer extras as needed,
+#              e.g. pip install tram[worker,kafka,snmp,avro]
 #
 manager = [
     "apscheduler>=3.10,<4.0",    # APScheduler 4.x has breaking API changes
@@ -51,91 +48,140 @@ manager = [
     "psycopg2-binary>=2.9,<3.0",
     "PyMySQL>=1.1,<2.0",
 ]
-worker = []                   # base is sufficient; this is a semantic marker only
+worker = []                      # base is sufficient; semantic marker only
 
-# ── Connector / feature extras ─────────────────────────────────────────────
+# ── Message queue connectors ───────────────────────────────────────────────
 kafka = ["kafka-python>=2.0,<3.0"]
-opensearch = ["opensearch-py>=2.4,<3.0"]
-s3 = ["boto3>=1.35,<2.0"]        # boto3↔botocore tight coupling; exclude from all extra
-snmp = ["pysnmp>=7,<8", "pyasn1>=0.4.8,<0.7"]
-avro = ["fastavro>=1.9,<2.0"]
-protobuf_ser = ["protobuf>=4.25,<6.0", "grpcio-tools>=1.64,<2.0"]  # grpcio tight per-patch coupling
-asn1 = ["asn1tools>=0.167,<1.0"]
-parquet = ["pyarrow>=16,<20"]    # exclude from all extra (~150 MB)
-msgpack_ser = ["msgpack>=1.0,<2.0"]
 mqtt = ["paho-mqtt>=2.0,<3.0"]
 amqp = ["pika>=1.0,<2.0"]
 nats = ["nats-py>=2.3,<3.0"]
+
+# ── Telemetry / network-management connectors ──────────────────────────────
+snmp = ["pysnmp>=7,<8", "pyasn1>=0.4.8,<0.7"]
 gnmi = ["pygnmi>=0.8,<1.0"]
-jmespath = ["jmespath>=1.0,<2.0"]
+
+# ── Database connectors ────────────────────────────────────────────────────
 sql = ["sqlalchemy>=2.0,<3.0"]
 postgresql = ["psycopg2-binary>=2.9,<3.0"]
 mysql = ["PyMySQL>=1.1,<2.0"]
 influxdb = ["influxdb-client>=1.30,<2.0"]
 redis = ["redis>=5.0,<6.0"]
-gcs = ["google-cloud-storage>=2.0,<3.0"]   # exclude from all extra (~50 MB)
-azure = ["azure-storage-blob>=12.0,<13.0"] # exclude from all extra (~30 MB)
-websocket = ["websockets>=12.0,<15.0"]
-elasticsearch = ["elasticsearch>=8.0,<9.0"]
-metrics = ["prometheus-client>=0.20,<1.0"]
-prometheus_rw = ["protobuf>=4.25,<6.0", "python-snappy>=0.7,<1.0"]
-k8s = ["kubernetes>=29,<32"]
-corba = ["omniORBpy>=4.3"]       # system package only — no PyPI wheel
 clickhouse = ["clickhouse-driver>=0.2,<1.0"]
-mib = ["pysmi>=1.4,<2.0"]
-otel = [                         # SDK↔exporter tight coupling; pin together
+elasticsearch = ["elasticsearch>=8.0,<9.0"]
+opensearch = ["opensearch-py>=2.4,<3.0"]
+
+# ── Object-storage connectors ──────────────────────────────────────────────
+s3 = ["boto3>=1.35,<2.0"]                      # boto3↔botocore tight coupling; exclude from all
+gcs = ["google-cloud-storage>=2.0,<3.0"]       # ~50 MB; exclude from all
+azure = ["azure-storage-blob>=12.0,<13.0"]     # ~30 MB; exclude from all
+
+# ── Streaming / API connectors ─────────────────────────────────────────────
+websocket = ["websockets>=12.0,<15.0"]
+
+# ── Kubernetes connector ───────────────────────────────────────────────────
+k8s = ["kubernetes>=29,<32"]
+
+# ── Serializers ───────────────────────────────────────────────────────────
+avro = ["fastavro>=1.9,<2.0"]
+protobuf_ser = ["protobuf>=4.25,<7.0", "grpcio-tools>=1.64,<2.0"]  # compile .proto (manager); grpcio-tools 1.72+ requires protobuf>=6
+protobuf = ["protobuf>=4.25,<7.0"]             # runtime decode only (worker)
+asn1 = ["asn1tools>=0.167,<1.0"]
+msgpack_ser = ["msgpack>=1.0,<2.0"]
+parquet = ["pyarrow>=16,<20"]                  # ~150 MB; exclude from all
+corba = ["omniORBpy>=4.3"]                     # system package only — no PyPI wheel
+
+# ── Transforms ────────────────────────────────────────────────────────────
+jmespath = ["jmespath>=1.0,<2.0"]
+
+# ── Observability ─────────────────────────────────────────────────────────
+metrics = ["prometheus-client>=0.20,<1.0"]
+prometheus_rw = ["protobuf>=4.25,<7.0", "python-snappy>=0.7,<1.0"]
+otel = [                                       # SDK↔exporter tight coupling; pin together
     "opentelemetry-sdk>=1.20,<2.0",
     "opentelemetry-exporter-otlp-proto-grpc>=1.20,<2.0",
 ]
+
+# ── Schema management ─────────────────────────────────────────────────────
+mib = ["pysmi-lextudio>=1.4,<2.0"]            # MIB compilation (manager-side)
+
+# ── System ────────────────────────────────────────────────────────────────
 watch = ["watchdog>=3.0,<7.0"]
+
+# ── AI ────────────────────────────────────────────────────────────────────
 ai-anthropic = ["anthropic>=0.30,<2.0"]
 ai-openai = ["openai>=1.40,<2.0"]
+
+# ── Dev ───────────────────────────────────────────────────────────────────
 dev = [
-    "apscheduler>=3.10,<4.0", # PipelineController tests import BackgroundScheduler directly
-    "sqlalchemy>=2.0,<3.0",   # DB and stats tests import SQLAlchemy directly
-    "tram[snmp]",             # SNMP unit tests exercise trap sink/source code paths
+    "apscheduler>=3.10,<4.0",   # PipelineController tests import BackgroundScheduler directly
+    "sqlalchemy>=2.0,<3.0",     # DB and stats tests import SQLAlchemy directly
+    "tram[snmp]",               # SNMP unit tests exercise trap sink/source code paths
     "pytest>=8.0,<9.0",
     "pytest-asyncio>=0.23,<2.0",
     "pytest-cov>=4.0,<6.0",
     "pytest-mock>=3.14,<4.0",
     "ruff>=0.4,<1.0",
-    "respx>=0.20,<1.0",       # HTTP mock for CLI tests
+    "respx>=0.20,<1.0",         # HTTP mock for CLI tests
 ]
+
+# ── Meta ──────────────────────────────────────────────────────────────────
+# Excluded from 'all' (size, system deps, or pip backtrack risk):
+#   corba        — omniORBpy has no PyPI wheel (system package only)
+#   s3           — boto3↔botocore per-patch coupling causes backtrack (~60 MB)
+#   gcs          — google-cloud-storage (~50 MB)
+#   azure        — azure-storage-blob (~30 MB)
+#   parquet      — pyarrow (~150 MB)
+#   protobuf_ser — grpcio-tools 1.72+ requires protobuf>=6; triggers backtrack with older pins
+# Install individually when needed: pip install tram[s3] / tram[protobuf_ser]
 all = [
-    # Excluded (cause pip backtrack loop or require system libs):
-    #   corba        — omniORBpy has no PyPI wheel (system package only)
-    #   s3           — boto3↔botocore per-patch coupling causes backtrack (~60 MB)
-    #   gcs          — google-cloud-storage (~50 MB)
-    #   azure        — azure-storage-blob (~30 MB)
-    #   parquet      — pyarrow (~150 MB)
-    #   protobuf_ser — grpcio-tools depends on setuptools with no floor; triggers backtrack
-    # Install individually when needed: pip install tram[s3] / tram[protobuf_ser]
+    # ── Deployment ──────────────────────────────
     "tram[manager]",
+    # ── Message queues ──────────────────────────
     "tram[kafka]",
-    "tram[opensearch]",
-    "tram[snmp]",
-    "tram[avro]",
-    "tram[msgpack_ser]",
     "tram[mqtt]",
     "tram[amqp]",
     "tram[nats]",
+    # ── Telemetry / NMS ─────────────────────────
+    "tram[snmp]",
     "tram[gnmi]",
-    "tram[jmespath]",
+    # ── Databases ───────────────────────────────
     "tram[sql]",
-    "tram[influxdb]",
-    "tram[redis]",
-    "tram[websocket]",
-    "tram[elasticsearch]",
-    "tram[metrics]",
-    "tram[prometheus_rw]",
-    "tram[k8s]",
-    "tram[clickhouse]",
-    "tram[asn1]",
-    "tram[mib]",
-    "tram[otel]",
-    "tram[watch]",
     "tram[postgresql]",
     "tram[mysql]",
+    "tram[influxdb]",
+    "tram[redis]",
+    "tram[clickhouse]",
+    "tram[elasticsearch]",
+    "tram[opensearch]",
+    # ── Object storage (excluded — image heavy) ─
+    # "tram[s3]",       # ~60 MB; boto3↔botocore per-patch coupling causes backtrack
+    # "tram[gcs]",      # ~50 MB
+    # "tram[azure]",    # ~30 MB
+    # ── Streaming / API ─────────────────────────
+    "tram[websocket]",
+    # ── Kubernetes ──────────────────────────────
+    "tram[k8s]",
+    # ── Serializers ─────────────────────────────
+    "tram[avro]",
+    "tram[protobuf]",
+    # "tram[protobuf_ser]",  # grpcio-tools 1.72+ requires protobuf>=6; triggers backtrack with older pins
+    "tram[asn1]",
+    "tram[msgpack_ser]",
+    # "tram[parquet]",  # ~150 MB pyarrow
+    # "tram[corba]",    # omniORBpy has no PyPI wheel (system package only)
+    # ── Transforms ──────────────────────────────
+    "tram[jmespath]",
+    # ── Observability ───────────────────────────
+    "tram[metrics]",
+    "tram[prometheus_rw]",
+    "tram[otel]",
+    # ── Schema management ───────────────────────
+    "tram[mib]",
+    # ── System ──────────────────────────────────
+    "tram[watch]",
+    # ── AI ──────────────────────────────────────
+    "tram[ai-anthropic]",
+    "tram[ai-openai]",
 ]
 
 [project.scripts]
@@ -153,7 +199,7 @@ log_cli_level = "DEBUG"
 
 [tool.ruff]
 line-length = 100
-target-version = "py311"
+target-version = "py313"
 
 [tool.ruff.lint]
 select = ["E", "F", "I", "UP"]

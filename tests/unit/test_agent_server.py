@@ -80,7 +80,7 @@ class TestWorkerState:
 class TestPostRunComplete:
     def test_no_op_when_url_empty(self):
         # Should not raise and should not attempt any HTTP call
-        _post_run_complete("", "r1", "p", "success", 0, 0, 0, 0, None)
+        _post_run_complete("", "r1", "p", "w0", "success", 0, 0, 0, 0, None)
 
     def test_posts_payload(self, respx_mock=None):
         captured = {}
@@ -103,13 +103,14 @@ class TestPostRunComplete:
 
             _post_run_complete(
                 "http://manager/api/internal/run-complete",
-                "run-42", "my-pipe", "success", 10, 8, 1024, 768, None,
+                "run-42", "my-pipe", "worker-7", "success", 10, 8, 1024, 768, None,
                 started_at=started_at,
                 finished_at=finished_at,
             )
 
         assert captured["url"] == "http://manager/api/internal/run-complete"
         assert captured["json"]["run_id"] == "run-42"
+        assert captured["json"]["worker_id"] == "worker-7"
         assert captured["json"]["status"] == "success"
         assert captured["json"]["records_in"] == 10
         assert captured["json"]["bytes_in"] == 1024
@@ -125,7 +126,7 @@ class TestPostRunComplete:
             mock_client_cls.return_value = mock_client
 
             # Must not raise
-            _post_run_complete("http://bad-host/run-complete", "r", "p", "error", 0, 0, 0, 0, "boom")
+            _post_run_complete("http://bad-host/run-complete", "r", "p", "w0", "error", 0, 0, 0, 0, "boom")
 
 
 # ── FastAPI endpoint tests ─────────────────────────────────────────────────
@@ -168,6 +169,32 @@ class TestStatusEndpoint:
         data = resp.json()
         assert data["running"] == []
         assert data["streams"] == []
+
+    def test_status_includes_live_stats_snapshot(self):
+        app = create_worker_app(worker_id="w0", manager_url="")
+        state: WorkerState = app.state.worker
+        run = ActiveRun(
+            run_id="s1",
+            pipeline_name="pipe-a",
+            schedule_type="stream",
+            started_at="2026-04-27T00:00:00+00:00",
+        )
+        from tram.agent.metrics import PipelineStats
+
+        run.stats = PipelineStats(run_id="s1", pipeline_name="pipe-a", schedule_type="stream")
+        run.stats.increment(records_in=12, records_out=8, bytes_in=120, bytes_out=80)
+        state.add(run)
+        client = TestClient(app, raise_server_exceptions=True)
+
+        resp = client.get("/agent/status")
+
+        assert resp.status_code == 200
+        data = resp.json()
+        assert data["worker_id"] == "w0"
+        assert data["active_runs"] == 1
+        assert data["running_pipelines"] == ["pipe-a"]
+        assert data["streams"][0]["run_id"] == "s1"
+        assert data["streams"][0]["stats"]["records_out"] == 8
 
 
 class TestIngressApp:

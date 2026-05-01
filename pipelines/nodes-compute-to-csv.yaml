@@ -12,7 +12,6 @@ pipeline:
 
   serializer_in:
     type: json
-    skip_lines: 7   # skip HTTP metadata header before JSON body
 
   transforms:
     - type: explode
@@ -35,4 +34,4 @@ pipeline:
       filename_template: "{source_filename}.csv"
       serializer_out:
         type: csv
-        include_header: true
+        has_header: true

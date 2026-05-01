@@ -123,3 +123,28 @@ def test_only_latest_version_is_active(db):
     active = [v for v in versions if v["is_active"]]
     assert len(active) == 1
     assert active[0]["version"] == 2
+
+
+def test_save_pipeline_version_is_noop_for_identical_active_yaml(db):
+    v1 = db.save_pipeline_version("p", "same")
+    v2 = db.save_pipeline_version("p", "same")
+
+    versions = db.get_pipeline_versions("p")
+
+    assert v2 == v1
+    assert len(versions) == 1
+    assert versions[0]["version"] == v1
+    assert versions[0]["is_active"] == 1
+
+
+def test_activate_pipeline_version_marks_existing_row_active(db):
+    db.save_pipeline_version("p", "v1")
+    db.save_pipeline_version("p", "v2")
+
+    yaml_text = db.activate_pipeline_version("p", 1)
+    versions = db.get_pipeline_versions("p")
+    active = [v for v in versions if v["is_active"]]
+
+    assert yaml_text == "v1"
+    assert len(active) == 1
+    assert active[0]["version"] == 1

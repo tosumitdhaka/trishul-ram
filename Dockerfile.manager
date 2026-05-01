@@ -1,0 +1,167 @@
+# Dockerfile.manager — TRAM manager image
+#
+# Owns scheduling, persistence, schema/MIB management, and worker orchestration.
+# Does NOT execute pipelines directly — dispatches runs to worker pods.
+#
+#   ✓  manager (apscheduler, sqlalchemy, DB drivers)
+#   ✓  k8s         — spawn/manage worker pods via Kubernetes API
+#   ✓  metrics      — Prometheus /metrics endpoint
+#   ✓  watch        — pipeline config hot-reload via watchdog
+#   ✓  mib          — pysmi: compile uploaded MIBs → shared volume
+#   ✓  protobuf_ser — grpcio-tools: compile uploaded .proto → shared volume
+#   ✓  asn1         — validate/cache .asn schemas uploaded via UI
+#   ✓  ai-anthropic / ai-openai — AI features are UI/API driven (manager-side)
+#   ✓  Web UI assets
+#
+#   ✗  kafka, snmp, avro, jmespath, sql, websocket, prometheus_rw — execution connectors
+#   ✗  protobuf runtime (worker-only)
+#
+# Stage 0  ui-builder  — builds tram-ui static assets (Node 20)
+# Stage 1  builder     — builds the Python wheel
+# Stage 2  mib-builder — downloads + compiles standard SNMP MIBs
+# Stage 3  runtime     — final image
+
+# ── Stage 0: build web UI ────────────────────────────────────────────────────
+FROM node:20-alpine AS ui-builder
+
+WORKDIR /ui-src
+COPY tram/ui/package.json tram/ui/package-lock.json ./
+RUN npm ci
+COPY tram/ui/ ./
+RUN npm run build
+
+# ── Stage 1: build wheel ─────────────────────────────────────────────────────
+FROM python:3.13-slim AS builder
+
+WORKDIR /build
+COPY pyproject.toml README.md ./
+COPY tram/ ./tram/
+
+RUN pip install --no-cache-dir build && python -m build --wheel
+
+# ── Stage 2: download + compile standard SNMP MIBs + cache raw sources ──────
+FROM python:3.13-slim AS mib-builder
+
+RUN pip install --no-cache-dir "pysmi-lextudio>=1.1"
+
+RUN python - <<'EOF'
+import os, sys
+from pathlib import Path
+
+os.makedirs("/mibs", exist_ok=True)
+os.makedirs("/mib-sources", exist_ok=True)
+try:
+    from pysmi.reader import HttpReader
+    from pysmi.searcher import PyFileSearcher, StubSearcher
+    from pysmi.writer import PyFileWriter
+    from pysmi.parser.smi import parserFactory
+    from pysmi.codegen.pysnmp import PySnmpCodeGen
+    from pysmi.compiler import MibCompiler
+
+    STANDARD_MIBS = [
+        "IANAifType-MIB",
+        "IF-MIB",
+        "IP-MIB",
+        "TCP-MIB",
+        "UDP-MIB",
+        "ENTITY-MIB",
+        "HOST-RESOURCES-MIB",
+    ]
+
+    class CachingReader:
+        def __init__(self, reader, cache_dir):
+            self._reader = reader
+            self._cache_dir = Path(cache_dir)
+
+        def __str__(self):
+            return str(self._reader)
+
+        def _fetch(self, mibname, **options):
+            getter = getattr(self._reader, "getData", None) or getattr(self._reader, "get_data", None)
+            if getter is None:
+                raise AttributeError(f"{type(self._reader).__name__} reader has no getData/get_data method")
+            mib_info, mib_text = getter(mibname, **options)
+            target = self._cache_dir / Path(getattr(mib_info, "file", mibname)).name
+            target.write_text(mib_text, encoding="utf-8")
+            return mib_info, mib_text
+
+        def getData(self, mibname, **options):
+            return self._fetch(mibname, **options)
+
+        def get_data(self, mibname, **options):
+            return self._fetch(mibname, **options)
+
+    parser  = parserFactory()()
+    codegen = PySnmpCodeGen()
+    writer  = PyFileWriter("/mibs")
+
+    compiler = MibCompiler(parser, codegen, writer)
+    compiler.addSources(CachingReader(HttpReader("https://mibs.pysnmp.com/asn1/@mib@"), "/mib-sources"))
+    compiler.addSearchers(PyFileSearcher("/mibs"))
+    compiler.addSearchers(StubSearcher(*(PySnmpCodeGen.baseMibs + PySnmpCodeGen.fakeMibs)))
+
+    results = compiler.compile(*STANDARD_MIBS)
+    for name, status in results.items():
+        print(f"  {status}: {name}", flush=True)
+    compiled = sum(1 for s in results.values() if s == "compiled")
+    print(f"Compiled {compiled} MIB module(s) → /mibs; cached raw sources → /mib-sources", flush=True)
+except Exception as exc:
+    print(f"WARNING: MIB download failed ({exc}); continuing with empty /mibs and /mib-sources", flush=True)
+EOF
+
+# ── Stage 3: runtime image ────────────────────────────────────────────────────
+FROM python:3.13-slim
+
+RUN useradd -m -u 1000 -s /bin/bash tram
+
+WORKDIR /app
+
+# omniORBpy (CORBA) requires the omniORB shared runtime libraries
+RUN apt-get update && \
+    ( apt-get install -y --no-install-recommends libomniorb4-3t64 libomnithread4 || \
+      apt-get install -y --no-install-recommends libomniorb4-2 libomnithread4 ) && \
+    rm -rf /var/lib/apt/lists/*
+
+# Manager extras:
+#   manager      — apscheduler + sqlalchemy + DB drivers
+#   k8s          — worker pod orchestration
+#   metrics      — Prometheus /metrics
+#   watch        — pipeline config hot-reload
+#   mib          — pysmi MIB compilation
+#   protobuf_ser — grpcio-tools .proto compilation
+#   asn1         — .asn schema validation/caching
+#   ai-anthropic / ai-openai — UI/API-driven AI features
+#
+# Excluded: execution connectors (kafka, snmp, avro, jmespath, sql connector,
+#   websocket, prometheus_rw) — those belong in the worker image.
+# corba (omniORBpy) excluded: not on PyPI; install python3-omniorb via apt in a custom layer.
+COPY --from=builder /build/dist/*.whl .
+RUN whl=$(ls *.whl) && \
+    pip install --no-cache-dir \
+        "${whl}[manager,k8s,metrics,watch,mib,protobuf_ser,asn1,ai-anthropic,ai-openai]" && \
+    rm *.whl
+
+COPY --from=mib-builder /mibs /mibs
+COPY --from=mib-builder /mib-sources /mib-sources
+COPY --from=ui-builder /ui-src/dist /ui
+COPY pipelines/ /tram-templates/
+
+RUN mkdir -p /pipelines /data /data/mibs /data/mib-sources /mibs /mib-sources /schemas && \
+    mkdir -p /home/tram/.tram && \
+    chown -R tram:tram /pipelines /data /mibs /mib-sources /schemas /home/tram /app /ui
+
+USER tram
+
+HEALTHCHECK --interval=30s --timeout=10s --start-period=15s --retries=3 \
+    CMD python -c "import urllib.request; urllib.request.urlopen('http://localhost:8765/api/health')" || exit 1
+
+EXPOSE 8765
+
+ENV TRAM_MIB_DIR=/mibs
+ENV TRAM_MIB_BUNDLED_SOURCE_DIR=/mib-sources
+ENV TRAM_SCHEMA_DIR=/schemas
+ENV TRAM_UI_DIR=/ui
+ENV TRAM_TEMPLATES_DIR=/tram-templates
+
+ENTRYPOINT ["tram"]
+CMD ["daemon"]

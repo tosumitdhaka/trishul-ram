@@ -9,11 +9,11 @@
 </head>
 <body>
 <!-- Login overlay (hidden once authenticated) -->
-<div id="login-overlay" style="display:none;position:fixed;inset:0;z-index:9999;background:var(--bg-page)">
+<div id="login-overlay" hidden>
   <div id="login-content"></div>
 </div>
 
-<div id="app-shell" class="d-flex" style="height:100vh;overflow:hidden;">
+<div id="app-shell" class="d-flex" hidden>
 
   <!-- ── Sidebar ───────────────────────────────────────────────── -->
   <div id="sidebar" class="sidebar">
@@ -21,8 +21,8 @@
       <svg class="brand-icon" viewBox="0 0 64 64" xmlns="http://www.w3.org/2000/svg">
         <defs>
           <linearGradient id="tg" x1="0%" y1="0%" x2="0%" y2="100%">
-            <stop offset="0%" style="stop-color:#f59e0b"/>
-            <stop offset="100%" style="stop-color:#d97706"/>
+            <stop offset="0%" stop-color="#f59e0b"/>
+            <stop offset="100%" stop-color="#d97706"/>
           </linearGradient>
         </defs>
         <path d="M57 24.6C54 17.4 44.8 8.7 44.8 8.7s3 7.4.8 17.3l3.5-3s3.3 1.4 3.7 5c.5 4.4-2 10.6-2 10.6s-5.5-1.7-13.9-1.6l-3-19.6l7.2 4.7L32 2l-9 19.9l7.2-4.7l-3 19.6c-8.4-.1-13.9 1.6-13.9 1.6s-2.5-6.2-2-10.6c.4-3.5 3.7-5 3.7-5l3.5 3c-2.2-9.8.8-17.3.8-17.3S10 17.4 7 24.6C3.9 32 2 40.8 2 40.8l6.4 5.9s5.6-1.7 10-2c4.1-.3 8.9-.4 8.9-.4l-.6 8.7l5.3 9l5.3-9l-.6-8.7s4.8.1 8.9.4c4.3.3 10 2 10 2l6.4-5.9s-1.9-8.8-5-16.2" fill="url(#tg)"/>
@@ -42,7 +42,7 @@
       <div class="nav-section-label mt-1">Pipelines</div>
       <a class="nav-link" href="#pipelines" data-page="pipelines">
         <i class="bi bi-list-ul"></i> All Pipelines
-        <span class="badge bg-secondary ms-auto" id="nav-badge-pipelines" style="font-size:10px"></span>
+        <span class="badge bg-secondary ms-auto nav-badge" id="nav-badge-pipelines"></span>
       </a>
       <a class="nav-link" href="#runs" data-page="runs">
         <i class="bi bi-clock-history"></i> Run History
@@ -51,16 +51,16 @@
       <div class="nav-section-label mt-1">Assets</div>
       <a class="nav-link" href="#schemas" data-page="schemas">
         <i class="bi bi-file-earmark-code"></i> Schemas
-        <span class="badge bg-secondary ms-auto" id="nav-badge-schemas" style="font-size:10px"></span>
+        <span class="badge bg-secondary ms-auto nav-badge" id="nav-badge-schemas"></span>
       </a>
       <a class="nav-link" href="#mibs" data-page="mibs">
         <i class="bi bi-heptagon"></i> MIB Modules
-        <span class="badge bg-secondary ms-auto" id="nav-badge-mibs" style="font-size:10px"></span>
+        <span class="badge bg-secondary ms-auto nav-badge" id="nav-badge-mibs"></span>
       </a>
 
       <div class="nav-section-label mt-1">System</div>
       <a class="nav-link" href="#cluster" data-page="cluster">
-        <i class="bi bi-diagram-3"></i> Workers
+        <i class="bi bi-diagram-3"></i> Cluster
       </a>
       <a class="nav-link" href="#plugins" data-page="plugins">
         <i class="bi bi-plug"></i> Plugins
@@ -71,14 +71,14 @@
     </nav>
 
     <div class="sidebar-footer">
-      <div class="dot-green" id="health-dot"></div>
+      <div class="health-indicator health-indicator-sm" id="health-dot"></div>
       <span id="health-text">Connecting…</span>
-      <span class="ms-auto" id="health-port" style="font-family:monospace;font-size:10px;color:#6e7681"></span>
+      <span class="ms-auto sidebar-footer-port" id="health-port"></span>
     </div>
   </div>
 
   <!-- ── Main ──────────────────────────────────────────────────── -->
-  <div class="d-flex flex-column flex-grow-1" style="min-width:0;overflow:hidden;">
+  <div class="d-flex flex-column flex-grow-1 app-shell-main">
 
     <!-- Topbar -->
     <div id="topbar">
@@ -88,7 +88,7 @@
       </div>
       <div class="topbar-right ms-2">
         <div class="topbar-icon health-btn">
-          <span id="health-icon" style="width:8px;height:8px;border-radius:50%;background:#3fb950;box-shadow:0 0 5px #3fb950;display:inline-block"></span>
+          <span id="health-icon" class="health-indicator health-indicator-md is-online"></span>
           <div class="health-card" id="health-card">
             <div class="hrow"><span class="hlabel">Status</span><span id="hc-status">—</span></div>
             <div class="hrow"><span class="hlabel">Scheduler</span><span id="hc-scheduler">—</span></div>
@@ -97,9 +97,9 @@
             <div class="hrow"><span class="hlabel">Version</span><span id="hc-version">—</span></div>
           </div>
         </div>
-        <button class="topbar-icon" onclick="navigate('settings')" title="Settings"><i class="bi bi-gear"></i></button>
-        <button class="topbar-icon" onclick="toggleTheme()" id="theme-btn" title="Toggle theme"><i class="bi bi-moon-stars-fill"></i></button>
-        <button class="topbar-icon" id="logout-btn" onclick="window._logout?.()" title="Sign out" style="display:none"><i class="bi bi-box-arrow-right"></i></button>
+        <button class="topbar-icon" id="topbar-settings-btn" title="Settings" type="button"><i class="bi bi-gear"></i></button>
+        <button class="topbar-icon" id="theme-btn" title="Toggle theme" type="button"><i class="bi bi-moon-stars-fill"></i></button>
+        <button class="topbar-icon" id="logout-btn" title="Sign out" type="button" hidden><i class="bi bi-box-arrow-right"></i></button>
       </div>
     </div>
 

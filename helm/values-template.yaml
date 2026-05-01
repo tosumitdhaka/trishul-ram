@@ -5,7 +5,7 @@
 image:
   registry: ""               # e.g. ghcr.io
   repository: OWNER/tram     # replace OWNER with your registry namespace
-  tag: "1.3.1"
+  tag: "1.3.3"
   pullPolicy: IfNotPresent
 
 ## Standalone mode: single-replica StatefulSet (replicaCount=1).

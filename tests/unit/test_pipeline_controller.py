@@ -660,6 +660,7 @@ class TestBootLoad:
 
         assert ctrl.manager.exists("my-interval")
         assert ctrl.manager.get("my-interval").status == "scheduled"
+        db.save_pipeline_version.assert_not_called()
         ctrl.stop()
 
     def test_boot_load_applies_stopped_flags(self):
@@ -728,6 +729,7 @@ class TestOnWorkerRunComplete:
         ctrl.on_worker_run_complete(
             run_id="r0",
             pipeline_name="my-manual",
+            worker_id="worker-1",
             status="success",
             records_in=5,
             records_out=5,
@@ -738,6 +740,7 @@ class TestOnWorkerRunComplete:
         last_run = ctrl.manager.get("my-manual").run_history[-1]
         assert last_run.started_at == started_at
         assert last_run.finished_at == finished_at
+        assert last_run.node_id == "worker-1"
         ctrl.stop()
 
     def test_success_updates_manager_and_transitions_state(self):
@@ -749,6 +752,7 @@ class TestOnWorkerRunComplete:
         ctrl.on_worker_run_complete(
             run_id="r1",
             pipeline_name="my-interval",
+            worker_id="worker-1",
             status="success",
             records_in=5,
             records_out=5,
@@ -769,6 +773,7 @@ class TestOnWorkerRunComplete:
         ctrl.on_worker_run_complete(
             run_id="r2",
             pipeline_name="my-manual",
+            worker_id="worker-1",
             status="failed",
             records_in=0,
             records_out=0,
@@ -784,6 +789,7 @@ class TestOnWorkerRunComplete:
         ctrl.on_worker_run_complete(
             run_id="r3",
             pipeline_name="ghost",
+            worker_id="worker-1",
             status="success",
             records_in=0,
             records_out=0,
@@ -799,6 +805,7 @@ class TestOnWorkerRunComplete:
         ctrl.on_worker_run_complete(
             run_id="r4",
             pipeline_name="my-manual",
+            worker_id="worker-1",
             status="success",
             records_in=5,
             records_out=4,
@@ -815,6 +822,7 @@ class TestOnWorkerRunComplete:
         ctrl.on_worker_run_complete(
             run_id="r5",
             pipeline_name="my-manual",
+            worker_id="worker-1",
             status="unknown_status_xyz",
             records_in=0,
             records_out=0,
@@ -833,6 +841,7 @@ class TestOnWorkerRunComplete:
         ctrl.on_worker_run_complete(
             run_id="r6",
             pipeline_name="my-manual",
+            worker_id="worker-1",
             status="success",
             records_in=1,
             records_out=1,
@@ -854,12 +863,32 @@ class TestOnWorkerRunComplete:
         ctrl.on_worker_run_complete(
             run_id="rb1",
             pipeline_name="my-manual",
+            worker_id="worker-1",
             status="success",
             records_in=1,
             records_out=1,
         )
 
         assert ctrl.get_active_batch_runs() == []
+        ctrl.stop()
+
+    def test_worker_node_id_is_persisted_on_callback_result(self):
+        ctrl = _started_controller()
+        config = load_pipeline_from_yaml(_MANUAL_YAML)
+        ctrl.register(config, yaml_text=_MANUAL_YAML)
+        ctrl.manager.set_status("my-manual", "running")
+
+        ctrl.on_worker_run_complete(
+            run_id="r-node",
+            pipeline_name="my-manual",
+            worker_id="tram-worker-3",
+            status="success",
+            records_in=1,
+            records_out=1,
+        )
+
+        last_run = ctrl.manager.get("my-manual").run_history[-1]
+        assert last_run.node_id == "tram-worker-3"
         ctrl.stop()
 
 
@@ -923,6 +952,7 @@ class TestWorkerDispatch:
 
     def test_mark_active_batch_run_lost_records_failed_run(self):
         wp = self._worker_pool()
+        wp.worker_id_for_url.return_value = "tram-worker-0"
         ctrl = _started_controller(worker_pool=wp, manager_url="http://manager:8765")
         config = load_pipeline_from_yaml(_INTERVAL_YAML)
         ctrl.register(config, yaml_text=_INTERVAL_YAML)
@@ -942,6 +972,7 @@ class TestWorkerDispatch:
         assert state.status == "error"
         assert state.run_history[0].run_id == "lost-1"
         assert state.run_history[0].status == RunStatus.FAILED
+        assert state.run_history[0].node_id == "tram-worker-0"
         ctrl.stop()
 
     def test_mark_active_batch_run_lost_records_failed_manual_run(self):
@@ -985,6 +1016,7 @@ class TestWorkerDispatch:
         ctrl.on_worker_run_complete(
             run_id="lost-late",
             pipeline_name="my-manual",
+            worker_id="worker-1",
             status="success",
             records_in=5,
             records_out=5,
@@ -1009,7 +1041,7 @@ class TestWorkerDispatch:
         assert str(uuid.UUID(generated_run_id)) == generated_run_id
         ctrl.stop()
 
-    def test_run_batch_no_healthy_workers_sets_error(self):
+    def test_run_batch_no_healthy_workers_records_failed_run(self):
         wp = self._worker_pool(dispatch_return=None)
         ctrl = _started_controller(worker_pool=wp)
         config = load_pipeline_from_yaml(_INTERVAL_YAML)
@@ -1017,7 +1049,11 @@ class TestWorkerDispatch:
         ctrl.manager.set_status("my-interval", "scheduled")
 
         ctrl._run_batch("my-interval")
-        assert ctrl.manager.get("my-interval").status == "error"
+        state = ctrl.manager.get("my-interval")
+        assert state.status == "error"
+        assert len(state.run_history) == 1
+        assert state.run_history[0].status == RunStatus.FAILED
+        assert state.run_history[0].error == "No healthy workers available for dispatch"
         ctrl.stop()
 
     def test_start_stream_dispatches_to_worker(self):
@@ -1329,6 +1365,7 @@ class TestWorkerDispatch:
         ctrl.on_worker_run_complete(
             run_id="run-abc",
             pipeline_name="my-stream",
+            worker_id="w0",
             status="success",
             records_in=1,
             records_out=1,
@@ -1361,6 +1398,7 @@ class TestWorkerDispatch:
         ctrl.on_worker_run_complete(
             run_id="run-a",
             pipeline_name="my-webhook-stream",
+            worker_id="w0",
             status="success",
             records_in=1,
             records_out=1,
@@ -1377,16 +1415,15 @@ class TestWorkerDispatch:
 
 
 class TestUpdateDeleteRestart:
-    def test_update_replaces_pipeline_and_restarts(self):
+    def test_update_identical_yaml_is_noop(self):
         ctrl = _started_controller()
         config = load_pipeline_from_yaml(_INTERVAL_YAML)
         ctrl.register(config, yaml_text=_INTERVAL_YAML)
-        assert ctrl.manager.get("my-interval").status == "scheduled"
+        original_state = ctrl.manager.get("my-interval")
 
-        # Update with same YAML — pipeline should re-register and reschedule
         new_state = ctrl.update("my-interval", _INTERVAL_YAML)
-        assert new_state is not None
-        assert ctrl.manager.exists("my-interval")
+        assert new_state is original_state
+        assert ctrl.manager.get("my-interval").status == "scheduled"
         ctrl.stop()
 
     def test_update_stopped_pipeline_stays_stopped(self):
@@ -1411,6 +1448,7 @@ class TestUpdateDeleteRestart:
         )
         ctrl.update("my-interval", _INTERVAL_YAML)
         db.save_pipeline.assert_called_with("my-interval", _INTERVAL_YAML, source="api")
+        db.save_pipeline_version.assert_called_once_with("my-interval", _INTERVAL_YAML)
         ctrl.stop()
 
     def test_delete_deregisters_pipeline(self):
@@ -1472,7 +1510,8 @@ class TestStartPipelineEdgeCases:
         ctrl.manager.set_status("my-interval", "running")
 
         # Should not raise and should leave status as running
-        ctrl.start_pipeline("my-interval")
+        result = ctrl.start_pipeline("my-interval")
+        assert result == "already_running"
         assert ctrl.manager.get("my-interval").status == "running"
         ctrl.stop()
 
@@ -1482,8 +1521,19 @@ class TestStartPipelineEdgeCases:
         config = load_pipeline_from_yaml(yaml)
         ctrl.manager.register(config, yaml_text=yaml)
 
-        ctrl.start_pipeline("my-interval")
+        result = ctrl.start_pipeline("my-interval")
+        assert result == "disabled"
         assert ctrl.manager.get("my-interval").status == "stopped"
+        ctrl.stop()
+
+    def test_start_pipeline_manual_returns_manual(self):
+        ctrl = _started_controller()
+        config = load_pipeline_from_yaml(_MANUAL_YAML)
+        ctrl.register(config, yaml_text=_MANUAL_YAML)
+
+        result = ctrl.start_pipeline("my-manual")
+        assert result == "manual"
+        assert ctrl.manager.get("my-manual").status == "stopped"
         ctrl.stop()
 
     def test_stop_pipeline_persists_to_db(self):

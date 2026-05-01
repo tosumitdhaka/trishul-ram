@@ -1,5 +1,6 @@
 // Settings page — load saved config + daemon status
 import { api, getConfig, saveConfig } from '../api.js'
+import { setStatusMessage } from '../utils.js'
 
 export async function init() {
   const { baseUrl, apiKey } = getConfig()
@@ -10,57 +11,54 @@ export async function init() {
   if (key) key.value = apiKey
   if (poll) poll.value = localStorage.getItem('tram_poll_interval') || '10'
 
-  window._settingsResetUrl = () => {
+  document.getElementById('cfg-reset-btn')?.addEventListener('click', () => {
     localStorage.removeItem('tram_base_url')
     if (url) url.value = window.location.origin
-    const s = document.getElementById('cfg-status')
-    if (s) { s.textContent = '✓ Reset to default'; s.style.color = '#8b949e' }
-  }
+    setStatusMessage('cfg-status', 'Reset to default', 'muted')
+  })
 
-  window._settingsSave = () => {
+  document.getElementById('cfg-save-btn')?.addEventListener('click', () => {
     saveConfig(url?.value?.trim() || window.location.origin, key?.value?.trim() || '')
     localStorage.setItem('tram_poll_interval', poll?.value || '10')
-    const s = document.getElementById('cfg-status')
-    if (s) { s.textContent = '✓ Saved'; s.style.color = '#3fb950' }
-  }
+    setStatusMessage('cfg-status', 'Saved', 'success')
+  })
 
-  window._settingsTest = async () => {
-    const s = document.getElementById('cfg-status')
+  document.getElementById('cfg-test-btn')?.addEventListener('click', async () => {
     try {
-      if (s) { s.textContent = 'Testing…'; s.style.color = '#8b949e' }
-      const r = await api.ready()
-      if (s) { s.textContent = `✓ Connected · v${(await api.meta()).version}`; s.style.color = '#3fb950' }
+      setStatusMessage('cfg-status', 'Testing…', 'muted')
+      await api.ready()
+      const meta = await api.meta()
+      setStatusMessage('cfg-status', `Connected · v${meta.version}`, 'success')
     } catch (e) {
-      if (s) { s.textContent = `✗ ${e.message}`; s.style.color = '#f85149' }
+      setStatusMessage('cfg-status', e.message, 'error')
     }
-  }
+  })
 
   // Show password change card if user is logged in
   const authUser = localStorage.getItem('tram_auth_user')
   if (authUser) {
     const col = document.getElementById('pwd-col')
-    if (col) col.style.display = ''
+    if (col) col.classList.remove('d-none')
   }
 
-  window._settingsChangePwd = async () => {
+  document.getElementById('pwd-change-btn')?.addEventListener('click', async () => {
     const current = document.getElementById('pwd-current')?.value || ''
     const newPwd  = document.getElementById('pwd-new')?.value     || ''
     const confirm = document.getElementById('pwd-confirm')?.value  || ''
-    const s = document.getElementById('pwd-status')
-    if (!current) { if (s) { s.textContent = '✗ Enter current password'; s.style.color = '#f85149' }; return }
-    if (newPwd.length < 6) { if (s) { s.textContent = '✗ New password must be at least 6 characters'; s.style.color = '#f85149' }; return }
-    if (newPwd !== confirm) { if (s) { s.textContent = '✗ Passwords do not match'; s.style.color = '#f85149' }; return }
+    if (!current) { setStatusMessage('pwd-status', 'Enter current password', 'error'); return }
+    if (newPwd.length < 6) { setStatusMessage('pwd-status', 'New password must be at least 6 characters', 'error'); return }
+    if (newPwd !== confirm) { setStatusMessage('pwd-status', 'Passwords do not match', 'error'); return }
     try {
-      if (s) { s.textContent = 'Saving…'; s.style.color = '#8b949e' }
+      setStatusMessage('pwd-status', 'Saving…', 'muted')
       await api.auth.changePassword(current, newPwd)
-      if (s) { s.textContent = '✓ Password changed'; s.style.color = '#3fb950' }
+      setStatusMessage('pwd-status', 'Password changed', 'success')
       document.getElementById('pwd-current').value = ''
       document.getElementById('pwd-new').value     = ''
       document.getElementById('pwd-confirm').value  = ''
     } catch (e) {
-      if (s) { s.textContent = `✗ ${e.message}`; s.style.color = '#f85149' }
+      setStatusMessage('pwd-status', e.message, 'error')
     }
-  }
+  })
 
   // Load AI config
   try {
@@ -76,14 +74,10 @@ export async function init() {
     if (hintEl)  hintEl.textContent = aiCfg.api_key_set
       ? `Current key: ${aiCfg.api_key_hint} (${aiCfg.source})`
       : 'No API key configured'
-    if (badge) {
-      badge.textContent = aiCfg.api_key_set ? '● enabled' : '○ disabled'
-      badge.style.color = aiCfg.api_key_set ? '#3fb950' : '#8b949e'
-    }
+    updateAiBadge(badge, aiCfg.api_key_set)
   } catch { /* AI not available */ }
 
-  window._settingsSaveAI = async () => {
-    const s = document.getElementById('ai-cfg-status')
+  document.getElementById('ai-save-btn')?.addEventListener('click', async () => {
     const payload = {
       provider: document.getElementById('ai-provider')?.value || '',
       api_key:  document.getElementById('ai-api-key')?.value  || '',
@@ -91,7 +85,7 @@ export async function init() {
       base_url: document.getElementById('ai-base-url')?.value || '',
     }
     try {
-      if (s) { s.textContent = 'Saving…'; s.style.color = '#8b949e' }
+      setStatusMessage('ai-cfg-status', 'Saving…', 'muted')
       await api.ai.saveConfig(payload)
       // Clear the password field after save
       const keyEl = document.getElementById('ai-api-key')
@@ -103,40 +97,25 @@ export async function init() {
       if (hintEl) hintEl.textContent = aiCfg.api_key_set
         ? `Current key: ${aiCfg.api_key_hint} (${aiCfg.source})`
         : 'No API key configured'
-      if (badge) {
-        badge.textContent = aiCfg.api_key_set ? '● enabled' : '○ disabled'
-        badge.style.color = aiCfg.api_key_set ? '#3fb950' : '#8b949e'
-      }
-      if (s) { s.textContent = '✓ Saved'; s.style.color = '#3fb950' }
+      updateAiBadge(badge, aiCfg.api_key_set)
+      setStatusMessage('ai-cfg-status', 'Saved', 'success')
     } catch (e) {
-      if (s) { s.textContent = `✗ ${e.message}`; s.style.color = '#f85149' }
+      setStatusMessage('ai-cfg-status', e.message, 'error')
     }
-  }
+  })
 
-  window._settingsTestAI = async () => {
-    const s = document.getElementById('ai-cfg-status')
+  document.getElementById('ai-test-btn')?.addEventListener('click', async () => {
     try {
-      if (s) { s.textContent = 'Testing…'; s.style.color = '#8b949e' }
+      setStatusMessage('ai-cfg-status', 'Testing…', 'muted')
       const r = await api.ai.test()
-      if (s) { s.textContent = `✓ Connected · ${r.provider} / ${r.model}`; s.style.color = '#3fb950' }
+      setStatusMessage('ai-cfg-status', `Connected · ${r.provider} / ${r.model}`, 'success')
     } catch (e) {
-      if (s) { s.textContent = `✗ ${e.message}`; s.style.color = '#f85149' }
+      setStatusMessage('ai-cfg-status', e.message, 'error')
     }
-  }
+  })
+}
 
-  // Load daemon status
-  try {
-    const [ready, meta] = await Promise.all([api.ready(), api.meta()])
-    const set = (id, val) => { const el = document.getElementById(id); if (el) el.textContent = val ?? '—' }
-    const sch = document.getElementById('ds-scheduler')
-    if (sch) sch.innerHTML = `<span class="tram-badge badge-${ready.scheduler === 'running' ? 'running has-dot running' : 'stopped'}">${ready.scheduler || '—'}</span>`
-    set('ds-db-engine',  ready.db_engine || 'SQLite')
-    const dbs = document.getElementById('ds-db-status')
-    if (dbs) { dbs.textContent = ready.db || '—'; dbs.style.color = ready.db === 'ok' ? '#3fb950' : '#f85149' }
-    set('ds-db-path',    ready.db_path   || '—')
-    set('ds-cluster',    ready.cluster   || 'standalone')
-    set('ds-pipelines',  ready.pipelines_loaded ?? '—')
-    set('ds-python',     meta.python_version || '—')
-    set('ds-uptime',     ready.uptime    || '—')
-  } catch { /* offline */ }
+function updateAiBadge(badge, enabled) {
+  if (!badge) return
+  setStatusMessage(badge, enabled ? '● enabled' : '○ disabled', enabled ? 'success' : 'muted')
 }

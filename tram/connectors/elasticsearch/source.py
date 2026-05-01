@@ -61,7 +61,7 @@ class ElasticsearchSource(BaseSource):
 
         return Elasticsearch(**kwargs)
 
-    def read(self) -> Generator[tuple[bytes, dict], None, None]:
+    def read(self) -> Generator[tuple[bytes, dict]]:
         client = self._build_client()
         try:
             resp = client.search(

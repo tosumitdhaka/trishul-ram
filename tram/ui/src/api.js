@@ -12,28 +12,71 @@ export function saveConfig(baseUrl, apiKey) {
   localStorage.setItem('tram_api_key',  apiKey)
 }
 
-async function reqText(path) {
-  const { baseUrl, apiKey } = getConfig()
-  const headers = {}
-  if (apiKey) headers['X-API-Key'] = apiKey
+function withAuthHeaders(headers = {}) {
+  const next = { ...headers }
+  const { apiKey } = getConfig()
+  if (apiKey) next['X-API-Key'] = apiKey
   const token = localStorage.getItem('tram_auth_token')
-  if (token && !apiKey) headers['Authorization'] = `Bearer ${token}`
+  if (token && !apiKey) next['Authorization'] = `Bearer ${token}`
+  return next
+}
+
+function parseJsonSafe(text) {
+  if (!text) return null
+  try { return JSON.parse(text) } catch (_) { return null }
+}
+
+function errorFromResponse(text, fallback) {
+  const detail = parseJsonSafe(text)?.detail || null
+  return new Error(detail || fallback)
+}
+
+function encodePathSegment(value) {
+  return encodeURIComponent(String(value ?? ''))
+}
+
+function encodePath(value) {
+  return String(value ?? '')
+    .split('/')
+    .map(segment => encodePathSegment(segment))
+    .join('/')
+}
+
+function buildQuery(params = {}) {
+  const query = new URLSearchParams()
+  Object.entries(params).forEach(([key, value]) => {
+    if (value === undefined || value === null || value === '') return
+    query.set(key, String(value))
+  })
+  const text = query.toString()
+  return text ? `?${text}` : ''
+}
+
+async function reqText(path) {
+  const { baseUrl } = getConfig()
+  const headers = withAuthHeaders()
   const res = await fetch(`${baseUrl}${path}`, { headers })
   if (!res.ok) {
     const text = await res.text()
-    let detail
-    try { detail = JSON.parse(text)?.detail } catch (_) { detail = null }
-    throw Object.assign(new Error(detail || res.statusText), { status: res.status })
+    throw Object.assign(errorFromResponse(text, res.statusText), { status: res.status })
   }
   return res.text()
 }
 
+function normalizeDryRunResult(result) {
+  const issues = result?.issues || result?.errors || []
+  return {
+    ...result,
+    valid: result?.valid ?? (result?.status === 'ok'),
+    issues,
+    errors: result?.errors || issues,
+    warnings: result?.warnings || [],
+  }
+}
+
 async function req(path, options = {}) {
-  const { baseUrl, apiKey } = getConfig()
-  const headers = { ...options.headers }
-  if (apiKey) headers['X-API-Key'] = apiKey
-  const token = localStorage.getItem('tram_auth_token')
-  if (token && !apiKey) headers['Authorization'] = `Bearer ${token}`
+  const { baseUrl } = getConfig()
+  const headers = withAuthHeaders(options.headers)
   if (options.body && typeof options.body === 'object' && !(options.body instanceof FormData)) {
     headers['Content-Type'] = 'application/json'
     options = { ...options, body: JSON.stringify(options.body) }
@@ -41,9 +84,26 @@ async function req(path, options = {}) {
   const res = await fetch(`${baseUrl}${path}`, { ...options, headers })
   if (res.status === 204) return null
   const text = await res.text()
-  const json = text ? JSON.parse(text) : null
-  if (!res.ok) throw Object.assign(new Error(json?.detail || res.statusText), { status: res.status })
-  return json
+  const json = parseJsonSafe(text)
+  if (!res.ok) {
+    throw Object.assign(new Error(json?.detail || res.statusText), { status: res.status })
+  }
+  return json ?? text ?? null
+}
+
+async function reqBlob(path, options = {}) {
+  const { baseUrl } = getConfig()
+  const headers = withAuthHeaders(options.headers)
+  if (options.body && typeof options.body === 'object' && !(options.body instanceof FormData)) {
+    headers['Content-Type'] = 'application/json'
+    options = { ...options, body: JSON.stringify(options.body) }
+  }
+  const res = await fetch(`${baseUrl}${path}`, { ...options, headers })
+  if (!res.ok) {
+    const text = await res.text()
+    throw Object.assign(errorFromResponse(text, res.statusText), { status: res.status })
+  }
+  return res.blob()
 }
 
 // ── Health & Meta ────────────────────────────────────────────────────────────
@@ -63,35 +123,37 @@ export const api = {
   // ── Pipelines ──────────────────────────────────────────────────────────────
   pipelines: {
     list:     ()           => req('/api/pipelines'),
-    get:      (name)       => req(`/api/pipelines/${name}`),
-    placement:(name)       => req(`/api/pipelines/${name}/placement`),
+    get:      (name)       => req(`/api/pipelines/${encodePathSegment(name)}`),
+    placement:(name)       => req(`/api/pipelines/${encodePathSegment(name)}/placement`),
+    dryRun:   async (yaml) => normalizeDryRunResult(await req('/api/pipelines/dry-run', { method: 'POST', headers: { 'Content-Type': 'application/yaml' }, body: yaml })),
     create:   (yaml)       => req('/api/pipelines', { method: 'POST', headers: { 'Content-Type': 'text/plain' }, body: yaml }),
-    update:   (name, yaml) => req(`/api/pipelines/${name}`, { method: 'PUT', headers: { 'Content-Type': 'application/yaml' }, body: yaml }),
-    delete:   (name)       => req(`/api/pipelines/${name}`, { method: 'DELETE' }),
-    start:    (name)       => req(`/api/pipelines/${name}/start`,   { method: 'POST' }),
-    stop:     (name)       => req(`/api/pipelines/${name}/stop`,    { method: 'POST' }),
-    restart:  (name)       => req(`/api/pipelines/${name}/restart`, { method: 'POST' }),
-    run:      (name)       => req(`/api/pipelines/${name}/run`,     { method: 'POST' }),
+    update:   (name, yaml) => req(`/api/pipelines/${encodePathSegment(name)}`, { method: 'PUT', headers: { 'Content-Type': 'application/yaml' }, body: yaml }),
+    delete:   (name)       => req(`/api/pipelines/${encodePathSegment(name)}`, { method: 'DELETE' }),
+    start:    (name)       => req(`/api/pipelines/${encodePathSegment(name)}/start`,   { method: 'POST' }),
+    stop:     (name)       => req(`/api/pipelines/${encodePathSegment(name)}/stop`,    { method: 'POST' }),
+    restart:  (name)       => req(`/api/pipelines/${encodePathSegment(name)}/restart`, { method: 'POST' }),
+    run:      (name)       => req(`/api/pipelines/${encodePathSegment(name)}/run`,     { method: 'POST' }),
     reload:   ()           => req('/api/pipelines/reload',          { method: 'POST' }),
-    versions: (name)       => req(`/api/pipelines/${name}/versions`),
-    rollback: (name, ver)  => req(`/api/pipelines/${name}/rollback?version=${ver}`, { method: 'POST' }),
+    versions: (name)       => req(`/api/pipelines/${encodePathSegment(name)}/versions`),
+    rollback: (name, ver)  => req(`/api/pipelines/${encodePathSegment(name)}/rollback${buildQuery({ version: ver })}`, { method: 'POST' }),
   },
 
   // ── Runs ───────────────────────────────────────────────────────────────────
   runs: {
-    list: (params = {}) => req('/api/runs?' + new URLSearchParams(params)),
-    get:  (id)          => req(`/api/runs/${id}`),
+    list:      (params = {}) => req(`/api/runs${buildQuery(params)}`),
+    get:       (id)          => req(`/api/runs/${id}`),
+    exportCsv: (params = {}) => reqBlob(`/api/runs${buildQuery({ ...params, format: 'csv' })}`),
   },
 
   // ── Schemas ────────────────────────────────────────────────────────────────
   schemas: {
     list:   ()          => req('/api/schemas'),
-    get:    (filepath)  => req(`/api/schemas/${filepath}`),
-    delete: (filepath)  => req(`/api/schemas/${filepath}`, { method: 'DELETE' }),
+    get:    (filepath)  => reqText(`/api/schemas/${encodePath(filepath)}`),
+    delete: (filepath)  => req(`/api/schemas/${encodePath(filepath)}`, { method: 'DELETE' }),
     upload: (file, subdir) => {
       const fd = new FormData()
       fd.append('file', file)
-      const qs = subdir ? `?subdir=${encodeURIComponent(subdir)}` : ''
+      const qs = buildQuery({ subdir })
       return req(`/api/schemas/upload${qs}`, { method: 'POST', body: fd })
     },
   },
@@ -99,12 +161,15 @@ export const api = {
   // ── MIBs ───────────────────────────────────────────────────────────────────
   mibs: {
     list:     ()        => req('/api/mibs'),
-    delete:   (name)    => req(`/api/mibs/${name}`, { method: 'DELETE' }),
+    get:      (name)    => reqText(`/api/mibs/${encodePathSegment(name)}`),
+    source:   (name)    => reqText(`/api/mibs/${encodePathSegment(name)}/source`),
+    delete:   (name)    => req(`/api/mibs/${encodePathSegment(name)}`, { method: 'DELETE' }),
     download: (names)   => req('/api/mibs/download', { method: 'POST', body: { names } }),
-    upload:   (file)    => {
+    upload:   (file, { resolveMissing = false } = {}) => {
       const fd = new FormData()
       fd.append('file', file)
-      return req('/api/mibs/upload', { method: 'POST', body: fd })
+      const qs = buildQuery({ resolve_missing: resolveMissing || undefined })
+      return req(`/api/mibs/upload${qs}`, { method: 'POST', body: fd })
     },
   },
 
@@ -127,10 +192,10 @@ export const api = {
 
   // ── Alert rules ────────────────────────────────────────────────────────────
   alerts: {
-    list:   (name)            => req(`/api/pipelines/${name}/alerts`),
-    create: (name, rule)      => req(`/api/pipelines/${name}/alerts`, { method: 'POST', body: rule }),
-    update: (name, idx, rule) => req(`/api/pipelines/${name}/alerts/${idx}`, { method: 'PUT', body: rule }),
-    delete: (name, idx)       => req(`/api/pipelines/${name}/alerts/${idx}`, { method: 'DELETE' }),
+    list:   (name)            => req(`/api/pipelines/${encodePathSegment(name)}/alerts`),
+    create: (name, rule)      => req(`/api/pipelines/${encodePathSegment(name)}/alerts`, { method: 'POST', body: rule }),
+    update: (name, idx, rule) => req(`/api/pipelines/${encodePathSegment(name)}/alerts/${encodePathSegment(idx)}`, { method: 'PUT', body: rule }),
+    delete: (name, idx)       => req(`/api/pipelines/${encodePathSegment(name)}/alerts/${encodePathSegment(idx)}`, { method: 'DELETE' }),
   },
 
   // ── Templates ──────────────────────────────────────────────────────────────
@@ -138,9 +203,13 @@ export const api = {
     list: () => req('/api/templates'),
   },
 
+  configSchema: {
+    get: () => req('/api/config/schema'),
+  },
+
   // ── Stats ──────────────────────────────────────────────────────────────────
   stats: {
-    get: () => req('/api/stats'),
+    get: (params = {}) => req(`/api/stats${buildQuery(params)}`),
   },
 
   // ── AI assist ──────────────────────────────────────────────────────────────
@@ -154,6 +223,6 @@ export const api = {
 
   // ── Pipeline version YAML ──────────────────────────────────────────────────
   versions: {
-    yaml: (name, ver) => reqText(`/api/pipelines/${name}/versions/${ver}`),
+    yaml: (name, ver) => reqText(`/api/pipelines/${encodePathSegment(name)}/versions/${encodePathSegment(ver)}`),
   },
 }

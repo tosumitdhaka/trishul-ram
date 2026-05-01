@@ -1,17 +1,96 @@
-<div class="d-flex align-items-center gap-3 mb-3" id="cluster-header">
+<div class="cluster-toolbar" id="cluster-header">
   <span class="text-secondary" id="cluster-status-text">Loading cluster info…</span>
+  <button class="btn-flat ms-auto d-flex align-items-center gap-1 cluster-refresh-btn"
+          id="cluster-refresh-btn"
+          title="Refresh cluster status">
+    <i class="bi bi-arrow-clockwise" id="cluster-refresh-icon"></i>
+  </button>
 </div>
+
+<div class="cluster-strip mb-3" id="cluster-runtime">
+  <div class="cluster-strip-item">
+    <div class="detail-card h-100">
+      <div class="cluster-runtime-label">Execution State</div>
+      <div id="cluster-daemon-mode" class="cluster-runtime-value">—</div>
+      <div id="cluster-daemon-mode-sub" class="cluster-runtime-note">—</div>
+    </div>
+  </div>
+  <div class="cluster-strip-item">
+    <div class="detail-card h-100">
+      <div class="cluster-runtime-label">Workers / Runtime</div>
+      <div id="cluster-workers-value" class="cluster-runtime-value">—</div>
+      <div id="cluster-workers-sub" class="cluster-runtime-note">—</div>
+    </div>
+  </div>
+  <div class="cluster-strip-item">
+    <div class="detail-card h-100">
+      <div class="cluster-runtime-label">Uptime</div>
+      <div id="cluster-daemon-uptime" class="cluster-runtime-value">—</div>
+      <div class="cluster-runtime-note">Daemon process runtime.</div>
+    </div>
+  </div>
+  <div class="cluster-strip-item">
+    <div class="detail-card h-100" id="cluster-daemon-db-card">
+      <div class="cluster-runtime-label">Database</div>
+      <div id="cluster-daemon-db-engine" class="cluster-runtime-value">—</div>
+      <div id="cluster-daemon-db-meta" class="cluster-runtime-note">—</div>
+    </div>
+  </div>
+</div>
+
+<div class="cluster-strip mb-3" id="cluster-summary">
+  <div class="cluster-strip-item">
+    <div class="stat-card cluster-summary-card">
+      <div class="stat-label">Active Pipelines</div>
+      <div class="stat-val" id="cluster-streams-value">—</div>
+      <div class="stat-sub" id="cluster-streams-sub"></div>
+    </div>
+  </div>
+  <div class="cluster-strip-item">
+    <div class="stat-card cluster-summary-card">
+      <div class="stat-label">Running Pipelines</div>
+      <div class="stat-val" id="cluster-running-value">—</div>
+      <div class="stat-sub" id="cluster-running-sub"></div>
+    </div>
+  </div>
+  <div class="cluster-strip-item">
+    <div class="stat-card cluster-summary-card">
+      <div class="stat-label">Input Traffic</div>
+      <div class="stat-val" id="cluster-input-value">—</div>
+      <div class="stat-sub" id="cluster-input-sub"></div>
+    </div>
+  </div>
+  <div class="cluster-strip-item">
+    <div class="stat-card cluster-summary-card">
+      <div class="stat-label">Output Traffic</div>
+      <div class="stat-val" id="cluster-output-value">—</div>
+      <div class="stat-sub" id="cluster-output-sub"></div>
+    </div>
+  </div>
+  <div class="cluster-strip-item">
+    <div class="stat-card cluster-summary-card">
+      <div class="stat-label">Errors</div>
+      <div class="stat-val" id="cluster-errors-value">—</div>
+      <div class="stat-sub" id="cluster-errors-sub"></div>
+    </div>
+  </div>
+</div>
+
 <div class="detail-card mb-3">
   <div class="d-flex align-items-center gap-2 mb-2">
-    <div class="detail-label mb-0">Active Streams</div>
+    <div class="detail-label mb-0">Active Pipelines</div>
     <span class="count-pill" id="cluster-stream-count"></span>
   </div>
   <div id="cluster-streams">
     <div class="text-secondary text-center py-3">Loading…</div>
   </div>
 </div>
-<div class="accordion accordion-flush" id="clusterAcc"
-     style="border:1px solid var(--border);border-radius:8px;overflow:hidden;">
+
+<div class="detail-card">
+  <div class="d-flex align-items-center gap-2 mb-3">
+    <div class="detail-label mb-0">Workers / Runtime</div>
+    <span class="count-pill" id="cluster-node-count"></span>
+  </div>
   <div id="cluster-nodes">
     <div class="p-4 text-secondary text-center">Loading…</div>
   </div>

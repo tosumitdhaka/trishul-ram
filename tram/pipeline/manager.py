@@ -46,7 +46,7 @@ class PipelineState:
             "status": self.status,
             "schedule_type": c.schedule.type,
             "interval_seconds": c.schedule.interval_seconds,
-            "cron_expr": getattr(c.schedule, "cron_expr", None),
+            "cron_expr": getattr(c.schedule, "cron", None),
             "registered_at": self.registered_at.isoformat(),
             "last_run": self.last_run.isoformat() if self.last_run else None,
             "last_run_status": self.last_run_status,
@@ -64,7 +64,7 @@ class PipelineState:
             "serializer_in": c.serializer_in.type if c.serializer_in else None,
             "transforms": [{"type": t.type} for t in c.transforms],
             "interval_seconds": c.schedule.interval_seconds,
-            "cron_expr": getattr(c.schedule, "cron_expr", None),
+            "cron_expr": getattr(c.schedule, "cron", None),
             "on_error": c.on_error,
             "dlq": {"type": c.dlq.type} if c.dlq else None,
             "parallel_sinks": c.parallel_sinks,
@@ -91,6 +91,7 @@ class PipelineManager:
         config: PipelineConfig,
         replace: bool = False,
         yaml_text: str | None = None,
+        save_version: bool = True,
     ) -> PipelineState:
         """Register a pipeline configuration."""
         if config.name in self._pipelines and not replace:
@@ -111,7 +112,7 @@ class PipelineManager:
                 state.last_run_status = recent[0].status.value
 
         # Persist version if yaml_text provided
-        if yaml_text and self._db:
+        if yaml_text and self._db and save_version:
             self._db.save_pipeline_version(config.name, yaml_text)
 
         return state
@@ -225,6 +226,12 @@ class PipelineManager:
         yaml_text = self.get_version_yaml(name, version)
         config = load_pipeline_from_yaml(yaml_text)
 
+        if self._db is None:
+            raise RuntimeError("Persistence not configured (no TramDB)")
+
+        self._db.activate_pipeline_version(name, version)
+        self._db.save_pipeline(name, yaml_text, source="api")
+
         # Re-register (replace)
-        self.register(config, replace=True, yaml_text=yaml_text)
+        self.register(config, replace=True, yaml_text=yaml_text, save_version=False)
         return config

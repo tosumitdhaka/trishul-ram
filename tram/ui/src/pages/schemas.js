@@ -1,47 +1,44 @@
 import { api } from '../api.js'
-import { esc, toast } from '../utils.js'
+import { bindDataActions, downloadText, esc, toast } from '../utils.js'
+
+let _allSchemas = []
 
 export async function init() {
-  await loadSchemas()
   wireDropZone()
-
-  window._schemasUpload = async () => {
-    const files  = Array.from(document.getElementById('schema-file-input')?.files || [])
-    const subdir = document.getElementById('schema-subdir')?.value?.trim() || ''
-    if (!files.length) { toast('Select a file first', 'error'); return }
-    let ok = 0, fail = 0
-    for (const file of files) {
-      try { await api.schemas.upload(file, subdir); ok++ }
-      catch (e) { fail++; toast(`${file.name}: ${e.message}`, 'error') }
-    }
-    if (ok) toast(`Uploaded ${ok} file${ok > 1 ? 's' : ''}`)
-    document.getElementById('schema-file-input').value = ''
-    await loadSchemas()
-  }
-
-  window._schemaDelete = async (filepath) => {
-    if (!confirm(`Delete schema "${filepath}"?`)) return
-    try { await api.schemas.delete(filepath); toast('Deleted'); await loadSchemas() }
-    catch (e) { toast(e.message, 'error') }
-  }
+  document.getElementById('schemas-search')?.addEventListener('input', applySchemaFilter)
+  document.getElementById('schemas-upload-btn')?.addEventListener('click', uploadSchemas)
+  bindDataActions(document.getElementById('schemas-body'), {
+    download: async (button) => downloadSchema(button.dataset.filepath),
+    delete: async (button) => deleteSchema(button.dataset.filepath),
+  })
+  await loadSchemas()
 }
 
 async function loadSchemas() {
   try {
-    const schemas = await api.schemas.list()
-    renderSchemas(schemas)
-    const el = document.getElementById('schemas-count')
-    if (el) el.textContent = schemas.length
+    _allSchemas = await api.schemas.list()
+    applySchemaFilter()
   } catch (e) {
     toast(`Schemas error: ${e.message}`, 'error')
   }
+}
+
+function applySchemaFilter() {
+  const query = (document.getElementById('schemas-search')?.value || '').trim().toLowerCase()
+  const visible = _allSchemas.filter((schema) => schemaMatches(schema, query))
+  renderSchemas(visible)
+  updateCounts(visible.length, _allSchemas.length)
 }
 
 function renderSchemas(schemas) {
   const tbody = document.getElementById('schemas-body')
   if (!tbody) return
   if (!schemas.length) {
-    tbody.innerHTML = '<tr><td colspan="4" class="text-secondary text-center py-4">No schemas uploaded</td></tr>'
+    tbody.innerHTML = `<tr><td colspan="4" class="text-secondary text-center py-4">${
+      _allSchemas.length && queryActive()
+        ? 'No schema files match your search'
+        : 'No schemas uploaded'
+    }</td></tr>`
     return
   }
   tbody.innerHTML = schemas.map(s => {
@@ -53,10 +50,51 @@ function renderSchemas(schemas) {
       <td><span class="type-pill">${esc(ext)}</span></td>
       <td class="text-secondary">${size}</td>
       <td class="text-end">
-        <button class="btn-flat-danger" title="Delete" onclick="window._schemaDelete('${esc(name)}')"><i class="bi bi-trash"></i></button>
+        <button class="btn-flat" type="button" title="Download schema" data-action="download" data-filepath="${esc(name)}"><i class="bi bi-download"></i></button>
+        <button class="btn-flat-danger" type="button" title="Delete" data-action="delete" data-filepath="${esc(name)}"><i class="bi bi-trash"></i></button>
       </td>
     </tr>`
   }).join('')
+}
+
+async function uploadSchemas() {
+  const files  = Array.from(document.getElementById('schema-file-input')?.files || [])
+  const subdir = document.getElementById('schema-subdir')?.value?.trim() || ''
+  if (!files.length) { toast('Select a file first', 'error'); return }
+  let ok = 0
+  for (const file of files) {
+    try {
+      await api.schemas.upload(file, subdir)
+      ok++
+    } catch (e) {
+      toast(`${file.name}: ${e.message}`, 'error')
+    }
+  }
+  if (ok) toast(`Uploaded ${ok} file${ok > 1 ? 's' : ''}`)
+  document.getElementById('schema-file-input').value = ''
+  await loadSchemas()
+}
+
+async function deleteSchema(filepath) {
+  if (!filepath) return
+  if (!confirm(`Delete schema "${filepath}"?`)) return
+  try {
+    await api.schemas.delete(filepath)
+    toast('Deleted')
+    await loadSchemas()
+  } catch (e) {
+    toast(e.message, 'error')
+  }
+}
+
+async function downloadSchema(filepath) {
+  if (!filepath) return
+  try {
+    const text = await api.schemas.get(filepath)
+    downloadText(filepath.replaceAll('/', '__'), text)
+  } catch (e) {
+    toast(e.message, 'error')
+  }
 }
 
 function wireDropZone() {
@@ -89,4 +127,25 @@ function fmtSize(bytes) {
   if (bytes >= 1048576) return `${(bytes / 1048576).toFixed(1)} MB`
   if (bytes >= 1024)    return `${(bytes / 1024).toFixed(1)} KB`
   return `${bytes} B`
+}
+
+function schemaMatches(schema, query) {
+  if (!query) return true
+  const name = schema?.path || schema?.name || schema || ''
+  return String(name).toLowerCase().includes(query)
+}
+
+function updateCounts(visible, total) {
+  const count = document.getElementById('schemas-count')
+  const status = document.getElementById('schemas-filter-status')
+  if (count) count.textContent = visible === total ? String(total) : `${visible}/${total}`
+  if (status) {
+    status.textContent = queryActive() && total
+      ? `${visible} of ${total} visible`
+      : `${total} schema file${total === 1 ? '' : 's'}`
+  }
+}
+
+function queryActive() {
+  return Boolean((document.getElementById('schemas-search')?.value || '').trim())
 }

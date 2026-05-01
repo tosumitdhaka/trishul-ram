@@ -1,86 +1,118 @@
-<div class="row g-3">
-  <div class="col-8">
-    <div class="editor-wrap">
+<div class="row g-4 editor-page">
+  <div class="col-12 col-xl-8 d-flex">
+    <div class="editor-wrap flex-grow-1">
       <div class="editor-bar">
-        <span class="editor-filename" id="editor-filename">new-pipeline.yaml</span>
-        <div class="ms-auto d-flex gap-2">
-          <button class="btn-flat d-flex align-items-center gap-1" style="font-size:13px;color:var(--fg-2)"
-                  title="Copy YAML" onclick="window._editorCopy?.()">
-            <i class="bi bi-clipboard" style="font-size:15px"></i>
-          </button>
-          <button class="btn-flat d-flex align-items-center gap-1" id="editor-diff-btn"
-                  style="font-size:13px;color:var(--fg-2)" hidden
-                  title="Diff vs saved" onclick="window._editorDiffSaved?.()">
-            <i class="bi bi-file-diff" style="font-size:15px"></i> Diff
-          </button>
-          <button class="btn-flat d-flex align-items-center gap-1" style="font-size:13px;color:var(--fg-2)"
-                  onclick="navigate('pipelines')">
-            <i class="bi bi-x" style="font-size:15px"></i> Cancel
-          </button>
-          <button class="btn-flat d-flex align-items-center gap-1" style="font-size:13px;color:var(--fg-2)"
-                  onclick="window._editorTestConnectors?.()">
-            <i class="bi bi-plug" style="font-size:15px"></i> Test
-          </button>
-          <button class="btn-flat d-flex align-items-center gap-1" style="font-size:13px;color:var(--fg-2)"
-                  onclick="window._editorDryRun?.()">
-            <i class="bi bi-lightning" style="font-size:15px"></i> Dry Run
-          </button>
-          <button class="btn btn-sm btn-primary" id="editor-save-btn" onclick="window._editorSave?.()">
-            <i class="bi bi-check-lg"></i> <span id="editor-save-label">Save Pipeline</span>
-          </button>
+        <div class="editor-title-block">
+          <div class="editor-title" id="editor-title">New Pipeline</div>
+        </div>
+        <div class="editor-toolbar-actions">
+          <div class="editor-toolbar-group">
+            <button class="btn btn-sm btn-outline-secondary detail-action-btn editor-toolbar-btn" id="editor-copy-btn"
+                    type="button" title="Copy YAML">
+              <i class="bi bi-clipboard"></i><span>Copy</span>
+            </button>
+            <button class="btn btn-sm btn-outline-secondary detail-action-btn editor-toolbar-btn" id="editor-diff-btn"
+                    type="button" hidden title="Diff vs saved">
+              <i class="bi bi-file-diff"></i><span>Diff</span>
+            </button>
+          </div>
+          <div class="editor-toolbar-group">
+            <button class="btn btn-sm btn-outline-secondary detail-action-btn editor-toolbar-btn" id="editor-test-btn"
+                    type="button">
+              <i class="bi bi-plug"></i><span>Test</span>
+            </button>
+            <button class="btn btn-sm btn-outline-secondary detail-action-btn editor-toolbar-btn" id="editor-dry-run-btn"
+                    type="button">
+              <i class="bi bi-lightning"></i><span>Dry Run</span>
+            </button>
+          </div>
+          <div class="editor-toolbar-group editor-toolbar-group-primary">
+            <button class="btn btn-sm btn-outline-secondary detail-action-btn editor-toolbar-btn" id="editor-cancel-btn"
+                    type="button">
+              <i class="bi bi-x"></i><span>Cancel</span>
+            </button>
+            <button class="btn btn-sm btn-primary detail-action-btn editor-toolbar-btn editor-toolbar-btn-primary" id="editor-save-btn" type="button">
+              <i class="bi bi-check-lg"></i><span id="editor-save-label">Save</span>
+            </button>
+          </div>
         </div>
       </div>
-      <textarea id="editor-textarea" class="editor-body w-100" style="resize:none;outline:none;border:none;min-height:580px"
+      <textarea id="editor-textarea" class="editor-body editor-textarea w-100"
                 spellcheck="false" placeholder="Paste or type YAML pipeline definition…"></textarea>
     </div>
   </div>
-  <div class="col-4">
-    <!-- AI assist panel -->
-    <div id="editor-ai-section" class="mb-3 p-3 rounded" style="background:var(--bg-surface);border:1px solid var(--border)">
-      <div class="d-flex align-items-center mb-2">
-        <i class="bi bi-stars me-2" style="color:#9e6bde"></i>
-        <span style="font-size:13px;font-weight:500;color:var(--fg)">AI Assist</span>
-        <span class="ms-auto text-secondary" style="font-size:10px" id="editor-ai-model"></span>
-      </div>
+  <div class="col-12 col-xl-4 d-flex">
+    <div class="editor-side-stack w-100">
+      <div id="editor-ai-section" class="detail-card editor-ai-shell">
+        <div class="editor-side-card-header">
+          <div class="d-flex align-items-center gap-2">
+            <i class="bi bi-stars editor-ai-accent"></i>
+            <span class="editor-ai-title">AI Assist</span>
+          </div>
+          <span class="ms-auto text-secondary editor-ai-model" id="editor-ai-model"></span>
+        </div>
+        <div class="editor-side-card-copy">
+          Use AI for a clean first draft or a targeted YAML change, then review the diff before saving.
+        </div>
 
-      <!-- NEW mode: generate -->
-      <div id="editor-ai-generate-panel">
-        <textarea id="editor-ai-prompt" rows="5" class="form-control form-control-sm mb-2"
-                  style="background:var(--bg-page);color:var(--fg);border-color:var(--border);resize:vertical;font-size:12px"
-                  placeholder="Describe the pipeline you want to create…&#10;&#10;e.g. Poll SFTP every 5 min, parse CSV, push to Kafka topic pm-raw"></textarea>
-        <button class="btn btn-sm w-100" id="editor-ai-gen-btn"
-                style="border:1px solid #9e6bde;color:#9e6bde;background:transparent"
-                onclick="window._editorAiGenerate?.()">
-          <i class="bi bi-stars me-1"></i>Generate YAML
-        </button>
-      </div>
+        <div id="editor-ai-generate-panel">
+          <textarea id="editor-ai-prompt" rows="5" class="form-control form-control-sm mb-2 editor-ai-input"
+                    placeholder="Describe the pipeline you want to create…&#10;&#10;e.g. Poll SFTP every 5 min, parse CSV, push to Kafka topic pm-raw"></textarea>
+          <button class="btn btn-sm btn-outline-secondary detail-action-btn w-100 editor-ai-action" id="editor-ai-gen-btn" type="button">
+            <i class="bi bi-stars"></i><span>Generate YAML</span>
+          </button>
+        </div>
 
-      <!-- EDIT mode: modify -->
-      <div id="editor-ai-modify-panel" class="d-none">
-        <textarea id="editor-ai-instruction" rows="5" class="form-control form-control-sm mb-2"
-                  style="background:var(--bg-page);color:var(--fg);border-color:var(--border);resize:vertical;font-size:12px"
-                  placeholder="Describe the change to make…&#10;&#10;e.g. Add an add_field transform with source_address: 172.25.242.55&#10;e.g. Change interval to every 10 minutes"></textarea>
-        <button class="btn btn-sm w-100" id="editor-ai-mod-btn"
-                style="border:1px solid #9e6bde;color:#9e6bde;background:transparent"
-                onclick="window._editorAiModify?.()">
-          <i class="bi bi-stars me-1"></i>Modify Pipeline
-        </button>
-      </div>
+        <div id="editor-ai-modify-panel" class="d-none">
+          <textarea id="editor-ai-instruction" rows="5" class="form-control form-control-sm mb-2 editor-ai-input"
+                    placeholder="Describe the change to make…&#10;&#10;e.g. Add an add_field transform with source_address: 172.25.242.55&#10;e.g. Change interval to every 10 minutes"></textarea>
+          <button class="btn btn-sm btn-outline-secondary detail-action-btn w-100 editor-ai-action" id="editor-ai-mod-btn" type="button">
+            <i class="bi bi-stars"></i><span>Modify Pipeline</span>
+          </button>
+        </div>
 
-      <div id="editor-ai-status" class="mt-2 text-secondary" style="font-size:11px"></div>
-      <div id="editor-ai-unconfigured" class="d-none mt-2 p-2 rounded" style="background:var(--bg-surface);border:1px solid #3d3020;font-size:11px;color:#d29922">
-        <i class="bi bi-exclamation-triangle me-1"></i>AI not configured — <a href="#" onclick="navigate('settings')" style="color:#d29922">open Settings</a> to add your API key.
+        <div id="editor-ai-status" class="mt-2 editor-ai-status"></div>
+        <div id="editor-ai-unconfigured" class="d-none mt-2 p-2 rounded editor-ai-warning">
+          <i class="bi bi-exclamation-triangle me-1"></i>AI not configured — <a href="#" id="editor-open-settings-link" class="editor-ai-warning-link">open Settings</a> to add your API key.
+        </div>
       </div>
-    </div>
-    <div class="ref-panel">
-      <div class="ref-cat">Sources</div>
-      <span class="ref-pill">sftp</span><span class="ref-pill">kafka</span><span class="ref-pill">rest</span><span class="ref-pill">local</span><span class="ref-pill">s3</span><span class="ref-pill">syslog</span><span class="ref-pill">snmp_trap</span><span class="ref-pill">snmp_poll</span><span class="ref-pill">mqtt</span><span class="ref-pill">amqp</span><span class="ref-pill">nats</span><span class="ref-pill">webhook</span><span class="ref-pill">gnmi</span><span class="ref-pill">redis</span><span class="ref-pill">sql</span><span class="ref-pill">ftp</span><span class="ref-pill">gcs</span><span class="ref-pill">azure_blob</span><span class="ref-pill">websocket</span><span class="ref-pill">influxdb</span><span class="ref-pill">elasticsearch</span><span class="ref-pill">prometheus_rw</span><span class="ref-pill">clickhouse</span><span class="ref-pill">corba</span>
-      <div class="ref-cat">Sinks</div>
-      <span class="ref-pill">kafka</span><span class="ref-pill">opensearch</span><span class="ref-pill">rest</span><span class="ref-pill">local</span><span class="ref-pill">sftp</span><span class="ref-pill">s3</span><span class="ref-pill">sql</span><span class="ref-pill">influxdb</span><span class="ref-pill">redis</span><span class="ref-pill">ves</span><span class="ref-pill">mqtt</span><span class="ref-pill">amqp</span><span class="ref-pill">nats</span><span class="ref-pill">gcs</span><span class="ref-pill">azure_blob</span><span class="ref-pill">elasticsearch</span><span class="ref-pill">websocket</span><span class="ref-pill">snmp_trap</span><span class="ref-pill">ftp</span><span class="ref-pill">clickhouse</span>
-      <div class="ref-cat">Serializers</div>
-      <span class="ref-pill">json</span><span class="ref-pill">xml</span><span class="ref-pill">csv</span><span class="ref-pill">avro</span><span class="ref-pill">protobuf</span><span class="ref-pill">parquet</span><span class="ref-pill">msgpack</span><span class="ref-pill">ndjson</span><span class="ref-pill">bytes</span><span class="ref-pill">text</span>
-      <div class="ref-cat">Transforms</div>
-      <span class="ref-pill">rename</span><span class="ref-pill">cast</span><span class="ref-pill">add_field</span><span class="ref-pill">drop</span><span class="ref-pill">filter</span><span class="ref-pill">value_map</span><span class="ref-pill">flatten</span><span class="ref-pill">timestamp_normalize</span><span class="ref-pill">aggregate</span><span class="ref-pill">enrich</span><span class="ref-pill">explode</span><span class="ref-pill">deduplicate</span><span class="ref-pill">regex_extract</span><span class="ref-pill">template</span><span class="ref-pill">mask</span><span class="ref-pill">validate</span><span class="ref-pill">sort</span><span class="ref-pill">limit</span><span class="ref-pill">jmespath</span><span class="ref-pill">unnest</span>
+      <div class="detail-card ref-panel">
+        <div class="editor-side-card-header">
+          <div>
+            <div class="editor-side-card-kicker">Reference</div>
+            <div class="editor-side-card-title">Available Plugins</div>
+          </div>
+        </div>
+        <div class="editor-side-card-copy">
+          Quick authoring reference for common plugin types while editing. Full backend metadata stays available on the Plugins page.
+        </div>
+        <div class="ref-groups">
+          <section class="ref-group">
+            <div class="ref-cat">Sources</div>
+            <div class="ref-pill-wrap">
+              <span class="ref-pill">sftp</span><span class="ref-pill">kafka</span><span class="ref-pill">rest</span><span class="ref-pill">local</span><span class="ref-pill">s3</span><span class="ref-pill">syslog</span><span class="ref-pill">snmp_trap</span><span class="ref-pill">snmp_poll</span><span class="ref-pill">mqtt</span><span class="ref-pill">amqp</span><span class="ref-pill">nats</span><span class="ref-pill">webhook</span><span class="ref-pill">gnmi</span><span class="ref-pill">redis</span><span class="ref-pill">sql</span><span class="ref-pill">ftp</span><span class="ref-pill">gcs</span><span class="ref-pill">azure_blob</span><span class="ref-pill">websocket</span><span class="ref-pill">influxdb</span><span class="ref-pill">elasticsearch</span><span class="ref-pill">prometheus_rw</span><span class="ref-pill">clickhouse</span><span class="ref-pill">corba</span>
+            </div>
+          </section>
+          <section class="ref-group">
+            <div class="ref-cat">Sinks</div>
+            <div class="ref-pill-wrap">
+              <span class="ref-pill">kafka</span><span class="ref-pill">opensearch</span><span class="ref-pill">rest</span><span class="ref-pill">local</span><span class="ref-pill">sftp</span><span class="ref-pill">s3</span><span class="ref-pill">sql</span><span class="ref-pill">influxdb</span><span class="ref-pill">redis</span><span class="ref-pill">ves</span><span class="ref-pill">mqtt</span><span class="ref-pill">amqp</span><span class="ref-pill">nats</span><span class="ref-pill">gcs</span><span class="ref-pill">azure_blob</span><span class="ref-pill">elasticsearch</span><span class="ref-pill">websocket</span><span class="ref-pill">snmp_trap</span><span class="ref-pill">ftp</span><span class="ref-pill">clickhouse</span>
+            </div>
+          </section>
+          <section class="ref-group">
+            <div class="ref-cat">Serializers</div>
+            <div class="ref-pill-wrap">
+              <span class="ref-pill">json</span><span class="ref-pill">xml</span><span class="ref-pill">csv</span><span class="ref-pill">avro</span><span class="ref-pill">protobuf</span><span class="ref-pill">parquet</span><span class="ref-pill">msgpack</span><span class="ref-pill">ndjson</span><span class="ref-pill">bytes</span><span class="ref-pill">text</span>
+            </div>
+          </section>
+          <section class="ref-group">
+            <div class="ref-cat">Transforms</div>
+            <div class="ref-pill-wrap">
+              <span class="ref-pill">rename</span><span class="ref-pill">cast</span><span class="ref-pill">add_field</span><span class="ref-pill">drop</span><span class="ref-pill">filter</span><span class="ref-pill">value_map</span><span class="ref-pill">flatten</span><span class="ref-pill">timestamp_normalize</span><span class="ref-pill">aggregate</span><span class="ref-pill">enrich</span><span class="ref-pill">explode</span><span class="ref-pill">deduplicate</span><span class="ref-pill">regex_extract</span><span class="ref-pill">template</span><span class="ref-pill">mask</span><span class="ref-pill">validate</span><span class="ref-pill">sort</span><span class="ref-pill">limit</span><span class="ref-pill">jmespath</span><span class="ref-pill">unnest</span>
+            </div>
+          </section>
+        </div>
+      </div>
     </div>
   </div>
 </div>

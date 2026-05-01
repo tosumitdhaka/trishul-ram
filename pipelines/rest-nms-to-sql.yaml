@@ -105,7 +105,6 @@ pipeline:
       table: pm_counters
       mode: upsert
       upsert_keys: [network_element_id, counter_name, collected_at]
-      chunk_size: 1000
       retry_count: 3
       retry_delay_seconds: 5.0
 
