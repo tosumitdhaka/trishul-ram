@@ -16,10 +16,11 @@ IMAGE_TAG="${IMAGE_TAG:-local-$(date -u +%Y%m%d%H%M%S)}"
 
 CHART_PATH="${CHART_PATH:-${ROOT_DIR}/helm}"
 VALUES_FILE="${VALUES_FILE:-}"
+KEEP_IMAGES="${KEEP_IMAGES:-5}"
 
 usage() {
   cat <<EOF
-Usage: $(basename "$0") [--mode MODE] [--tag TAG] [--release NAME] [--namespace NS] [--cluster NAME]
+Usage: $(basename "$0") [--mode MODE] [--tag TAG] [--release NAME] [--namespace NS] [--cluster NAME] [--keep-images N]
 
 Build TRAM images, load them into a kind cluster, and upgrade the Helm release.
 
@@ -42,6 +43,7 @@ Environment overrides:
   IMAGE_TAG                     default: generated UTC timestamp
   CHART_PATH                    default: ${CHART_PATH}
   VALUES_FILE                   optional extra values file to merge during upgrade
+  KEEP_IMAGES                   keep newest N local \`local-*\` images per repository after build/load (default: ${KEEP_IMAGES}; 0 disables cleanup)
 EOF
 }
 
@@ -68,6 +70,10 @@ while [[ $# -gt 0 ]]; do
       KUBE_CONTEXT="kind-${CLUSTER_NAME}"
       shift 2
       ;;
+    --keep-images)
+      KEEP_IMAGES="$2"
+      shift 2
+      ;;
     --help|-h)
       usage
       exit 0
@@ -82,6 +88,11 @@ done
 
 if [[ "${MODE}" != "manager" && "${MODE}" != "standalone" ]]; then
   echo "Invalid mode: ${MODE}. Must be 'manager' or 'standalone'." >&2
+  exit 2
+fi
+
+if ! [[ "${KEEP_IMAGES}" =~ ^[0-9]+$ ]]; then
+  echo "--keep-images must be a non-negative integer." >&2
   exit 2
 fi
 
@@ -101,6 +112,53 @@ require_cmd kind
 require_cmd kubectl
 require_cmd helm
 
+run_cmd_nonfatal() {
+  printf '+'
+  for arg in "$@"; do
+    printf ' %q' "$arg"
+  done
+  printf '\n'
+  if ! "$@"; then
+    echo "Warning: command failed but cleanup will continue." >&2
+  fi
+}
+
+cleanup_local_images() {
+  local repository="$1"
+  local keep_images="$2"
+  local -a refs=()
+  local -a records=()
+  local -a sorted=()
+  local ref created
+
+  if (( keep_images == 0 )); then
+    return 0
+  fi
+
+  mapfile -t refs < <(docker image ls --format '{{.Repository}}:{{.Tag}}' --filter "reference=${repository}:local-*")
+  if (( ${#refs[@]} <= keep_images )); then
+    return 0
+  fi
+
+  for ref in "${refs[@]}"; do
+    [[ -n "${ref}" ]] || continue
+    created="$(docker image inspect --format '{{.Created}}' "${ref}" 2>/dev/null || true)"
+    [[ -n "${created}" ]] || continue
+    records+=("${created} ${ref}")
+  done
+
+  if (( ${#records[@]} <= keep_images )); then
+    return 0
+  fi
+
+  mapfile -t sorted < <(printf '%s\n' "${records[@]}" | sort -r)
+  echo "Pruning older local images for ${repository} (keeping ${keep_images})."
+  for ((i=keep_images; i<${#sorted[@]}; i++)); do
+    ref="${sorted[$i]#* }"
+    run_cmd_nonfatal docker image rm "${ref}"
+  done
+}
+
 DEPLOY_START=$(date +%s)
 
 echo "Mode:              ${MODE}"
@@ -113,6 +171,7 @@ if [[ "${MODE}" == "standalone" ]]; then
 
   echo "Loading image into kind cluster: ${CLUSTER_NAME}"
   kind load docker-image --name "${CLUSTER_NAME}" "${STANDALONE_IMAGE}"
+  cleanup_local_images "${STANDALONE_IMAGE_REPOSITORY}" "${KEEP_IMAGES}"
 else
   echo "Building manager image: ${MANAGER_IMAGE}"
   docker build -t "${MANAGER_IMAGE}" -f "${ROOT_DIR}/Dockerfile.manager" "${ROOT_DIR}"
@@ -123,6 +182,8 @@ else
   echo "Loading images into kind cluster: ${CLUSTER_NAME}"
   kind load docker-image --name "${CLUSTER_NAME}" "${MANAGER_IMAGE}"
   kind load docker-image --name "${CLUSTER_NAME}" "${WORKER_IMAGE}"
+  cleanup_local_images "${MANAGER_IMAGE_REPOSITORY}" "${KEEP_IMAGES}"
+  cleanup_local_images "${WORKER_IMAGE_REPOSITORY}" "${KEEP_IMAGES}"
 fi
 
 echo "Upgrading Helm release: ${RELEASE_NAME}"

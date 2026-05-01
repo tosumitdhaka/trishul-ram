@@ -469,6 +469,49 @@ docker run -p 8765:8765 \
 
 Mount a volume at `/data` (or set `TRAM_DB_URL`) to persist run history and pipeline versions across container restarts.
 
+### Standalone helper script
+
+For local standalone Docker workflows, use the bundled helper script:
+
+```bash
+./scripts/deploy-docker-standalone.sh up
+./scripts/deploy-docker-standalone.sh up --tag local-test
+./scripts/deploy-docker-standalone.sh up --ghcr
+./scripts/deploy-docker-standalone.sh status
+./scripts/deploy-docker-standalone.sh logs --tail 100
+./scripts/deploy-docker-standalone.sh down
+```
+
+To deploy a published standalone image directly from GHCR in one command:
+
+```bash
+./scripts/deploy-docker-standalone.sh up --ghcr
+./scripts/deploy-docker-standalone.sh up --ghcr --tag 1.3.3
+```
+
+For a no-clone bootstrap from GitHub:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/tosumitdhaka/trishul-ram/main/scripts/deploy-docker-standalone.sh | \
+bash -s -- up --ghcr
+```
+
+The script wraps `docker build`, `docker run`, `docker stop/rm`, and log/status inspection for a
+single standalone container. By default it:
+
+- publishes `http://localhost:8765`
+- mounts `./pipelines` to `/pipelines` (read-only) and creates that host directory automatically when missing
+- creates and reuses a named Docker volume for `/data` (`trishul-ram-data` by default), including `/data/output`
+- bind-mounts `/data/output` to a host path only when you pass `--output-dir`
+- sets standalone-friendly defaults for SQLite, runtime MIBs, and runtime schemas under `/data`
+- auto-builds a fresh local image for normal workflows, tagged `trishul-ram:local-<epoch>` unless you pass `--tag`
+- prunes older local `local-*` images after builds, keeping the newest 5 by default; override with `--keep-images N`
+- switches to the published image `ghcr.io/tosumitdhaka/trishul-ram:latest` when you pass `--ghcr` unless you also pass `--tag`
+
+Run `./scripts/deploy-docker-standalone.sh help` for all options, including custom image tags,
+env files, extra `TRAM_*` overrides, UDP port publishing for trap/syslog ingress, and an optional
+host bind override (`--data-dir`) when you explicitly do not want a Docker-managed volume.
+
 ### Installed extras in the default image
 
 The default `tram:1.3.3` image installs (`clickhouse` added in v1.0.4):

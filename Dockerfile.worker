@@ -28,8 +28,7 @@
 #   docker build -f Dockerfile.worker -t trishul-ram-worker:1.3.3 .
 #
 # Stage 0  builder     — builds the Python wheel
-# Stage 1  mib-builder — downloads + compiles standard SNMP MIBs
-# Stage 2  runtime     — final image (no UI assets, no manager deps)
+# Stage 1  runtime     — final image (no UI assets, no manager deps)
 
 # ── Stage 0: build wheel ─────────────────────────────────────────────────────
 FROM python:3.13-slim AS builder
@@ -40,51 +39,7 @@ COPY tram/ ./tram/
 
 RUN pip install --no-cache-dir build && python -m build --wheel
 
-# ── Stage 1: download + compile standard SNMP MIBs ───────────────────────────
-FROM python:3.13-slim AS mib-builder
-
-RUN pip install --no-cache-dir "pysmi-lextudio>=1.1"
-
-RUN python - <<'EOF'
-import os, sys
-os.makedirs("/mibs", exist_ok=True)
-try:
-    from pysmi.reader import HttpReader
-    from pysmi.searcher import PyFileSearcher, StubSearcher
-    from pysmi.writer import PyFileWriter
-    from pysmi.parser.smi import parserFactory
-    from pysmi.codegen.pysnmp import PySnmpCodeGen
-    from pysmi.compiler import MibCompiler
-
-    STANDARD_MIBS = [
-        "IANAifType-MIB",
-        "IF-MIB",
-        "IP-MIB",
-        "TCP-MIB",
-        "UDP-MIB",
-        "ENTITY-MIB",
-        "HOST-RESOURCES-MIB",
-    ]
-
-    parser  = parserFactory()()
-    codegen = PySnmpCodeGen()
-    writer  = PyFileWriter("/mibs")
-
-    compiler = MibCompiler(parser, codegen, writer)
-    compiler.addSources(HttpReader("https://mibs.pysnmp.com/asn1/@mib@"))
-    compiler.addSearchers(PyFileSearcher("/mibs"))
-    compiler.addSearchers(StubSearcher(*(PySnmpCodeGen.baseMibs + PySnmpCodeGen.fakeMibs)))
-
-    results = compiler.compile(*STANDARD_MIBS)
-    for name, status in results.items():
-        print(f"  {status}: {name}", flush=True)
-    compiled = sum(1 for s in results.values() if s == "compiled")
-    print(f"Compiled {compiled} MIB module(s) → /mibs", flush=True)
-except Exception as exc:
-    print(f"WARNING: MIB download failed ({exc}); continuing with empty /mibs", flush=True)
-EOF
-
-# ── Stage 2: runtime image ────────────────────────────────────────────────────
+# ── Stage 1: runtime image ────────────────────────────────────────────────────
 FROM python:3.13-slim
 
 # Non-root user — same uid/gid as manager image so shared PVC files are compatible
@@ -108,17 +63,18 @@ RUN whl=$(ls *.whl) && \
         "${whl}[worker,kafka,snmp,avro,protobuf,asn1,jmespath,sql,websocket,metrics,prometheus_rw,watch]" && \
     rm *.whl
 
-# Copy compiled MIBs from mib-builder stage
-COPY --from=mib-builder /mibs /mibs
+# Copy bundled SNMP MIB assets from the repo
+COPY files/mibs_compiled/ /mibs/
+COPY files/mibs/ /mib-sources/
 
 # Bundle pipeline templates (read-only reference examples)
 COPY pipelines/ /tram-templates/
 
 # Create data, MIB, and schema directories; set ownership
 # NOTE: no /ui directory — workers do not serve the web UI
-RUN mkdir -p /data /data/mibs /mibs /schemas && \
+RUN mkdir -p /data /data/mibs /mibs /mib-sources /schemas && \
     mkdir -p /home/tram/.tram && \
-    chown -R tram:tram /data /mibs /schemas /home/tram /app
+    chown -R tram:tram /data /mibs /mib-sources /schemas /home/tram /app
 
 USER tram
 
@@ -129,6 +85,7 @@ HEALTHCHECK --interval=30s --timeout=10s --start-period=15s --retries=3 \
 EXPOSE 8766
 
 ENV TRAM_MIB_DIR=/mibs
+ENV TRAM_MIB_BUNDLED_SOURCE_DIR=/mib-sources
 ENV TRAM_SCHEMA_DIR=/schemas
 ENV TRAM_MODE=worker
 ENV TRAM_TEMPLATES_DIR=/tram-templates

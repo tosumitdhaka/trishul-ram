@@ -7,6 +7,11 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+### Added
+
+- Added local-image retention cleanup to both `scripts/deploy-docker-standalone.sh` and `scripts/deploy-kind-tram-dev.sh`, keeping the newest 5 `local-*` images per repository by default with a `--keep-images` override
+- Added `scripts/deploy-docker-standalone.sh` to build, run, and manage a single standalone TRAM Docker container with a persisted Docker data volume, auto-created host pipeline mounts, optional host output bind mounts, timestamp-tagged local auto-builds for repo workflows, `--ghcr` pull support for the published `ghcr.io/tosumitdhaka/trishul-ram:<tag>` image, log/status helpers, optional UDP port publishing, and a README-friendly GitHub bootstrap flow
+
 ---
 
 ## [1.3.3] — 2026-05-01

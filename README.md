@@ -242,6 +242,32 @@ docker compose up
 curl http://localhost:8765/api/ready
 ```
 
+For a single standalone container without Compose:
+
+```bash
+./scripts/deploy-docker-standalone.sh up
+./scripts/deploy-docker-standalone.sh up --tag local-test
+./scripts/deploy-docker-standalone.sh up --ghcr
+./scripts/deploy-docker-standalone.sh up --ghcr --tag 1.3.3
+./scripts/deploy-docker-standalone.sh status
+```
+
+One-shot standalone deploy from GitHub + GHCR:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/tosumitdhaka/trishul-ram/main/scripts/deploy-docker-standalone.sh | \
+bash -s -- up --ghcr
+```
+
+The one-shot command pulls `ghcr.io/tosumitdhaka/trishul-ram:latest` by default, creates or reuses
+the `trishul-ram-data` Docker volume, creates `./pipelines` in the current directory when missing,
+keeps `/data/output` inside the Docker-managed volume unless you pass `--output-dir`, and starts the
+UI/API on `http://localhost:8765`.
+
+For local repo-based development, plain `up` auto-builds a fresh `trishul-ram:local-<epoch>` image
+on each run unless you pin a tag with `--tag`, and it prunes older `local-*` images afterward so
+only the newest 5 are kept by default. Override that with `--keep-images N`.
+
 ---
 
 ## Deployment Modes
