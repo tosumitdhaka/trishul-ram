@@ -109,28 +109,10 @@ schemaRegistry:
   username: ""
   password: ""
 
-pipelines:
-  sample-health.yaml: |
-    version: "1"
-    pipeline:
-      name: sample-health
-      schedule:
-        type: interval
-        interval_seconds: 600
-      source:
-        type: local
-        path: /dev/null
-        file_pattern: "*.noop"
-      serializer_in:
-        type: json
-      transforms:
-        - type: add_field
-          fields:
-            status: ok
-            source: tram-sample
-      sink:
-        type: local
-        path: /tmp/tram-sample
+## Pipeline YAML files to mount as a ConfigMap at /pipelines.
+## The chart already includes a built-in sample-health.yaml bootstrap pipeline.
+## Add extra pipeline YAMLs here if needed.
+pipelines: {}
 
 ## Standalone pod resources.
 resources: {}

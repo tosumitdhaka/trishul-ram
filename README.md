@@ -249,6 +249,7 @@ For a single standalone container without Compose:
 ./scripts/deploy-docker-standalone.sh up --tag local-test
 ./scripts/deploy-docker-standalone.sh up --ghcr
 ./scripts/deploy-docker-standalone.sh up --ghcr --tag 1.3.3
+./scripts/deploy-docker-standalone.sh up --ghcr --env 'TRAM_AUTH_USERS=admin:changeme123'
 ./scripts/deploy-docker-standalone.sh status
 ```
 
@@ -260,9 +261,17 @@ bash -s -- up --ghcr
 ```
 
 The one-shot command pulls `ghcr.io/tosumitdhaka/trishul-ram:latest` by default, creates or reuses
-the `trishul-ram-data` Docker volume, creates `./pipelines` in the current directory when missing,
-keeps `/data/output` inside the Docker-managed volume unless you pass `--output-dir`, and starts the
-UI/API on `http://localhost:8765`.
+the `trishul-ram-data` Docker volume, keeps runtime pipelines in `/data/pipelines` inside that
+Docker-managed volume by default, keeps `/data/output` inside the same volume unless you pass
+`--output-dir`, and starts the UI/API on `http://localhost:8765`. When the runtime pipeline area is
+empty, the helper bootstraps `sample-health.yaml` automatically. Pass `--pipelines-dir` only if you
+explicitly want a host-managed runtime pipeline directory.
+
+The standalone script also bootstraps browser login by default with `TRAM_AUTH_USERS=admin:admin123`.
+Override it with an exported `TRAM_AUTH_USERS`, an `--env-file`, or `--env 'TRAM_AUTH_USERS=admin:changeme123'`.
+Quote the full value if the password contains shell-special characters. If you later change that
+password from the UI, the DB-backed hash stored in `/data/tram.db` overrides the bootstrap env value
+on future redeploys while the same data volume is reused.
 
 For local repo-based development, plain `up` auto-builds a fresh `trishul-ram:local-<epoch>` image
 on each run unless you pin a tag with `--tag`, and it prunes older `local-*` images afterward so

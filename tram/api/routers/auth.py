@@ -39,8 +39,18 @@ def _resolve_password(username: str, password: str, config, db) -> bool:
 
 
 def _browser_auth_available(config, db) -> bool:
-    """Return True when browser auth is configured via env users or DB support."""
-    return bool(config.auth_users) or db is not None
+    """Return True when browser auth is configured via env users or DB-backed users."""
+    if bool(config.auth_users):
+        return True
+    if db is None:
+        return False
+    has_password_users = getattr(db, "has_password_users", None)
+    if not callable(has_password_users):
+        return False
+    try:
+        return bool(has_password_users())
+    except Exception:
+        return False
 
 
 @router.post("/login")

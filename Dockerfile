@@ -72,7 +72,7 @@ COPY --from=ui-builder /ui-src/dist /ui
 COPY pipelines/ /tram-templates/
 
 # Create default pipeline, data, MIB, and schema directories; set ownership
-RUN mkdir -p /pipelines /data /data/mibs /data/mib-sources /mibs /mib-sources /schemas && \
+RUN mkdir -p /pipelines /data /data/pipelines /data/mibs /data/mib-sources /mibs /mib-sources /schemas && \
     mkdir -p /home/tram/.tram && \
     chown -R tram:tram /pipelines /data /mibs /mib-sources /schemas /home/tram /app /ui
 

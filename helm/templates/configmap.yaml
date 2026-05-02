@@ -1,4 +1,5 @@
-{{- if .Values.pipelines }}
+{{- $builtin := .Files.Glob "files/pipelines/*.yaml" }}
+{{- if or $builtin .Values.pipelines }}
 apiVersion: v1
 kind: ConfigMap
 metadata:
@@ -6,6 +7,13 @@ metadata:
   labels:
     {{- include "tram.labels" . | nindent 4 }}
 data:
+  {{- range $path, $content := $builtin }}
+  {{- $filename := base $path }}
+  {{- if not (hasKey $.Values.pipelines $filename) }}
+  {{ $filename }}: |
+    {{- $content | toString | nindent 4 }}
+  {{- end }}
+  {{- end }}
   {{- range $filename, $content := .Values.pipelines }}
   {{ $filename }}: |
     {{- $content | nindent 4 }}

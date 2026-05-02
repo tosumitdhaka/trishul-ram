@@ -477,6 +477,7 @@ For local standalone Docker workflows, use the bundled helper script:
 ./scripts/deploy-docker-standalone.sh up
 ./scripts/deploy-docker-standalone.sh up --tag local-test
 ./scripts/deploy-docker-standalone.sh up --ghcr
+./scripts/deploy-docker-standalone.sh up --ghcr --env 'TRAM_AUTH_USERS=admin:changeme123'
 ./scripts/deploy-docker-standalone.sh status
 ./scripts/deploy-docker-standalone.sh logs --tail 100
 ./scripts/deploy-docker-standalone.sh down
@@ -500,13 +501,21 @@ The script wraps `docker build`, `docker run`, `docker stop/rm`, and log/status 
 single standalone container. By default it:
 
 - publishes `http://localhost:8765`
-- mounts `./pipelines` to `/pipelines` (read-only) and creates that host directory automatically when missing
 - creates and reuses a named Docker volume for `/data` (`trishul-ram-data` by default), including `/data/output`
+- keeps runtime pipelines in `/data/pipelines` inside that Docker volume by default
+- bootstraps `sample-health.yaml` into the runtime pipeline directory when it is empty
+- mounts a host runtime pipeline directory only when you pass `--pipelines-dir`
 - bind-mounts `/data/output` to a host path only when you pass `--output-dir`
 - sets standalone-friendly defaults for SQLite, runtime MIBs, and runtime schemas under `/data`
 - auto-builds a fresh local image for normal workflows, tagged `trishul-ram:local-<epoch>` unless you pass `--tag`
 - prunes older local `local-*` images after builds, keeping the newest 5 by default; override with `--keep-images N`
 - switches to the published image `ghcr.io/tosumitdhaka/trishul-ram:latest` when you pass `--ghcr` unless you also pass `--tag`
+
+The standalone helper bootstraps browser login by default with `TRAM_AUTH_USERS=admin:admin123`.
+Override it with an exported `TRAM_AUTH_USERS`, an `--env-file`, or `--env 'TRAM_AUTH_USERS=admin:changeme123'`.
+Quote the full value if the password contains shell-special characters. If you later change that
+password from the UI, the updated hash is stored in `/data/tram.db` and overrides the bootstrap
+`TRAM_AUTH_USERS` value on future redeploys while the same data volume is reused.
 
 Run `./scripts/deploy-docker-standalone.sh help` for all options, including custom image tags,
 env files, extra `TRAM_*` overrides, UDP port publishing for trap/syslog ingress, and an optional

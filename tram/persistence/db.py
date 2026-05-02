@@ -592,6 +592,14 @@ class TramDB:
             ).fetchone()
         return row[0] if row else None
 
+    def has_password_users(self) -> bool:
+        """Return True when at least one DB-backed browser-auth user exists."""
+        with self._engine.connect() as conn:
+            row = conn.execute(
+                text("SELECT 1 FROM user_passwords LIMIT 1"),
+            ).fetchone()
+        return row is not None
+
     def set_password_hash(self, username: str, password_hash: str) -> None:
         """Upsert a password hash for *username*."""
         now = datetime.now(UTC).isoformat()

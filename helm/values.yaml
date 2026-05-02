@@ -226,30 +226,9 @@ schemaRegistry:
   password: ""     # optional basic-auth password (use envSecret for production)
 
 ## Pipeline YAML files to mount as a ConfigMap at /pipelines
-## Add your own pipeline YAMLs here or via --set-file during helm install/upgrade.
-## The sample pipeline below runs every 60 s and writes a health record to /tmp — safe to delete.
-pipelines:
-  sample-health.yaml: |
-    version: "1"
-    pipeline:
-      name: sample-health
-      schedule:
-        type: interval
-        interval_seconds: 600
-      source:
-        type: local
-        path: /dev/null
-        file_pattern: "*.noop"
-      serializer_in:
-        type: json
-      transforms:
-        - type: add_field
-          fields:
-            status: ok
-            source: tram-sample
-      sink:
-        type: local
-        path: /tmp/tram-sample
+## The chart already includes a built-in sample-health.yaml bootstrap pipeline.
+## Add your own extra pipeline YAMLs here or via --set-file during helm install/upgrade.
+pipelines: {}
 
 resources:
   requests:

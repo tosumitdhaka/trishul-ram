@@ -21,7 +21,8 @@ IMAGE_REPOSITORY="${IMAGE_REPOSITORY:-trishul-ram}"
 IMAGE_TAG="${IMAGE_TAG:-${DEFAULT_LOCAL_TAG}}"
 HOST_PORT="${HOST_PORT:-8765}"
 CONTAINER_PORT="${CONTAINER_PORT:-8765}"
-PIPELINES_DIR="${PIPELINES_DIR:-${ROOT_DIR}/pipelines}"
+PIPELINES_DIR="${PIPELINES_DIR:-}"
+CONTAINER_PIPELINES_DIR="/data/pipelines"
 DATA_VOLUME="${DATA_VOLUME:-}"
 DATA_DIR="${DATA_DIR:-}"
 OUTPUT_DIR="${OUTPUT_DIR:-}"
@@ -30,6 +31,9 @@ RESTART_POLICY="${RESTART_POLICY:-unless-stopped}"
 WAIT_TIMEOUT_SECONDS="${WAIT_TIMEOUT_SECONDS:-60}"
 LOG_TAIL="${LOG_TAIL:-200}"
 KEEP_IMAGES="${KEEP_IMAGES:-5}"
+DEFAULT_TRAM_AUTH_USERS="${TRAM_AUTH_USERS:-admin:admin123}"
+SAMPLE_HEALTH_PIPELINE_NAME="sample-health.yaml"
+SAMPLE_HEALTH_PIPELINE_SOURCE="${ROOT_DIR}/helm/files/pipelines/${SAMPLE_HEALTH_PIPELINE_NAME}"
 
 BUILD_FIRST=false
 DRY_RUN=false
@@ -69,7 +73,7 @@ Options:
   --container-name NAME      Docker container name (default: ${CONTAINER_NAME})
   --host-port PORT           Host TCP port published for the UI/API (default: ${HOST_PORT})
   --container-port PORT      Container TCP port for TRAM (default: ${CONTAINER_PORT})
-  --pipelines-dir DIR        Host directory mounted to /pipelines (default: ${PIPELINES_DIR})
+  --pipelines-dir DIR        Optional host runtime pipeline directory mounted to ${CONTAINER_PIPELINES_DIR} (default: disabled)
   --data-volume NAME         Docker volume mounted to /data (default: <container>-data)
   --data-dir DIR             Host directory mounted to /data instead of a Docker volume
   --output-dir DIR           Optional host directory mounted to /data/output (default: inside /data)
@@ -86,15 +90,18 @@ Options:
 Defaults:
   Image:        local mode auto-builds ${IMAGE_REPOSITORY}:${DEFAULT_LOCAL_TAG}; --ghcr uses latest unless tagged
   TCP port:     ${HOST_PORT}:${CONTAINER_PORT}
-  Pipelines:    ${PIPELINES_DIR} -> /pipelines (read-only)
+  Pipelines:    ${CONTAINER_PIPELINES_DIR} inside /data (host bind disabled by default)
   Data:         <default volume> -> /data
   Output:       /data/output inside /data (or bind-mounted with --output-dir)
+  UI login:     ${DEFAULT_TRAM_AUTH_USERS}
 
 Examples:
   ${SCRIPT_NAME} up
   ${SCRIPT_NAME} up --tag local-test
   ${SCRIPT_NAME} up --ghcr
   ${SCRIPT_NAME} up --ghcr --tag 1.3.3
+  ${SCRIPT_NAME} up --ghcr --env 'TRAM_AUTH_USERS=admin:changeme123'
+  ${SCRIPT_NAME} up --pipelines-dir ./my-runtime-pipelines
   ${SCRIPT_NAME} up --keep-images 10
   ${SCRIPT_NAME} up --output-dir ./output
   ${SCRIPT_NAME} up --udp-port 1162 --udp-port 1514:1514
@@ -112,10 +119,19 @@ Notes:
     newest ${KEEP_IMAGES} by default; pass \`--keep-images\` to override or \`0\` to disable cleanup.
   - \`--ghcr\` is a convenience wrapper for the published GHCR standalone image and defaults the tag to
     \`latest\` unless you pass \`--tag\`.
-  - The host pipelines directory is created automatically when missing so \`curl | bash\` can bootstrap
-    from the current working directory without extra setup.
+  - Runtime pipelines live in ${CONTAINER_PIPELINES_DIR} inside /data by default, so they persist in the
+    Docker data volume without requiring a host bind.
+  - Pass \`--pipelines-dir\` only when you explicitly want host-managed file pipelines for import/watch flows;
+    that host directory is created automatically when missing.
+  - When the runtime pipeline directory is empty, the script bootstraps
+    \`${SAMPLE_HEALTH_PIPELINE_NAME}\` so a fresh standalone deploy has a safe sample pipeline.
   - Advanced \`--env\` overrides can replace the script's default TRAM_* values, so keep them
     consistent with the mounted directories and published ports.
+  - Browser login bootstrap defaults to \`TRAM_AUTH_USERS=${DEFAULT_TRAM_AUTH_USERS}\`.
+  - Override browser login with exported \`TRAM_AUTH_USERS\`, \`--env-file\`, or \`--env TRAM_AUTH_USERS=...\`;
+    quote the full value if the password contains shell-special characters.
+  - The default Docker data volume persists \`/data/tram.db\`; any password changed later in the UI is
+    stored in the DB and overrides the bootstrap \`TRAM_AUTH_USERS\` value on future redeploys.
 EOF
 }
 
@@ -276,6 +292,114 @@ run_cmd_nonfatal() {
   fi
 }
 
+env_key_in_extra_args() {
+  local key="$1"
+  local env_kv
+  for env_kv in "${EXTRA_ENV_VARS[@]}"; do
+    if [[ "${env_kv}" == "${key}="* ]]; then
+      return 0
+    fi
+  done
+  return 1
+}
+
+env_key_in_file() {
+  local key="$1"
+  if [[ -z "${ENV_FILE}" || ! -f "${ENV_FILE}" ]]; then
+    return 1
+  fi
+  grep -Eq "^[[:space:]]*${key}=" "${ENV_FILE}"
+}
+
+ensure_sample_health_source() {
+  if [[ ! -f "${SAMPLE_HEALTH_PIPELINE_SOURCE}" ]]; then
+    echo "Missing sample pipeline source: ${SAMPLE_HEALTH_PIPELINE_SOURCE}" >&2
+    exit 1
+  fi
+}
+
+runtime_yaml_count() {
+  local target_dir="$1"
+  find "${target_dir}" -maxdepth 1 -type f \( -name '*.yaml' -o -name '*.yml' \) | wc -l
+}
+
+seed_sample_health_host_dir() {
+  local target_dir="$1"
+  local yaml_count target_path
+
+  mkdir -p "${target_dir}"
+  target_path="${target_dir}/${SAMPLE_HEALTH_PIPELINE_NAME}"
+  yaml_count="$(runtime_yaml_count "${target_dir}")"
+  if (( yaml_count == 0 )); then
+    run_cmd cp "${SAMPLE_HEALTH_PIPELINE_SOURCE}" "${target_path}"
+    if [[ "${DRY_RUN}" == "true" ]]; then
+      echo "Would bootstrap sample runtime pipeline: ${target_path}"
+    else
+      echo "Bootstrapped sample runtime pipeline: ${target_path}"
+    fi
+    return 0
+  fi
+
+  if (( yaml_count == 1 )) && [[ -f "${target_path}" ]] && ! cmp -s "${SAMPLE_HEALTH_PIPELINE_SOURCE}" "${target_path}"; then
+    run_cmd cp "${SAMPLE_HEALTH_PIPELINE_SOURCE}" "${target_path}"
+    if [[ "${DRY_RUN}" == "true" ]]; then
+      echo "Would update sample runtime pipeline: ${target_path}"
+    else
+      echo "Updated sample runtime pipeline: ${target_path}"
+    fi
+    return 0
+  fi
+
+  if (( yaml_count > 0 )); then
+    echo "Runtime pipelines already present in ${target_dir}; skipping ${SAMPLE_HEALTH_PIPELINE_NAME} bootstrap."
+    return 0
+  fi
+}
+
+seed_sample_health_volume() {
+  local shell_cmd
+
+  shell_cmd=$(cat <<'EOF'
+mkdir -p /data/pipelines
+count=$(find /data/pipelines -maxdepth 1 -type f \( -name '*.yaml' -o -name '*.yml' \) | wc -l)
+if [ "$count" -gt 0 ]; then
+  if [ "$count" -eq 1 ] && [ -f /data/pipelines/sample-health.yaml ] && ! cmp -s /seed/sample-health.yaml /data/pipelines/sample-health.yaml; then
+    cp /seed/sample-health.yaml /data/pipelines/sample-health.yaml
+    echo "Updated sample runtime pipeline: /data/pipelines/sample-health.yaml"
+  else
+    echo "Runtime pipelines already present in /data/pipelines; skipping sample-health.yaml bootstrap."
+  fi
+else
+  cp /seed/sample-health.yaml /data/pipelines/sample-health.yaml
+  echo "Bootstrapped sample runtime pipeline: /data/pipelines/sample-health.yaml"
+fi
+EOF
+)
+
+  run_cmd docker run --rm \
+    --entrypoint /bin/sh \
+    -v "${DATA_VOLUME}:/data" \
+    -v "${SAMPLE_HEALTH_PIPELINE_SOURCE}:/seed/${SAMPLE_HEALTH_PIPELINE_NAME}:ro" \
+    "${IMAGE}" \
+    -c "${shell_cmd}"
+}
+
+seed_sample_health_pipeline() {
+  ensure_sample_health_source
+
+  if [[ -n "${PIPELINES_DIR}" ]]; then
+    seed_sample_health_host_dir "${PIPELINES_DIR}"
+    return 0
+  fi
+
+  if [[ -n "${DATA_DIR}" ]]; then
+    seed_sample_health_host_dir "${DATA_DIR}/pipelines"
+    return 0
+  fi
+
+  seed_sample_health_volume
+}
+
 cleanup_local_images() {
   local repository="$1"
   local keep_images="$2"
@@ -325,18 +449,18 @@ container_running() {
 }
 
 ensure_bind_mounts() {
-  if [[ -z "${PIPELINES_DIR}" ]]; then
-    echo "Pipelines directory cannot be empty." >&2
-    exit 1
-  fi
-  mkdir -p "${PIPELINES_DIR}"
   if [[ -n "${ENV_FILE}" && ! -f "${ENV_FILE}" ]]; then
     echo "Env file does not exist: ${ENV_FILE}" >&2
     exit 1
   fi
 
+  if [[ -n "${PIPELINES_DIR}" ]]; then
+    mkdir -p "${PIPELINES_DIR}"
+  fi
+
   if [[ -n "${DATA_DIR}" ]]; then
     mkdir -p "${DATA_DIR}" \
+             "${DATA_DIR}/pipelines" \
              "${DATA_DIR}/mibs" \
              "${DATA_DIR}/mib-sources" \
              "${DATA_DIR}/schemas"
@@ -400,11 +524,16 @@ show_summary() {
   echo "Container: ${CONTAINER_NAME}"
   echo "Image:     ${IMAGE}"
   echo "UI/API:    http://localhost:${HOST_PORT}"
-  echo "Pipelines: ${PIPELINES_DIR}"
+  echo "UI login:  bootstrap via TRAM_AUTH_USERS (default: admin/admin123 unless overridden or stored in DB)"
   if [[ -n "${DATA_VOLUME}" ]]; then
     echo "Data:      volume ${DATA_VOLUME}"
   else
     echo "Data:      ${DATA_DIR}"
+  fi
+  if [[ -n "${PIPELINES_DIR}" ]]; then
+    echo "Runtime pipelines: host ${PIPELINES_DIR} -> ${CONTAINER_PIPELINES_DIR} (read-only)"
+  else
+    echo "Runtime pipelines: ${CONTAINER_PIPELINES_DIR} inside data storage"
   fi
   if [[ -n "${OUTPUT_DIR}" ]]; then
     echo "Output:    ${OUTPUT_DIR}"
@@ -428,6 +557,8 @@ cmd_up() {
     run_cmd docker rm -f "${CONTAINER_NAME}"
   fi
 
+  seed_sample_health_pipeline
+
   local -a args=(
     docker run -d
     --name "${CONTAINER_NAME}"
@@ -441,12 +572,11 @@ cmd_up() {
 
   args+=(
     -p "${HOST_PORT}:${CONTAINER_PORT}"
-    -v "${PIPELINES_DIR}:/pipelines:ro"
     -e "TRAM_MODE=standalone"
     -e "TRAM_HOST=0.0.0.0"
     -e "TRAM_PORT=${CONTAINER_PORT}"
     -e "TRAM_NODE_ID=${CONTAINER_NAME}"
-    -e "TRAM_PIPELINE_DIR=/pipelines"
+    -e "TRAM_PIPELINE_DIR=${CONTAINER_PIPELINES_DIR}"
     -e "TRAM_DB_URL=sqlite:////data/tram.db"
     -e "TRAM_MIB_DIR=/data/mibs"
     -e "TRAM_MIB_SOURCE_DIR=/data/mib-sources"
@@ -454,10 +584,18 @@ cmd_up() {
     -e "TRAM_SCHEMA_DIR=/data/schemas"
   )
 
+  if ! env_key_in_file "TRAM_AUTH_USERS" && ! env_key_in_extra_args "TRAM_AUTH_USERS"; then
+    args+=(-e "TRAM_AUTH_USERS=${DEFAULT_TRAM_AUTH_USERS}")
+  fi
+
   if [[ -n "${DATA_VOLUME}" ]]; then
     args+=(-v "${DATA_VOLUME}:/data")
   else
     args+=(-v "${DATA_DIR}:/data")
+  fi
+
+  if [[ -n "${PIPELINES_DIR}" ]]; then
+    args+=(-v "${PIPELINES_DIR}:${CONTAINER_PIPELINES_DIR}:ro")
   fi
 
   if [[ -n "${OUTPUT_DIR}" ]]; then
@@ -564,11 +702,15 @@ cmd_status() {
   echo "Health:    ${health}"
   echo "Image:     ${image}"
   echo "UI/API:    http://localhost:${HOST_PORT}"
-  echo "Pipelines: ${PIPELINES_DIR}"
   if [[ -n "${DATA_VOLUME}" ]]; then
     echo "Data:      volume ${DATA_VOLUME}"
   else
     echo "Data:      ${DATA_DIR}"
+  fi
+  if [[ -n "${PIPELINES_DIR}" ]]; then
+    echo "Runtime pipelines: host ${PIPELINES_DIR} -> ${CONTAINER_PIPELINES_DIR} (read-only)"
+  else
+    echo "Runtime pipelines: ${CONTAINER_PIPELINES_DIR} inside data storage"
   fi
   if [[ -n "${OUTPUT_DIR}" ]]; then
     echo "Output:    ${OUTPUT_DIR}"

@@ -1,0 +1,36 @@
+version: "1"
+
+pipeline:
+  name: sample-health
+  description: "Built-in sample pipeline for fresh standalone and Helm installs"
+  enabled: true
+
+  schedule:
+    type: interval
+    interval_seconds: 600
+
+  source:
+    type: rest
+    url: http://127.0.0.1:8765/api/health
+    timeout: 10
+
+  serializer_in:
+    type: json
+
+  transforms:
+    - type: add_field
+      fields:
+        source: "'tram-sample'"
+        kind: "'sample-health'"
+        status: "'ok'"
+
+  serializer_out:
+    type: json
+    indent: 2
+
+  sink:
+    type: local
+    path: /data/output
+    filename_template: "sample_health_{timestamp}.json"
+
+  on_error: continue
