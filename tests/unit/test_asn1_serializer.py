@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import os
 import sys
 from datetime import UTC, datetime
 from types import SimpleNamespace
@@ -292,6 +293,46 @@ class TestAsn1Serializer:
             assert first.parse(b"one") == [{"x": 1}]
             assert second.parse(b"two") == [{"x": 1}]
 
+        compile_files.assert_called_once()
+
+    def test_same_content_varying_mtime_keeps_cache_at_one(self, tmp_path):
+        """Identical schema bytes with churning mtimes must not grow the cache."""
+        schema_file = _schema_file(tmp_path)
+        compiled = MagicMock()
+        compiled.decode.return_value = {"x": 1}
+        compile_files = MagicMock(return_value=compiled)
+        fake_asn1tools = SimpleNamespace(compile_files=compile_files)
+
+        with pytest.MonkeyPatch.context() as mp:
+            mp.setitem(sys.modules, "asn1tools", fake_asn1tools)
+            for mtime in (1000.0, 2000.0, 3000.0):
+                os.utime(schema_file, (mtime, mtime))
+                serializer = Asn1Serializer({"schema_file": str(schema_file), "message_class": "Foo"})
+                assert serializer.parse(b"payload") == [{"x": 1}]
+
+        assert len(_SCHEMA_CACHE) == 1
+        compile_files.assert_called_once()
+
+    def test_identical_schema_content_in_different_dirs_shares_cache(self, tmp_path):
+        """Content-hash keys make identical bytes at different paths a single entry."""
+        for name in ("a", "b"):
+            schema_dir = tmp_path / name
+            schema_dir.mkdir()
+            (schema_dir / "test.asn").write_text("Test DEFINITIONS ::= BEGIN END")
+        compiled = MagicMock()
+        compiled.decode.return_value = {"x": 1}
+        compile_files = MagicMock(return_value=compiled)
+        fake_asn1tools = SimpleNamespace(compile_files=compile_files)
+
+        with pytest.MonkeyPatch.context() as mp:
+            mp.setitem(sys.modules, "asn1tools", fake_asn1tools)
+            for name in ("a", "b"):
+                serializer = Asn1Serializer(
+                    {"schema_file": str(tmp_path / name), "message_class": "Foo"}
+                )
+                serializer.parse(b"payload")
+
+        assert len(_SCHEMA_CACHE) == 1
         compile_files.assert_called_once()
 
     def test_serialize_is_explicitly_unsupported(self, tmp_path):

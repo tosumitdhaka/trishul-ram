@@ -153,6 +153,48 @@ class TestSyncAllSchemas:
         assert not (schema_dir / "a.proto").exists()
         assert (schema_dir / "b.proto").read_bytes() == b"ok"
 
+    @respx.mock
+    def test_unchanged_schema_skips_write(self, tmp_path):
+        """Identical content must not be rewritten — avoids mtime churn."""
+        schema_dir = tmp_path / "schemas"
+        dest = schema_dir / "foo.proto"
+        dest.parent.mkdir(parents=True, exist_ok=True)
+        dest.write_bytes(b"stable content")
+        original_mtime = dest.stat().st_mtime
+
+        respx.get("http://manager/api/schemas").mock(
+            return_value=httpx.Response(200, json=[{"path": "foo.proto"}])
+        )
+        respx.get("http://manager/api/schemas/foo.proto").mock(
+            return_value=httpx.Response(200, content=b"stable content")
+        )
+
+        with httpx.Client(base_url="http://manager") as client:
+            _sync_all_schemas(client, schema_dir)
+
+        assert dest.read_bytes() == b"stable content"
+        assert dest.stat().st_mtime == original_mtime
+
+    @respx.mock
+    def test_changed_schema_is_rewritten(self, tmp_path):
+        """Different content must still be written."""
+        schema_dir = tmp_path / "schemas"
+        dest = schema_dir / "foo.proto"
+        dest.parent.mkdir(parents=True, exist_ok=True)
+        dest.write_bytes(b"old content")
+
+        respx.get("http://manager/api/schemas").mock(
+            return_value=httpx.Response(200, json=[{"path": "foo.proto"}])
+        )
+        respx.get("http://manager/api/schemas/foo.proto").mock(
+            return_value=httpx.Response(200, content=b"new content")
+        )
+
+        with httpx.Client(base_url="http://manager") as client:
+            _sync_all_schemas(client, schema_dir)
+
+        assert dest.read_bytes() == b"new content"
+
 
 # ── _sync_mib ──────────────────────────────────────────────────────────────
 
@@ -180,6 +222,24 @@ class TestSyncMib:
             _sync_mib(client, "IF-MIB", mib_dir)   # must not raise
 
         assert not (mib_dir / "IF-MIB.py").exists()
+
+    @respx.mock
+    def test_unchanged_mib_skips_write(self, tmp_path):
+        """Identical content must not be rewritten — avoids mtime churn."""
+        mib_dir = tmp_path / "mibs"
+        dest = mib_dir / "CUSTOM-MIB.py"
+        dest.parent.mkdir(parents=True, exist_ok=True)
+        dest.write_bytes(b"# stable")
+        original_mtime = dest.stat().st_mtime
+
+        respx.get("http://manager/api/mibs/CUSTOM-MIB").mock(
+            return_value=httpx.Response(200, content=b"# stable")
+        )
+        with httpx.Client(base_url="http://manager") as client:
+            _sync_mib(client, "CUSTOM-MIB", mib_dir)
+
+        assert dest.read_bytes() == b"# stable"
+        assert dest.stat().st_mtime == original_mtime
 
     @respx.mock
     def test_server_error_is_swallowed(self, tmp_path):

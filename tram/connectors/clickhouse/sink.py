@@ -89,10 +89,13 @@ class ClickHouseSink(BaseSink):
         self._insert_rows(rows)
 
     def close(self) -> None:
-        """Flush remaining buffer and stop the timer. Called by executor on stream stop."""
+        """Flush remaining buffer and stop the timer. Idempotent — safe to call twice."""
+        if self._closed:
+            return
         self._closed = True
         if self._flush_timer is not None:
             self._flush_timer.cancel()
+            self._flush_timer = None
         if self.batch_flush_on_stop:
             try:
                 self._flush()

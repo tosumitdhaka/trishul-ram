@@ -41,13 +41,19 @@ class TestPipelineExecutorDryRun:
         config = _make_pipeline("record_chunk_size: 1000")
         assert config.record_chunk_size == 1000
 
-    def test_pipeline_config_post_batch_cleanup_defaults_false(self):
+    def test_pipeline_config_post_batch_cleanup_defaults_true(self):
         config = _make_pipeline()
-        assert config.post_batch_cleanup is False
+        assert config.post_batch_cleanup is True
+        # Serialization round-trip preserves the default.
+        assert config.model_dump()["post_batch_cleanup"] is True
 
     def test_pipeline_config_accepts_post_batch_cleanup(self):
         config = _make_pipeline("post_batch_cleanup: true")
         assert config.post_batch_cleanup is True
+
+    def test_pipeline_config_accepts_post_batch_cleanup_false(self):
+        config = _make_pipeline("post_batch_cleanup: false")
+        assert config.post_batch_cleanup is False
 
     def test_dry_run_valid_pipeline(self):
         config = _make_pipeline()
@@ -168,8 +174,29 @@ class TestPipelineExecutorBatchRun:
         assert result.status == RunStatus.SUCCESS
         assert result.records_skipped > 0
 
-    def test_batch_run_skips_post_batch_cleanup_by_default(self):
+    def test_batch_run_invokes_post_batch_cleanup_by_default(self):
         config = _make_pipeline()
+        executor = PipelineExecutor()
+
+        mock_source = MagicMock()
+        mock_source.read.return_value = iter([])
+        mock_sink = MagicMock()
+
+        with (
+            patch.object(executor, "_build_source", return_value=mock_source),
+            patch.object(executor, "_build_sinks", return_value=[(mock_sink, None, [])]),
+            patch.object(executor, "_build_serializer_in", return_value=MagicMock()),
+            patch.object(executor, "_build_serializer_out", return_value=MagicMock()),
+            patch.object(executor, "_build_transforms", return_value=[]),
+            patch.object(executor, "_post_batch_cleanup") as cleanup,
+        ):
+            result = executor.batch_run(config)
+
+        assert result.status == RunStatus.SUCCESS
+        cleanup.assert_called_once_with(config)
+
+    def test_batch_run_skips_post_batch_cleanup_when_disabled(self):
+        config = _make_pipeline("post_batch_cleanup: false")
         executor = PipelineExecutor()
 
         mock_source = MagicMock()
@@ -232,6 +259,75 @@ class TestPipelineExecutorBatchRun:
 
         assert result.status == RunStatus.FAILED
         cleanup.assert_called_once_with(config)
+
+    def test_batch_run_closes_sinks_in_finally(self):
+        """batch_run must close sinks (and the DLQ sink) after a successful run."""
+        config = _make_pipeline()
+        executor = PipelineExecutor()
+
+        mock_source = MagicMock()
+        mock_source.read.return_value = iter([])
+        mock_sink = MagicMock()
+        mock_dlq = MagicMock()
+
+        with (
+            patch.object(executor, "_build_source", return_value=mock_source),
+            patch.object(executor, "_build_sinks", return_value=[(mock_sink, None, [])]),
+            patch.object(executor, "_build_serializer_in", return_value=MagicMock()),
+            patch.object(executor, "_build_serializer_out", return_value=MagicMock()),
+            patch.object(executor, "_build_transforms", return_value=[]),
+            patch.object(executor, "_build_dlq_sink", return_value=mock_dlq),
+        ):
+            result = executor.batch_run(config)
+
+        assert result.status == RunStatus.SUCCESS
+        mock_sink.close.assert_called_once()
+        mock_dlq.close.assert_called_once()
+
+    def test_batch_run_closes_sinks_on_failure(self):
+        """batch_run must still close sinks when the run fails."""
+        config = _make_pipeline("on_error: abort")
+        executor = PipelineExecutor()
+
+        mock_source = MagicMock()
+        mock_source.read.return_value = iter([(b"bad", {})])
+        mock_sink = MagicMock()
+        mock_ser_in = MagicMock()
+        mock_ser_in.parse.side_effect = ValueError("boom")
+
+        with (
+            patch.object(executor, "_build_source", return_value=mock_source),
+            patch.object(executor, "_build_sinks", return_value=[(mock_sink, None, [])]),
+            patch.object(executor, "_build_serializer_in", return_value=mock_ser_in),
+            patch.object(executor, "_build_serializer_out", return_value=MagicMock()),
+            patch.object(executor, "_build_transforms", return_value=[]),
+        ):
+            result = executor.batch_run(config)
+
+        assert result.status == RunStatus.FAILED
+        mock_sink.close.assert_called_once()
+
+    def test_batch_run_swallows_sink_close_errors(self):
+        """A failing sink close() must not mask the run result."""
+        config = _make_pipeline()
+        executor = PipelineExecutor()
+
+        mock_source = MagicMock()
+        mock_source.read.return_value = iter([])
+        mock_sink = MagicMock()
+        mock_sink.close.side_effect = RuntimeError("close boom")
+
+        with (
+            patch.object(executor, "_build_source", return_value=mock_source),
+            patch.object(executor, "_build_sinks", return_value=[(mock_sink, None, [])]),
+            patch.object(executor, "_build_serializer_in", return_value=MagicMock()),
+            patch.object(executor, "_build_serializer_out", return_value=MagicMock()),
+            patch.object(executor, "_build_transforms", return_value=[]),
+        ):
+            result = executor.batch_run(config)
+
+        assert result.status == RunStatus.SUCCESS
+        mock_sink.close.assert_called_once()
 
     def test_post_batch_cleanup_ignores_missing_trim_support(self):
         config = _make_pipeline()

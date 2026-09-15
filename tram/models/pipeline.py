@@ -1319,7 +1319,11 @@ class PipelineConfig(BaseModel):
     # Batch size cap (max records to process per batch run; None = unlimited)
     batch_size: int | None = None
     record_chunk_size: int | None = Field(default=None, gt=0)
-    post_batch_cleanup: bool = False
+
+    # Run gc.collect() plus best-effort heap trim after each batch run. Defaults
+    # to True so batch runs reclaim transient heap on shared workers (GH #16);
+    # opt out explicitly with `post_batch_cleanup: false`.
+    post_batch_cleanup: bool = True
 
     # Error handling
     on_error: Literal["continue", "abort", "retry", "dlq"] = "continue"

@@ -244,7 +244,13 @@ These fields are set per-pipeline in the pipeline YAML (not environment variable
 | `on_error` | `continue` | Error policy: `continue` \| `abort` \| `retry` \| `dlq` |
 | `skip_processed` | `false` | On file/object sources: skip files already processed |
 | `parallel_sinks` | `false` | Fan out to all sinks concurrently via thread pool |
-| `post_batch_cleanup` | `false` | After batch completion, optionally run `gc.collect()` plus best-effort heap trim; useful for memory-heavy one-shot file pipelines on shared workers |
+| `post_batch_cleanup` | `true` | After batch completion, run `gc.collect()` plus best-effort heap trim; releases transient batch heap on shared workers. Defaults to **on** since the GH #16 allocator fix — set `post_batch_cleanup: false` to opt out |
+
+### Allocator mitigation (GH #16)
+
+The worker image sets `MALLOC_ARENA_MAX=2` (`Dockerfile.worker`), capping the number of glibc per-thread malloc arenas. C-extension-heavy batches (ASN.1, Kafka, SNMP) allocate across many arenas under worker threads, and each arena retains freed pages — a ~560 MiB transient peak can leave fragmented arenas pinned in the worker's RSS long after the run. With the arena cap, thread allocations fall back to the shared main heap, where the executor's post-batch `malloc_trim` can actually return pages to the OS. This is an image-level setting, so rollback means rolling back the worker image; it is not a `TRAM_*` runtime knob and does not appear in `.env.example`.
+
+**Behavioral change:** `post_batch_cleanup` now defaults to `true` (previously `false`). Existing pipelines that do not set the field will now run `gc.collect()` plus a best-effort heap trim after every batch run — a small per-batch latency cost in exchange for lower retained RSS on shared workers. Pipelines that explicitly set `post_batch_cleanup: true` or `false` are unaffected.
 
 ### Per-sink reliability fields (v1.0.0)
 

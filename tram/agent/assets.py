@@ -45,6 +45,18 @@ _SCHEMA_SUBDIR = "schemas"
 _MIB_SUBDIR    = "mibs"
 
 
+def _content_matches(path: Path, content: bytes) -> bool:
+    """True if *path* already holds exactly *content*.
+
+    Skipping the write when bytes are identical stops mtime churn on every
+    worker run, which otherwise grows mtime-keyed serializer caches unboundedly.
+    """
+    try:
+        return path.is_file() and path.read_bytes() == content
+    except OSError:
+        return False
+
+
 # ── Public API ─────────────────────────────────────────────────────────────
 
 
@@ -129,6 +141,9 @@ def _sync_all_schemas(client: httpx.Client, schema_dir: Path) -> None:
         try:
             r = client.get(f"/api/schemas/{rel_path}")
             r.raise_for_status()
+            if _content_matches(dest, r.content):
+                logger.debug("Schema %s unchanged, skipping write", rel_path)
+                continue
             dest.write_bytes(r.content)
             logger.debug("Synced schema %s", rel_path)
         except Exception as exc:
@@ -146,6 +161,9 @@ def _sync_mib(client: httpx.Client, mib_name: str, mib_dir: Path) -> None:
             logger.debug("MIB %s not on manager (likely baked into image)", mib_name)
             return
         resp.raise_for_status()
+        if _content_matches(dest, resp.content):
+            logger.debug("MIB %s unchanged, skipping write", mib_name)
+            return
         dest.write_bytes(resp.content)
         logger.debug("Synced MIB %s", mib_name)
     except Exception as exc:

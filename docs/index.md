@@ -221,7 +221,7 @@ See [changelog.md](changelog.md) for detailed release notes.
 - CDR shaping primitives: dotted-path support across core transforms plus `select_from_list`, `coalesce_fields`, `project`, conditional `drop`, and narrow wildcard path support for explicit LTE/SGW/PGW mediation pipelines
 - Batch resilience: `BatchReconciler` adopts or clears lost worker-owned batch runs after manager restart or worker loss, reusing the normal final status path
 - Large-file batch efficiency: `record_chunk_size` enables bounded serial batch decode windows, and ASN.1 BER payloads now support incremental record parsing instead of one giant in-memory decode
-- Safer batch file output: serial batch `csv` / `ndjson` sinks stage temp files per source unit, publish only on successful source completion, and can optionally run post-batch heap cleanup via `post_batch_cleanup: true`
+- Safer batch file output: serial batch `csv` / `ndjson` sinks stage temp files per source unit, publish only on successful source completion, and run post-batch heap cleanup by default (`post_batch_cleanup`; opt out with `post_batch_cleanup: false`)
 
 **v1.3.1** (2026-04-20)
 - `workers.count: N` and `workers.list` placement behavior are now implemented for multi-worker push streams in manager mode

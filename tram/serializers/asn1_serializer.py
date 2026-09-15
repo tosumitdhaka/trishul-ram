@@ -17,7 +17,9 @@ Schema file is required; there is no schema-less fallback.
 """
 from __future__ import annotations
 
+import hashlib
 import os
+from collections import OrderedDict
 from collections.abc import Iterator
 from datetime import datetime
 from typing import Any
@@ -26,8 +28,39 @@ from tram.core.exceptions import SerializerError
 from tram.interfaces.base_serializer import BaseSerializer
 from tram.registry.registry import register_serializer
 
-# Cache: (schema_key, encoding) -> compiled asn1tools file object
-_SCHEMA_CACHE: dict[tuple[str, str], object] = {}
+# Cache: (content_hash, encoding) -> compiled asn1tools file object.
+# Keyed by content hash (not mtime) so asset-sync mtime churn on identical
+# content does not grow the cache unboundedly; bounded LRU caps memory in
+# long-lived worker processes.
+_SCHEMA_CACHE: OrderedDict[tuple[str, str], object] = OrderedDict()
+_SCHEMA_CACHE_MAX = 32
+
+
+def _schema_files(schema_path: str) -> list[str]:
+    """Return the sorted .asn files that feed compilation for *schema_path*."""
+    if os.path.isdir(schema_path):
+        import glob as _glob
+        files = sorted(_glob.glob(os.path.join(schema_path, "*.asn")))
+        if not files:
+            raise SerializerError(f"No .asn files found in directory: {schema_path}")
+        return files
+    return [schema_path]
+
+
+def _schema_content_key(files: list[str]) -> str:
+    """Content hash (sha256) of schema file names + bytes — mtime-agnostic.
+
+    Identical schema content — even at a different path or with a different
+    mtime — maps to the same cache key, so re-syncing unchanged assets never
+    triggers a recompile.
+    """
+    hasher = hashlib.sha256()
+    for path in files:
+        hasher.update(os.path.basename(path).encode("utf-8"))
+        hasher.update(b"\x00")
+        with open(path, "rb") as fh:
+            hasher.update(fh.read())
+    return hasher.hexdigest()
 
 
 def _to_json_safe(obj):
@@ -168,18 +201,14 @@ class Asn1Serializer(BaseSerializer):
         if not os.path.exists(schema_path):
             raise SerializerError(f"ASN.1 schema not found: {schema_path}")
 
-        # Build cache key: for a directory use its combined mtime, for a file use its mtime
-        if os.path.isdir(schema_path):
-            import glob as _glob
-            files = sorted(_glob.glob(os.path.join(schema_path, "*.asn")))
-            if not files:
-                raise SerializerError(f"No .asn files found in directory: {schema_path}")
-            cache_key = (schema_path + ":dir:" + str(sum(os.path.getmtime(f) for f in files)), self.encoding)
-        else:
-            files = [schema_path]
-            cache_key = (schema_path + ":" + str(os.path.getmtime(schema_path)), self.encoding)
+        files = _schema_files(schema_path)
+        cache_key = (_schema_content_key(files), self.encoding)
 
-        if cache_key in _SCHEMA_CACHE:
+        try:
+            _SCHEMA_CACHE.move_to_end(cache_key)
+        except KeyError:
+            pass  # evicted concurrently — fall through to the compile path
+        else:
             self._compiled = _SCHEMA_CACHE[cache_key]
             return self._compiled
 
@@ -189,6 +218,8 @@ class Asn1Serializer(BaseSerializer):
             raise SerializerError(f"ASN.1 schema compile error: {exc}") from exc
 
         _SCHEMA_CACHE[cache_key] = compiled
+        if len(_SCHEMA_CACHE) > _SCHEMA_CACHE_MAX:
+            _SCHEMA_CACHE.popitem(last=False)
         self._compiled = compiled
         return compiled
 

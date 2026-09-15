@@ -58,7 +58,7 @@ pipeline:
   on_error: continue           # continue | abort | retry | dlq
   # batch_size: 100000         # optional hard cap per batch run
   # record_chunk_size: 500     # serial batch only; bounded decode windows for large files
-  # post_batch_cleanup: true   # optional gc + heap trim after batch completion
+  # post_batch_cleanup: false  # default on: gc + heap trim after batch completion; set false to opt out
 
   dlq:                         # dead-letter queue for failed records
     type: local

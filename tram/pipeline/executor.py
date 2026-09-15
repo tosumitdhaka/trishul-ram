@@ -315,6 +315,29 @@ class PipelineExecutor:
             if callable(finalize):
                 finalize(meta, success)
 
+    @staticmethod
+    def _close_sinks(sinks: list[tuple], dlq_sink=None) -> None:
+        """Best-effort, idempotent close of sink instances after a batch run.
+
+        Releases run-scoped resources (timers, buffers, connections) that sinks
+        otherwise pin for the process lifetime (e.g. the ClickHouse flush
+        timer/buffer). close() failures are logged but never mask the run result.
+        """
+        instances = [sink_tuple[0] for sink_tuple in sinks]
+        if dlq_sink is not None:
+            instances.append(dlq_sink)
+        for sink_instance in instances:
+            close = getattr(sink_instance, "close", None)
+            if not callable(close):
+                continue
+            try:
+                close()
+            except Exception as exc:
+                logger.warning(
+                    "Sink close failed",
+                    extra={"sink_type": type(sink_instance).__name__, "error": str(exc)},
+                )
+
     def _process_records(
         self,
         records: list[dict],
@@ -829,6 +852,7 @@ class PipelineExecutor:
                     return result
             return result
         finally:
+            self._close_sinks(sinks, dlq_sink)
             if getattr(config, "post_batch_cleanup", False):
                 self._post_batch_cleanup(config)
 

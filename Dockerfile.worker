@@ -84,6 +84,12 @@ HEALTHCHECK --interval=30s --timeout=10s --start-period=15s --retries=3 \
 
 EXPOSE 8766
 
+# Cap glibc per-thread malloc arenas — C-extension-heavy batches (asn1, kafka, snmp)
+# fragment memory across many arenas under worker threads, pinning large anonymous
+# heap in RSS after each run (GH #16). Limiting arenas forces allocations back to
+# the main heap where malloc_trim can actually return pages to the OS.
+ENV MALLOC_ARENA_MAX=2
+
 ENV TRAM_MIB_DIR=/mibs
 ENV TRAM_MIB_BUNDLED_SOURCE_DIR=/mib-sources
 ENV TRAM_SCHEMA_DIR=/schemas
