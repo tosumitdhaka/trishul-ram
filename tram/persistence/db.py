@@ -185,6 +185,28 @@ def _create_tables(engine: Engine) -> None:
             "CREATE INDEX IF NOT EXISTS idx_bp_pipeline ON broadcast_placements(pipeline_name)"
         ))
 
+        # v1.4.0 (E.2 / GH #21): queued manual runs — DB-backed queue for
+        # no-capacity manual triggers. Broadcast-placement conventions: TEXT
+        # columns, ISO-8601 UTC timestamps, idempotent DDL. Terminal rows
+        # (dispatched/expired) are kept for audit; read paths filter on status.
+        conn.execute(text("""
+            CREATE TABLE IF NOT EXISTS queued_runs (
+                run_id        TEXT PRIMARY KEY NOT NULL,
+                pipeline_name TEXT NOT NULL,
+                yaml_snapshot TEXT NOT NULL,
+                status        TEXT NOT NULL,
+                requested_at  TEXT NOT NULL,
+                expires_at    TEXT NOT NULL,
+                dispatched_at TEXT
+            )
+        """))
+        conn.execute(text(
+            "CREATE INDEX IF NOT EXISTS idx_qr_pipeline ON queued_runs(pipeline_name)"
+        ))
+        conn.execute(text(
+            "CREATE INDEX IF NOT EXISTS idx_qr_status ON queued_runs(status)"
+        ))
+
         # v0.7.0 column migrations: add new columns to existing databases
         _add_column_if_missing(conn, dialect, "run_history", "node_id", "TEXT NOT NULL DEFAULT ''")
         _add_column_if_missing(conn, dialect, "run_history", "dlq_count", "INTEGER NOT NULL DEFAULT 0")
@@ -274,6 +296,64 @@ class TramDB:
             "TramDB initialised",
             extra={"dialect": self._engine.dialect.name, "node_id": node_id},
         )
+
+    # ── Reusable upsert ────────────────────────────────────────────────────
+
+    def _upsert(
+        self,
+        table: str,
+        values: dict[str, object],
+        key_columns: tuple[str, ...],
+        update_columns: tuple[str, ...] | None = None,
+    ) -> None:
+        """Insert-or-update a single row, keyed on *key_columns*, across dialects.
+
+        sqlite / postgresql : INSERT ... ON CONFLICT (keys) DO UPDATE SET col = excluded.col
+        mysql               : INSERT ... ON DUPLICATE KEY UPDATE col = VALUES(col)
+        other               : DELETE by key + INSERT, in one transaction (generic fallback)
+
+        ``values`` maps column -> value for ALL columns (keys included).
+        *update_columns* selects which non-key columns are written on conflict:
+        ``None`` (default) updates all non-key columns; ``()`` degrades to
+        insert-if-absent (DO NOTHING / INSERT IGNORE / plain insert that raises
+        on duplicate for exotic dialects). Raises on failure (does not swallow —
+        contrast parked B8).
+        """
+        dialect = self._engine.dialect.name
+        columns = list(values)
+        if update_columns is None:
+            update_columns = tuple(c for c in columns if c not in key_columns)
+
+        col_list = ", ".join(columns)
+        placeholders = ", ".join(f":{c}" for c in columns)
+        insert_sql = f"INSERT INTO {table} ({col_list}) VALUES ({placeholders})"
+        key_where = " AND ".join(f"{c} = :{c}" for c in key_columns)
+
+        with self._engine.begin() as conn:
+            if dialect == "mysql":
+                if update_columns:
+                    updates = ", ".join(f"{c} = VALUES({c})" for c in update_columns)
+                    sql = f"{insert_sql} ON DUPLICATE KEY UPDATE {updates}"
+                else:
+                    sql = f"INSERT IGNORE INTO {table} ({col_list}) VALUES ({placeholders})"
+                conn.execute(text(sql), values)
+            elif dialect in ("sqlite", "postgresql"):
+                conflict = ", ".join(key_columns)
+                if update_columns:
+                    updates = ", ".join(f"{c} = excluded.{c}" for c in update_columns)
+                    sql = f"{insert_sql} ON CONFLICT ({conflict}) DO UPDATE SET {updates}"
+                else:
+                    sql = f"{insert_sql} ON CONFLICT ({conflict}) DO NOTHING"
+                conn.execute(text(sql), values)
+            elif update_columns:
+                # Generic fallback: delete by key + insert, in one transaction.
+                conn.execute(text(f"DELETE FROM {table} WHERE {key_where}"), values)
+                conn.execute(text(insert_sql), values)
+            else:
+                # Generic fallback, insert-if-absent mode: no portable DO NOTHING;
+                # a duplicate key surfaces as IntegrityError for the caller's
+                # existing handling (mark_processed's try/except).
+                conn.execute(text(insert_sql), values)
 
     # ── Health ─────────────────────────────────────────────────────────────
 
@@ -515,52 +595,15 @@ class TramDB:
 
     def set_alert_cooldown(self, pipeline_name: str, rule_name: str, dt: datetime) -> None:
         """Upsert the last-alerted timestamp for a rule."""
-        dialect = self._engine.dialect.name
-        ts = dt.isoformat()
-        with self._engine.begin() as conn:
-            if dialect == "sqlite":
-                conn.execute(
-                    text("""
-                        INSERT OR REPLACE INTO alert_state
-                          (pipeline_name, rule_name, last_alerted_at)
-                        VALUES (:pn, :rn, :ts)
-                    """),
-                    {"pn": pipeline_name, "rn": rule_name, "ts": ts},
-                )
-            elif dialect in ("postgresql", "postgres"):
-                conn.execute(
-                    text("""
-                        INSERT INTO alert_state (pipeline_name, rule_name, last_alerted_at)
-                        VALUES (:pn, :rn, :ts)
-                        ON CONFLICT (pipeline_name, rule_name)
-                        DO UPDATE SET last_alerted_at = EXCLUDED.last_alerted_at
-                    """),
-                    {"pn": pipeline_name, "rn": rule_name, "ts": ts},
-                )
-            elif dialect == "mysql":
-                conn.execute(
-                    text("""
-                        INSERT INTO alert_state (pipeline_name, rule_name, last_alerted_at)
-                        VALUES (:pn, :rn, :ts)
-                        ON DUPLICATE KEY UPDATE last_alerted_at = VALUES(last_alerted_at)
-                    """),
-                    {"pn": pipeline_name, "rn": rule_name, "ts": ts},
-                )
-            else:
-                # Generic fallback: delete + insert
-                conn.execute(
-                    text(
-                        "DELETE FROM alert_state WHERE pipeline_name = :pn AND rule_name = :rn"
-                    ),
-                    {"pn": pipeline_name, "rn": rule_name},
-                )
-                conn.execute(
-                    text("""
-                        INSERT INTO alert_state (pipeline_name, rule_name, last_alerted_at)
-                        VALUES (:pn, :rn, :ts)
-                    """),
-                    {"pn": pipeline_name, "rn": rule_name, "ts": ts},
-                )
+        self._upsert(
+            "alert_state",
+            {
+                "pipeline_name": pipeline_name,
+                "rule_name": rule_name,
+                "last_alerted_at": dt.isoformat(),
+            },
+            key_columns=("pipeline_name", "rule_name"),
+        )
 
     # ── Processed-file tracking (v0.9.0) ──────────────────────────────────
 
@@ -579,46 +622,19 @@ class TramDB:
     def mark_processed(self, pipeline_name: str, source_key: str, filepath: str) -> None:
         """Record a file as successfully processed. Silently ignores duplicates."""
         now = datetime.now(UTC).isoformat()
-        dialect = self._engine.dialect.name
         try:
-            with self._engine.begin() as conn:
-                if dialect == "sqlite":
-                    conn.execute(
-                        text("""
-                            INSERT OR IGNORE INTO processed_files
-                              (pipeline_name, source_key, filepath, processed_at)
-                            VALUES (:pn, :sk, :fp, :now)
-                        """),
-                        {"pn": pipeline_name, "sk": source_key, "fp": filepath, "now": now},
-                    )
-                elif dialect in ("postgresql", "postgres"):
-                    conn.execute(
-                        text("""
-                            INSERT INTO processed_files
-                              (pipeline_name, source_key, filepath, processed_at)
-                            VALUES (:pn, :sk, :fp, :now)
-                            ON CONFLICT DO NOTHING
-                        """),
-                        {"pn": pipeline_name, "sk": source_key, "fp": filepath, "now": now},
-                    )
-                elif dialect == "mysql":
-                    conn.execute(
-                        text("""
-                            INSERT IGNORE INTO processed_files
-                              (pipeline_name, source_key, filepath, processed_at)
-                            VALUES (:pn, :sk, :fp, :now)
-                        """),
-                        {"pn": pipeline_name, "sk": source_key, "fp": filepath, "now": now},
-                    )
-                else:
-                    conn.execute(
-                        text("""
-                            INSERT INTO processed_files
-                              (pipeline_name, source_key, filepath, processed_at)
-                            VALUES (:pn, :sk, :fp, :now)
-                        """),
-                        {"pn": pipeline_name, "sk": source_key, "fp": filepath, "now": now},
-                    )
+            # update_columns=() → insert-if-absent (DO NOTHING / INSERT IGNORE).
+            self._upsert(
+                "processed_files",
+                {
+                    "pipeline_name": pipeline_name,
+                    "source_key": source_key,
+                    "filepath": filepath,
+                    "processed_at": now,
+                },
+                key_columns=("pipeline_name", "source_key", "filepath"),
+                update_columns=(),
+            )
         except Exception as exc:
             logger.warning(
                 "Failed to mark file as processed",
@@ -647,26 +663,11 @@ class TramDB:
     def set_password_hash(self, username: str, password_hash: str) -> None:
         """Upsert a password hash for *username*."""
         now = datetime.now(UTC).isoformat()
-        dialect = self._engine.dialect.name
-        with self._engine.begin() as conn:
-            if dialect == "postgresql":
-                conn.execute(text("""
-                    INSERT INTO user_passwords (username, password_hash, updated_at)
-                    VALUES (:u, :h, :now)
-                    ON CONFLICT (username) DO UPDATE SET password_hash = :h, updated_at = :now
-                """), {"u": username, "h": password_hash, "now": now})
-            elif dialect == "mysql":
-                conn.execute(text("""
-                    INSERT INTO user_passwords (username, password_hash, updated_at)
-                    VALUES (:u, :h, :now)
-                    ON DUPLICATE KEY UPDATE password_hash = :h, updated_at = :now
-                """), {"u": username, "h": password_hash, "now": now})
-            else:  # sqlite
-                conn.execute(text("""
-                    INSERT INTO user_passwords (username, password_hash, updated_at)
-                    VALUES (:u, :h, :now)
-                    ON CONFLICT (username) DO UPDATE SET password_hash = :h, updated_at = :now
-                """), {"u": username, "h": password_hash, "now": now})
+        self._upsert(
+            "user_passwords",
+            {"username": username, "password_hash": password_hash, "updated_at": now},
+            key_columns=("username",),
+        )
 
     # ── v1.2.0: stopped flag (replaces paused) ────────────────────────────
 
@@ -713,38 +714,21 @@ class TramDB:
                          as long as the user has never saved it via API/UI)
         """
         now = datetime.now(UTC).isoformat()
-        dialect = self._engine.dialect.name
-        with self._engine.begin() as conn:
-            if dialect == "postgresql":
-                conn.execute(text("""
-                    INSERT INTO registered_pipelines (name, yaml_text, created_at, updated_at, deleted, source)
-                    VALUES (:name, :yaml, :now, :now, 0, :src)
-                    ON CONFLICT (name) DO UPDATE
-                      SET yaml_text = EXCLUDED.yaml_text,
-                          updated_at = EXCLUDED.updated_at,
-                          deleted = 0,
-                          source = EXCLUDED.source
-                """), {"name": name, "yaml": yaml_text, "now": now, "src": source})
-            elif dialect == "mysql":
-                conn.execute(text("""
-                    INSERT INTO registered_pipelines (name, yaml_text, created_at, updated_at, deleted, source)
-                    VALUES (:name, :yaml, :now, :now, 0, :src)
-                    ON DUPLICATE KEY UPDATE
-                      yaml_text = VALUES(yaml_text),
-                      updated_at = VALUES(updated_at),
-                      deleted = 0,
-                      source = VALUES(source)
-                """), {"name": name, "yaml": yaml_text, "now": now, "src": source})
-            else:  # sqlite
-                conn.execute(text("""
-                    INSERT INTO registered_pipelines (name, yaml_text, created_at, updated_at, deleted, source)
-                    VALUES (:name, :yaml, :now, :now, 0, :src)
-                    ON CONFLICT (name) DO UPDATE
-                      SET yaml_text = excluded.yaml_text,
-                          updated_at = excluded.updated_at,
-                          deleted = 0,
-                          source = excluded.source
-                """), {"name": name, "yaml": yaml_text, "now": now, "src": source})
+        # created_at is deliberately excluded from update_columns — it is set on
+        # first insert and preserved across later saves (legacy behavior).
+        self._upsert(
+            "registered_pipelines",
+            {
+                "name": name,
+                "yaml_text": yaml_text,
+                "created_at": now,
+                "updated_at": now,
+                "deleted": 0,
+                "source": source,
+            },
+            key_columns=("name",),
+            update_columns=("yaml_text", "updated_at", "deleted", "source"),
+        )
 
     def delete_pipeline(self, name: str) -> None:
         """Soft-delete a pipeline from the shared registry."""
@@ -794,20 +778,11 @@ class TramDB:
     def set_setting(self, key: str, value: str) -> None:
         """Upsert a key-value setting."""
         now = datetime.now(UTC).isoformat()
-        dialect = self._engine.dialect.name
-        with self._engine.begin() as conn:
-            if dialect == "mysql":
-                conn.execute(text("""
-                    INSERT INTO settings (key, value, updated_at)
-                    VALUES (:k, :v, :now)
-                    ON DUPLICATE KEY UPDATE value = :v, updated_at = :now
-                """), {"k": key, "v": value, "now": now})
-            else:  # sqlite + postgresql both support this syntax
-                conn.execute(text("""
-                    INSERT INTO settings (key, value, updated_at)
-                    VALUES (:k, :v, :now)
-                    ON CONFLICT (key) DO UPDATE SET value = :v, updated_at = :now
-                """), {"k": key, "v": value, "now": now})
+        self._upsert(
+            "settings",
+            {"key": key, "value": value, "updated_at": now},
+            key_columns=("key",),
+        )
 
     def delete_setting(self, key: str) -> None:
         """Remove a setting, reverting to env-var / default."""
@@ -826,59 +801,19 @@ class TramDB:
         started_at: datetime | None = None,
     ) -> None:
         now = (started_at or datetime.now(UTC)).isoformat()
-        payload = {
-            "placement_group_id": placement_group_id,
-            "pipeline_name": pipeline_name,
-            "slots_json": json.dumps(slots),
-            "target_count": target_count,
-            "started_at": now,
-            "status": status,
-            "stopped_at": None,
-        }
-        dialect = self._engine.dialect.name
-        with self._engine.begin() as conn:
-            if dialect == "postgresql":
-                conn.execute(text("""
-                    INSERT INTO broadcast_placements
-                      (placement_group_id, pipeline_name, slots_json, target_count, started_at, status, stopped_at)
-                    VALUES
-                      (:placement_group_id, :pipeline_name, :slots_json, :target_count, :started_at, :status, :stopped_at)
-                    ON CONFLICT (placement_group_id) DO UPDATE SET
-                      pipeline_name = EXCLUDED.pipeline_name,
-                      slots_json = EXCLUDED.slots_json,
-                      target_count = EXCLUDED.target_count,
-                      started_at = EXCLUDED.started_at,
-                      status = EXCLUDED.status,
-                      stopped_at = EXCLUDED.stopped_at
-                """), payload)
-            elif dialect == "mysql":
-                conn.execute(text("""
-                    INSERT INTO broadcast_placements
-                      (placement_group_id, pipeline_name, slots_json, target_count, started_at, status, stopped_at)
-                    VALUES
-                      (:placement_group_id, :pipeline_name, :slots_json, :target_count, :started_at, :status, :stopped_at)
-                    ON DUPLICATE KEY UPDATE
-                      pipeline_name = VALUES(pipeline_name),
-                      slots_json = VALUES(slots_json),
-                      target_count = VALUES(target_count),
-                      started_at = VALUES(started_at),
-                      status = VALUES(status),
-                      stopped_at = VALUES(stopped_at)
-                """), payload)
-            else:
-                conn.execute(text("""
-                    INSERT INTO broadcast_placements
-                      (placement_group_id, pipeline_name, slots_json, target_count, started_at, status, stopped_at)
-                    VALUES
-                      (:placement_group_id, :pipeline_name, :slots_json, :target_count, :started_at, :status, :stopped_at)
-                    ON CONFLICT (placement_group_id) DO UPDATE SET
-                      pipeline_name = excluded.pipeline_name,
-                      slots_json = excluded.slots_json,
-                      target_count = excluded.target_count,
-                      started_at = excluded.started_at,
-                      status = excluded.status,
-                      stopped_at = excluded.stopped_at
-                """), payload)
+        self._upsert(
+            "broadcast_placements",
+            {
+                "placement_group_id": placement_group_id,
+                "pipeline_name": pipeline_name,
+                "slots_json": json.dumps(slots),
+                "target_count": target_count,
+                "started_at": now,
+                "status": status,
+                "stopped_at": None,
+            },
+            key_columns=("placement_group_id",),
+        )
 
     def get_active_broadcast_placements(self) -> list[dict]:
         with self._engine.connect() as conn:
@@ -1016,6 +951,167 @@ class TramDB:
                   AND {_slot_matches_clause(dialect, expected_run_id is not None)}
             """), params)
             return result.rowcount
+
+    # ── Queued manual runs (v1.4.0 / E.2, GH #21) ──────────────────────────
+
+    @staticmethod
+    def _parse_utc_ts(raw: str | None) -> datetime | None:
+        """Parse an ISO-8601 timestamp, coercing naive values to UTC.
+
+        Mirrors the reconciler's ``_slot_dispatch_time`` handling
+        (reconciler.py): ``datetime.fromisoformat``, tzinfo-coerced to UTC.
+        """
+        if raw is None:
+            return None
+        parsed = datetime.fromisoformat(raw)
+        return parsed if parsed.tzinfo is not None else parsed.replace(tzinfo=UTC)
+
+    def _queued_run_row(self, row) -> dict:
+        """Shape a queued_runs row as a dict with UTC-aware datetimes."""
+        return {
+            "run_id": row["run_id"],
+            "pipeline_name": row["pipeline_name"],
+            "yaml_snapshot": row["yaml_snapshot"],
+            "status": row["status"],
+            "requested_at": self._parse_utc_ts(row["requested_at"]),
+            "expires_at": self._parse_utc_ts(row["expires_at"]),
+            "dispatched_at": self._parse_utc_ts(row["dispatched_at"]),
+        }
+
+    def save_queued_run(
+        self,
+        run_id: str,
+        pipeline_name: str,
+        yaml_snapshot: str,
+        requested_at: datetime,
+        expires_at: datetime,
+    ) -> None:
+        """Persist a queued manual run (enqueue path; uses ``_upsert``).
+
+        ``run_id`` is the primary key — a re-save of the same run_id refreshes
+        the whole row (pipeline, snapshot, timestamps), matching the broadcast
+        placement upsert semantics.
+        """
+        self._upsert(
+            "queued_runs",
+            {
+                "run_id": run_id,
+                "pipeline_name": pipeline_name,
+                "yaml_snapshot": yaml_snapshot,
+                "status": "queued",
+                "requested_at": requested_at.isoformat(),
+                "expires_at": expires_at.isoformat(),
+                "dispatched_at": None,
+            },
+            key_columns=("run_id",),
+        )
+
+    def get_active_queued_runs(self) -> list[dict]:
+        """Return all rows with status='queued', ordered by requested_at (drain order)."""
+        with self._engine.connect() as conn:
+            rows = conn.execute(text("""
+                SELECT run_id, pipeline_name, yaml_snapshot, status,
+                       requested_at, expires_at, dispatched_at
+                FROM queued_runs
+                WHERE status = 'queued'
+                ORDER BY requested_at
+            """)).mappings().fetchall()
+        return [self._queued_run_row(r) for r in rows]
+
+    def get_queued_run_view(self) -> list[dict]:
+        """Return non-terminal queued/dispatching rows, ordered by requested_at (API merge)."""
+        with self._engine.connect() as conn:
+            rows = conn.execute(text("""
+                SELECT run_id, pipeline_name, yaml_snapshot, status,
+                       requested_at, expires_at, dispatched_at
+                FROM queued_runs
+                WHERE status IN ('queued', 'dispatching')
+                ORDER BY requested_at
+            """)).mappings().fetchall()
+        return [self._queued_run_row(r) for r in rows]
+
+    def get_active_queued_run_for_pipeline(self, pipeline_name: str) -> dict | None:
+        """Return the active (non-terminal) queued run for a pipeline, or None."""
+        with self._engine.connect() as conn:
+            row = conn.execute(text("""
+                SELECT run_id, pipeline_name, yaml_snapshot, status,
+                       requested_at, expires_at, dispatched_at
+                FROM queued_runs
+                WHERE pipeline_name = :pipeline_name
+                  AND status IN ('queued', 'dispatching')
+                ORDER BY requested_at
+                LIMIT 1
+            """), {"pipeline_name": pipeline_name}).mappings().fetchone()
+        return self._queued_run_row(row) if row is not None else None
+
+    def claim_queued_run_row(self, run_id: str) -> int:
+        """queued → dispatching. Conditional UPDATE; rowcount 1 is the single-claim fence."""
+        with self._engine.begin() as conn:
+            result = conn.execute(text("""
+                UPDATE queued_runs SET status = 'dispatching'
+                WHERE run_id = :run_id AND status = 'queued'
+            """), {"run_id": run_id})
+        return result.rowcount
+
+    def mark_queued_run_dispatched(self, run_id: str, dispatched_at: datetime) -> int:
+        """dispatching → dispatched (worker accepted the run). Records dispatched_at."""
+        with self._engine.begin() as conn:
+            result = conn.execute(text("""
+                UPDATE queued_runs
+                SET status = 'dispatched', dispatched_at = :dispatched_at
+                WHERE run_id = :run_id AND status = 'dispatching'
+            """), {"run_id": run_id, "dispatched_at": dispatched_at.isoformat()})
+        return result.rowcount
+
+    def revert_queued_run_row(self, run_id: str) -> int:
+        """dispatching → queued (dispatch failed / capacity vanished mid-pass)."""
+        with self._engine.begin() as conn:
+            result = conn.execute(text("""
+                UPDATE queued_runs SET status = 'queued'
+                WHERE run_id = :run_id AND status = 'dispatching'
+            """), {"run_id": run_id})
+        return result.rowcount
+
+    def expire_queued_run_row(self, run_id: str) -> int:
+        """queued → expired (TTL elapsed without capacity)."""
+        with self._engine.begin() as conn:
+            result = conn.execute(text("""
+                UPDATE queued_runs SET status = 'expired'
+                WHERE run_id = :run_id AND status = 'queued'
+            """), {"run_id": run_id})
+        return result.rowcount
+
+    def refresh_queued_run_yaml(self, pipeline_name: str, yaml_text: str) -> int:
+        """Refresh yaml_snapshot for a pipeline's queued rows (config currency).
+
+        Only status='queued' rows are refreshed — a 'dispatching' row has
+        already handed its snapshot to the worker.
+        """
+        with self._engine.begin() as conn:
+            result = conn.execute(text("""
+                UPDATE queued_runs SET yaml_snapshot = :yaml_text
+                WHERE pipeline_name = :pipeline_name AND status = 'queued'
+            """), {"pipeline_name": pipeline_name, "yaml_text": yaml_text})
+        return result.rowcount
+
+    def delete_queued_runs(self, pipeline_name: str) -> int:
+        """Purge a pipeline's non-terminal queued rows (delete/stop); keep audit rows."""
+        with self._engine.begin() as conn:
+            result = conn.execute(text("""
+                DELETE FROM queued_runs
+                WHERE pipeline_name = :pipeline_name
+                  AND status IN ('queued', 'dispatching')
+            """), {"pipeline_name": pipeline_name})
+        return result.rowcount
+
+    def reset_dispatching_queued_runs(self) -> int:
+        """dispatching → queued for every row (boot recovery; nothing in flight)."""
+        with self._engine.begin() as conn:
+            result = conn.execute(text("""
+                UPDATE queued_runs SET status = 'queued'
+                WHERE status = 'dispatching'
+            """))
+        return result.rowcount
 
     # ── Lifecycle ──────────────────────────────────────────────────────────
 
