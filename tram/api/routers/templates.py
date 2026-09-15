@@ -64,7 +64,7 @@ def _load_templates(pipeline_dir: str) -> list[dict]:
                 "source_type": source_type,
                 "sink_types": sink_types,
                 "schedule_type": schedule_type,
-                "yaml": text,
+                "yaml": text.rstrip("\n"),
             })
         except Exception as exc:
             logger.warning("Could not parse template %s: %s", path.name, exc)

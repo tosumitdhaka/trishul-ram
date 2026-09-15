@@ -70,7 +70,7 @@
 <div class="modal fade" id="pl-templates-modal" tabindex="-1">
   <div class="modal-dialog modal-xl modal-dialog-centered pipeline-template-dialog">
     <div class="modal-content detail-modal-shell">
-      <div class="modal-header detail-modal-header flex-wrap gap-2">
+      <div class="modal-header detail-modal-header flex-wrap gap-2" id="pl-tpl-list-header">
         <h6 class="modal-title detail-modal-title d-flex align-items-center gap-2 me-auto">
           <i class="bi bi-collection"></i><span>Pipeline Templates</span>
         </h6>
@@ -92,6 +92,19 @@
         <span class="text-secondary pipeline-template-count" id="pl-tpl-count"></span>
         <button type="button" class="btn-close btn-close-theme" data-bs-dismiss="modal"></button>
       </div>
+      <!-- YAML preview header (replaces filters header in preview mode) -->
+      <div class="modal-header detail-modal-header d-none" id="pl-tpl-yaml-header">
+        <button type="button" class="btn-flat detail-action-inline me-2" id="pl-tpl-back-btn" title="Back to template list">
+          <i class="bi bi-arrow-left"></i><span>Back</span>
+        </button>
+        <h6 class="modal-title detail-modal-title" id="pl-tpl-yaml-name"></h6>
+        <div class="d-flex align-items-center gap-1 ms-auto me-2">
+          <button class="btn btn-sm btn-primary detail-action-btn" id="pl-tpl-deploy-view-btn" type="button" title="Deploy this template">
+            <i class="bi bi-rocket-takeoff"></i><span>Deploy</span>
+          </button>
+        </div>
+        <button type="button" class="btn-close btn-close-theme" data-bs-dismiss="modal"></button>
+      </div>
       <div class="modal-body p-0">
         <!-- List view -->
         <div id="pl-tpl-list-view">
@@ -106,14 +119,7 @@
         </div>
         <!-- YAML preview (inline, replaces list view) -->
         <div id="pl-tpl-yaml-view" class="d-none">
-          <div class="d-flex align-items-center gap-2 p-3 detail-modal-header">
-            <button class="btn-flat" id="pl-tpl-back-btn" title="Back to list" type="button"><i class="bi bi-arrow-left"></i></button>
-            <span class="fw-semibold ms-1 template-card-title" id="pl-tpl-yaml-name"></span>
-            <button class="btn btn-sm btn-primary ms-auto" id="pl-tpl-deploy-view-btn" type="button">
-              <i class="bi bi-rocket-takeoff me-1"></i>Deploy
-            </button>
-          </div>
-          <pre id="pl-tpl-yaml-body" class="detail-yaml-view pipeline-template-preview"></pre>
+          <pre id="pl-tpl-yaml-body" class="detail-yaml-view"></pre>
         </div>
       </div>
     </div>
