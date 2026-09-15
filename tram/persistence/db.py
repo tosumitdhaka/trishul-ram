@@ -210,6 +210,50 @@ def _create_tables(engine: Engine) -> None:
             pass  # paused column may not exist on fresh DBs
 
 
+def _slot_matches_clause(dialect: str, check_run_id: bool) -> str:
+    """SQL fragment verifying a placement slot's identity inside slots_json.
+
+    Used as the WHERE guard of ``update_slot_run_id``'s conditional UPDATE so
+    the write is keyed on the full slot identity (placement_group_id +
+    worker_index, plus the expected current_run_id when provided) and fails
+    (0 rows) when a concurrent writer already replaced the slot's run id
+    (review A13 / plan D.1). slots_json is a JSON array of slot objects on all
+    backends (column declared as TEXT), so each dialect needs its own
+    extraction path.
+
+    Note: only the SQLite branch is exercised by the test suite; the
+    PostgreSQL and MySQL fragments follow each dialect's JSON semantics but
+    are unverified against live servers (MySQL's number-vs-string binding
+    in JSON_CONTAINS is the fragile spot).
+    """
+    if dialect == "postgresql":
+        run_id_clause = "AND slot->>'current_run_id' = :expected_run_id" if check_run_id else ""
+        return (
+            "EXISTS ("
+            "  SELECT 1 FROM jsonb_array_elements(broadcast_placements.slots_json::jsonb) AS slot"
+            "  WHERE slot->>'worker_index' = CAST(:worker_index AS text)"
+            f" {run_id_clause}"
+            ")"
+        )
+    if dialect == "mysql":
+        run_id_clause = ", 'current_run_id', :expected_run_id" if check_run_id else ""
+        return (
+            "JSON_CONTAINS("
+            "  CAST(broadcast_placements.slots_json AS JSON),"
+            f"  JSON_OBJECT('worker_index', :worker_index{run_id_clause})"
+            ")"
+        )
+    # sqlite (the json1 extension ships with CPython's bundled sqlite3)
+    run_id_clause = "AND json_extract(value, '$.current_run_id') = :expected_run_id" if check_run_id else ""
+    return (
+        "EXISTS ("
+        "  SELECT 1 FROM json_each(broadcast_placements.slots_json)"
+        "  WHERE json_extract(value, '$.worker_index') = :worker_index"
+        f" {run_id_clause}"
+        ")"
+    )
+
+
 # ── TramDB ────────────────────────────────────────────────────────────────────
 
 
@@ -888,24 +932,66 @@ class TramDB:
         current_run_id: str,
         status: str = "running",
         restart_count: int | None = None,
-    ) -> None:
-        placements = self.get_active_broadcast_placements()
-        placement = next((p for p in placements if p["placement_group_id"] == placement_group_id), None)
-        if placement is None:
-            return
-        for slot in placement["slots"]:
-            if int(slot.get("worker_index", -1)) != worker_index:
-                continue
+        expected_run_id: str | None = None,
+    ) -> int:
+        """Set a placement slot's current run id via a per-slot, CAS-scoped update.
+
+        Replaces the previous read-modify-write (which scanned every active
+        placement, mutated a slot copy, and wrote the whole placement back —
+        clobbering concurrent slot updates, review A13). The write now targets
+        the single placement row and is keyed on the full slot identity
+        (placement_group_id + worker_index) plus, when *expected_run_id* is
+        given, an optimistic-concurrency check that the slot still holds that
+        run id — so a stale writer (a late stats payload or an old dispatch
+        path racing a redispatch) detects the lost race instead of overwriting
+        the newer run id (plan D.1).
+
+        Returns the number of rows updated: 1 on success, 0 when the placement
+        or slot is absent, the placement is stopped, or the slot no longer
+        matches *expected_run_id* (lost race).
+        """
+        dialect = self._engine.dialect.name
+        with self._engine.begin() as conn:
+            row = conn.execute(text("""
+                SELECT placement_group_id, pipeline_name, slots_json, target_count,
+                       started_at, status, stopped_at
+                FROM broadcast_placements
+                WHERE placement_group_id = :placement_group_id
+                  AND stopped_at IS NULL
+                  AND status != 'stopped'
+            """), {"placement_group_id": placement_group_id}).mappings().fetchone()
+            if row is None:
+                return 0
+            slots = json.loads(row["slots_json"])
+            slot = next(
+                (s for s in slots if int(s.get("worker_index", -1)) == worker_index),
+                None,
+            )
+            if slot is None:
+                return 0
+            if expected_run_id is not None and str(slot.get("current_run_id", "")) != expected_run_id:
+                return 0
             slot["current_run_id"] = current_run_id
             slot["status"] = status
             if restart_count is not None:
                 slot["restart_count"] = restart_count
-            break
-        self.update_broadcast_placement_status(
-            placement_group_id,
-            placement["status"],
-            slots=placement["slots"],
-        )
+
+            params: dict[str, object] = {
+                "placement_group_id": placement_group_id,
+                "worker_index": worker_index,
+                "slots_json": json.dumps(slots),
+            }
+            if expected_run_id is not None:
+                params["expected_run_id"] = expected_run_id
+            result = conn.execute(text(f"""
+                UPDATE broadcast_placements
+                SET slots_json = :slots_json
+                WHERE placement_group_id = :placement_group_id
+                  AND stopped_at IS NULL
+                  AND status != 'stopped'
+                  AND {_slot_matches_clause(dialect, expected_run_id is not None)}
+            """), params)
+            return result.rowcount
 
     # ── Lifecycle ──────────────────────────────────────────────────────────
 

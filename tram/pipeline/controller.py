@@ -18,6 +18,7 @@ State machine
 from __future__ import annotations
 
 import logging
+import re
 import threading
 import uuid
 from concurrent.futures import ThreadPoolExecutor
@@ -669,9 +670,33 @@ class PipelineController:
                 MGR_DISPATCH_TOTAL.labels(pipeline=pipeline_name, result="accepted").inc()
             return
         # ── Local execution path ───────────────────────────────────────────
+        # Standalone live stats: register a _LocalRun exactly like
+        # _stream_worker does, so local batch runs appear in the live stats
+        # (via _emit_local_stats_once) and are removed atomically on exit.
+        stats = None
+        local_run = None
+        if self._stats_store is not None:
+            from tram.agent.metrics import PipelineStats
+            stats = PipelineStats(
+                run_id=run_id,
+                pipeline_name=pipeline_name,
+                schedule_type=schedule_type,
+            )
+            local_run = _LocalRun(
+                run_id=run_id,
+                pipeline_name=pipeline_name,
+                schedule_type=schedule_type,
+                started_at=datetime.now(UTC),
+                stats=stats,
+            )
+            with self._local_stats_lock:
+                self._local_active_stats[run_id] = local_run
 
         try:
-            result = self.executor.batch_run(config, run_id=run_id)
+            if stats is not None:
+                result = self.executor.batch_run(config, run_id=run_id, stats=stats)
+            else:
+                result = self.executor.batch_run(config, run_id=run_id)
             self._finalize_batch_result(pipeline_name, result)
         except Exception as exc:
             logger.error("Batch run exception",
@@ -679,9 +704,18 @@ class PipelineController:
             with self._lock:
                 # Guard against a concurrent delete() deregistering the pipeline
                 # mid-run — set_status on a missing pipeline would raise inside
-                    # the except handler (B10).
-                    if self.manager.exists(pipeline_name):
-                        self.manager.set_status(pipeline_name, "error")
+                # the except handler (B10).
+                if self.manager.exists(pipeline_name):
+                    self.manager.set_status(pipeline_name, "error")
+        finally:
+            if local_run is not None:
+                # Remove from dict and StatsStore atomically under the same lock so
+                # _emit_local_stats_once() cannot resurrect the entry after removal
+                # (same pattern as _stream_worker).
+                with self._local_stats_lock:
+                    self._local_active_stats.pop(run_id, None)
+                    if self._stats_store is not None:
+                        self._stats_store.remove(run_id)
 
     def _on_run_complete(self, pipeline_name: str, result) -> None:
         """Post-run state transition — called after every batch run completes.
@@ -1225,6 +1259,18 @@ class PipelineController:
         else:
             self._stream_run_ids.pop(pipeline_name, None)
 
+    @staticmethod
+    def _run_restart_count(run_id: str) -> int:
+        """Extract the ``-rN`` restart suffix of a stream run id (0 if absent).
+
+        Placement stream run ids are ``<run_id_prefix>`` for the first dispatch
+        and ``<run_id_prefix>-r<restart_count>`` after each redispatch, so the
+        suffix orders run instances: stats from an older restart can never be
+        adopted over a newer recorded run id (review A13 / plan D.1).
+        """
+        match = re.search(r"-r(\d+)$", run_id)
+        return int(match.group(1)) if match else 0
+
     def _update_broadcast_placement_status(self, placement_group_id: str, status: str) -> None:
         with self._lock:
             placement = self._broadcast_placements.get(placement_group_id)
@@ -1417,25 +1463,65 @@ class PipelineController:
                 return
 
             changed = False
+            lost_race = False
             for slot in placement["slots"]:
                 run_id_prefix = str(slot.get("run_id_prefix", ""))
                 if payload.run_id != slot.get("current_run_id") and not payload.run_id.startswith(run_id_prefix):
                     continue
                 if slot.get("current_run_id") != payload.run_id:
-                    slot["current_run_id"] = payload.run_id
+                    recorded_run_id = str(slot.get("current_run_id", ""))
+                    # Never regress to a superseded run instance: stats from a
+                    # stale stream (still running after a redispatch replaced
+                    # the run) must not overwrite the newer recorded run id
+                    # (review A13 / plan D.1).
+                    if self._run_restart_count(payload.run_id) < self._run_restart_count(recorded_run_id):
+                        logger.warning(
+                            "Ignoring stats from superseded stream run",
+                            extra={
+                                "pipeline": payload.pipeline_name,
+                                "placement_group_id": placement_group_id,
+                                "worker_index": int(slot["worker_index"]),
+                                "run_id": payload.run_id,
+                                "recorded_run_id": recorded_run_id,
+                            },
+                        )
+                        continue
                     if self._db is not None:
-                        self._db.update_slot_run_id(
+                        updated = self._db.update_slot_run_id(
                             placement_group_id,
                             int(slot["worker_index"]),
                             payload.run_id,
                             status="running",
                             restart_count=int(slot.get("restart_count", 0)),
+                            expected_run_id=recorded_run_id,
                         )
+                        if updated == 0:
+                            # Lost race: a redispatch (or another manager)
+                            # advanced the slot's run id between our read and
+                            # the DB write. Keep the newer DB state; neither
+                            # mutate nor persist the stale in-memory slot.
+                            lost_race = True
+                            logger.warning(
+                                "Lost slot run-id update race",
+                                extra={
+                                    "pipeline": payload.pipeline_name,
+                                    "placement_group_id": placement_group_id,
+                                    "worker_index": int(slot["worker_index"]),
+                                    "run_id": payload.run_id,
+                                    "recorded_run_id": recorded_run_id,
+                                },
+                            )
+                            continue
+                    slot["current_run_id"] = payload.run_id
                 if slot.get("status") != "running":
                     slot["status"] = "running"
                     changed = True
 
             self._sync_stream_run_ids_from_slots(payload.pipeline_name, placement["slots"])
+            if lost_race:
+                # The DB has advanced beyond this in-memory copy; persisting
+                # anything computed from it would clobber the newer run id.
+                return
             if all(slot.get("status") == "running" for slot in placement["slots"]):
                 self._update_broadcast_placement_status(placement_group_id, "running")
             elif changed and self._db is not None:
