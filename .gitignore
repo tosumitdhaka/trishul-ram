@@ -60,3 +60,4 @@ tmp/
 Docker
 .docker/
 CLAUDE.md
+.cortexkit/
