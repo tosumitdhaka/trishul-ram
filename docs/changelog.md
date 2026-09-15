@@ -23,6 +23,7 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - Manager boot now materializes a placement from a pre-upgrade live count=1 run (adoption, zero interruption); the reconciler's unplaced-stream pass converts running placement-less streams without a restart, self-heals bookkeeping, and stops duplicate stray runs (earliest kept)
 - Config-drift detection: a live stream running stale YAML is stopped and redispatched with the current config, with new `tram_mgr_reconcile_action_total` labels `config_drift_redispatch`, `stream_recover`, and `adopt_materialize`; older agents that do not report `config_sha256` fail open (never acted on)
 - The worker agent now exposes `config_sha256` of the dispatched YAML in `/agent/status`, passed through the worker pool's `live_streams()`/`find_pipeline_runs()` (absent means unknown)
+- ASN.1 `serializer_in.split_path` + `split_path_context` (GH #19): split the record list inside a single decoded BER document at a dot-notation path (e.g. `measurement.measValues`), with sibling context deep-copied into every record (record fields take precedence; scalars wrapped as `value`). `split_path` requires `record_chunk_size > 0`, is mutually exclusive with `split_records`, and `split_path_context` requires `split_path`; a missing or non-list path fails loud naming the path. The chunked fan-out bounds memory only on sequential runs — `thread_workers > 1` applies the split eagerly
 
 ### Changed
 
@@ -39,6 +40,7 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - `json_flatten`/`explode` transforms are now linear on large nested lists (a 10k-element explode drops from minutes to milliseconds, GH #18) and exploded records no longer alias the source record
 - Manager worker probes (health polling, status, and live-streams fan-out) now run in parallel per worker — a slow or unreachable worker no longer serializes the whole fan-out or stalls the API endpoints that trigger it
 - `/api/cluster/nodes` now reflects the debounced (2-consecutive-failure) worker health state instead of a one-shot probe result, and `/api/pipelines/{name}/placement` renders a synthetic single-slot view for streams without a placement row when live stats exist (previously a 404 in manager mode); standalone streams with no stats entry return a clean 404, which the UI renders as a hidden placement card
+- Templates page (UI): the YAML preview now uses the shared detail-viewer header (Back / template name / Deploy / close) and the shared capped YAML view; the row View/Deploy pair rides the shared button contract; the filter bar is hidden while previewing (filter state preserved); template YAML is served without trailing newlines
 
 ### Fixed
 
@@ -57,6 +59,7 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - A running stream with no placement record and no live run is now recovered (redispatched, or marked stopped when the pipeline is disabled) instead of being stuck "running" forever (GH #17)
 - Broadcast (count=N/all/list) streams can no longer be downgraded to 1-slot placements by the unplaced-stream reconciliation pass (guard mirrors the boot path), and reconciler-side materialization now activates the pipeline's Kubernetes Service and deactivates stale placement rows, matching the boot path
 - Worker bookkeeping (`_assignments` / `_pipeline_workers` entries) is now reaped when a worker is marked down, instead of leaking until the manager restarts
+- Templates page (UI): removed the dead bespoke templates-preview CSS and the off-contract preview header (GH #20)
 
 ---
 
