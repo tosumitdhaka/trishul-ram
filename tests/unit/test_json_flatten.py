@@ -2,6 +2,9 @@
 
 from __future__ import annotations
 
+import copy
+import time
+
 import pytest
 
 from tram.core.exceptions import TransformError
@@ -50,6 +53,22 @@ class TestJsonFlattenTransform:
         })
 
         assert transform.apply([{"recordType": "lte"}]) == []
+
+    def test_empty_explode_list_keeps_row_when_keep_empty_rows_true(self):
+        transform = JsonFlattenTransform({
+            "explode_paths": ["items"],
+            "keep_empty_rows": True,
+        })
+
+        assert transform.apply([{"id": 1, "items": []}]) == [{"id": 1, "items": []}]
+
+    def test_empty_explode_list_drops_row_when_keep_empty_rows_false(self):
+        transform = JsonFlattenTransform({
+            "explode_paths": ["items"],
+            "keep_empty_rows": False,
+        })
+
+        assert transform.apply([{"id": 1, "items": []}]) == []
 
     def test_non_list_explode_path_raises(self):
         transform = JsonFlattenTransform({"explode_paths": ["serviceData"]})
@@ -161,3 +180,43 @@ class TestJsonFlattenTransform:
         result = transform.apply([{"outer": {"inner": {"leaf": 1}}}])
 
         assert result == [{"outer.inner": {"leaf": 1}}]
+
+    def test_explode_large_list_is_linear(self, monkeypatch):
+        """Regression for GH #18: exploding a large list must not deep-copy the
+        whole record once per element (O(n²)). Pin the algorithm via the number
+        of deepcopies that carry the large list, plus a generous wall-clock
+        bound to stay CI-safe."""
+        size = 10_000
+        big_list = [{"v": i, "meta": f"e{i}"} for i in range(size)]
+        record = {"id": "rec-1", "header": {"src": "x"}, "measurements": big_list}
+
+        calls_with_big_list = {"count": 0}
+        real_deepcopy = copy.deepcopy
+
+        def counting_deepcopy(obj, memo=None):
+            if isinstance(obj, dict) and any(
+                isinstance(v, list) and len(v) >= size for v in obj.values()
+            ):
+                calls_with_big_list["count"] += 1
+            return real_deepcopy(obj, memo)
+
+        monkeypatch.setattr("tram.transforms.json_flatten.deepcopy", counting_deepcopy)
+
+        transform = JsonFlattenTransform({"explode_paths": ["measurements"]})
+        start = time.perf_counter()
+        result = transform.apply([record])
+        elapsed = time.perf_counter() - start
+
+        assert len(result) == size
+        assert result[0] == {"id": "rec-1", "header.src": "x", "v": 0, "meta": "e0"}
+        assert result[-1] == {
+            "id": "rec-1",
+            "header.src": "x",
+            "v": size - 1,
+            "meta": f"e{size - 1}",
+        }
+        # Only apply()'s upfront copy and the single _apply_explodes base copy
+        # may carry the large list. The old per-element deepcopy(row) pattern
+        # produced ~size + 1 such copies (O(n²)).
+        assert calls_with_big_list["count"] == 2
+        assert elapsed < 5.0

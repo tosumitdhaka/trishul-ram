@@ -74,6 +74,30 @@ class TestExplodeTransform:
             {"id": 1, "a": {"items": "y"}},
         ]
 
+    def test_explode_dicts_do_not_alias_source(self):
+        # GH #18 aliasing fix: the merged dict element must be copied, not the
+        # original element inserted by reference.
+        source = {"id": 1, "tags": [{"name": "foo"}, {"name": "bar"}]}
+        t = ExplodeTransform({"field": "tags"})
+        result = t.apply([source])
+
+        result[0]["name"] = "MUTATED"
+
+        assert source["tags"][0]["name"] == "foo"
+        assert result[1]["name"] == "bar"
+
+    def test_explode_nested_list_elements_do_not_alias_source(self):
+        # Non-dict (mutable) elements written back via set_path must be copied
+        # too, so exploded rows do not share state with the source record.
+        source = {"id": 1, "a": {"items": [[1, 2], [3, 4]]}}
+        t = ExplodeTransform({"field": "a.items", "drop_source": False})
+        result = t.apply([source])
+
+        result[0]["a"]["items"].append(999)
+
+        assert source["a"]["items"][0] == [1, 2]
+        assert result[1]["a"]["items"] == [3, 4]
+
 
 # ── DeduplicateTransform ──────────────────────────────────────────────────────
 
