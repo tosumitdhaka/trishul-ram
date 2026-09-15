@@ -990,6 +990,74 @@ class TestStatusQueries:
             "stats": {"records_out": 9},
         }]
 
+    def test_live_streams_passes_config_sha256_through(self):
+        pool = _pool("http://w0:8766")
+
+        with patch("httpx.Client", return_value=_mock_httpx_client({
+            "http://w0:8766/agent/status": {
+                "worker_id": "w0",
+                "active_runs": 1,
+                "running_pipelines": ["pipe-a"],
+                "running": [],
+                "streams": [{
+                    "run_id": "s1",
+                    "pipeline": "pipe-a",
+                    "started_at": "now",
+                    "schedule_type": "stream",
+                    "uptime_seconds": 3.0,
+                    "stats": {"records_out": 9},
+                    "config_sha256": "0123456789abcdef",
+                }],
+            },
+        })):
+            live = pool.live_streams()
+
+        assert live[0]["config_sha256"] == "0123456789abcdef"
+
+    def test_live_streams_omits_config_sha256_for_older_agents(self):
+        """An agent that predates D.2 does not emit the key — it must be absent,
+        never synthesized, so the manager treats it as "unknown" (fail-open)."""
+        pool = _pool("http://w0:8766")
+
+        with patch("httpx.Client", return_value=_mock_httpx_client({
+            "http://w0:8766/agent/status": {
+                "worker_id": "w0",
+                "active_runs": 1,
+                "running_pipelines": ["pipe-a"],
+                "running": [],
+                "streams": [{
+                    "run_id": "s1",
+                    "pipeline": "pipe-a",
+                    "started_at": "now",
+                    "schedule_type": "stream",
+                    "uptime_seconds": 3.0,
+                    "stats": {"records_out": 9},
+                }],
+            },
+        })):
+            live = pool.live_streams()
+
+        assert "config_sha256" not in live[0]
+
+    def test_find_pipeline_runs_passes_config_sha256_through(self):
+        pool = _pool("http://w0:8766")
+
+        with patch("httpx.Client", return_value=_mock_httpx_client({
+            "http://w0:8766/agent/status": {
+                "worker_id": "w0",
+                "running": [],
+                "streams": [{
+                    "run_id": "s1",
+                    "pipeline": "pipe-a",
+                    "started_at": "now",
+                    "config_sha256": "0123456789abcdef",
+                }],
+            },
+        })):
+            matches = pool.find_pipeline_runs("pipe-a", schedule_type="stream")
+
+        assert matches[0]["config_sha256"] == "0123456789abcdef"
+
     def test_is_run_active_checks_assigned_worker(self):
         pool = _pool("http://w0:8766")
         pool._assignments["r1"] = "http://w0:8766"
@@ -1074,3 +1142,181 @@ class TestOnRunComplete:
     def test_noop_for_unknown_run(self):
         pool = _pool("http://w0:8766")
         pool.on_run_complete("never-dispatched")  # must not raise
+
+
+class TestPipelineWorkersPrune:
+    """D8: _pipeline_workers must not grow unboundedly — entries are dropped
+    once no active placement slot (or run assignment) references them."""
+
+    def test_prunes_pipeline_workers_when_last_run_completes(self):
+        pool = _pool("http://w0:8766")
+        pool._assignments["r1"] = "http://w0:8766"
+        pool._run_pipelines["r1"] = "pipe-a"
+        pool._pipeline_workers["pipe-a"] = ["http://w0:8766"]
+
+        pool.on_run_complete("r1")
+
+        assert "pipe-a" not in pool._pipeline_workers
+
+    def test_keeps_pipeline_workers_while_other_runs_active(self):
+        pool = _pool("http://w0:8766", "http://w1:8766")
+        pool._assignments.update({"r1": "http://w0:8766", "r2": "http://w1:8766"})
+        pool._run_pipelines.update({"r1": "pipe-a", "r2": "pipe-a"})
+        pool._pipeline_workers["pipe-a"] = ["http://w0:8766", "http://w1:8766"]
+
+        pool.on_run_complete("r1")
+        assert pool._pipeline_workers["pipe-a"] == ["http://w0:8766", "http://w1:8766"]
+
+        pool.on_run_complete("r2")
+        assert "pipe-a" not in pool._pipeline_workers
+
+    def test_other_pipelines_unaffected(self):
+        pool = _pool("http://w0:8766")
+        pool._assignments.update({"r1": "http://w0:8766", "r2": "http://w0:8766"})
+        pool._run_pipelines.update({"r1": "pipe-a", "r2": "pipe-b"})
+        pool._pipeline_workers["pipe-a"] = ["http://w0:8766"]
+        pool._pipeline_workers["pipe-b"] = ["http://w0:8766"]
+
+        pool.on_run_complete("r1")
+
+        assert "pipe-a" not in pool._pipeline_workers
+        assert pool._pipeline_workers["pipe-b"] == ["http://w0:8766"]
+
+    def test_dispatch_tracks_run_pipeline_then_prunes_on_complete(self):
+        pool = _pool("http://w0:8766")
+        with patch("httpx.Client", return_value=_mock_httpx_client({})):
+            err = pool._dispatch_to_worker(
+                worker_url="http://w0:8766",
+                run_id="r1",
+                pipeline_name="pipe-a",
+                yaml_text="name: pipe-a\n",
+                schedule_type="stream",
+            )
+        assert err is None
+        assert pool._assignments["r1"] == "http://w0:8766"
+        assert pool._run_pipelines["r1"] == "pipe-a"
+        assert pool._pipeline_workers["pipe-a"] == ["http://w0:8766"]
+
+        pool.on_run_complete("r1")
+
+        assert "pipe-a" not in pool._pipeline_workers
+
+    def test_adopted_stream_assignment_prunes_after_complete(self):
+        pool = _pool("http://w0:8766")
+        pool.adopt_stream_assignment("pipe-a", "r1", "http://w0:8766")
+        assert pool._run_pipelines["r1"] == "pipe-a"
+        assert pool.workers_for_pipeline("pipe-a") == ["http://w0:8766"]
+
+        pool.on_run_complete("r1")
+
+        assert "pipe-a" not in pool._pipeline_workers
+
+
+# ── Reap bookkeeping on worker death (D.2 review) ───────────────────────────
+
+
+class TestReapOnWorkerDown:
+    """A worker's _assignments/_run_pipelines bookkeeping is reaped on the
+    healthy→down hysteresis transition, so entries from a dead worker's
+    never-completing runs don't leak and keep _pipeline_workers un-pruned."""
+
+    def _mark_down_via_poll(self, pool, url):
+        """Drive the poll loop past the hysteresis threshold (2 failures) for
+        the target worker only — other workers stay healthy."""
+
+        def _get(request_url, **kwargs):
+            base = request_url.rsplit("/agent/health", 1)[0]
+            if base == url:
+                raise ConnectionError("refused")
+            resp = MagicMock()
+            resp.status_code = 200
+            resp.json.return_value = {
+                "ok": True,
+                "active_runs": 0,
+                "worker_id": base.rsplit(":", 1)[-1],
+            }
+            return resp
+
+        mock_client = MagicMock()
+        mock_client.__enter__ = lambda s: mock_client
+        mock_client.__exit__ = MagicMock(return_value=False)
+        mock_client.get.side_effect = _get
+        with patch("httpx.Client", return_value=mock_client):
+            pool._poll_all()
+            pool._poll_all()
+        assert pool._health[url]["ok"] is False
+
+    def test_reaps_assignments_for_down_worker(self):
+        pool = _pool("http://w0:8766", "http://w1:8766")
+        pool._assignments.update({
+            "r1": "http://w0:8766",
+            "r2": "http://w0:8766",
+            "r3": "http://w1:8766",
+        })
+        pool._run_pipelines.update({"r1": "pipe-a", "r2": "pipe-b", "r3": "pipe-c"})
+        pool._pipeline_workers.update({
+            "pipe-a": ["http://w0:8766"],
+            "pipe-b": ["http://w0:8766"],
+            "pipe-c": ["http://w1:8766"],
+        })
+        pool._health["http://w0:8766"]["active_runs"] = 2
+
+        self._mark_down_via_poll(pool, "http://w0:8766")
+
+        # The down worker's runs are reaped; the healthy worker's are untouched.
+        assert "r1" not in pool._assignments
+        assert "r2" not in pool._assignments
+        assert pool._assignments == {"r3": "http://w1:8766"}
+        assert "r1" not in pool._run_pipelines
+        assert "r2" not in pool._run_pipelines
+        assert pool._run_pipelines == {"r3": "pipe-c"}
+        # Pipelines left without any active run are pruned (D8), like on_run_complete.
+        assert "pipe-a" not in pool._pipeline_workers
+        assert "pipe-b" not in pool._pipeline_workers
+        assert pool._pipeline_workers["pipe-c"] == ["http://w1:8766"]
+        assert pool._health["http://w0:8766"]["active_runs"] == 0
+
+    def test_down_worker_removed_from_shared_pipeline_list(self):
+        pool = _pool("http://w0:8766", "http://w1:8766")
+        pool._assignments.update({"r1": "http://w0:8766", "r2": "http://w1:8766"})
+        pool._run_pipelines.update({"r1": "pipe-a", "r2": "pipe-a"})
+        pool._pipeline_workers["pipe-a"] = ["http://w0:8766", "http://w1:8766"]
+
+        self._mark_down_via_poll(pool, "http://w0:8766")
+
+        # The pipeline still has a live run on w1: only the down worker is
+        # removed from the list, the pipeline entry survives.
+        assert pool._assignments == {"r2": "http://w1:8766"}
+        assert pool._pipeline_workers["pipe-a"] == ["http://w1:8766"]
+
+    def test_no_assignments_no_change(self):
+        pool = _pool("http://w0:8766")
+        self._mark_down_via_poll(pool, "http://w0:8766")
+        assert pool._assignments == {}
+        assert pool._run_pipelines == {}
+        assert pool._pipeline_workers == {}
+
+    def test_recovered_worker_can_be_redispatched(self):
+        """The reap only drops bookkeeping — the worker itself stays a member of
+        the pool and can be dispatched to again once healthy."""
+        pool = _pool("http://w0:8766")
+        pool._assignments["r1"] = "http://w0:8766"
+        pool._run_pipelines["r1"] = "pipe-a"
+        pool._pipeline_workers["pipe-a"] = ["http://w0:8766"]
+
+        self._mark_down_via_poll(pool, "http://w0:8766")
+        assert pool._assignments == {}
+
+        # Healthy again → dispatch registers fresh bookkeeping.
+        pool._health["http://w0:8766"]["ok"] = True
+        mock_client = _mock_httpx_client({})
+        with patch("httpx.Client", return_value=mock_client):
+            pool._dispatch_to_worker(
+                worker_url="http://w0:8766",
+                run_id="r2",
+                pipeline_name="pipe-a",
+                yaml_text="name: pipe-a\n",
+                schedule_type="stream",
+            )
+        assert pool._assignments["r2"] == "http://w0:8766"
+        assert pool.workers_for_pipeline("pipe-a") == ["http://w0:8766"]

@@ -11,6 +11,7 @@ On completion the worker POSTs to the manager's run-complete callback URL.
 
 from __future__ import annotations
 
+import hashlib
 import logging
 import os
 import socket
@@ -59,6 +60,9 @@ class ActiveRun:
     schedule_type: str
     started_at: str
     started_at_dt: datetime | None = None
+    # sha256(req.yaml_text)[:16] captured at dispatch time (D.2 §6.1). Lets the
+    # manager detect stale-config adoption; empty string means "not computed".
+    config_sha256: str = ""
     stats_url: str = ""
     stats: PipelineStats | None = None
     stop_event: threading.Event = field(default_factory=threading.Event)
@@ -246,6 +250,7 @@ def _active_run_status(run: ActiveRun, worker_id: str, now: datetime) -> dict[st
         "schedule_type": run.schedule_type,
         "worker_id": worker_id,
         "uptime_seconds": uptime_seconds,
+        "config_sha256": run.config_sha256,
         "stats": stats,
     }
 
@@ -363,6 +368,10 @@ def create_worker_app(worker_id: str = "", manager_url: str = "", stats_interval
         from tram.pipeline.executor import PipelineExecutor
         from tram.pipeline.loader import load_pipeline_from_yaml
 
+        # D.2 §6.1: fingerprint the dispatched YAML before loading so the
+        # manager can detect stale-config adoption after a restart.
+        config_sha256 = hashlib.sha256(req.yaml_text.encode()).hexdigest()[:16]
+
         try:
             config = load_pipeline_from_yaml(req.yaml_text)
         except Exception as exc:
@@ -378,6 +387,7 @@ def create_worker_app(worker_id: str = "", manager_url: str = "", stats_interval
             pipeline_name=req.pipeline_name,
             schedule_type=req.schedule_type,
             started_at=datetime.now(UTC).isoformat(),
+            config_sha256=config_sha256,
             stats_url=_derive_stats_url(callback_url, state.manager_url),
             stats=PipelineStats(
                 run_id=req.run_id,

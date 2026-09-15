@@ -1,6 +1,7 @@
 """Unit tests for the worker agent server (tram/agent/server.py)."""
 from __future__ import annotations
 
+import hashlib
 import logging
 import threading
 import time
@@ -12,6 +13,7 @@ from fastapi.testclient import TestClient
 from tram.agent.server import (
     ActiveRun,
     WorkerState,
+    _active_run_status,
     _emit_stats_once,
     _post_run_complete,
     _post_stats,
@@ -319,6 +321,61 @@ class TestStatusEndpoint:
         assert data["running_pipelines"] == ["pipe-a"]
         assert data["streams"][0]["run_id"] == "s1"
         assert data["streams"][0]["stats"]["records_out"] == 8
+
+
+class TestConfigSha256:
+    """D.2 §6.1: the dispatched YAML is fingerprinted and exposed in status."""
+
+    def test_active_run_status_includes_config_sha256(self):
+        run = ActiveRun(
+            run_id="s1",
+            pipeline_name="pipe-a",
+            schedule_type="stream",
+            started_at="2026-01-01T00:00:00+00:00",
+            config_sha256="0123456789abcdef",
+        )
+        now = datetime(2026, 1, 1, 0, 0, 5, tzinfo=UTC)
+        status = _active_run_status(run, "w0", now)
+        assert status["config_sha256"] == "0123456789abcdef"
+
+    def test_active_run_status_defaults_to_empty(self):
+        run = ActiveRun(
+            run_id="s1",
+            pipeline_name="pipe-a",
+            schedule_type="stream",
+            started_at="2026-01-01T00:00:00+00:00",
+        )
+        status = _active_run_status(run, "w0", datetime(2026, 1, 1, 0, 0, 5, tzinfo=UTC))
+        assert status["config_sha256"] == ""
+
+    def test_run_endpoint_hashes_dispatched_yaml_and_exposes_it(self):
+        expected = hashlib.sha256(_MINIMAL_YAML.encode()).hexdigest()[:16]
+        stopped = threading.Event()
+
+        def _fake_stream_run(config, stop_event, stats=None):
+            stop_event.wait(timeout=5)
+            stopped.set()
+
+        with patch(
+            "tram.pipeline.executor.PipelineExecutor.stream_run",
+            side_effect=_fake_stream_run,
+        ):
+            client = _make_client(worker_id="w0", manager_url="")
+            resp = client.post("/agent/run", json={
+                "pipeline_name": "test-pipe",
+                "yaml_text": _MINIMAL_YAML,
+                "run_id": "r-hash-1",
+                "schedule_type": "stream",
+            })
+            assert resp.status_code == 202
+
+            status = client.get("/agent/status").json()
+            items = [i for i in status["streams"] if i["run_id"] == "r-hash-1"]
+            assert len(items) == 1
+            assert items[0]["config_sha256"] == expected
+
+            client.post("/agent/stop", json={"pipeline_name": "test-pipe", "run_id": "r-hash-1"})
+            assert stopped.wait(timeout=3)
 
 
 class TestIngressApp:

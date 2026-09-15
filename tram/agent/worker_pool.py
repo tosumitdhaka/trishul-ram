@@ -94,6 +94,9 @@ class WorkerPool:
         }
         # {run_id: worker_url}
         self._assignments: dict[str, str] = {}
+        # {run_id: pipeline_name} — lets on_run_complete prune _pipeline_workers
+        # once a pipeline's last active run completes (D8: bounded map growth).
+        self._run_pipelines: dict[str, str] = {}
         # {pipeline_name: [worker_url, ...]} — most recent dispatch per pipeline
         self._pipeline_workers: dict[str, list[str]] = {}
         # {worker_id: worker_url}
@@ -277,6 +280,14 @@ class WorkerPool:
                     if health["failures"] >= self._health_failures_to_down:
                         health["ok"] = False
                     health["running_pipelines"] = []
+                if prev_ok and not health["ok"]:
+                    # Healthy → down transition (hysteresis threshold crossed):
+                    # the worker's runs will never complete, so their
+                    # _assignments/_run_pipelines entries would otherwise leak
+                    # forever and keep _pipeline_workers un-pruned (D8 bound).
+                    # Reap the bookkeeping only — the placement reconciler owns
+                    # actual run recovery.
+                    self._reap_assignments_for_down_worker(url)
                 consecutive_failures = health["failures"]
                 if worker_id:
                     prev_worker_id = self._url_to_worker_id.get(url)
@@ -503,7 +514,7 @@ class WorkerPool:
                 continue
             worker_id = status.get("worker_id") or self.worker_id_for_url(worker_url)
             for item in status.get("streams", []):
-                live.append({
+                entry = {
                     "worker_url": worker_url,
                     "worker_id": worker_id,
                     "pipeline_name": item.get("pipeline"),
@@ -512,7 +523,12 @@ class WorkerPool:
                     "schedule_type": item.get("schedule_type", "stream"),
                     "uptime_seconds": item.get("uptime_seconds", 0.0),
                     "stats": dict(item.get("stats", {})),
-                })
+                }
+                # D.2 §6.1: older agents omit the key entirely; consumers treat
+                # a missing key as "unknown" and never act on it.
+                if "config_sha256" in item:
+                    entry["config_sha256"] = item["config_sha256"]
+                live.append(entry)
         return live
 
     def is_run_active(self, run_id: str, worker_url: str | None = None) -> bool:
@@ -538,13 +554,17 @@ class WorkerPool:
             for item in status.get(key, []):
                 if item.get("pipeline") != pipeline_name or not item.get("run_id"):
                     continue
-                matches.append({
+                entry = {
                     "worker_url": worker_url,
                     "run_id": str(item["run_id"]),
                     "pipeline_name": str(item.get("pipeline", pipeline_name)),
                     "started_at": item.get("started_at"),
                     "schedule_type": schedule_type,
-                })
+                }
+                # D.2 §6.1: same "missing key ⇒ unknown" contract as live_streams().
+                if "config_sha256" in item:
+                    entry["config_sha256"] = item["config_sha256"]
+                matches.append(entry)
         return matches
 
     def adopt_stream_assignment(self, pipeline_name: str, run_id: str, worker_url: str) -> None:
@@ -559,6 +579,7 @@ class WorkerPool:
         """
         with self._lock:
             self._assignments[run_id] = worker_url
+            self._run_pipelines[run_id] = pipeline_name
             self._pipeline_workers.setdefault(pipeline_name, [])
             if worker_url not in self._pipeline_workers[pipeline_name]:
                 self._pipeline_workers[pipeline_name].append(worker_url)
@@ -604,6 +625,7 @@ class WorkerPool:
 
         with self._lock:
             self._assignments[run_id] = worker_url
+            self._run_pipelines[run_id] = pipeline_name
             self._pipeline_workers.setdefault(pipeline_name, [])
             if worker_url not in self._pipeline_workers[pipeline_name]:
                 self._pipeline_workers[pipeline_name].append(worker_url)
@@ -880,7 +902,52 @@ class WorkerPool:
         """
         with self._lock:
             worker_url = self._assignments.pop(run_id, None)
+            pipeline_name = self._run_pipelines.pop(run_id, None)
             if worker_url and worker_url in self._health:
                 self._health[worker_url]["active_runs"] = max(
                     0, self._health[worker_url]["active_runs"] - 1
                 )
+            if pipeline_name is not None and pipeline_name not in self._run_pipelines.values():
+                # D8: the pipeline's last active run completed, so no placement
+                # slot (or batch run) references it anymore — drop the worker
+                # list to keep _pipeline_workers bounded. Referenced entries
+                # (other active runs for the same pipeline) are left untouched.
+                self._pipeline_workers.pop(pipeline_name, None)
+
+    def _reap_assignments_for_down_worker(self, worker_url: str) -> None:
+        """Drop run bookkeeping for a worker that just transitioned to down.
+
+        A dead worker's runs never complete, so their ``_assignments`` and
+        ``_run_pipelines`` entries would otherwise leak forever and keep
+        ``_pipeline_workers`` un-pruned (D8 bound) — the stale entry prevents
+        on_run_complete-style pruning from ever firing for that run. Reaps the
+        down worker's entries and removes it from shared pipeline worker lists,
+        then prunes pipelines no longer referenced by any active run. Bookkeeping
+        only: no dispatch, stop, or placement writes — the placement reconciler
+        owns actual run recovery. Caller holds the lock.
+        """
+        reaped: list[str] = [
+            run_id
+            for run_id, url in self._assignments.items()
+            if url == worker_url
+        ]
+        for run_id in reaped:
+            self._assignments.pop(run_id, None)
+            pipeline_name = self._run_pipelines.pop(run_id, None)
+            if pipeline_name is None:
+                continue
+            workers = self._pipeline_workers.get(pipeline_name)
+            if workers is not None and worker_url in workers:
+                workers.remove(worker_url)
+            if pipeline_name not in self._run_pipelines.values():
+                # Mirrors on_run_complete's D8 prune: no active run references
+                # the pipeline anymore.
+                self._pipeline_workers.pop(pipeline_name, None)
+        if reaped:
+            health = self._health.get(worker_url)
+            if health is not None:
+                health["active_runs"] = max(0, health["active_runs"] - len(reaped))
+            logger.warning(
+                "Reaped run bookkeeping for down worker",
+                extra={"worker": worker_url, "run_ids": reaped},
+            )
