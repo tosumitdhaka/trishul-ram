@@ -189,7 +189,7 @@ Consumes messages from a Kafka topic. Stream mode.
 | `topic` | required | Topic name or list of topics |
 | `group_id` | pipeline name | Consumer group ID |
 | `auto_offset_reset` | `latest` | `latest` \| `earliest` |
-| `enable_auto_commit` | `true` | Auto-commit offsets |
+| `enable_auto_commit` | `false` | Commit offsets once per poll batch after consumption (at-least-once); `true` opts into at-most-once |
 | `max_poll_records` | `500` | Max records per poll |
 | `session_timeout_ms` | `30000` | Consumer session timeout |
 | `security_protocol` | `PLAINTEXT` | `PLAINTEXT` \| `SASL_PLAINTEXT` \| `SASL_SSL` \| `SSL` |

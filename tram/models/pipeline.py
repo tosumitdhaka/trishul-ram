@@ -90,7 +90,14 @@ class KafkaSourceConfig(BaseModel):
     topic: str | list[str]
     group_id: str | None = None   # None → use pipeline name at runtime
     auto_offset_reset: Literal["latest", "earliest"] = "latest"
-    enable_auto_commit: bool = True
+    # Default False: the connector commits offsets explicitly, once per poll
+    # batch, only after the batch has been handed to / written by the sink —
+    # a crash before that commit re-polls the batch (at-least-once). The old
+    # default (auto-commit on a ~5s timer) committed offsets for messages that
+    # were polled but not yet sink-written, silently losing them on a crash.
+    # Opting back into enable_auto_commit: true restores that at-most-once
+    # behavior.
+    enable_auto_commit: bool = False
     max_poll_records: int = 500
     session_timeout_ms: int = 30000
     security_protocol: str = "PLAINTEXT"

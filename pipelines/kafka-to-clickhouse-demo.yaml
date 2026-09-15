@@ -16,7 +16,7 @@ source:
     - tram.fm.raw
   group_id: tram-clickhouse-consumer
   auto_offset_reset: earliest        # earliest | latest
-  enable_auto_commit: true
+  enable_auto_commit: false          # false = at-least-once (commit after sink); true = at-most-once
   max_poll_records: 500
   session_timeout_ms: 30000
   security_protocol: SASL_SSL        # PLAINTEXT | SSL | SASL_PLAINTEXT | SASL_SSL
