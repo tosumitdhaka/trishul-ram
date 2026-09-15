@@ -23,6 +23,7 @@ def test_mgr_series_importable():
         MGR_RECONCILE_ACTION_TOTAL,
         MGR_REDISPATCH_TOTAL,
         MGR_RUN_COMPLETE_RECEIVED_TOTAL,
+        MGR_STATS_MISSED_TOTAL,
         MGR_WORKER_HEALTHY,
         MGR_WORKER_TOTAL,
     )
@@ -34,6 +35,7 @@ def test_mgr_series_importable():
     assert MGR_WORKER_TOTAL is not None
     assert MGR_RUN_COMPLETE_RECEIVED_TOTAL is not None
     assert MGR_PIPELINE_STATS_RECEIVED_TOTAL is not None
+    assert MGR_STATS_MISSED_TOTAL is not None
 
 
 # ── No-op behaviour when prometheus_client is absent ──────────────────────
@@ -52,4 +54,5 @@ def test_mgr_series_are_noop_when_prometheus_absent():
     registry.MGR_WORKER_TOTAL.set(3)
     registry.MGR_RUN_COMPLETE_RECEIVED_TOTAL.labels(pipeline="p", status="success").inc()
     registry.MGR_PIPELINE_STATS_RECEIVED_TOTAL.inc()
+    registry.MGR_STATS_MISSED_TOTAL.labels(worker_id="w0").inc()
     assert registry._PROMETHEUS_AVAILABLE is False

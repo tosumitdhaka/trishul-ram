@@ -27,6 +27,11 @@ from tram.agent.metrics import PipelineStats
 
 logger = logging.getLogger(__name__)
 
+# Consecutive stats-POST failures per worker_id, surfaced in the WARNING log
+# so an operator can tell a one-off blip from a persistent manager outage.
+_STATS_MISS_LOCK = threading.Lock()
+_CONSECUTIVE_STATS_MISSES: dict[str, int] = {}
+
 
 # ── Request / response models ──────────────────────────────────────────────
 
@@ -155,10 +160,27 @@ def _post_stats(stats_url: str, payload: dict, api_key: str = "") -> None:
             resp = client.post(stats_url, json=payload, headers=headers)
             resp.raise_for_status()
     except Exception as exc:
-        logger.debug(
+        from tram.metrics.registry import MGR_STATS_MISSED_TOTAL
+        worker_id = str(payload.get("worker_id", "") or "")
+        with _STATS_MISS_LOCK:
+            consecutive = _CONSECUTIVE_STATS_MISSES.get(worker_id, 0) + 1
+            _CONSECUTIVE_STATS_MISSES[worker_id] = consecutive
+        MGR_STATS_MISSED_TOTAL.labels(worker_id=worker_id).inc()
+        logger.warning(
             "pipeline-stats callback failed",
-            extra={"stats_url": stats_url, "run_id": payload.get("run_id"), "error": str(exc)},
+            extra={
+                "stats_url": stats_url,
+                "pipeline": payload.get("pipeline_name"),
+                "run_id": payload.get("run_id"),
+                "worker_id": worker_id,
+                "consecutive_misses": consecutive,
+                "error": str(exc),
+            },
         )
+        return
+    worker_id = str(payload.get("worker_id", "") or "")
+    with _STATS_MISS_LOCK:
+        _CONSECUTIVE_STATS_MISSES.pop(worker_id, None)
 
 
 def _derive_stats_url(callback_url: str, manager_url: str) -> str:

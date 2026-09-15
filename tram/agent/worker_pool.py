@@ -20,6 +20,7 @@ from __future__ import annotations
 import logging
 import os
 import threading
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
@@ -202,8 +203,30 @@ class WorkerPool:
         while not self._poll_stop.wait(self._poll_interval):
             self._poll_all()
 
+    def _probe_health(self, url: str) -> dict:
+        """Probe one worker's /agent/health endpoint.
+
+        Runs inside a probe thread during :meth:`_poll_all`. Returns the parsed
+        probe payload and raises on transport/HTTP errors so the caller records
+        the failure under its lock.
+        """
+        with self._agent_client(5) as client:
+            resp = client.get(f"{url}/agent/health")
+            data = resp.json() if resp.status_code == 200 else {}
+            return {
+                "ok": resp.status_code == 200 and bool(data.get("ok")),
+                "active_runs": int(data.get("active_runs", 0)),
+                "running_pipelines": list(data.get("running_pipelines", [])),
+                "worker_id": str(data.get("worker_id", "")).strip(),
+            }
+
     def _poll_all(self, initial_scan: bool = False) -> None:
         """Probe /agent/health on every configured worker.
+
+        Probes run concurrently (one thread per worker), so a slow or
+        unreachable worker no longer stalls the probes of every other worker:
+        with the per-probe 5s timeout the serial loop cost N×5s per poll cycle,
+        which regularly exceeded the poll interval and delayed health updates.
 
         A single failed probe does not mark a worker down: the worker is only
         marked unhealthy after ``health_failures_to_down`` consecutive failed
@@ -215,61 +238,64 @@ class WorkerPool:
         poll interval while it is still reported healthy (startup hysteresis
         window, plan B.6).
         """
-        with self._agent_client(5) as client:
-            for url in self._workers:
-                probe_error: str | None = None
+        probes: dict[str, dict] = {}
+        with ThreadPoolExecutor(max_workers=len(self._workers) or 1) as executor:
+            futures = {executor.submit(self._probe_health, url): url for url in self._workers}
+            for future in as_completed(futures):
+                url = futures[future]
                 try:
-                    resp = client.get(f"{url}/agent/health")
-                    data = resp.json() if resp.status_code == 200 else {}
-                    ok = resp.status_code == 200 and bool(data.get("ok"))
-                    active = int(data.get("active_runs", 0))
-                    pipelines = list(data.get("running_pipelines", []))
-                    worker_id = str(data.get("worker_id", "")).strip()
+                    probes[url] = future.result()
                 except Exception as exc:
-                    ok = False
-                    worker_id = ""
-                    probe_error = str(exc)
+                    probes[url] = {"ok": False, "worker_id": "", "error": str(exc)}
 
-                with self._lock:
-                    health = self._health[url]
-                    prev_ok = health["ok"]
-                    if ok:
-                        health.update({
-                            "ok": True,
-                            "failures": 0,
-                            "active_runs": active,
-                            "running_pipelines": pipelines,
-                        })
+        for url in self._workers:
+            probe = probes[url]
+            probe_error = probe.get("error")
+            ok = bool(probe["ok"])
+            active = int(probe.get("active_runs", 0))
+            pipelines = list(probe.get("running_pipelines", []))
+            worker_id = str(probe.get("worker_id", "")).strip()
+
+            with self._lock:
+                health = self._health[url]
+                prev_ok = health["ok"]
+                if ok:
+                    health.update({
+                        "ok": True,
+                        "failures": 0,
+                        "active_runs": active,
+                        "running_pipelines": pipelines,
+                    })
+                else:
+                    if initial_scan:
+                        # No grace period at boot: an unreachable worker is
+                        # down from the first probe so dispatch decisions
+                        # never rely on it.
+                        health["failures"] = self._health_failures_to_down
                     else:
-                        if initial_scan:
-                            # No grace period at boot: an unreachable worker is
-                            # down from the first probe so dispatch decisions
-                            # never rely on it.
-                            health["failures"] = self._health_failures_to_down
-                        else:
-                            health["failures"] = health.get("failures", 0) + 1
-                        if health["failures"] >= self._health_failures_to_down:
-                            health["ok"] = False
-                        health["running_pipelines"] = []
-                    consecutive_failures = health["failures"]
-                    if worker_id:
-                        prev_worker_id = self._url_to_worker_id.get(url)
-                        if prev_worker_id and prev_worker_id != worker_id:
-                            self._worker_ids.pop(prev_worker_id, None)
-                        self._worker_ids[worker_id] = url
-                        self._url_to_worker_id[url] = worker_id
+                        health["failures"] = health.get("failures", 0) + 1
+                    if health["failures"] >= self._health_failures_to_down:
+                        health["ok"] = False
+                    health["running_pipelines"] = []
+                consecutive_failures = health["failures"]
+                if worker_id:
+                    prev_worker_id = self._url_to_worker_id.get(url)
+                    if prev_worker_id and prev_worker_id != worker_id:
+                        self._worker_ids.pop(prev_worker_id, None)
+                    self._worker_ids[worker_id] = url
+                    self._url_to_worker_id[url] = worker_id
 
-                if ok and not prev_ok:
-                    logger.info("Worker came back up", extra={"worker": url})
-                elif not ok and prev_ok:
-                    logger.warning(
-                        "Worker health probe failed",
-                        extra={
-                            "worker": url,
-                            "error": probe_error,
-                            "consecutive_failures": consecutive_failures,
-                        },
-                    )
+            if ok and not prev_ok:
+                logger.info("Worker came back up", extra={"worker": url})
+            elif not ok and prev_ok:
+                logger.warning(
+                    "Worker health probe failed",
+                    extra={
+                        "worker": url,
+                        "error": probe_error,
+                        "consecutive_failures": consecutive_failures,
+                    },
+                )
 
         with self._lock:
             healthy = sum(1 for h in self._health.values() if h["ok"])
@@ -387,8 +413,10 @@ class WorkerPool:
             worker_ids = dict(self._url_to_worker_id)
 
         rows: list[dict] = []
+        probe_urls = [url for url, h in health.items() if h["ok"]]
+        live_statuses = self._worker_statuses(probe_urls) if probe_urls else {}
         for url, h in health.items():
-            live_status = self.worker_status(url) if h["ok"] else None
+            live_status = live_statuses.get(url)
             running_items = []
             stream_items = []
             worker_id = worker_ids.get(url)
@@ -447,13 +475,30 @@ class WorkerPool:
             "streams": list(data.get("streams", [])),
         }
 
+    def _worker_statuses(self, worker_urls: list[str]) -> dict[str, dict | None]:
+        """Probe /agent/status on several workers concurrently.
+
+        Returns ``{worker_url: status-dict-or-None}`` with the same semantics
+        as :meth:`worker_status` (None on probe failure). Used by
+        :meth:`status` and :meth:`live_streams` so a single slow worker no
+        longer serializes the whole fan-out (previously N workers × 5s timeout
+        in the worst case, inside async API handlers).
+        """
+        results: dict[str, dict | None] = {}
+        with ThreadPoolExecutor(max_workers=len(worker_urls) or 1) as executor:
+            futures = {executor.submit(self.worker_status, url): url for url in worker_urls}
+            for future in as_completed(futures):
+                results[futures[future]] = future.result()
+        return results
+
     def live_streams(self) -> list[dict]:
         with self._lock:
             worker_urls = list(self._workers)
 
         live: list[dict] = []
+        statuses = self._worker_statuses(worker_urls)
         for worker_url in worker_urls:
-            status = self.worker_status(worker_url)
+            status = statuses.get(worker_url)
             if status is None:
                 continue
             worker_id = status.get("worker_id") or self.worker_id_for_url(worker_url)

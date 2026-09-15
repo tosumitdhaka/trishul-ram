@@ -1,6 +1,7 @@
 """Unit tests for WorkerPool (tram/agent/worker_pool.py)."""
 from __future__ import annotations
 
+import threading
 from unittest.mock import MagicMock, patch
 
 from tram.agent.worker_pool import (
@@ -15,6 +16,44 @@ from tram.agent.worker_pool import (
 
 def _pool(*urls, manager_url="http://manager"):
     return WorkerPool(workers=list(urls), manager_url=manager_url, poll_interval=60)
+
+
+def _gated_fanout_client(urls: list[str], gate: threading.Event):
+    """Return (mock_client, both_entered) for a parallel-fan-out assertion.
+
+    Every probe blocks on ``gate`` until every worker has entered the probe
+    call, then returns a healthy payload. If the fan-out is serial, the second
+    probe can never enter while the first is blocked, so ``both_entered``
+    times out.
+    """
+    started: dict[str, int] = {"n": 0}
+    started_lock = threading.Lock()
+    both_entered = threading.Event()
+
+    def _get(url, **kwargs):
+        with started_lock:
+            started["n"] += 1
+            if started["n"] >= len(urls):
+                both_entered.set()
+        assert gate.wait(5), "gate was not released"
+        resp = MagicMock()
+        resp.status_code = 200
+        resp.raise_for_status = MagicMock()
+        resp.json.return_value = {
+            "ok": True,
+            "active_runs": 0,
+            "worker_id": url.rsplit("/", 1)[-1],
+            "running": [],
+            "streams": [],
+            "running_pipelines": [],
+        }
+        return resp
+
+    mock_client = MagicMock()
+    mock_client.__enter__ = lambda s: mock_client
+    mock_client.__exit__ = MagicMock(return_value=False)
+    mock_client.get.side_effect = _get
+    return mock_client, both_entered
 
 
 def _mock_httpx_client(responses: dict):
@@ -231,6 +270,52 @@ class TestHealthPolling:
         pool = _pool("http://w0:8766")
         pool._health["http://w0:8766"]["ok"] = False
         assert pool.least_loaded() is None
+
+
+# ── D.6: per-worker probes run concurrently ────────────────────────────────
+
+
+class TestParallelFanout:
+    """Plan D.6 — per-worker probes must run concurrently.
+
+    Each test gates every worker probe on an Event and asserts that all probes
+    entered the call while the first was still blocked. A serial loop can never
+    satisfy that: the next probe only starts after the previous one returns.
+    """
+
+    def _run_gated(self, pool, target):
+        gate = threading.Event()
+        mock_client, both_entered = _gated_fanout_client(pool._workers, gate)
+        with patch("httpx.Client", return_value=mock_client):
+            worker = threading.Thread(target=target)
+            worker.start()
+            try:
+                assert both_entered.wait(2), (
+                    "probes were serialized: a later probe did not start "
+                    "while the first was still blocked"
+                )
+            finally:
+                gate.set()
+                worker.join(5)
+        assert not worker.is_alive()
+
+    def test_poll_all_probes_workers_in_parallel(self):
+        pool = _pool("http://w0:8766", "http://w1:8766")
+        self._run_gated(pool, pool._poll_all)
+        assert pool._health["http://w0:8766"]["ok"] is True
+        assert pool._health["http://w1:8766"]["ok"] is True
+
+    def test_status_probes_workers_in_parallel(self):
+        pool = _pool("http://w0:8766", "http://w1:8766")
+        result: dict[str, object] = {}
+        self._run_gated(pool, lambda: result.setdefault("rows", pool.status()))
+        assert len(result["rows"]) == 2
+
+    def test_live_streams_probes_workers_in_parallel(self):
+        pool = _pool("http://w0:8766", "http://w1:8766")
+        result: dict[str, object] = {}
+        self._run_gated(pool, lambda: result.setdefault("live", pool.live_streams()))
+        assert result["live"] == []
 
 
 # ── B.6: boot scan skips the health debounce ───────────────────────────────

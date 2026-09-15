@@ -2,6 +2,8 @@
 from __future__ import annotations
 
 import sys
+import threading
+import time
 from datetime import UTC, datetime
 from unittest.mock import MagicMock, patch
 
@@ -9,6 +11,7 @@ from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
 from tram.agent.stats_store import StatsStore
+from tram.agent.worker_pool import WorkerPool
 from tram.api.routers.health import router as health_router
 from tram.api.routers.internal import PipelineStatsPayload
 from tram.api.routers.metrics_router import router as metrics_router
@@ -344,6 +347,67 @@ class TestClusterStreams:
         assert data["streams"][0]["pipeline_name"] == "pipe-live"
         assert data["streams"][0]["active_slots"] == 1
         assert data["streams"][0]["records_out_per_sec"] == 2.0
+
+
+class TestClusterStreamsNonBlocking:
+    """Plan D.6 — the live_streams() fan-out must run off the event loop.
+
+    A worker whose /agent/status probe is gated (blocked indefinitely) must
+    not stall a concurrent fast request: the route offloads the blocking
+    fan-out with run_in_threadpool, so the event loop stays responsive.
+    """
+
+    def test_gated_slow_worker_does_not_block_concurrent_fast_request(self):
+        gate = threading.Event()
+        slow_probe_entered = threading.Event()
+
+        def _get(url, **kwargs):
+            if url == "http://slow:8766/agent/status":
+                slow_probe_entered.set()
+                assert gate.wait(5), "gate was not released"
+            resp = MagicMock()
+            resp.status_code = 200
+            resp.raise_for_status = MagicMock()
+            resp.json.return_value = {
+                "worker_id": "w0",
+                "active_runs": 0,
+                "running_pipelines": [],
+                "running": [],
+                "streams": [],
+            }
+            return resp
+
+        mock_client = MagicMock()
+        mock_client.__enter__ = lambda s: mock_client
+        mock_client.__exit__ = MagicMock(return_value=False)
+        mock_client.get.side_effect = _get
+
+        pool = WorkerPool(workers=["http://slow:8766", "http://fast:8766"], poll_interval=60)
+        config = MagicMock()
+        config.tram_mode = "manager"
+        app = _make_health_app(worker_pool=pool, config=config)
+        client = TestClient(app)
+
+        with patch("tram.agent.worker_pool.httpx.Client", return_value=mock_client):
+            slow_result: dict[str, object] = {}
+            slow_thread = threading.Thread(
+                target=lambda: slow_result.setdefault(
+                    "resp", client.get("/api/cluster/streams")
+                ),
+            )
+            slow_thread.start()
+            try:
+                assert slow_probe_entered.wait(2), "slow worker probe never entered flight"
+                started = time.monotonic()
+                fast = client.get("/api/health")
+                elapsed = time.monotonic() - started
+            finally:
+                gate.set()
+                slow_thread.join(5)
+
+        assert fast.status_code == 200
+        assert elapsed < 1.0, "fast request was stalled by the slow worker probe"
+        assert slow_result["resp"].status_code == 200
 
 
 # ── Runs router ────────────────────────────────────────────────────────────

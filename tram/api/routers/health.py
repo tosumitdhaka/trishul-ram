@@ -7,6 +7,7 @@ import sys
 from datetime import UTC, datetime
 
 from fastapi import APIRouter, Request
+from fastapi.concurrency import run_in_threadpool
 
 from tram import __version__
 from tram.api.config_schema import SCHEMA_FIELDS
@@ -207,7 +208,9 @@ async def cluster_nodes(request: Request) -> dict:
     if worker_pool is None:
         return {"mode": mode, "workers": []}
 
-    workers = worker_pool.status()
+    # worker_pool.status() fans out blocking /agent/status probes — offload it
+    # so one slow worker cannot stall the event loop (plan D.6).
+    workers = await run_in_threadpool(worker_pool.status)
     current_assignments = _current_worker_assignments(controller)
     for worker in workers:
         worker["assigned_pipelines"] = current_assignments.get(worker.get("url"), [])
@@ -238,6 +241,8 @@ async def cluster_streams(request: Request) -> dict:
         "streams": build_cluster_streams(
             placements,
             stats_store,
-            worker_pool.live_streams() if worker_pool is not None else None,
+            # Blocking per-worker /agent/status fan-out — off the event loop
+            # (plan D.6).
+            await run_in_threadpool(worker_pool.live_streams) if worker_pool is not None else None,
         ),
     }

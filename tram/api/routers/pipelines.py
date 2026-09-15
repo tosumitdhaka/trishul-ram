@@ -5,6 +5,7 @@ from __future__ import annotations
 import logging
 
 from fastapi import APIRouter, HTTPException, Query, Request, Response, status
+from fastapi.concurrency import run_in_threadpool
 from pydantic import BaseModel
 
 from tram.api.routers._stream_views import build_placement_view
@@ -124,9 +125,12 @@ async def get_pipeline_placement(name: str, request: Request) -> dict:
     if placement is not None:
         live_items = None
         if worker_pool is not None:
+            # Blocking per-worker /agent/status fan-out — off the event loop
+            # (plan D.6).
+            all_live = await run_in_threadpool(worker_pool.live_streams)
             live_items = [
                 item
-                for item in worker_pool.live_streams()
+                for item in all_live
                 if item.get("pipeline_name") == name
             ]
         return build_placement_view(placement, stats_store, live_items)

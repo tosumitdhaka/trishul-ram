@@ -81,6 +81,11 @@ try:
         "tram_mgr_pipeline_stats_received_total",
         "Pipeline-stats callbacks received at manager",
     )
+    MGR_STATS_MISSED_TOTAL = Counter(
+        "tram_mgr_stats_missed_total",
+        "Worker stats-heartbeat POSTs that failed to reach the manager",
+        ["worker_id"],
+    )
 
     RECORDS_IN = Counter(
         "tram_records_in_total",
@@ -134,6 +139,7 @@ except ImportError:
     MGR_WORKER_TOTAL = _NoOpGauge()  # type: ignore[assignment]
     MGR_RUN_COMPLETE_RECEIVED_TOTAL = _NoOpCounter()  # type: ignore[assignment]
     MGR_PIPELINE_STATS_RECEIVED_TOTAL = _NoOpCounter()  # type: ignore[assignment]
+    MGR_STATS_MISSED_TOTAL = _NoOpCounter()  # type: ignore[assignment]
     RECORDS_IN = _NoOpCounter()  # type: ignore[assignment]
     RECORDS_OUT = _NoOpCounter()  # type: ignore[assignment]
     RECORDS_SKIP = _NoOpCounter()  # type: ignore[assignment]

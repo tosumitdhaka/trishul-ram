@@ -1,6 +1,7 @@
 """Unit tests for the worker agent server (tram/agent/server.py)."""
 from __future__ import annotations
 
+import logging
 import threading
 import time
 from datetime import UTC, datetime
@@ -177,6 +178,79 @@ class TestPostRunComplete:
 
             # Must not raise
             _post_run_complete("http://bad-host/run-complete", "r", "p", "w0", "error", 0, 0, 0, 0, "boom")
+
+
+# ── _post_stats unit tests (plan D.6) ──────────────────────────────────────
+
+
+class TestPostStats:
+    """Heartbeat failures must be visible: WARNING log with pipeline context,
+    a MGR_STATS_MISSED_TOTAL increment, and consecutive-miss tracking."""
+
+    def _failing_client(self):
+        mock_client = MagicMock()
+        mock_client.__enter__ = lambda s: mock_client
+        mock_client.__exit__ = MagicMock(return_value=False)
+        mock_client.post.side_effect = ConnectionError("connection refused")
+        return mock_client
+
+    def test_failure_logs_warning_with_pipeline_context_and_increments_metric(self, caplog):
+        payload = {
+            "worker_id": "w0",
+            "pipeline_name": "pipe-a",
+            "run_id": "run-1",
+        }
+        with patch("httpx.Client", return_value=self._failing_client()), \
+             patch("tram.metrics.registry.MGR_STATS_MISSED_TOTAL") as mock_metric:
+            with caplog.at_level(logging.WARNING, logger="tram.agent.server"):
+                _post_stats(
+                    "http://manager/api/internal/pipeline-stats",
+                    payload,
+                    api_key="secret",
+                )
+
+        warnings = [r for r in caplog.records if r.levelno == logging.WARNING]
+        assert len(warnings) == 1
+        rec = warnings[0]
+        assert rec.message == "pipeline-stats callback failed"
+        assert rec.pipeline == "pipe-a"
+        assert rec.run_id == "run-1"
+        assert rec.worker_id == "w0"
+        assert rec.consecutive_misses == 1
+        assert "connection refused" in rec.error
+        # no DEBUG-level swallow anymore
+        assert all(r.levelno >= logging.WARNING for r in caplog.records)
+        mock_metric.labels.assert_called_once_with(worker_id="w0")
+        mock_metric.labels.return_value.inc.assert_called_once_with()
+
+    def test_failure_tracks_consecutive_misses_and_resets_on_success(self, caplog):
+        failures = {"n": 0}
+
+        def _post(url, **kwargs):
+            failures["n"] += 1
+            if failures["n"] <= 2 or failures["n"] == 4:
+                raise ConnectionError("refused")
+            resp = MagicMock()
+            resp.raise_for_status = MagicMock()
+            return resp
+
+        mock_client = MagicMock()
+        mock_client.__enter__ = lambda s: mock_client
+        mock_client.__exit__ = MagicMock(return_value=False)
+        mock_client.post.side_effect = _post
+
+        payload = {"worker_id": "w9", "pipeline_name": "pipe-a", "run_id": "run-1"}
+        with patch("httpx.Client", return_value=mock_client), \
+             patch("tram.metrics.registry.MGR_STATS_MISSED_TOTAL") as mock_metric:
+            with caplog.at_level(logging.WARNING, logger="tram.agent.server"):
+                _post_stats("http://mgr/pipeline-stats", payload)
+                _post_stats("http://mgr/pipeline-stats", payload)
+                _post_stats("http://mgr/pipeline-stats", payload)   # success → reset
+                _post_stats("http://mgr/pipeline-stats", payload)   # failure again
+
+        warnings = [r for r in caplog.records if r.levelno == logging.WARNING]
+        assert [r.consecutive_misses for r in warnings] == [1, 2, 1]
+        assert mock_metric.labels.return_value.inc.call_count == 3
 
 
 # ── FastAPI endpoint tests ─────────────────────────────────────────────────
