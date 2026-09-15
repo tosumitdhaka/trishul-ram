@@ -26,6 +26,7 @@ import uuid
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
+from functools import partial
 from typing import TYPE_CHECKING, Literal
 
 from tram.core.context import RunResult, RunStatus
@@ -60,6 +61,19 @@ class _ActiveBatchRun:
     started_at: datetime
 
 
+@dataclass
+class TriggerResult:
+    """Result of a manual-run trigger (E.2 / GH #21).
+
+    ``disposition == "dispatched"`` is today's async submit; ``"queued"``
+    means the run was durably enqueued because no healthy worker existed
+    (or an existing queued run was returned — dedupe).
+    """
+
+    run_id: str
+    disposition: Literal["dispatched", "queued"]
+
+
 class PipelineController:
     """Single authority for all pipeline lifecycle operations."""
 
@@ -74,6 +88,8 @@ class PipelineController:
         stats_store=None,
         kubernetes_service_manager=None,
         single_stream_placements: bool | None = None,
+        queue_manual_runs: bool | None = None,
+        queue_ttl_seconds: int = 900,
     ) -> None:
         self._db = db
         self._node_id = node_id
@@ -98,6 +114,29 @@ class PipelineController:
                 )
         else:
             self._single_stream_placements = single_stream_placements
+
+        # E.2 feature flag (GH #21): queue manual runs dispatched when no
+        # healthy worker exists. Default ON ("1"); "0" keeps the legacy
+        # fail-fast no-capacity path verbatim. Read once at construction,
+        # mirroring the TRAM_STREAM_SINGLE_PLACEMENT pattern above.
+        if queue_manual_runs is None:
+            raw_flag = os.environ.get("TRAM_QUEUE_MANUAL_RUNS", "1")
+            self._queue_manual_runs = raw_flag != "0"
+            if raw_flag not in ("0", "1"):
+                # Fail open: anything other than an explicit "0" enables the
+                # queue. A typo'd value is loud here instead of silently
+                # flipping a deployment's manual-run semantics.
+                logger.warning(
+                    "Unrecognized TRAM_QUEUE_MANUAL_RUNS value — "
+                    'treating as enabled ("1")',
+                    extra={"value": raw_flag},
+                )
+        else:
+            self._queue_manual_runs = queue_manual_runs
+        # How long a queued run waits for capacity before it expires to a
+        # FAILED run-history row (absolute expires_at keeps the clock running
+        # across manager restarts — Decision 4).
+        self._queue_ttl_seconds = max(1, queue_ttl_seconds)
 
         self.manager = PipelineManager(db=db)
         self.executor = PipelineExecutor(file_tracker=file_tracker)
@@ -206,6 +245,13 @@ class PipelineController:
         from tram.pipeline.loader import load_pipeline_from_yaml
 
         with self._lock:
+            # E.2 (§7): a crash mid-claim leaves queued rows stuck at
+            # 'dispatching' — nothing is in flight at boot, so reset them to
+            # 'queued' before anything can observe the queue. The BatchReconciler
+            # (started by the app) drains within one interval; past-TTL rows
+            # expire on its first pass (Decision 4).
+            if self._db is not None:
+                self._db.reset_dispatching_queued_runs()
             stopped_names = set(self._db.get_stopped_pipeline_names())
             placements_by_pipeline = {
                 placement["pipeline_name"]: placement
@@ -348,6 +394,10 @@ class PipelineController:
 
             if self._db is not None:
                 self._db.save_pipeline(name, yaml_text, source="api")
+                # E.2 (Decision 5): a queued manual run must dispatch the
+                # updated config — refresh its yaml_snapshot so the auditable
+                # snapshot column stays the dispatch source.
+                self._db.refresh_queued_run_yaml(name, yaml_text)
 
             if was_active and config.enabled and self._may_schedule(name):
                 self._do_schedule(name)
@@ -364,6 +414,15 @@ class PipelineController:
             # Drop any in-flight batch lease so the reconciler can never mark a
             # deleted pipeline's run lost / adopt it back.
             self._active_batch_runs.pop(name, None)
+            # E.2 (§7): a deleted pipeline's queued request must never dispatch.
+            # Boundary: the purge cannot cancel a dispatch the worker already
+            # accepted — dispatch is at-least-once, the same as the normal
+            # _run_batch path, so the worker keeps running it and its callback
+            # still lands at run-complete (the lease is dropped below, so the
+            # reconciler never adopts/marks it lost on the deleted pipeline).
+            if self._db is not None:
+                self._db.delete_queued_runs(name)
+                self._set_queued_depth(name)
             self.manager.deregister(name)
             if self._db is not None:
                 self._db.delete_pipeline(name)
@@ -398,6 +457,13 @@ class PipelineController:
             self._stop_execution(name)
             if self._db is not None:
                 self._db.stop_pipeline(name)
+                # E.2 (§7): stopping a pipeline while its manual run waits
+                # rescinds it — purge the queued row (no FAILED row: the run
+                # never started). Boundary: the purge cannot cancel a dispatch
+                # the worker already accepted — dispatch is at-least-once, the
+                # same as the normal _run_batch path.
+                self._db.delete_queued_runs(name)
+                self._set_queued_depth(name)
             self.manager.set_status(name, "stopped")
             logger.info("Stopped pipeline", extra={"pipeline": name})
 
@@ -433,8 +499,15 @@ class PipelineController:
 
             logger.info("Restarted pipeline", extra={"pipeline": name})
 
-    def trigger_run(self, name: str) -> str:
-        """Immediate one-shot run. Returns run_id. Works even when pipeline is stopped."""
+    def trigger_run(self, name: str) -> TriggerResult:
+        """Immediate one-shot run. Works even when pipeline is stopped.
+
+        Manager+worker mode with the queue flag on and zero healthy workers
+        (debounced health state): durably enqueue instead of submitting a run
+        that would immediately fail. The run_id is stable across the queue's
+        lifetime — the 202 response, the queued_runs row, and (on dispatch)
+        the run_history row all share it.
+        """
         # Check-and-submit is atomic under the lock so a trigger cannot observe a
         # half-updated or half-deleted pipeline (B2/B10). The authoritative
         # no-double-run guard is the atomic claim in _run_batch(); the status
@@ -446,8 +519,274 @@ class PipelineController:
             if state.status == "running":
                 raise ValueError(f"Pipeline '{name}' is already running")
             run_id = str(uuid.uuid4())
-            self._thread_pool.submit(self._run_batch, name, run_id)
-            return run_id
+            # E.2 (§4.1): synchronous enqueue decision. healthy_workers() is a
+            # pure dict read over the debounced state — cheap under the lock,
+            # no probe I/O. Both enqueue sites funnel through _enqueue_manual_run,
+            # which dedupes.
+            if self._worker_pool is not None and self._queue_manual_runs and self._db is not None:
+                # Dedupe against the DB (the source of truth) before any submit:
+                # in the [capacity-returned → drain-commit] window a queued row
+                # is still active while healthy_workers() is non-empty. Without
+                # this check the submit below is discarded by _run_batch's
+                # claim-phase skip (status in ("running", "queued")), returning
+                # a run_id that 404s forever. It also covers a manager restart
+                # (queued row survived, in-memory status may be stale).
+                existing = self._db.get_active_queued_run_for_pipeline(name)
+                if existing is not None:
+                    if self.manager.exists(name):
+                        self.manager.set_status(name, "queued")
+                    return TriggerResult(existing["run_id"], "queued")
+                if not self._worker_pool.healthy_workers():
+                    if self._enqueue_manual_run(name, run_id, state.yaml_text):
+                        return TriggerResult(run_id, "queued")
+                    # Dedupe hit (Decision 3): a concurrent trigger won the
+                    # enqueue — return its run_id so the 202 response keeps the
+                    # run_id the user already saw.
+                    existing = self._db.get_active_queued_run_for_pipeline(name)
+                    return TriggerResult(existing["run_id"], "queued")
+            self._thread_pool.submit(partial(self._run_batch, name, run_id, origin="manual"))
+            return TriggerResult(run_id, "dispatched")
+
+    # ── Queued manual runs (E.2 / GH #21) ────────────────────────────────
+
+    def _set_queued_depth(self, pipeline_name: str) -> None:
+        """Set MGR_QUEUE_DEPTH to the pipeline's remaining non-terminal count."""
+        if self._db is None:
+            return
+        from tram.metrics.registry import MGR_QUEUE_DEPTH
+        count = sum(
+            1
+            for row in self._db.get_queued_run_view()
+            if row["pipeline_name"] == pipeline_name
+        )
+        MGR_QUEUE_DEPTH.labels(pipeline=pipeline_name).set(count)
+
+    def _enqueue_manual_run(self, pipeline_name: str, run_id: str, yaml_text: str) -> bool:
+        """Persist a queued manual run. Takes the RLock (reentrant for the
+        _run_batch fallback site). Returns False when an active queued run
+        already exists for the pipeline (dedupe). Sets pipeline status
+        'queued', bumps MGR_DISPATCH_TOTAL{no_workers} (metric continuity with
+        the legacy fail-fast) and MGR_QUEUE_ENQUEUED_TOTAL.
+        """
+        with self._lock:
+            if self._db is None:
+                return False
+            if self._db.get_active_queued_run_for_pipeline(pipeline_name) is not None:
+                # Dedupe hit (Decision 3): an active queued run already exists —
+                # keep the pipeline status in sync so the badge shows 'queued'
+                # even after a manager restart (in-memory status is fresh while
+                # the queued row survived).
+                if self.manager.exists(pipeline_name):
+                    self.manager.set_status(pipeline_name, "queued")
+                return False
+            now = datetime.now(UTC)
+            expires_at = now + timedelta(seconds=self._queue_ttl_seconds)
+            self._db.save_queued_run(run_id, pipeline_name, yaml_text, now, expires_at)
+            if self.manager.exists(pipeline_name):
+                self.manager.set_status(pipeline_name, "queued")
+            from tram.metrics.registry import (
+                MGR_DISPATCH_TOTAL,
+                MGR_QUEUE_ENQUEUED_TOTAL,
+            )
+            MGR_DISPATCH_TOTAL.labels(pipeline=pipeline_name, result="no_workers").inc()
+            MGR_QUEUE_ENQUEUED_TOTAL.labels(pipeline=pipeline_name).inc()
+            self._set_queued_depth(pipeline_name)
+            logger.info(
+                "Queued manual run — no healthy workers",
+                extra={
+                    "pipeline": pipeline_name,
+                    "run_id": run_id,
+                    "expires_at": expires_at.isoformat(),
+                },
+            )
+            return True
+
+    def drainable_queued_runs(self) -> list[dict]:
+        """[{"run_id", "pipeline_name", "yaml_snapshot", "schedule_type",
+        "callback_url", "requested_at", "expires_at"}] — status='queued', ordered
+        by requested_at, EXCLUDING pipelines that are deleted, have an active
+        batch lease, or have status 'running'. Lock-held read; returns copies."""
+        with self._lock:
+            if self._db is None or self._worker_pool is None:
+                return []
+            callback_url = (
+                f"{self._manager_url}/api/internal/run-complete"
+                if self._manager_url else ""
+            )
+            rows: list[dict] = []
+            for run in self._db.get_active_queued_runs():
+                name = run["pipeline_name"]
+                if not self.manager.exists(name):
+                    continue
+                if name in self._active_batch_runs:
+                    continue
+                state = self.manager.get(name)
+                if state.status == "running":
+                    continue
+                rows.append({
+                    "run_id": run["run_id"],
+                    "pipeline_name": name,
+                    "yaml_snapshot": run["yaml_snapshot"],
+                    "schedule_type": state.config.schedule.type,
+                    "callback_url": callback_url,
+                    "requested_at": run["requested_at"],
+                    "expires_at": run["expires_at"],
+                })
+            return rows
+
+    def claim_queued_run(self, run_id: str) -> dict | None:
+        """queued → dispatching. RLock + conditional UPDATE (rowcount fence):
+        re-reads the row, verifies pipeline exists / not running / no lease,
+        runs db.claim_queued_run_row(run_id), returns the claim payload or None
+        when the row was claimed, purged, or expired elsewhere."""
+        with self._lock:
+            if self._db is None or self._worker_pool is None:
+                return None
+            row = next(
+                (r for r in self._db.get_active_queued_runs() if r["run_id"] == run_id),
+                None,
+            )
+            if row is None:
+                return None
+            name = row["pipeline_name"]
+            if not self.manager.exists(name):
+                return None
+            if name in self._active_batch_runs:
+                return None
+            state = self.manager.get(name)
+            if state.status == "running":
+                return None
+            if self._db.claim_queued_run_row(run_id) != 1:
+                return None
+            callback_url = (
+                f"{self._manager_url}/api/internal/run-complete"
+                if self._manager_url else ""
+            )
+            return {
+                "run_id": run_id,
+                "pipeline_name": name,
+                "yaml_snapshot": row["yaml_snapshot"],
+                "schedule_type": state.config.schedule.type,
+                "callback_url": callback_url,
+                "requested_at": row["requested_at"],
+                "expires_at": row["expires_at"],
+            }
+
+    def commit_queued_dispatch(self, run_id: str, worker_url: str) -> bool:
+        """dispatching → dispatched + CAS: re-check pipeline exists under the
+        lock, record the _active_batch_runs lease (schedule_type from current
+        config), set pipeline status 'running', db.mark_queued_run_dispatched,
+        MGR_DISPATCH_TOTAL{accepted} + MGR_QUEUE_DISPATCHED_TOTAL + wait histogram."""
+        with self._lock:
+            if self._db is None or self._worker_pool is None:
+                return False
+            row = next(
+                (r for r in self._db.get_queued_run_view()
+                 if r["run_id"] == run_id and r["status"] == "dispatching"),
+                None,
+            )
+            if row is None:
+                return False
+            name = row["pipeline_name"]
+            if not self.manager.exists(name):
+                return False  # deleted mid-dispatch — the stale result is discarded
+            state = self.manager.get(name)
+            self._active_batch_runs[name] = _ActiveBatchRun(
+                run_id=run_id,
+                pipeline_name=name,
+                worker_url=worker_url,
+                schedule_type=state.config.schedule.type,
+                started_at=datetime.now(UTC),
+            )
+            self.manager.set_status(name, "running")
+            self._db.mark_queued_run_dispatched(run_id, datetime.now(UTC))
+            wait = (datetime.now(UTC) - row["requested_at"]).total_seconds()
+            from tram.metrics.registry import (
+                MGR_DISPATCH_TOTAL,
+                MGR_QUEUE_DISPATCHED_TOTAL,
+                MGR_QUEUE_DRAIN_RESULT_TOTAL,
+                MGR_QUEUE_WAIT_SECONDS,
+            )
+            MGR_DISPATCH_TOTAL.labels(pipeline=name, result="accepted").inc()
+            MGR_QUEUE_DISPATCHED_TOTAL.labels(pipeline=name).inc()
+            MGR_QUEUE_DRAIN_RESULT_TOTAL.labels(pipeline=name, result="dispatched").inc()
+            MGR_QUEUE_WAIT_SECONDS.labels(pipeline=name).observe(wait)
+            self._set_queued_depth(name)
+            logger.info(
+                "Queued manual run dispatched",
+                extra={"pipeline": name, "run_id": run_id, "worker": worker_url,
+                       "wait_seconds": round(wait, 1)},
+            )
+            return True
+
+    def revert_queued_claim(self, run_id: str, result: str = "failed") -> bool:
+        """dispatching → queued (drain dispatch_failed / no_capacity race).
+        Log WARNING + MGR_QUEUE_DRAIN_RESULT{failed|no_capacity}. No run-history
+        churn: nothing was recorded at claim time."""
+        with self._lock:
+            if self._db is None:
+                return False
+            row = next(
+                (r for r in self._db.get_queued_run_view() if r["run_id"] == run_id),
+                None,
+            )
+            if row is None:
+                return False
+            if self._db.revert_queued_run_row(run_id) != 1:
+                return False
+            from tram.metrics.registry import MGR_QUEUE_DRAIN_RESULT_TOTAL
+            MGR_QUEUE_DRAIN_RESULT_TOTAL.labels(
+                pipeline=row["pipeline_name"], result=result
+            ).inc()
+            logger.warning(
+                "Queued manual run dispatch attempt failed — reverted to queued",
+                extra={"pipeline": row["pipeline_name"], "run_id": run_id, "result": result},
+            )
+            return True
+
+    def expire_queued_run(self, run_id: str) -> bool:
+        """queued → expired: db.expire_queued_run_row, then a FAILED RunResult
+        (started_at=requested_at, finished_at=now, error="no worker capacity
+        within {N} minutes — queued run expired") through _finalize_batch_result,
+        so the run-history row, pipeline 'error' status, and K8s service
+        deactivation all reuse the proven finalize path. Pipeline deleted
+        meanwhile → drop the row only."""
+        with self._lock:
+            if self._db is None:
+                return False
+            row = next(
+                (r for r in self._db.get_active_queued_runs() if r["run_id"] == run_id),
+                None,
+            )
+            if row is None:
+                return False
+            if self._db.expire_queued_run_row(run_id) != 1:
+                return False
+            name = row["pipeline_name"]
+            from tram.metrics.registry import MGR_QUEUE_EXPIRED_TOTAL
+            MGR_QUEUE_EXPIRED_TOTAL.labels(pipeline=name).inc()
+            self._set_queued_depth(name)
+            logger.warning(
+                "Queued manual run expired at TTL",
+                extra={"pipeline": name, "run_id": run_id},
+            )
+            if not self.manager.exists(name):
+                return True  # deleted meanwhile — drop the row only
+            minutes = max(1, self._queue_ttl_seconds // 60)
+            result = RunResult(
+                run_id=run_id,
+                pipeline_name=name,
+                status=RunStatus.FAILED,
+                started_at=row["requested_at"],
+                finished_at=datetime.now(UTC),
+                records_in=0,
+                records_out=0,
+                records_skipped=0,
+                error=f"no worker capacity within {minutes} minutes — queued run expired",
+                node_id=self._node_id,
+            )
+            self._finalize_batch_result(name, result)
+            return True
 
     def rollback(self, name: str, version: int):
         """Restore a previous pipeline version and restart if appropriate."""
@@ -594,8 +933,15 @@ class PipelineController:
             logger.info("Scheduled cron pipeline",
                         extra={"pipeline": config.name, "cron": config.schedule.cron})
 
-    def _run_batch(self, pipeline_name: str, run_id: str | None = None) -> None:
+    def _run_batch(self, pipeline_name: str, run_id: str | None = None, *, origin: str = "scheduled") -> None:
         """APScheduler/thread-pool callback — one batch execution.
+
+        ``origin`` is keyword-only so manual triggers are distinguishable from
+        APScheduler fires (a manual trigger of an interval pipeline has
+        schedule_type == "interval" and is otherwise indistinguishable). The
+        default ("scheduled") keeps the APScheduler call sites untouched; the
+        E.2 no-capacity fallback enqueue site keys off ``origin == "manual"``
+        only.
 
         Claim phase: the existence check + running-guard + status flip + config
         snapshot happen atomically under the lifecycle RLock, so trigger_run()
@@ -615,8 +961,12 @@ class PipelineController:
                 return
 
             state = self.manager.get(pipeline_name)
-            if state.status == "running":
-                logger.warning("Batch job: previous run still active, skipping",
+            if state.status in ("running", "queued"):
+                # E.2 (§5): a 'queued' claim is skipped exactly like 'running' —
+                # one active run (queued or dispatched) per pipeline. A scheduled
+                # fire during a queued window is bounded loss (at most one tick);
+                # the queued manual run runs when capacity returns.
+                logger.warning("Batch job: previous run still active or queued, skipping",
                                extra={"pipeline": pipeline_name})
                 return
 
@@ -645,19 +995,48 @@ class PipelineController:
                 schedule_type=schedule_type,
                 callback_url=callback_url,
             )
-            if outcome.outcome in (DISPATCH_NO_CAPACITY, DISPATCH_FAILED):
+            if outcome.outcome == DISPATCH_NO_CAPACITY:
+                # E.2 (§4.2): the fallback enqueue site — capacity vanished
+                # between the synchronous trigger check and this dispatch. Queue
+                # only manual-origin runs (scheduled runs self-retry on their
+                # interval). DISPATCH_FAILED is intentionally NOT queued — it
+                # keeps today's fail-fast with its truthful error label
+                # (bug-inheritance guard #1).
+                if origin == "manual" and self._queue_manual_runs and self._db is not None:
+                    if self._enqueue_manual_run(pipeline_name, run_id, yaml_text):
+                        return  # queued — no FAILED row, no finalize
+                    # Dedupe hit: the synchronous trigger_run site already queued
+                    # this pipeline (different run_id). _enqueue_manual_run is
+                    # check-then-insert under the RLock, so no row was created for
+                    # this run_id — nothing to clean up.
+                    return
                 failure_time = datetime.now(UTC)
-                if outcome.outcome == DISPATCH_NO_CAPACITY:
-                    error = "No healthy workers available for dispatch"
-                    logger.error("Batch dispatch failed: no healthy workers",
-                                 extra={"pipeline": pipeline_name, "run_id": run_id})
-                    metric_result = "no_workers"
-                else:
-                    error = f"Worker dispatch failed: {outcome.error or 'unknown error'}"
-                    logger.error("Worker dispatch attempt failed",
-                                 extra={"pipeline": pipeline_name, "run_id": run_id,
-                                        "error": outcome.error})
-                    metric_result = "dispatch_failed"
+                error = "No healthy workers available for dispatch"
+                logger.error("Batch dispatch failed: no healthy workers",
+                             extra={"pipeline": pipeline_name, "run_id": run_id})
+                metric_result = "no_workers"
+                result = RunResult(
+                    run_id=run_id,
+                    pipeline_name=pipeline_name,
+                    status=RunStatus.FAILED,
+                    started_at=failure_time,
+                    finished_at=failure_time,
+                    records_in=0,
+                    records_out=0,
+                    records_skipped=0,
+                    error=error,
+                    node_id=self._node_id,
+                )
+                self._finalize_batch_result(pipeline_name, result)
+                from tram.metrics.registry import MGR_DISPATCH_TOTAL
+                MGR_DISPATCH_TOTAL.labels(pipeline=pipeline_name, result=metric_result).inc()
+            elif outcome.outcome == DISPATCH_FAILED:
+                failure_time = datetime.now(UTC)
+                error = f"Worker dispatch failed: {outcome.error or 'unknown error'}"
+                logger.error("Worker dispatch attempt failed",
+                             extra={"pipeline": pipeline_name, "run_id": run_id,
+                                    "error": outcome.error})
+                metric_result = "dispatch_failed"
                 result = RunResult(
                     run_id=run_id,
                     pipeline_name=pipeline_name,

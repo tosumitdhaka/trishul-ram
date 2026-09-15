@@ -78,6 +78,9 @@ class AppConfig:
     worker_ingress_port: int  # worker public ingress port
     # v1.3.1 D.2 (GH #17): count=1 stream durable placement
     stream_single_placement: bool = True  # "1" (default) durable 1-slot placement / "0" legacy
+    # v1.4.0 E.2 (GH #21): queued manual runs
+    queue_manual_runs: bool = True    # "1" (default) queue manual runs on no-capacity / "0" fail-fast
+    queue_ttl_seconds: int = 900      # how long a queued run waits for capacity before expiring
 
     @classmethod
     def from_env(cls) -> AppConfig:
@@ -91,6 +94,16 @@ class AppConfig:
                 "Unrecognized TRAM_STREAM_SINGLE_PLACEMENT value — "
                 'treating as enabled ("1")',
                 extra={"value": stream_single_placement_raw},
+            )
+        queue_manual_runs_raw = os.environ.get("TRAM_QUEUE_MANUAL_RUNS", "1")
+        if queue_manual_runs_raw not in ("0", "1"):
+            # Fail open: anything other than an explicit "0" enables the
+            # queue. A typo'd value is loud here instead of silently
+            # flipping a deployment's manual-run semantics.
+            logger.warning(
+                "Unrecognized TRAM_QUEUE_MANUAL_RUNS value — "
+                'treating as enabled ("1")',
+                extra={"value": queue_manual_runs_raw},
             )
         return cls(
             host=os.environ.get("TRAM_HOST", "0.0.0.0"),
@@ -125,6 +138,8 @@ class AppConfig:
             manager_url=os.environ.get("TRAM_MANAGER_URL", ""),
             stats_interval=_env_int("TRAM_STATS_INTERVAL", 30),
             stream_single_placement=stream_single_placement_raw != "0",
+            queue_manual_runs=queue_manual_runs_raw != "0",
+            queue_ttl_seconds=_env_int("TRAM_QUEUE_TTL_SECONDS", 900),
             worker_urls=os.environ.get("TRAM_WORKER_URLS", ""),
             worker_replicas=_env_int("TRAM_WORKER_REPLICAS", 0),
             worker_service=os.environ.get("TRAM_WORKER_SERVICE", "tram-worker"),

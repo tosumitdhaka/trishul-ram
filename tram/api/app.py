@@ -217,6 +217,8 @@ def create_app(config: AppConfig | None = None) -> FastAPI:
         stats_store=stats_store,
         kubernetes_service_manager=kubernetes_service_manager,
         single_stream_placements=config.stream_single_placement,
+        queue_manual_runs=config.queue_manual_runs,
+        queue_ttl_seconds=config.queue_ttl_seconds,
     )
     # Keep manager reference on controller's alert evaluator
     controller.manager._alert_evaluator = alert_evaluator
@@ -234,6 +236,10 @@ def create_app(config: AppConfig | None = None) -> FastAPI:
             worker_pool=worker_pool,
             interval=min(config.stats_interval, 10),
         )
+        # E.2 (§6.5): a worker down→up transition wakes the batch reconciler's
+        # drain loop immediately. The nudge never dispatches itself — run_once
+        # stays authoritative; absent wiring degrades to pure interval polling.
+        worker_pool.on_health_restored = batch_reconciler.nudge
     # Convenience alias — routers that still reference app.state.manager continue to work
     manager = controller.manager
 

@@ -86,6 +86,38 @@ try:
         "Worker stats-heartbeat POSTs that failed to reach the manager",
         ["worker_id"],
     )
+    # ── Queued manual runs (E.2 / GH #21) ─────────────────────────────────
+    MGR_QUEUE_DEPTH = Gauge(
+        "tram_mgr_queue_depth",
+        "Manual runs currently queued (non-terminal queued_runs rows)",
+        ["pipeline"],
+    )
+    MGR_QUEUE_ENQUEUED_TOTAL = Counter(
+        "tram_mgr_queue_enqueued_total",
+        "Manual runs enqueued on no-capacity",
+        ["pipeline"],
+    )
+    MGR_QUEUE_DISPATCHED_TOTAL = Counter(
+        "tram_mgr_queue_dispatched_total",
+        "Queued manual runs dispatched after capacity returned",
+        ["pipeline"],
+    )
+    MGR_QUEUE_EXPIRED_TOTAL = Counter(
+        "tram_mgr_queue_expired_total",
+        "Queued manual runs expired at TTL without capacity",
+        ["pipeline"],
+    )
+    MGR_QUEUE_WAIT_SECONDS = Histogram(
+        "tram_mgr_queue_wait_seconds",
+        "Wait from request to dispatch for queued manual runs",
+        ["pipeline"],
+        buckets=(1, 5, 15, 30, 60, 120, 300, 600, 900, 1800),
+    )
+    MGR_QUEUE_DRAIN_RESULT_TOTAL = Counter(
+        "tram_mgr_queue_drain_result_total",
+        "Drain attempt outcomes",
+        ["pipeline", "result"],
+    )
 
     RECORDS_IN = Counter(
         "tram_records_in_total",
@@ -140,6 +172,12 @@ except ImportError:
     MGR_RUN_COMPLETE_RECEIVED_TOTAL = _NoOpCounter()  # type: ignore[assignment]
     MGR_PIPELINE_STATS_RECEIVED_TOTAL = _NoOpCounter()  # type: ignore[assignment]
     MGR_STATS_MISSED_TOTAL = _NoOpCounter()  # type: ignore[assignment]
+    MGR_QUEUE_DEPTH = _NoOpGauge()  # type: ignore[assignment]
+    MGR_QUEUE_ENQUEUED_TOTAL = _NoOpCounter()  # type: ignore[assignment]
+    MGR_QUEUE_DISPATCHED_TOTAL = _NoOpCounter()  # type: ignore[assignment]
+    MGR_QUEUE_EXPIRED_TOTAL = _NoOpCounter()  # type: ignore[assignment]
+    MGR_QUEUE_WAIT_SECONDS = _NoOpHistogram()  # type: ignore[assignment]
+    MGR_QUEUE_DRAIN_RESULT_TOTAL = _NoOpCounter()  # type: ignore[assignment]
     RECORDS_IN = _NoOpCounter()  # type: ignore[assignment]
     RECORDS_OUT = _NoOpCounter()  # type: ignore[assignment]
     RECORDS_SKIP = _NoOpCounter()  # type: ignore[assignment]

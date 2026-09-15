@@ -6,6 +6,7 @@ import logging
 
 from fastapi import APIRouter, HTTPException, Query, Request, Response, status
 from fastapi.concurrency import run_in_threadpool
+from fastapi.responses import JSONResponse
 from pydantic import BaseModel
 
 from tram.api.routers._stream_views import build_placement_view
@@ -63,7 +64,30 @@ async def list_pipelines(request: Request) -> list[dict]:
     """List all registered pipelines with their current status."""
     controller = request.app.state.controller
     states = controller.list_all()
-    return [state.to_dict() for state in states]
+    rows = [state.to_dict() for state in states]
+    # E.2 (§8.1): each pipeline gains a `queued_run` field when a non-terminal
+    # queued run exists. One join against get_queued_run_view — never a
+    # per-pipeline DB hit.
+    db = getattr(request.app.state, "db", None)
+    if db is not None:
+        queued_by_pipeline: dict[str, dict] = {}
+        for run in db.get_queued_run_view():
+            queued_by_pipeline.setdefault(run["pipeline_name"], run)
+        for row in rows:
+            queued = queued_by_pipeline.get(row["name"])
+            row["queued_run"] = (
+                {
+                    "run_id": queued["run_id"],
+                    "requested_at": queued["requested_at"].isoformat(),
+                    "expires_at": queued["expires_at"].isoformat(),
+                }
+                if queued is not None
+                else None
+            )
+    else:
+        for row in rows:
+            row["queued_run"] = None
+    return rows
 
 
 @router.post("", status_code=status.HTTP_201_CREATED)
@@ -104,7 +128,23 @@ async def get_pipeline(name: str, request: Request) -> dict:
         state = controller.get(name)
     except PipelineNotFoundError as exc:
         raise HTTPException(status_code=404, detail=str(exc))
-    return state.to_detail_dict()
+    row = state.to_detail_dict()
+    # E.2 (§8.1): detail view carries the queued run (if any).
+    db = getattr(request.app.state, "db", None)
+    if db is not None:
+        queued = db.get_active_queued_run_for_pipeline(name)
+        row["queued_run"] = (
+            {
+                "run_id": queued["run_id"],
+                "requested_at": queued["requested_at"].isoformat(),
+                "expires_at": queued["expires_at"].isoformat(),
+            }
+            if queued is not None
+            else None
+        )
+    else:
+        row["queued_run"] = None
+    return row
 
 
 @router.get("/{name}/placement")
@@ -337,13 +377,36 @@ async def trigger_run(name: str, request: Request) -> dict:
         raise HTTPException(status_code=404, detail=str(exc))
 
     try:
-        run_id = controller.trigger_run(name)
+        result = controller.trigger_run(name)
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc))
     except Exception as exc:
         raise HTTPException(status_code=500, detail=str(exc))
 
-    return {"name": name, "status": "triggered", "run_id": run_id}
+    if isinstance(result, str):
+        # Legacy/mocked path: a plain run_id means the run was submitted.
+        return {"name": name, "status": "triggered", "run_id": result}
+
+    if result.disposition == "queued":
+        # E.2 (§8.1): 202 — the run is durably queued (or a dedupe-hit returning
+        # the existing run_id). expires_at is the absolute TTL deadline.
+        expires_at = None
+        db = getattr(request.app.state, "db", None)
+        if db is not None:
+            row = db.get_active_queued_run_for_pipeline(name)
+            if row is not None:
+                expires_at = row["expires_at"].isoformat()
+        return JSONResponse(
+            status_code=status.HTTP_202_ACCEPTED,
+            content={
+                "name": name,
+                "status": "queued",
+                "run_id": result.run_id,
+                "expires_at": expires_at,
+            },
+        )
+
+    return {"name": name, "status": "triggered", "run_id": result.run_id}
 
 
 # ── Reload ─────────────────────────────────────────────────────────────────

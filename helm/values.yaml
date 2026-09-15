@@ -164,6 +164,12 @@ env:
   ## machinery (durable 1-slot row, reconciler-driven recovery). "0" keeps the
   ## legacy single-dispatch path. Placement rows keep working under either value.
   TRAM_STREAM_SINGLE_PLACEMENT: "1"
+  ## Queued manual runs (v1.4.0, GH #21)
+  ## "1" (default) durably queues a manual run triggered with no healthy
+  ## workers and dispatches it when capacity returns (API returns 202). "0"
+  ## restores the legacy fail-fast behavior. An unrecognized value fails open.
+  TRAM_QUEUE_MANUAL_RUNS: "1"
+  # TRAM_QUEUE_TTL_SECONDS: "900"  # max wait for capacity before expiry
   # TRAM_NODE_ID: ""            # defaults to hostname (auto-set from pod name in StatefulSet)
   # TRAM_SHUTDOWN_TIMEOUT_SECONDS: "30"  # drain timeout before forced stop
   # --- Database (v0.7.0) ---

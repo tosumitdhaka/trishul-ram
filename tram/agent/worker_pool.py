@@ -20,6 +20,7 @@ from __future__ import annotations
 import logging
 import os
 import threading
+from collections.abc import Callable
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass
 from typing import TYPE_CHECKING
@@ -76,6 +77,7 @@ class WorkerPool:
         stats_store=None,
         stats_interval: int = 30,
         health_failures_to_down: int = 2,
+        on_health_restored: Callable[[], None] | None = None,
     ) -> None:
         self._workers = list(workers)
         self._manager_url = manager_url
@@ -85,6 +87,12 @@ class WorkerPool:
         # Number of consecutive failed health probes before a worker is marked
         # down (health debounce / hysteresis).
         self._health_failures_to_down = max(1, health_failures_to_down)
+        # E.2 (§6.5): optional hook fired when a worker transitions down→up in
+        # the poll loop. The app wires it to the BatchReconciler's drain nudge
+        # event so a restored worker wakes the drain immediately. Public
+        # attribute so the app can wire it after construction; absent wiring
+        # degrades to pure interval polling (correct, just slower).
+        self.on_health_restored = on_health_restored
 
         # {url: {"ok": bool, "active_runs": int, "running_pipelines": list[str],
         #        "failures": int}}  # "failures" = consecutive failed probes
@@ -137,6 +145,7 @@ class WorkerPool:
         manager_url: str = "",
         stats_store=None,
         stats_interval: int = 30,
+        on_health_restored: Callable[[], None] | None = None,
     ) -> WorkerPool | None:
         """Build a WorkerPool from environment variables.
 
@@ -152,6 +161,7 @@ class WorkerPool:
                     manager_url=manager_url,
                     stats_store=stats_store,
                     stats_interval=stats_interval,
+                    on_health_restored=on_health_restored,
                 )
 
         replicas = int(os.environ.get("TRAM_WORKER_REPLICAS", "0"))
@@ -172,6 +182,7 @@ class WorkerPool:
                 manager_url=manager_url,
                 stats_store=stats_store,
                 stats_interval=stats_interval,
+                on_health_restored=on_health_restored,
             )
 
         return None
@@ -298,6 +309,14 @@ class WorkerPool:
 
             if ok and not prev_ok:
                 logger.info("Worker came back up", extra={"worker": url})
+                if self.on_health_restored is not None:
+                    try:
+                        self.on_health_restored()
+                    except Exception as exc:  # noqa: BLE001 — hook must never break polling
+                        logger.warning(
+                            "on_health_restored hook failed",
+                            extra={"worker": url, "error": str(exc)},
+                        )
             elif not ok and prev_ok:
                 logger.warning(
                     "Worker health probe failed",

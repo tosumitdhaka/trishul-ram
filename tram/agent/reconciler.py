@@ -345,17 +345,36 @@ class PlacementReconciler:
 
 
 class BatchReconciler:
-    """Reconcile worker-owned batch runs after worker or manager failure."""
+    """Reconcile worker-owned batch runs after worker or manager failure.
+
+    E.2 (GH #21): the reconciler is also the single drain authority for queued
+    manual runs — it re-evaluates capacity, pipeline state, and TTL every pass.
+    Worker-restored health signals only *nudge* the loop early (§6.5); they
+    never dispatch.
+    """
 
     def __init__(self, controller, worker_pool, interval: int = 10) -> None:
         self._controller = controller
         self._worker_pool = worker_pool
         self._interval = interval
         self._stop = threading.Event()
+        # E.2 (§6.5): set by nudge() (wired to the WorkerPool on_health_restored
+        # hook in the app) to wake the loop before the next interval tick.
+        self._drain_nudge = threading.Event()
         self._thread: threading.Thread | None = None
+
+    def nudge(self) -> None:
+        """Wake the drain loop early — a worker's health was restored.
+
+        The nudge only wakes the loop; run_once re-evaluates everything and
+        never dispatches on the nudge itself. Worst case the wake is redundant
+        with the next interval tick.
+        """
+        self._drain_nudge.set()
 
     def start(self) -> None:
         self._stop.clear()
+        self._drain_nudge.clear()
         self._thread = threading.Thread(
             target=self._loop,
             daemon=True,
@@ -365,11 +384,18 @@ class BatchReconciler:
 
     def stop(self) -> None:
         self._stop.set()
+        # Wake a loop blocked in _drain_nudge.wait() — it re-checks the stop
+        # event right after clearing the nudge.
+        self._drain_nudge.set()
         if self._thread and self._thread.is_alive():
             self._thread.join(timeout=self._interval + 1)
 
     def _loop(self) -> None:
-        while not self._stop.wait(self._interval):
+        while not self._stop.is_set():
+            self._drain_nudge.wait(self._interval)
+            self._drain_nudge.clear()
+            if self._stop.is_set():
+                return
             try:
                 self.run_once()
             except Exception as exc:
@@ -442,3 +468,45 @@ class BatchReconciler:
     def run_once(self) -> None:
         cleared = self._reconcile_tracked_runs()
         self._reconcile_untracked_running_pipelines(skip=cleared)
+        self._drain_queued_runs()
+
+    def _drain_queued_runs(self) -> None:
+        """Drain queued manual runs (E.2 §6.2).
+
+        The drain is authoritative: it re-evaluates capacity, pipeline state,
+        and TTL every pass. TTL expiry runs first and unconditionally — a row
+        past ``expires_at`` must fail even through a full worker outage (the
+        202's deadline is enforced when it matters); expiry is pure DB +
+        ``_finalize_batch_result`` and needs no workers. The debounced health
+        pre-check is flap-safe (a single failed probe cannot cause a drain
+        attempt) and gates dispatch attempts only. Dispatch HTTP runs with
+        the controller's lifecycle lock released (the claim/commit/revert
+        transitions are each under the RLock per §6.4).
+        """
+        from tram.agent.worker_pool import DISPATCH_ACCEPTED, DISPATCH_NO_CAPACITY
+
+        for run in self._controller.drainable_queued_runs():
+            if run["expires_at"] <= datetime.now(UTC):
+                self._controller.expire_queued_run(run["run_id"])
+
+        if not self._worker_pool.healthy_workers():
+            return  # debounced state — flap-safe pre-check (dispatch attempts only)
+        for run in self._controller.drainable_queued_runs():
+            claimed = self._controller.claim_queued_run(run["run_id"])
+            if claimed is None:
+                continue  # lost the claim (delete/stop raced us)
+            # ── network I/O with the lock released (redispatch_broadcast_slot pattern) ──
+            outcome = self._worker_pool.dispatch_with_result(
+                run_id=claimed["run_id"],
+                pipeline_name=claimed["pipeline_name"],
+                yaml_text=claimed["yaml_snapshot"],  # the auditable snapshot (Decision 5)
+                schedule_type=claimed["schedule_type"],
+                callback_url=claimed["callback_url"],
+            )
+            if outcome.outcome == DISPATCH_ACCEPTED:
+                self._controller.commit_queued_dispatch(claimed["run_id"], outcome.worker_url)
+            else:  # DISPATCH_FAILED, or DISPATCH_NO_CAPACITY (capacity vanished mid-pass)
+                result_label = (
+                    "no_capacity" if outcome.outcome == DISPATCH_NO_CAPACITY else "failed"
+                )
+                self._controller.revert_queued_claim(claimed["run_id"], result=result_label)

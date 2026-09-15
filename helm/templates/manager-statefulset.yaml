@@ -85,6 +85,10 @@ spec:
             ## range injects it into this container).
             ##   "1" = count=1 streams get a durable 1-slot placement row
             ##   "0" = legacy count=1 single-dispatch path (rollback)
+            ## E.2 (GH #21): queued manual runs. Default "1" (on) — a manual run
+            ## triggered with no healthy workers is durably queued and dispatched
+            ## when capacity returns; set via .Values.env.TRAM_QUEUE_MANUAL_RUNS
+            ## below. "0" = legacy fail-fast (rollback).
             ## Point manager at its own service so workers can reach the callback URL
             - name: TRAM_MANAGER_URL
               value: "http://{{ include "tram.fullname" . }}:{{ .Values.service.port }}"

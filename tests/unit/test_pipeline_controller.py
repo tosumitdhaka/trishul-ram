@@ -605,7 +605,9 @@ class TestLifecycle:
         ctrl.executor = MagicMock()
         ctrl.executor.batch_run.return_value = result
 
-        run_id = ctrl.trigger_run("my-interval")
+        trigger = ctrl.trigger_run("my-interval")
+        assert trigger.disposition == "dispatched"
+        run_id = trigger.run_id
         assert str(uuid.UUID(run_id)) == run_id
 
         # Give the thread pool a moment to run
