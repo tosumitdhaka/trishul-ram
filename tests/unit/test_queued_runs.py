@@ -882,12 +882,30 @@ class TestDrain:
                 return DispatchOutcome(worker_url="http://w0:8766", outcome=DISPATCH_ACCEPTED)
 
             wp.dispatch_with_result.side_effect = _dispatch
-            # Keep the untracked-running pass inert: a concurrent drain may
-            # observe the just-committed "running" status before the lease is
-            # visible in its `tracked` snapshot. find_pipeline_runs=[] makes
-            # that pass a no-op (the MagicMock default would be truthy and
-            # crash min()).
-            wp.find_pipeline_runs.return_value = []
+            # A concurrent drain may observe the just-committed "running"
+            # status before the lease is visible in its `tracked` snapshot
+            # (thread B's tracked read predates thread A's commit). When
+            # that interleave hits, the untracked pass either adopts (match
+            # found) or marks the run lost (no match) — both paths must be
+            # mock-safe:
+            # - find_pipeline_runs returning the dispatched run makes that
+            #   pass a benign idempotent adopt of r1; an empty list sends
+            #   it to mark_active_batch_run_lost instead.
+            # - worker_id_for_url must return a real value: unmocked, the
+            #   MagicMock flows into RunResult.node_id and the run-history
+            #   INSERT fails to bind it (sqlite rejects MagicMock).
+            # - is_run_active=True keeps the tracked pass off the mark-lost
+            #   path for a lease it sees (a truthy MagicMock already skips,
+            #   but be explicit).
+            wp.find_pipeline_runs.return_value = [
+                {
+                    "run_id": "r1",
+                    "worker_url": "http://w0:8766",
+                    "started_at": "2026-01-01T00:00:00+00:00",
+                }
+            ]
+            wp.is_run_active.return_value = True
+            wp.worker_id_for_url.return_value = "w0"
             reconciler = BatchReconciler(ctrl, wp, interval=10)
             barrier = threading.Barrier(2)
             errors: list = []
