@@ -93,6 +93,19 @@ function renderHeader(p) {
     ].filter(Boolean)
     badges.innerHTML = fragments.join('')
   }
+  const queuedInfo = document.getElementById('detail-queued-info')
+  if (queuedInfo) {
+    const q = p.queued_run
+    if (p.status === 'queued' && q?.requested_at) {
+      queuedInfo.innerHTML =
+        '<i class="bi bi-hourglass-split"></i>' +
+        `<span>Queued at ${fmtTimestamp(q.requested_at)} — expires ${fmtTimestamp(q.expires_at)}</span>`
+      queuedInfo.classList.remove('d-none')
+    } else {
+      queuedInfo.classList.add('d-none')
+      queuedInfo.innerHTML = ''
+    }
+  }
 }
 
 function renderCards(p) {
@@ -178,10 +191,17 @@ function wireActions(pipeline) {
   const triggerBtn = document.getElementById('detail-trigger-btn')
   if (!btn) return
   const isActive = pipeline.status === 'running' || pipeline.status === 'scheduled'
+  const isQueued = pipeline.status === 'queued'
   const isManual = pipeline.schedule_type === 'manual'
   const isStream = pipeline.schedule_type === 'stream'
+  btn.disabled = false
 
-  if (isManual && !isActive) {
+  if (isQueued && isManual) {
+    btn.innerHTML = '<i class="bi bi-hourglass-split"></i><span>Queued…</span>'
+    btn.className = 'btn btn-sm btn-outline-secondary detail-action-btn'
+    btn.disabled = true
+    btn.onclick = null
+  } else if (isManual && !isActive) {
     btn.innerHTML = '<i class="bi bi-lightning"></i><span>Run Now</span>'
     btn.className = 'btn btn-sm btn-primary detail-action-btn'
     btn.onclick = () => { void _detailTrigger() }
@@ -200,8 +220,14 @@ function wireActions(pipeline) {
       triggerBtn.setAttribute('hidden', '')
     } else {
       triggerBtn.removeAttribute('hidden')
-      triggerBtn.disabled = isActive
-      triggerBtn.onclick = () => { void _detailTrigger() }
+      if (isQueued) {
+        triggerBtn.disabled = true
+        triggerBtn.innerHTML = '<i class="bi bi-hourglass-split"></i><span>Queued…</span>'
+        triggerBtn.onclick = null
+      } else {
+        triggerBtn.disabled = isActive
+        triggerBtn.onclick = () => { void _detailTrigger() }
+      }
     }
   }
 }
@@ -221,8 +247,13 @@ async function _detailTrigger() {
     triggerBtn.disabled = true
     triggerBtn.innerHTML = '<i class="bi bi-hourglass-split"></i><span>Running…</span>'
   }
+  let result = null
   try {
-    const result = await api.pipelines.run(_name)
+    result = await api.pipelines.run(_name)
+    if (result?.status === 'queued' && triggerBtn) {
+      triggerBtn.disabled = true
+      triggerBtn.innerHTML = '<i class="bi bi-hourglass-split"></i><span>Queued…</span>'
+    }
     setTimeout(() => init(), 400)
     if (result?.run_id) {
       const monitorToken = ++_runMonitorToken
@@ -233,7 +264,7 @@ async function _detailTrigger() {
   } catch (e) {
     toast(e.message, 'error')
   } finally {
-    if (triggerBtn) {
+    if (triggerBtn && result?.status !== 'queued') {
       triggerBtn.disabled = false
       triggerBtn.innerHTML = '<i class="bi bi-lightning"></i><span>Run Now</span>'
     }

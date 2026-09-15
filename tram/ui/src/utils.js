@@ -62,6 +62,7 @@ export function statusBadge(status) {
     degraded:  'badge-partial has-dot scheduled',
     stale:     'badge-partial has-dot scheduled',
     reconciling:'badge-paused has-dot paused',
+    queued:    'badge-queued has-dot queued',
     error:     'badge-error has-dot error',
     success:   'badge-success has-dot success',
     failed:    'badge-failed has-dot failed',
