@@ -217,6 +217,64 @@ class TestClusterNodes:
         assert r.status_code == 200
         assert r.json()["workers"][0]["assigned_pipelines"] == ["batch-b", "stream-a"]
 
+    def test_cluster_nodes_keeps_worker_online_on_single_failed_probe(self):
+        """D.3 (RCA #17): a single failed poll must not blank a worker's row —
+        the ok flag comes from the hysteresis-backed health state
+        (healthy_workers), not the one-shot probe result embedded in status().
+        The status row below simulates that one-shot probe failing (ok=False,
+        no live content) while the hysteresis state still reports the worker
+        healthy (only 1 of the 2 consecutive failures required to mark it
+        down)."""
+        wp = MagicMock()
+        wp.status.return_value = [{
+            "url": "http://w1:8766",
+            "worker_id": "w1",
+            "ok": False,
+            "active_runs": 0,
+            "active_streams": 0,
+            "running_pipelines": [],
+            "running": [],
+            "streams": [],
+            "assigned_pipelines": [],
+        }]
+        wp.healthy_workers.return_value = ["http://w1:8766"]
+        config = MagicMock()
+        config.tram_mode = "manager"
+        app = _make_health_app(worker_pool=wp, config=config)
+        client = TestClient(app)
+
+        r = client.get("/api/cluster/nodes")
+
+        assert r.status_code == 200
+        assert r.json()["workers"][0]["ok"] is True
+
+    def test_cluster_nodes_marks_worker_offline_when_hysteresis_says_down(self):
+        """Inverse gate: the hysteresis state (2+ consecutive failed health
+        polls) marks the worker down even if a one-shot probe happens to
+        report it ok — the table reflects the debounced state."""
+        wp = MagicMock()
+        wp.status.return_value = [{
+            "url": "http://w1:8766",
+            "worker_id": "w1",
+            "ok": True,
+            "active_runs": 1,
+            "active_streams": 0,
+            "running_pipelines": ["pipe-a"],
+            "running": [],
+            "streams": [],
+            "assigned_pipelines": [],
+        }]
+        wp.healthy_workers.return_value = []  # debounced down
+        config = MagicMock()
+        config.tram_mode = "manager"
+        app = _make_health_app(worker_pool=wp, config=config)
+        client = TestClient(app)
+
+        r = client.get("/api/cluster/nodes")
+
+        assert r.status_code == 200
+        assert r.json()["workers"][0]["ok"] is False
+
 
 class TestClusterStreams:
     def test_returns_broadcast_streams_with_aggregate_counters(self):

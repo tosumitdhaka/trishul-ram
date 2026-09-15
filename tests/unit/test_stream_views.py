@@ -109,3 +109,62 @@ def test_build_cluster_streams_prefers_live_slot_stats_over_stale_manager_view()
     assert stream["records_in"] == 40
     assert stream["records_out_per_sec"] == 4.0
     assert stream["slots"][0]["stats"]["stale"] is False
+
+
+def test_build_cluster_streams_renders_count1_placement_row():
+    """D.2 (GH #17): a count=1 stream's durable 1-slot placement row renders in
+    the same cluster-stream shape as broadcast rows — slot_count 1, the string
+    target_count passed through, per-slot stats keyed on the slot run id."""
+    store = StatsStore(interval=30)
+    store.update(
+        PipelineStatsPayload(
+            worker_id="w0",
+            pipeline_name="pipe-c1",
+            run_id="pg1",
+            schedule_type="stream",
+            uptime_seconds=8.0,
+            timestamp=datetime.now(UTC),
+            records_in=16,
+            records_out=16,
+            bytes_in=128,
+            bytes_out=128,
+        )
+    )
+
+    streams = build_cluster_streams(
+        [
+            {
+                "placement_group_id": "pg1",
+                "pipeline_name": "pipe-c1",
+                "status": "running",
+                "target_count": "1",
+                "started_at": datetime.now(UTC),
+                "slots": [
+                    {
+                        "worker_index": 0,
+                        "worker_url": "http://w0:8766",
+                        "worker_id": "w0",
+                        "run_id_prefix": "pg1",
+                        "current_run_id": "pg1",
+                        "status": "running",
+                        "restart_count": 0,
+                    }
+                ],
+            }
+        ],
+        store,
+    )
+
+    assert len(streams) == 1
+    stream = streams[0]
+    assert stream["pipeline_name"] == "pipe-c1"
+    assert stream["placement_group_id"] == "pg1"
+    assert stream["target_count"] == "1"
+    assert stream["slot_count"] == 1
+    assert stream["active_slots"] == 1
+    assert stream["records_in"] == 16
+    assert stream["records_out_per_sec"] == 2.0
+    slot = stream["slots"][0]
+    assert slot["worker_index"] == 0
+    assert slot["current_run_id"] == "pg1"
+    assert slot["stats"]["stale"] is False

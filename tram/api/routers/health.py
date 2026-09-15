@@ -211,8 +211,15 @@ async def cluster_nodes(request: Request) -> dict:
     # worker_pool.status() fans out blocking /agent/status probes — offload it
     # so one slow worker cannot stall the event loop (plan D.6).
     workers = await run_in_threadpool(worker_pool.status)
+    # Health gate: healthy_workers() is the hysteresis-backed health state — a
+    # worker only drops after N consecutive failed health polls (plan A.6) — so
+    # a single failed poll (health or the one-shot /agent/status probe inside
+    # status()) must not blank a worker's row (RCA #17, plan D.3). Reconcile
+    # each row's ok flag against that state instead of the probe result.
+    healthy = set(worker_pool.healthy_workers())
     current_assignments = _current_worker_assignments(controller)
     for worker in workers:
+        worker["ok"] = worker.get("url") in healthy
         worker["assigned_pipelines"] = current_assignments.get(worker.get("url"), [])
 
     return {

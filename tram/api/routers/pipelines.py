@@ -135,12 +135,14 @@ async def get_pipeline_placement(name: str, request: Request) -> dict:
             ]
         return build_placement_view(placement, stats_store, live_items)
 
-    # Standalone synthetic view: active stream pipeline with a live stats entry
-    if (
-        stats_store is not None
-        and state.config.schedule.type == "stream"
-        and controller._worker_pool is None
-    ):
+    # Stream pipeline without a durable placement row: single-slot synthetic
+    # view from the live stats entry whenever one exists. Placement rows are
+    # the source of truth after D.2 (count=1 streams included), so this path
+    # mainly serves standalone mode (no worker pool ⇒ no placements) and the
+    # feature-flag-off / pre-D.2 count=1 stream still running on a worker.
+    # The `worker_pool is None` gate is gone — a manager-mode stream without a
+    # placement row renders instead of 404ing (RCA #17, plan D.3).
+    if stats_store is not None and state.config.schedule.type == "stream":
         entries = stats_store.for_pipeline(name)
         if entries:
             from tram.api.routers._stream_views import _stats_view_from_entry

@@ -256,6 +256,59 @@ sinks:
         assert data["slots"][0]["stats"]["records_in"] == 50
         assert data["slots"][0]["stats"]["bytes_in_per_sec"] == 0.0
 
+    def test_returns_count1_placement_row(self):
+        """D.2 (GH #17): a count=1 stream dispatches through the placement
+        machinery; the endpoint renders the durable 1-slot row (target_count
+        "1") in the placement shape the UI expects."""
+        state = _make_state()
+        app = _make_app()
+        app.state.controller.get.return_value = state
+        app.state.controller.get_active_broadcast_placements.return_value = [{
+            "placement_group_id": "pg1",
+            "pipeline_name": "test-pipe",
+            "status": "running",
+            "target_count": "1",
+            "started_at": datetime.now(UTC),
+            "slots": [{
+                "worker_index": 0,
+                "worker_id": "w0",
+                "worker_url": "http://worker-0:8766",
+                "run_id_prefix": "pg1",
+                "current_run_id": "pg1",
+                "status": "running",
+                "restart_count": 0,
+            }],
+        }]
+        app.state.stats_store.update(PipelineStatsPayload(
+            worker_id="w0",
+            pipeline_name="test-pipe",
+            run_id="pg1",
+            schedule_type="stream",
+            uptime_seconds=10.0,
+            timestamp=datetime.now(UTC),
+            records_in=30,
+            records_out=25,
+            bytes_in=600,
+            bytes_out=500,
+        ))
+        client = TestClient(app)
+
+        resp = client.get("/api/pipelines/test-pipe/placement")
+
+        assert resp.status_code == 200
+        data = resp.json()
+        assert data["placement_group_id"] == "pg1"
+        assert data["target_count"] == "1"
+        assert data["slot_count"] == 1
+        assert data["active_slots"] == 1
+        assert data["records_in"] == 30
+        slot = data["slots"][0]
+        assert slot["worker_index"] == 0
+        assert slot["worker_url"] == "http://worker-0:8766"
+        assert slot["current_run_id"] == "pg1"
+        assert slot["stats"]["stale"] is False
+        assert slot["stats"]["records_out_per_sec"] == 2.5
+
     def test_missing_active_placement_returns_404(self):
         state = _make_state()
         app = _make_app()
