@@ -45,6 +45,25 @@ class PipelineStats:
                 self.error_count += len(errors)
                 self.errors_last_window.extend(errors[-10:])
 
+    def reset(self) -> None:
+        """Zero all counters for a fresh run attempt.
+
+        Called when a retry rebuilds the run context: the accumulator must be
+        reset alongside it, otherwise live totals accumulate across attempts
+        and can exceed the final run-history numbers (which come from the last
+        attempt's context). In-place so the manager-side StatsStore reference
+        keeps observing the same object.
+        """
+        with self._lock:
+            self.records_in = 0
+            self.records_out = 0
+            self.records_skipped = 0
+            self.dlq_count = 0
+            self.error_count = 0
+            self.bytes_in = 0
+            self.bytes_out = 0
+            self.errors_last_window.clear()
+
     def snapshot_and_reset_window(self) -> dict[str, int | list[str]]:
         with self._lock:
             snapshot = {

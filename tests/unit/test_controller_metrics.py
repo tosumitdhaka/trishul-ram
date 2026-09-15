@@ -245,3 +245,43 @@ def test_placement_status_gauge_set_on_status_update():
               for i in range(len(set_calls))}
     assert values.get("running") == 1
     assert values.get("degraded") == 0
+
+
+# ── PipelineStats.reset (retry parity) ─────────────────────────────────────
+
+
+def test_pipeline_stats_reset_zeroes_counters():
+    from tram.agent.metrics import PipelineStats
+
+    stats = PipelineStats(run_id="r1", pipeline_name="p1", schedule_type="batch")
+    stats.increment(
+        records_in=10, records_out=8, skipped=1, dlq=1,
+        bytes_in=100, bytes_out=80, errors=["boom"],
+    )
+    assert stats.snapshot()["records_in"] == 10
+
+    stats.reset()
+
+    snapshot = stats.snapshot()
+    assert snapshot == {
+        "records_in": 0,
+        "records_out": 0,
+        "records_skipped": 0,
+        "dlq_count": 0,
+        "error_count": 0,
+        "bytes_in": 0,
+        "bytes_out": 0,
+        "errors_last_window": [],
+    }
+
+
+def test_pipeline_stats_reset_preserves_run_identity():
+    """reset() zeroes counters in-place; run metadata survives."""
+    from tram.agent.metrics import PipelineStats
+
+    stats = PipelineStats(run_id="r1", pipeline_name="p1", schedule_type="batch")
+    stats.increment(records_in=5)
+    stats.reset()
+    assert stats.run_id == "r1"
+    assert stats.pipeline_name == "p1"
+    assert stats.schedule_type == "batch"

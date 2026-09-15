@@ -372,6 +372,194 @@ class TestPipelineExecutorBatchRun:
         first_source.close.assert_called_once()   # failed attempt's source connection
         second_source.close.assert_called_once()
 
+    # ── D4: records_out counts records delivered, not sink fanout ────────────
+
+    def test_records_out_counts_delivered_records_with_condition_sink(self):
+        """D4: a condition-filtered sink must not inflate records_out — only
+        the records it actually wrote count as delivered."""
+        from tram.agent.metrics import PipelineStats
+
+        config = _make_pipeline()
+        executor = PipelineExecutor()
+        stats = PipelineStats(run_id="r1", pipeline_name="test-exec", schedule_type="batch")
+
+        records = [{"id": "1", "val": "keep"}, {"id": "2", "val": "drop"}]
+        mock_source = MagicMock()
+        mock_source.read.return_value = iter([
+            (json.dumps(records).encode(), {"source_filename": "test.json"}),
+        ])
+        mock_sink = MagicMock()
+        mock_ser_in = MagicMock()
+        mock_ser_in.parse.return_value = records
+        mock_ser_out = MagicMock()
+        mock_ser_out.serialize.return_value = json.dumps(records).encode()
+
+        with (
+            patch.object(executor, "_build_source", return_value=mock_source),
+            patch.object(executor, "_build_sinks", return_value=[(mock_sink, "val == 'keep'", [])]),
+            patch.object(executor, "_build_serializer_in", return_value=mock_ser_in),
+            patch.object(executor, "_build_serializer_out", return_value=mock_ser_out),
+            patch.object(executor, "_build_transforms", return_value=[]),
+        ):
+            result = executor.batch_run(config, stats=stats)
+
+        assert result.records_in == 2
+        assert result.records_out == 1  # only the record the sink actually wrote
+        assert stats.snapshot()["records_out"] == 1
+
+    def test_records_out_not_multiplied_by_multi_sink_fanout(self):
+        """D4: two sinks each writing every record must report records, not
+        records x sinks — fanout is counted in bytes_out, not records_out."""
+        from tram.agent.metrics import PipelineStats
+
+        config = _make_pipeline()
+        executor = PipelineExecutor()
+        stats = PipelineStats(run_id="r1", pipeline_name="test-exec", schedule_type="batch")
+
+        records = [{"id": "1", "val": "a"}, {"id": "2", "val": "b"}]
+        mock_source = MagicMock()
+        mock_source.read.return_value = iter([
+            (json.dumps(records).encode(), {"source_filename": "test.json"}),
+        ])
+        mock_sink_a = MagicMock()
+        mock_sink_b = MagicMock()
+        mock_ser_in = MagicMock()
+        mock_ser_in.parse.return_value = records
+        mock_ser_out = MagicMock()
+        mock_ser_out.serialize.return_value = json.dumps(records).encode()
+
+        with (
+            patch.object(executor, "_build_source", return_value=mock_source),
+            patch.object(executor, "_build_sinks", return_value=[
+                (mock_sink_a, None, []),
+                (mock_sink_b, None, []),
+            ]),
+            patch.object(executor, "_build_serializer_in", return_value=mock_ser_in),
+            patch.object(executor, "_build_serializer_out", return_value=mock_ser_out),
+            patch.object(executor, "_build_transforms", return_value=[]),
+        ):
+            result = executor.batch_run(config, stats=stats)
+
+        assert result.records_in == 2
+        assert result.records_out == 2  # not 4 — no fanout
+        assert stats.snapshot()["records_out"] == 2
+        assert stats.snapshot()["bytes_out"] > 0  # I/O fanout is still counted
+
+    def test_records_out_ignores_failed_sink(self):
+        """D4: a sink that fails must not inflate records_out — a record is
+        counted once, via the sink that delivered it. (The failed sink still
+        bumps records_skipped via record_error — unchanged behavior.)"""
+        config = _make_pipeline()
+        executor = PipelineExecutor()
+
+        records = [{"id": "1", "val": "a"}]
+        mock_source = MagicMock()
+        mock_source.read.return_value = iter([
+            (json.dumps(records).encode(), {"source_filename": "test.json"}),
+        ])
+        ok_sink = MagicMock()
+        failing_sink = MagicMock()
+        failing_sink.write.side_effect = Exception("boom")
+        mock_ser_in = MagicMock()
+        mock_ser_in.parse.return_value = records
+        mock_ser_out = MagicMock()
+        mock_ser_out.serialize.return_value = json.dumps(records).encode()
+
+        with (
+            patch.object(executor, "_build_source", return_value=mock_source),
+            patch.object(executor, "_build_sinks", return_value=[
+                (ok_sink, None, []),
+                (failing_sink, None, []),
+            ]),
+            patch.object(executor, "_build_serializer_in", return_value=mock_ser_in),
+            patch.object(executor, "_build_serializer_out", return_value=mock_ser_out),
+            patch.object(executor, "_build_transforms", return_value=[]),
+        ):
+            result = executor.batch_run(config)
+
+        assert result.records_in == 1
+        assert result.records_out == 1  # delivered once, not doubled by fanout
+
+    def test_records_skipped_when_condition_filters_everything(self):
+        """A sink that filters out every record counts the chunk as skipped."""
+        config = _make_pipeline()
+        executor = PipelineExecutor()
+
+        records = [{"id": "1", "val": "a"}, {"id": "2", "val": "b"}]
+        mock_source = MagicMock()
+        mock_source.read.return_value = iter([
+            (json.dumps(records).encode(), {"source_filename": "test.json"}),
+        ])
+        mock_sink = MagicMock()
+        mock_ser_in = MagicMock()
+        mock_ser_in.parse.return_value = records
+        mock_ser_out = MagicMock()
+        mock_ser_out.serialize.return_value = json.dumps(records).encode()
+
+        with (
+            patch.object(executor, "_build_source", return_value=mock_source),
+            patch.object(executor, "_build_sinks", return_value=[(mock_sink, "val == 'zzz'", [])]),
+            patch.object(executor, "_build_serializer_in", return_value=mock_ser_in),
+            patch.object(executor, "_build_serializer_out", return_value=mock_ser_out),
+            patch.object(executor, "_build_transforms", return_value=[]),
+        ):
+            result = executor.batch_run(config)
+
+        assert result.records_out == 0
+        assert result.records_skipped == 2
+
+    # ── Retry parity: stats reset with the rebuilt context ───────────────────
+
+    def test_retry_resets_stats_accumulator(self):
+        """Retry parity: on on_error=retry the run context is rebuilt and the
+        stats accumulator is reset too — live totals reflect only the final
+        attempt, matching the RunResult's numbers."""
+        from tram.agent.metrics import PipelineStats
+        from tram.core.exceptions import TramError
+
+        config = _make_pipeline(
+            "on_error: retry\n"
+            "          retry_count: 1\n"
+            "          retry_delay_seconds: 0"
+        )
+        executor = PipelineExecutor()
+        stats = PipelineStats(run_id="r1", pipeline_name="test-exec", schedule_type="batch")
+
+        calls = {"n": 0}
+
+        def fake_run_chunks(*args, **kwargs):
+            calls["n"] += 1
+            ctx = args[7]
+            if calls["n"] == 1:
+                # Attempt 1 processes records before dying.
+                ctx.inc_records_in(5)
+                ctx.inc_records_out(5)
+                stats.increment(records_in=5, records_out=5)
+                raise TramError("boom")
+            # Attempt 2 processes a fresh 3 records.
+            ctx.inc_records_in(3)
+            ctx.inc_records_out(3)
+            stats.increment(records_in=3, records_out=3)
+            return None
+
+        with (
+            patch.object(executor, "_build_source", side_effect=[MagicMock(), MagicMock()]),
+            patch.object(executor, "_build_sinks", side_effect=[
+                [(MagicMock(), None, [])],
+                [(MagicMock(), None, [])],
+            ]),
+            patch.object(executor, "_build_serializer_in", return_value=MagicMock()),
+            patch.object(executor, "_build_serializer_out", return_value=MagicMock()),
+            patch.object(executor, "_build_transforms", return_value=[]),
+            patch.object(executor, "_run_batch_chunks", side_effect=fake_run_chunks),
+            patch("time.sleep"),
+        ):
+            result = executor.batch_run(config, stats=stats)
+
+        assert result.status == RunStatus.SUCCESS
+        assert result.records_in == 3  # final attempt only
+        assert stats.snapshot()["records_in"] == 3  # live == final, no accumulation
+
     def test_post_batch_cleanup_ignores_missing_trim_support(self):
         config = _make_pipeline()
 

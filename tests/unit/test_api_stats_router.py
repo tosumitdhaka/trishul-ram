@@ -8,6 +8,8 @@ from unittest.mock import MagicMock
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
+from tram.agent.stats_store import StatsStore
+from tram.api.routers.internal import PipelineStatsPayload
 from tram.api.routers.stats import router
 from tram.core.context import RunResult, RunStatus
 
@@ -55,6 +57,32 @@ def _make_app(states=None, db=None):
     app.state.controller = mock_controller
     app.state.db = db
     return app
+
+
+def _make_live_payload(
+    run_id="live-1",
+    pipeline_name="p1",
+    records_in=50,
+    records_out=40,
+    bytes_in=4096,
+    bytes_out=2048,
+    error_count=0,
+    age_seconds=10,
+):
+    """Build a fresh, non-stale StatsStore payload (30s interval -> 90s staleness)."""
+    return PipelineStatsPayload(
+        worker_id="w0",
+        pipeline_name=pipeline_name,
+        run_id=run_id,
+        schedule_type="batch",
+        uptime_seconds=age_seconds,
+        timestamp=datetime.now(UTC) - timedelta(seconds=age_seconds),
+        records_in=records_in,
+        records_out=records_out,
+        bytes_in=bytes_in,
+        bytes_out=bytes_out,
+        error_count=error_count,
+    )
 
 
 class TestStatsInMemory:
@@ -154,3 +182,102 @@ class TestStatsInMemory:
         assert len(data["sparkline"]) == 24
         assert len(data["chart"]["points"]) == 24
         assert data["chart"]["points"][-1]["bucket_start"] is not None
+
+
+class TestLiveStatsMerge:
+    """D.4: StatsStore live in-flight runs merged into cards, chart, and rows."""
+
+    def _app_with_store(self, states=None, store=None):
+        app = _make_app(states=states)
+        app.state.stats_store = store
+        return TestClient(app)
+
+    def test_live_payload_added_to_15m_cards(self):
+        store = StatsStore(interval=30)
+        store.update(_make_live_payload(
+            run_id="live-1", pipeline_name="p1",
+            records_in=50, records_out=40, bytes_in=4096, bytes_out=2048,
+        ))
+        state = _make_state("p1", "running", runs=[])
+        client = self._app_with_store(states=[state], store=store)
+        data = client.get("/api/stats").json()
+        assert data["records_in_last_15m"] == 50
+        assert data["records_out_last_15m"] == 40
+        assert data["bytes_in_last_15m"] == 4096
+        assert data["bytes_out_last_15m"] == 2048
+
+    def test_live_payload_added_to_current_chart_bucket(self):
+        store = StatsStore(interval=30)
+        store.update(_make_live_payload(
+            run_id="live-1", records_in=0, records_out=10, bytes_in=100, bytes_out=200,
+        ))
+        state = _make_state("p1", "running", runs=[])
+        client = self._app_with_store(states=[state], store=store)
+        data = client.get("/api/stats").json()
+        assert data["chart"]["total"] == 300
+        assert data["chart"]["points"][-1]["records_out"] == 10
+        assert data["chart"]["points"][-1]["bytes_processed"] == 300
+        assert data["sparkline"][-1]["records_out"] == 10
+
+    def test_live_payload_merged_into_per_pipeline_row(self):
+        store = StatsStore(interval=30)
+        run = _make_run(age_seconds=30)  # completed history: 10 in / 8 out
+        state = _make_state("p1", "running", runs=[run])
+        store.update(_make_live_payload(
+            run_id="live-1", pipeline_name="p1", records_in=50, records_out=40, error_count=2,
+        ))
+        client = self._app_with_store(states=[state], store=store)
+        data = client.get("/api/stats").json()
+        row = next(r for r in data["per_pipeline"] if r["name"] == "p1")
+        assert row["runs_last_hour"] == 2  # completed run + live run
+        assert row["records_in"] == 60
+        assert row["records_out"] == 48
+        assert row["errors"] == 2
+
+    def test_live_only_pipeline_gets_row(self):
+        store = StatsStore(interval=30)
+        state = _make_state("p1", "running", runs=[])
+        store.update(_make_live_payload(
+            run_id="live-1", pipeline_name="p1", records_in=7, records_out=7,
+        ))
+        client = self._app_with_store(states=[state], store=store)
+        data = client.get("/api/stats").json()
+        rows = {r["name"]: r for r in data["per_pipeline"]}
+        assert rows["p1"]["runs_last_hour"] == 1
+        assert rows["p1"]["records_in"] == 7
+        assert rows["p1"]["records_out"] == 7
+
+    def test_completion_boundary_drops_late_live_payload(self):
+        """A non-final snapshot for a run already in run history must be
+        dropped — the final recorded numbers own the dashboard."""
+        store = StatsStore(interval=30)
+        run = _make_run(age_seconds=30)  # run_id "run-001"
+        state = _make_state("p1", "running", runs=[run])
+        # Phantom: same run_id as the completed run, arriving late with inflated
+        # counters that must not override the final numbers.
+        store.update(_make_live_payload(
+            run_id="run-001", pipeline_name="p1", records_in=9999, records_out=9999,
+        ))
+        client = self._app_with_store(states=[state], store=store)
+        data = client.get("/api/stats").json()
+        assert data["records_in_last_15m"] == 10   # completed run only
+        assert data["records_out_last_15m"] == 8
+        assert data["chart"]["total"] == 1792      # 1024 + 768 from history
+
+    def test_is_final_live_entry_is_dropped(self):
+        store = StatsStore(interval=30)
+        payload = _make_live_payload(run_id="live-1", records_in=50)
+        payload.is_final = True
+        store.update(payload)
+        state = _make_state("p1", "running", runs=[])
+        client = self._app_with_store(states=[state], store=store)
+        data = client.get("/api/stats").json()
+        assert data["records_in_last_15m"] == 0
+
+    def test_stale_live_entry_is_ignored(self):
+        store = StatsStore(interval=30)
+        store.update(_make_live_payload(run_id="live-1", records_in=50, age_seconds=300))
+        state = _make_state("p1", "running", runs=[])
+        client = self._app_with_store(states=[state], store=store)
+        data = client.get("/api/stats").json()
+        assert data["records_in_last_15m"] == 0

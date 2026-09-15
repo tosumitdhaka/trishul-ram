@@ -429,11 +429,10 @@ class PipelineExecutor:
             records = surviving_records
 
             # ── Multi-sink routing with per-sink transforms ───────────────────
-            # Use threading.Event so parallel sink threads can set it atomically.
-            wrote_any_event = threading.Event()
 
             def _write_one_sink(sink_tuple, records_in, sink_index):
-                """Process one sink entry. Returns True if write succeeded."""
+                """Process one sink entry. Returns the number of records the
+                sink actually wrote (0 if nothing was written)."""
                 # Accept 3-tuple (legacy/test), 4-tuple, or 5-tuple (current with per-sink ser)
                 if len(sink_tuple) == 5:
                     sink_instance, condition, sink_transforms, sink_cfg, per_sink_ser = sink_tuple
@@ -451,7 +450,7 @@ class PipelineExecutor:
                     filtered = list(records_in)
 
                 if not filtered:
-                    return False
+                    return 0
 
                 # Apply per-sink transforms
                 sink_records = filtered
@@ -480,7 +479,7 @@ class PipelineExecutor:
                         break
 
                 if sink_transform_failed or not sink_records:
-                    return False
+                    return 0
 
                 active_ser = per_sink_ser if per_sink_ser is not None else serializer_out
 
@@ -505,12 +504,12 @@ class PipelineExecutor:
                         ctx.record_error("Circuit breaker open")
                         if stats is not None:
                             stats.increment(skipped=1, errors=["Circuit breaker open"])
-                        return False
+                        return 0
 
                 # Per-sink retry loop
                 retry_count = getattr(sink_cfg, "retry_count", 0)
                 retry_delay = getattr(sink_cfg, "retry_delay_seconds", 1.0)
-                wrote_partition = False
+                written = 0
                 partitions = _partition_records_for_template(
                     sink_records,
                     _sink_filename_template(sink_cfg, sink_instance),
@@ -540,8 +539,7 @@ class PipelineExecutor:
                             if cb_threshold > 0:
                                 with self._cb_lock:
                                     self._cb_state[sink_key] = (0, 0.0)
-                            wrote_any_event.set()
-                            wrote_partition = True
+                            written += len(partition_records)
                             partition_succeeded = True
                             break
                         except Exception as exc:
@@ -593,9 +591,11 @@ class PipelineExecutor:
                             dlq=1 if dlq_sink is not None else 0,
                             errors=[str(last_exc)],
                         )
-                    return False
+                    # A partition failure stops this sink; earlier partitions
+                    # that already wrote still count toward records_out.
+                    return written
 
-                return wrote_partition
+                return written
 
             if parallel_sinks and len(sinks) > 1:
                 with ThreadPoolExecutor(max_workers=len(sinks)) as pool:
@@ -603,20 +603,31 @@ class PipelineExecutor:
                         pool.submit(_write_one_sink, s, records, i)
                         for i, s in enumerate(sinks)
                     ]
+                    written_counts = []
                     for f in futures:
                         try:
-                            f.result()
+                            written_counts.append(f.result())
                         except TramError:
                             raise
             else:
-                for i, sink_tuple in enumerate(sinks):
+                written_counts = [
                     _write_one_sink(sink_tuple, records, i)
+                    for i, sink_tuple in enumerate(sinks)
+                ]
 
-            if wrote_any_event.is_set():
-                ctx.inc_records_out(len(records))
-                RECORDS_OUT.labels(pipeline=ctx.pipeline_name).inc(len(records))
+            # records_out counts records delivered to at least one sink (per
+            # record, not per sink-fanout — multi-sink pipelines must not
+            # inflate it). Each sink reports how many records it actually
+            # wrote; the largest single-sink count is the delivered set when
+            # sinks overlap (the common case) and a conservative lower bound
+            # otherwise. Condition-filtered or failed sinks no longer bump the
+            # count for records they never wrote (review D4).
+            records_written = max(written_counts) if written_counts else 0
+            if records_written > 0:
+                ctx.inc_records_out(records_written)
+                RECORDS_OUT.labels(pipeline=ctx.pipeline_name).inc(records_written)
                 if stats is not None:
-                    stats.increment(records_out=len(records))
+                    stats.increment(records_out=records_written)
             else:
                 ctx.inc_records_skipped(len(records))
                 RECORDS_SKIP.labels(pipeline=ctx.pipeline_name).inc(len(records))
@@ -872,6 +883,14 @@ class PipelineExecutor:
                         # Rebuilding only the source on retry would reuse a potentially
                         # broken sink connection that caused the original failure.
                         ctx = PipelineRunContext(pipeline_name=config.name)
+                        if stats is not None:
+                            # Retry parity: the context is rebuilt for the new
+                            # attempt, so the stats accumulator must be reset
+                            # alongside it — otherwise live totals accumulate
+                            # across attempts and can exceed the final
+                            # run-history numbers (which come from the last
+                            # attempt's context).
+                            stats.reset()
                         source = self._build_source(config)
                         sinks = self._build_sinks(config)
                         serializer_in = self._build_serializer_in(config)
