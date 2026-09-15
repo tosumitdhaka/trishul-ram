@@ -19,6 +19,12 @@ from unittest.mock import MagicMock
 
 import pytest
 
+from tram.agent.worker_pool import (
+    DISPATCH_ACCEPTED,
+    DISPATCH_FAILED,
+    DISPATCH_NO_CAPACITY,
+    DispatchOutcome,
+)
 from tram.core.context import RunResult, RunStatus
 from tram.pipeline.controller import PipelineController
 from tram.pipeline.loader import load_pipeline_from_yaml
@@ -225,7 +231,9 @@ class TestInstantiation:
 class TestKubernetesServiceLifecycle:
     def test_manager_stream_activation_creates_pipeline_service(self):
         wp = MagicMock()
-        wp.dispatch.return_value = "http://worker-0:8766"
+        wp.dispatch_with_result.return_value = DispatchOutcome(
+            worker_url="http://worker-0:8766", outcome=DISPATCH_ACCEPTED,
+        )
         k8s = MagicMock()
         ctrl = _make_controller(
             worker_pool=wp,
@@ -833,7 +841,9 @@ class TestOnWorkerRunComplete:
     def test_worker_pool_notified_on_complete(self):
         """WorkerPool.on_run_complete() must be called when worker_pool is set."""
         worker_pool = MagicMock()
-        worker_pool.dispatch.return_value = "http://worker-0:8766"
+        worker_pool.dispatch_with_result.return_value = DispatchOutcome(
+            worker_url="http://worker-0:8766", outcome=DISPATCH_ACCEPTED,
+        )
         ctrl = _started_controller(worker_pool=worker_pool)
         config = load_pipeline_from_yaml(_MANUAL_YAML)
         ctrl.register(config, yaml_text=_MANUAL_YAML)
@@ -851,7 +861,9 @@ class TestOnWorkerRunComplete:
 
     def test_worker_batch_completion_clears_active_batch_lease(self):
         worker_pool = MagicMock()
-        worker_pool.dispatch.return_value = "http://worker-0:8766"
+        worker_pool.dispatch_with_result.return_value = DispatchOutcome(
+            worker_url="http://worker-0:8766", outcome=DISPATCH_ACCEPTED,
+        )
         ctrl = _started_controller(worker_pool=worker_pool, manager_url="http://manager:8765")
         config = load_pipeline_from_yaml(_MANUAL_YAML)
         ctrl.register(config, yaml_text=_MANUAL_YAML)
@@ -896,9 +908,22 @@ class TestOnWorkerRunComplete:
 
 
 class TestWorkerDispatch:
-    def _worker_pool(self, dispatch_return="http://worker-0:8766"):
+    def _worker_pool(self, dispatch_return="http://worker-0:8766", dispatch_error=None):
         wp = MagicMock()
-        wp.dispatch.return_value = dispatch_return
+        if dispatch_error is not None:
+            wp.dispatch_with_result.return_value = DispatchOutcome(
+                worker_url=None, outcome=DISPATCH_FAILED, error=dispatch_error,
+            )
+        elif dispatch_return is None:
+            wp.dispatch_with_result.return_value = DispatchOutcome(
+                worker_url=None,
+                outcome=DISPATCH_NO_CAPACITY,
+                error="No healthy workers available for dispatch",
+            )
+        else:
+            wp.dispatch_with_result.return_value = DispatchOutcome(
+                worker_url=dispatch_return, outcome=DISPATCH_ACCEPTED,
+            )
         wp.multi_dispatch.return_value = MagicMock(
             accepted=["http://worker-0:8766"],
             run_ids=["pg1-w0"],
@@ -921,13 +946,13 @@ class TestWorkerDispatch:
         ctrl = _started_controller(worker_pool=wp, manager_url="http://manager:8765")
         config = load_pipeline_from_yaml(_INTERVAL_YAML)
         ctrl.register(config, yaml_text=_INTERVAL_YAML)
-        wp.dispatch.reset_mock()
+        wp.dispatch_with_result.reset_mock()
         ctrl.manager.set_status("my-interval", "scheduled")
 
         ctrl._run_batch("my-interval", run_id="r1")
 
-        wp.dispatch.assert_called_once()
-        call_kwargs = wp.dispatch.call_args.kwargs
+        wp.dispatch_with_result.assert_called_once()
+        call_kwargs = wp.dispatch_with_result.call_args.kwargs
         assert call_kwargs["pipeline_name"] == "my-interval"
         assert "r1" in call_kwargs["run_id"] or call_kwargs["run_id"]
         ctrl.stop()
@@ -1037,7 +1062,7 @@ class TestWorkerDispatch:
 
         ctrl._run_batch("my-interval")
 
-        generated_run_id = wp.dispatch.call_args.kwargs["run_id"]
+        generated_run_id = wp.dispatch_with_result.call_args.kwargs["run_id"]
         assert str(uuid.UUID(generated_run_id)) == generated_run_id
         ctrl.stop()
 
@@ -1056,6 +1081,23 @@ class TestWorkerDispatch:
         assert state.run_history[0].error == "No healthy workers available for dispatch"
         ctrl.stop()
 
+    def test_run_batch_dispatch_failure_records_real_error(self):
+        wp = self._worker_pool(dispatch_error="HTTP 503 from http://worker-0:8766")
+        ctrl = _started_controller(worker_pool=wp)
+        config = load_pipeline_from_yaml(_INTERVAL_YAML)
+        ctrl.register(config, yaml_text=_INTERVAL_YAML)
+        ctrl.manager.set_status("my-interval", "scheduled")
+
+        ctrl._run_batch("my-interval")
+        state = ctrl.manager.get("my-interval")
+        assert state.status == "error"
+        assert len(state.run_history) == 1
+        assert state.run_history[0].status == RunStatus.FAILED
+        assert state.run_history[0].error == (
+            "Worker dispatch failed: HTTP 503 from http://worker-0:8766"
+        )
+        ctrl.stop()
+
     def test_start_stream_dispatches_to_worker(self):
         wp = self._worker_pool()
         ctrl = _started_controller(worker_pool=wp)
@@ -1064,8 +1106,8 @@ class TestWorkerDispatch:
 
         ctrl._start_stream(config)
 
-        wp.dispatch.assert_called_once()
-        generated_run_id = wp.dispatch.call_args.kwargs["run_id"]
+        wp.dispatch_with_result.assert_called_once()
+        generated_run_id = wp.dispatch_with_result.call_args.kwargs["run_id"]
         assert str(uuid.UUID(generated_run_id)) == generated_run_id
         assert ctrl.manager.get("my-stream").status == "running"
         ctrl.stop()
@@ -1090,7 +1132,7 @@ class TestWorkerDispatch:
         ctrl._start_stream(config)
 
         wp.multi_dispatch.assert_called_once()
-        assert wp.dispatch.call_count == 0
+        assert wp.dispatch_with_result.call_count == 0
         call_kwargs = wp.multi_dispatch.call_args.kwargs
         assert call_kwargs["workers_cfg"].count == "all"
         assert ctrl._stream_run_ids["my-webhook-stream"] == ["pg1-w0", "pg1-w1"]
@@ -1319,7 +1361,7 @@ class TestWorkerDispatch:
         ctrl._start_stream(config)
         ctrl._stream_run_ids["my-stream"] = ["existing-run-id"]
         ctrl._start_stream(config)
-        assert wp.dispatch.call_count == 1  # only called once
+        assert wp.dispatch_with_result.call_count == 1  # only called once
         ctrl.stop()
 
     def test_stop_stream_calls_worker_stop(self):
@@ -1417,6 +1459,9 @@ class TestWorkerDispatch:
 class TestUpdateDeleteRestart:
     def test_update_identical_yaml_is_noop(self):
         ctrl = _started_controller()
+        # Pause the scheduler so register()'s immediate first batch run
+        # cannot set status "running" and race the assertions below.
+        ctrl._scheduler.pause()
         config = load_pipeline_from_yaml(_INTERVAL_YAML)
         ctrl.register(config, yaml_text=_INTERVAL_YAML)
         original_state = ctrl.manager.get("my-interval")

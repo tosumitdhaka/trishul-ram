@@ -3,7 +3,12 @@ from __future__ import annotations
 
 from unittest.mock import MagicMock, patch
 
-from tram.agent.worker_pool import WorkerPool
+from tram.agent.worker_pool import (
+    DISPATCH_ACCEPTED,
+    DISPATCH_FAILED,
+    DISPATCH_NO_CAPACITY,
+    WorkerPool,
+)
 
 # ── Helpers ────────────────────────────────────────────────────────────────
 
@@ -100,13 +105,112 @@ class TestHealthPolling:
         assert pool._url_to_worker_id["http://w0:8766"] == "w0"
         assert pool._url_to_worker_id["http://w1:8766"] == "w1"
 
-    def test_poll_marks_down_worker_on_error(self):
+    def test_poll_marks_down_worker_after_consecutive_failures(self):
         pool = _pool("http://w0:8766")
         mock_client = MagicMock()
         mock_client.__enter__ = lambda s: mock_client
         mock_client.__exit__ = MagicMock(return_value=False)
         mock_client.get.side_effect = ConnectionError("refused")
         with patch("httpx.Client", return_value=mock_client):
+            pool._poll_all()
+            pool._poll_all()
+
+        assert pool._health["http://w0:8766"]["ok"] is False
+        assert pool._health["http://w0:8766"]["failures"] == 2
+
+    def test_single_failed_probe_does_not_mark_worker_down(self):
+        pool = _pool("http://w0:8766")
+        mock_client = MagicMock()
+        mock_client.__enter__ = lambda s: mock_client
+        mock_client.__exit__ = MagicMock(return_value=False)
+        mock_client.get.side_effect = ConnectionError("refused")
+        with patch("httpx.Client", return_value=mock_client):
+            pool._poll_all()
+
+        assert pool._health["http://w0:8766"]["ok"] is True
+        assert pool._health["http://w0:8766"]["failures"] == 1
+
+    def test_failed_probe_recovering_next_poll_keeps_worker_healthy(self):
+        pool = _pool("http://w0:8766")
+        attempts = {"count": 0}
+
+        def _get(url, **kwargs):
+            attempts["count"] += 1
+            if attempts["count"] == 1:
+                raise ConnectionError("blip")
+            resp = MagicMock()
+            resp.status_code = 200
+            resp.json.return_value = {"ok": True, "active_runs": 0, "worker_id": "w0"}
+            return resp
+
+        mock_client = MagicMock()
+        mock_client.__enter__ = lambda s: mock_client
+        mock_client.__exit__ = MagicMock(return_value=False)
+        mock_client.get.side_effect = _get
+
+        with patch("httpx.Client", return_value=mock_client):
+            pool._poll_all()
+            pool._poll_all()
+
+        health = pool._health["http://w0:8766"]
+        assert health["ok"] is True
+        assert health["failures"] == 0
+
+    def test_worker_marked_down_after_two_consecutive_failures_by_default(self):
+        pool = _pool("http://w0:8766")
+        mock_client = MagicMock()
+        mock_client.__enter__ = lambda s: mock_client
+        mock_client.__exit__ = MagicMock(return_value=False)
+        mock_client.get.side_effect = ConnectionError("refused")
+        with patch("httpx.Client", return_value=mock_client):
+            pool._poll_all()
+            pool._poll_all()
+
+        assert pool._health["http://w0:8766"]["ok"] is False
+
+    def test_worker_recovers_after_debounce_threshold_was_reached(self):
+        pool = _pool("http://w0:8766")
+        attempts = {"count": 0}
+
+        def _get(url, **kwargs):
+            attempts["count"] += 1
+            if attempts["count"] <= 2:
+                raise ConnectionError("down")
+            resp = MagicMock()
+            resp.status_code = 200
+            resp.json.return_value = {"ok": True, "active_runs": 0, "worker_id": "w0"}
+            return resp
+
+        mock_client = MagicMock()
+        mock_client.__enter__ = lambda s: mock_client
+        mock_client.__exit__ = MagicMock(return_value=False)
+        mock_client.get.side_effect = _get
+
+        with patch("httpx.Client", return_value=mock_client):
+            pool._poll_all()
+            pool._poll_all()
+            assert pool._health["http://w0:8766"]["ok"] is False
+            pool._poll_all()
+
+        health = pool._health["http://w0:8766"]
+        assert health["ok"] is True
+        assert health["failures"] == 0
+
+    def test_custom_failure_threshold_is_respected(self):
+        pool = WorkerPool(
+            workers=["http://w0:8766"],
+            manager_url="http://manager",
+            poll_interval=60,
+            health_failures_to_down=3,
+        )
+        mock_client = MagicMock()
+        mock_client.__enter__ = lambda s: mock_client
+        mock_client.__exit__ = MagicMock(return_value=False)
+        mock_client.get.side_effect = ConnectionError("refused")
+        with patch("httpx.Client", return_value=mock_client):
+            pool._poll_all()
+            pool._poll_all()
+            assert pool._health["http://w0:8766"]["ok"] is True
             pool._poll_all()
 
         assert pool._health["http://w0:8766"]["ok"] is False
@@ -224,6 +328,62 @@ class TestDispatch:
         with patch("httpx.Client", return_value=mock_client):
             result = pool.dispatch("r6", "p", "yaml", "batch")
         assert result is None
+
+    def test_dispatch_with_result_labels_accepted(self):
+        pool = _pool("http://w0:8766")
+        mock_client = MagicMock()
+        mock_client.__enter__ = lambda s: mock_client
+        mock_client.__exit__ = MagicMock(return_value=False)
+        mock_client.post.return_value = MagicMock(raise_for_status=MagicMock())
+
+        with patch("httpx.Client", return_value=mock_client):
+            outcome = pool.dispatch_with_result("r10", "p", "yaml", "batch")
+
+        assert outcome.worker_url == "http://w0:8766"
+        assert outcome.outcome == DISPATCH_ACCEPTED
+        assert outcome.error is None
+
+    def test_dispatch_with_result_labels_no_capacity(self):
+        pool = _pool("http://w0:8766")
+        pool._health["http://w0:8766"]["ok"] = False
+
+        outcome = pool.dispatch_with_result("r11", "p", "yaml", "batch")
+
+        assert outcome.worker_url is None
+        assert outcome.outcome == DISPATCH_NO_CAPACITY
+        assert "No healthy workers" in (outcome.error or "")
+
+    def test_dispatch_with_result_labels_dispatch_failure_with_error(self):
+        pool = _pool("http://w0:8766")
+        mock_client = MagicMock()
+        mock_client.__enter__ = lambda s: mock_client
+        mock_client.__exit__ = MagicMock(return_value=False)
+        mock_client.post.side_effect = ConnectionError("refused")
+
+        captured: dict = {}
+        real_multi_dispatch = pool.multi_dispatch
+
+        def _capturing_multi_dispatch(*args, **kwargs):
+            result = real_multi_dispatch(*args, **kwargs)
+            captured["result"] = result
+            return result
+
+        pool.multi_dispatch = _capturing_multi_dispatch
+
+        with patch("httpx.Client", return_value=mock_client):
+            outcome = pool.dispatch_with_result("r12", "p", "yaml", "batch")
+
+        assert outcome.worker_url is None
+        assert outcome.outcome == DISPATCH_FAILED
+        assert "refused" in (outcome.error or "")
+        # the failure detail also reaches the slot entry
+        assert "refused" in (captured["result"].slots[0].get("error") or "")
+        assert pool._assignments == {}
+
+    def test_dispatch_keeps_backward_compatible_none_on_failure(self):
+        pool = _pool("http://w0:8766")
+        pool._health["http://w0:8766"]["ok"] = False
+        assert pool.dispatch("r13", "p", "yaml", "batch") is None
 
     def test_dispatch_to_worker_targets_specific_worker(self):
         pool = _pool("http://w0:8766", "http://w1:8766")

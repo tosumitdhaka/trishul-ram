@@ -624,24 +624,6 @@ class TramDB:
                     ON CONFLICT (username) DO UPDATE SET password_hash = :h, updated_at = :now
                 """), {"u": username, "h": password_hash, "now": now})
 
-    # ── Registered pipelines (v1.1.2) ─────────────────────────────────────
-
-    def pause_pipeline(self, name: str) -> None:
-        """Mark a pipeline as paused (legacy — maps to stop_pipeline in v1.2.0)."""
-        self.stop_pipeline(name)
-
-    def resume_pipeline(self, name: str) -> None:
-        """Clear the paused flag (legacy — maps to start_pipeline in v1.2.0)."""
-        self.start_pipeline_flag(name)
-
-    def is_pipeline_paused(self, name: str) -> bool:
-        """Return True if the pipeline is stopped (legacy alias for is_pipeline_stopped)."""
-        return self.is_pipeline_stopped(name)
-
-    def get_paused_pipeline_names(self) -> list[str]:
-        """Return names of stopped pipelines (legacy alias for get_stopped_pipeline_names)."""
-        return self.get_stopped_pipeline_names()
-
     # ── v1.2.0: stopped flag (replaces paused) ────────────────────────────
 
     def stop_pipeline(self, name: str) -> None:

@@ -3,6 +3,12 @@ from __future__ import annotations
 
 from unittest.mock import MagicMock, patch
 
+from tram.agent.worker_pool import (
+    DISPATCH_ACCEPTED,
+    DISPATCH_FAILED,
+    DISPATCH_NO_CAPACITY,
+    DispatchOutcome,
+)
 from tram.pipeline.controller import PipelineController
 from tram.pipeline.loader import load_pipeline_from_yaml
 
@@ -62,7 +68,9 @@ def test_batch_dispatch_accepted_increments_counter():
     state.status = "scheduled"
     ctrl.manager.exists.return_value = True
     ctrl.manager.get.return_value = state
-    worker_pool.dispatch.return_value = "http://w0:8766"
+    worker_pool.dispatch_with_result.return_value = DispatchOutcome(
+        worker_url="http://w0:8766", outcome=DISPATCH_ACCEPTED,
+    )
 
     counter = MagicMock()
     counter.labels.return_value = counter
@@ -86,7 +94,9 @@ def test_batch_dispatch_no_workers_increments_counter():
     state.status = "scheduled"
     ctrl.manager.exists.return_value = True
     ctrl.manager.get.return_value = state
-    worker_pool.dispatch.return_value = None  # no workers
+    worker_pool.dispatch_with_result.return_value = DispatchOutcome(
+        worker_url=None, outcome=DISPATCH_NO_CAPACITY,
+    )  # no workers
 
     counter = MagicMock()
     counter.labels.return_value = counter
@@ -95,6 +105,32 @@ def test_batch_dispatch_no_workers_increments_counter():
         ctrl._run_batch("my-batch")
 
     counter.labels.assert_called_with(pipeline="my-batch", result="no_workers")
+    counter.inc.assert_called_once()
+
+
+# ── Batch dispatch: dispatch attempt failed increments dispatch_failed ────
+
+
+def test_batch_dispatch_failure_increments_dispatch_failed_counter():
+    ctrl, worker_pool = _make_manager_controller()
+    config = load_pipeline_from_yaml(_BATCH_YAML)
+    state = MagicMock()
+    state.config = config
+    state.yaml_text = _BATCH_YAML
+    state.status = "scheduled"
+    ctrl.manager.exists.return_value = True
+    ctrl.manager.get.return_value = state
+    worker_pool.dispatch_with_result.return_value = DispatchOutcome(
+        worker_url=None, outcome=DISPATCH_FAILED, error="HTTP 503",
+    )
+
+    counter = MagicMock()
+    counter.labels.return_value = counter
+
+    with patch("tram.metrics.registry.MGR_DISPATCH_TOTAL", counter):
+        ctrl._run_batch("my-batch")
+
+    counter.labels.assert_called_with(pipeline="my-batch", result="dispatch_failed")
     counter.inc.assert_called_once()
 
 
@@ -111,7 +147,9 @@ def test_stream_single_dispatch_accepted_increments_counter():
     ctrl.manager.exists.return_value = True
     ctrl.manager.get.return_value = state
     ctrl._stream_run_ids = {}
-    worker_pool.dispatch.return_value = "http://w0:8766"
+    worker_pool.dispatch_with_result.return_value = DispatchOutcome(
+        worker_url="http://w0:8766", outcome=DISPATCH_ACCEPTED,
+    )
 
     counter = MagicMock()
     counter.labels.return_value = counter
@@ -120,6 +158,60 @@ def test_stream_single_dispatch_accepted_increments_counter():
         ctrl._start_stream(config)
 
     counter.labels.assert_called_with(pipeline="my-stream", result="accepted")
+    counter.inc.assert_called_once()
+
+
+# ── Stream single-dispatch: no workers increments no_workers label ────────
+
+
+def test_stream_dispatch_no_workers_increments_counter():
+    ctrl, worker_pool = _make_manager_controller()
+    config = load_pipeline_from_yaml(_STREAM_YAML)
+    config = config.model_copy(update={"workers": None})
+    state = MagicMock()
+    state.config = config
+    state.yaml_text = _STREAM_YAML
+    ctrl.manager.exists.return_value = True
+    ctrl.manager.get.return_value = state
+    ctrl._stream_run_ids = {}
+    worker_pool.dispatch_with_result.return_value = DispatchOutcome(
+        worker_url=None, outcome=DISPATCH_NO_CAPACITY,
+    )  # no workers
+
+    counter = MagicMock()
+    counter.labels.return_value = counter
+
+    with patch("tram.metrics.registry.MGR_DISPATCH_TOTAL", counter):
+        ctrl._start_stream(config)
+
+    counter.labels.assert_called_with(pipeline="my-stream", result="no_workers")
+    counter.inc.assert_called_once()
+
+
+# ── Stream single-dispatch: dispatch attempt failed increments dispatch_failed ──
+
+
+def test_stream_dispatch_failure_increments_dispatch_failed_counter():
+    ctrl, worker_pool = _make_manager_controller()
+    config = load_pipeline_from_yaml(_STREAM_YAML)
+    config = config.model_copy(update={"workers": None})
+    state = MagicMock()
+    state.config = config
+    state.yaml_text = _STREAM_YAML
+    ctrl.manager.exists.return_value = True
+    ctrl.manager.get.return_value = state
+    ctrl._stream_run_ids = {}
+    worker_pool.dispatch_with_result.return_value = DispatchOutcome(
+        worker_url=None, outcome=DISPATCH_FAILED, error="HTTP 503",
+    )
+
+    counter = MagicMock()
+    counter.labels.return_value = counter
+
+    with patch("tram.metrics.registry.MGR_DISPATCH_TOTAL", counter):
+        ctrl._start_stream(config)
+
+    counter.labels.assert_called_with(pipeline="my-stream", result="dispatch_failed")
     counter.inc.assert_called_once()
 
 

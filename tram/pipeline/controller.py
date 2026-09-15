@@ -139,8 +139,6 @@ class PipelineController:
         # On manager shutdown, keep worker-side streams alive so placement
         # reconciliation can restore state after restart. Manual stop/delete paths
         # still stop workers explicitly.
-        if self._worker_pool is None:
-            pass
         self._stream_run_ids.clear()
 
         for name in list(self._stop_events.keys()):
@@ -468,18 +466,28 @@ class PipelineController:
                 f"{self._manager_url}/api/internal/run-complete"
                 if self._manager_url else ""
             )
-            worker_url = self._worker_pool.dispatch(
+            from tram.agent.worker_pool import DISPATCH_FAILED, DISPATCH_NO_CAPACITY
+
+            outcome = self._worker_pool.dispatch_with_result(
                 run_id=run_id,
                 pipeline_name=pipeline_name,
                 yaml_text=state.yaml_text,
                 schedule_type=state.config.schedule.type,
                 callback_url=callback_url,
             )
-            if worker_url is None:
+            if outcome.outcome in (DISPATCH_NO_CAPACITY, DISPATCH_FAILED):
                 failure_time = datetime.now(UTC)
-                error = "No healthy workers available for dispatch"
-                logger.error("Batch dispatch failed: no healthy workers",
-                             extra={"pipeline": pipeline_name, "run_id": run_id})
+                if outcome.outcome == DISPATCH_NO_CAPACITY:
+                    error = "No healthy workers available for dispatch"
+                    logger.error("Batch dispatch failed: no healthy workers",
+                                 extra={"pipeline": pipeline_name, "run_id": run_id})
+                    metric_result = "no_workers"
+                else:
+                    error = f"Worker dispatch failed: {outcome.error or 'unknown error'}"
+                    logger.error("Batch dispatch attempt failed",
+                                 extra={"pipeline": pipeline_name, "run_id": run_id,
+                                        "error": outcome.error})
+                    metric_result = "dispatch_failed"
                 result = RunResult(
                     run_id=run_id,
                     pipeline_name=pipeline_name,
@@ -494,12 +502,12 @@ class PipelineController:
                 )
                 self._finalize_batch_result(pipeline_name, result)
                 from tram.metrics.registry import MGR_DISPATCH_TOTAL
-                MGR_DISPATCH_TOTAL.labels(pipeline=pipeline_name, result="no_workers").inc()
+                MGR_DISPATCH_TOTAL.labels(pipeline=pipeline_name, result=metric_result).inc()
             else:
                 self._active_batch_runs[pipeline_name] = _ActiveBatchRun(
                     run_id=run_id,
                     pipeline_name=pipeline_name,
-                    worker_url=worker_url,
+                    worker_url=outcome.worker_url,
                     schedule_type=state.config.schedule.type,
                     started_at=datetime.now(UTC),
                 )
@@ -753,19 +761,31 @@ class PipelineController:
                 )
                 return
 
+            from tram.agent.worker_pool import DISPATCH_FAILED, DISPATCH_NO_CAPACITY
+
             run_id = str(uuid.uuid4())
-            worker_url = self._worker_pool.dispatch(
+            outcome = self._worker_pool.dispatch_with_result(
                 run_id=run_id,
                 pipeline_name=config.name,
                 yaml_text=state.yaml_text,
                 schedule_type="stream",
                 callback_url=callback_url,
             )
-            if worker_url is None:
+            if outcome.outcome == DISPATCH_NO_CAPACITY:
                 logger.error("Stream dispatch failed: no healthy workers",
                              extra={"pipeline": config.name})
+                from tram.metrics.registry import MGR_DISPATCH_TOTAL
+                MGR_DISPATCH_TOTAL.labels(pipeline=config.name, result="no_workers").inc()
                 self.manager.set_status(config.name, "error")
                 return
+            if outcome.outcome == DISPATCH_FAILED:
+                logger.error("Stream dispatch attempt failed",
+                             extra={"pipeline": config.name, "error": outcome.error})
+                from tram.metrics.registry import MGR_DISPATCH_TOTAL
+                MGR_DISPATCH_TOTAL.labels(pipeline=config.name, result="dispatch_failed").inc()
+                self.manager.set_status(config.name, "error")
+                return
+            worker_url = outcome.worker_url
             from tram.metrics.registry import MGR_DISPATCH_TOTAL
             MGR_DISPATCH_TOTAL.labels(pipeline=config.name, result="accepted").inc()
             self._stream_run_ids[config.name] = [run_id]

@@ -41,6 +41,29 @@ class BroadcastResult:
     slots: list[dict]
 
 
+# Dispatch outcome labels — ``dispatch()`` historically collapsed every failure
+# into ``None``, conflating "no healthy workers" (a capacity condition) with
+# "a healthy worker was selected but the dispatch attempt failed" (an error).
+# ``dispatch_with_result()`` labels the real cause so it can reach run history.
+DISPATCH_ACCEPTED = "accepted"
+DISPATCH_NO_CAPACITY = "no_capacity"
+DISPATCH_FAILED = "dispatch_failed"
+
+
+@dataclass
+class DispatchOutcome:
+    """Labeled result of a single-run dispatch attempt.
+
+    ``worker_url`` is the accepting worker URL when ``outcome`` is
+    ``DISPATCH_ACCEPTED``, otherwise ``None``. ``error`` carries the failure
+    detail for ``DISPATCH_FAILED`` outcomes.
+    """
+
+    worker_url: str | None
+    outcome: str
+    error: str | None = None
+
+
 class WorkerPool:
     """Manager-side registry for tram-worker agents."""
 
@@ -51,16 +74,22 @@ class WorkerPool:
         poll_interval: int = 10,
         stats_store=None,
         stats_interval: int = 30,
+        health_failures_to_down: int = 2,
     ) -> None:
         self._workers = list(workers)
         self._manager_url = manager_url
         self._poll_interval = poll_interval
         self._stats_store = stats_store
         self._stats_interval = stats_interval
+        # Number of consecutive failed health probes before a worker is marked
+        # down (health debounce / hysteresis).
+        self._health_failures_to_down = max(1, health_failures_to_down)
 
-        # {url: {"ok": bool, "active_runs": int, "running_pipelines": list[str]}}
+        # {url: {"ok": bool, "active_runs": int, "running_pipelines": list[str],
+        #        "failures": int}}  # "failures" = consecutive failed probes
         self._health: dict[str, dict] = {
-            url: {"ok": True, "active_runs": 0, "running_pipelines": []} for url in workers
+            url: {"ok": True, "active_runs": 0, "running_pipelines": [], "failures": 0}
+            for url in workers
         }
         # {run_id: worker_url}
         self._assignments: dict[str, str] = {}
@@ -156,9 +185,15 @@ class WorkerPool:
             self._poll_all()
 
     def _poll_all(self) -> None:
-        """Probe /agent/health on every configured worker."""
+        """Probe /agent/health on every configured worker.
+
+        A single failed probe does not mark a worker down: the worker is only
+        marked unhealthy after ``health_failures_to_down`` consecutive failed
+        probes, so a transient blip that recovers on the next poll is ignored.
+        """
         with httpx.Client(timeout=5) as client:
             for url in self._workers:
+                probe_error: str | None = None
                 try:
                     resp = client.get(f"{url}/agent/health")
                     data = resp.json() if resp.status_code == 200 else {}
@@ -166,29 +201,45 @@ class WorkerPool:
                     active = int(data.get("active_runs", 0))
                     pipelines = list(data.get("running_pipelines", []))
                     worker_id = str(data.get("worker_id", "")).strip()
-                    with self._lock:
-                        prev_ok = self._health[url]["ok"]
-                        self._health[url] = {"ok": ok, "active_runs": active, "running_pipelines": pipelines}
-                        if worker_id:
-                            prev_worker_id = self._url_to_worker_id.get(url)
-                            if prev_worker_id and prev_worker_id != worker_id:
-                                self._worker_ids.pop(prev_worker_id, None)
-                            self._worker_ids[worker_id] = url
-                            self._url_to_worker_id[url] = worker_id
-                    if prev_ok and not ok:
-                        logger.warning("Worker went down", extra={"worker": url})
-                    elif not prev_ok and ok:
-                        logger.info("Worker came back up", extra={"worker": url})
                 except Exception as exc:
-                    with self._lock:
-                        was_ok = self._health[url]["ok"]
-                        self._health[url]["ok"] = False
-                        self._health[url]["running_pipelines"] = []
-                    if was_ok:
-                        logger.warning(
-                            "Worker health probe failed",
-                            extra={"worker": url, "error": str(exc)},
-                        )
+                    ok = False
+                    worker_id = ""
+                    probe_error = str(exc)
+
+                with self._lock:
+                    health = self._health[url]
+                    prev_ok = health["ok"]
+                    if ok:
+                        health.update({
+                            "ok": True,
+                            "failures": 0,
+                            "active_runs": active,
+                            "running_pipelines": pipelines,
+                        })
+                    else:
+                        health["failures"] = health.get("failures", 0) + 1
+                        if health["failures"] >= self._health_failures_to_down:
+                            health["ok"] = False
+                        health["running_pipelines"] = []
+                    consecutive_failures = health["failures"]
+                    if worker_id:
+                        prev_worker_id = self._url_to_worker_id.get(url)
+                        if prev_worker_id and prev_worker_id != worker_id:
+                            self._worker_ids.pop(prev_worker_id, None)
+                        self._worker_ids[worker_id] = url
+                        self._url_to_worker_id[url] = worker_id
+
+                if ok and not prev_ok:
+                    logger.info("Worker came back up", extra={"worker": url})
+                elif not ok and prev_ok:
+                    logger.warning(
+                        "Worker health probe failed",
+                        extra={
+                            "worker": url,
+                            "error": probe_error,
+                            "consecutive_failures": consecutive_failures,
+                        },
+                    )
 
         with self._lock:
             healthy = sum(1 for h in self._health.values() if h["ok"])
@@ -431,7 +482,12 @@ class WorkerPool:
         yaml_text: str,
         schedule_type: str,
         callback_url: str = "",
-    ) -> bool:
+    ) -> str | None:
+        """POST a run to a specific worker.
+
+        Returns ``None`` on success, or the failure detail string when the
+        HTTP dispatch attempt raised or returned a non-2xx status.
+        """
         if not callback_url and self._manager_url:
             callback_url = f"{self._manager_url}/api/internal/run-complete"
 
@@ -451,7 +507,7 @@ class WorkerPool:
                 "Worker dispatch failed",
                 extra={"worker": worker_url, "pipeline": pipeline_name, "error": str(exc)},
             )
-            return False
+            return str(exc)
 
         with self._lock:
             self._assignments[run_id] = worker_url
@@ -470,7 +526,7 @@ class WorkerPool:
                 "schedule_type": schedule_type,
             },
         )
-        return True
+        return None
 
     def multi_dispatch(
         self,
@@ -521,22 +577,25 @@ class WorkerPool:
             slot_run_id = placement_group_id if target_slots == 1 else f"{placement_group_id}-w{index}"
             current_run_id = None
             slot_status = "stale"
-            if worker_url is not None and self._dispatch_to_worker(
-                worker_url=worker_url,
-                run_id=slot_run_id,
-                pipeline_name=pipeline_name,
-                yaml_text=yaml_text,
-                schedule_type=schedule_type,
-                callback_url=callback_url,
-            ):
-                accepted.append(worker_url)
-                run_ids.append(slot_run_id)
-                current_run_id = slot_run_id
-                slot_status = "running"
-            elif worker_url is not None:
-                rejected.append(worker_url)
+            dispatch_error: str | None = None
+            if worker_url is not None:
+                dispatch_error = self._dispatch_to_worker(
+                    worker_url=worker_url,
+                    run_id=slot_run_id,
+                    pipeline_name=pipeline_name,
+                    yaml_text=yaml_text,
+                    schedule_type=schedule_type,
+                    callback_url=callback_url,
+                )
+                if dispatch_error is None:
+                    accepted.append(worker_url)
+                    run_ids.append(slot_run_id)
+                    current_run_id = slot_run_id
+                    slot_status = "running"
+                else:
+                    rejected.append(worker_url)
 
-            slots.append({
+            slot = {
                 "worker_index": index,
                 "worker_url": worker_url,
                 "worker_id": pinned_worker_id or (self.worker_id_for_url(worker_url) if worker_url else None),
@@ -545,7 +604,10 @@ class WorkerPool:
                 "current_run_id": current_run_id,
                 "status": slot_status,
                 "restart_count": 0,
-            })
+            }
+            if dispatch_error is not None:
+                slot["error"] = dispatch_error
+            slots.append(slot)
 
         status = "error"
         if accepted:
@@ -567,7 +629,36 @@ class WorkerPool:
         schedule_type: str,
         callback_url: str = "",
     ) -> str | None:
-        """POST a run to the least-loaded healthy worker."""
+        """POST a run to the least-loaded healthy worker.
+
+        Backward-compatible single-dispatch helper: returns the accepting
+        worker URL, or ``None`` when the dispatch did not succeed. Callers
+        that need the real cause (capacity vs. dispatch failure) should use
+        :meth:`dispatch_with_result` instead.
+        """
+        return self.dispatch_with_result(
+            run_id=run_id,
+            pipeline_name=pipeline_name,
+            yaml_text=yaml_text,
+            schedule_type=schedule_type,
+            callback_url=callback_url,
+        ).worker_url
+
+    def dispatch_with_result(
+        self,
+        run_id: str,
+        pipeline_name: str,
+        yaml_text: str,
+        schedule_type: str,
+        callback_url: str = "",
+    ) -> DispatchOutcome:
+        """POST a run to the least-loaded healthy worker, labeling the outcome.
+
+        The returned :class:`DispatchOutcome` distinguishes "no healthy
+        workers" (``DISPATCH_NO_CAPACITY``, a capacity condition) from "a
+        healthy worker was selected but the dispatch attempt failed"
+        (``DISPATCH_FAILED``, an error) so the real cause can reach run history.
+        """
         from tram.models.pipeline import WorkersConfig
 
         result = self.multi_dispatch(
@@ -578,7 +669,19 @@ class WorkerPool:
             schedule_type=schedule_type,
             callback_url=callback_url,
         )
-        return result.accepted[0] if result.accepted else None
+        if result.accepted:
+            return DispatchOutcome(worker_url=result.accepted[0], outcome=DISPATCH_ACCEPTED)
+        if result.rejected:
+            return DispatchOutcome(
+                worker_url=None,
+                outcome=DISPATCH_FAILED,
+                error=result.slots[0].get("error") if result.slots else None,
+            )
+        return DispatchOutcome(
+            worker_url=None,
+            outcome=DISPATCH_NO_CAPACITY,
+            error="No healthy workers available for dispatch",
+        )
 
     def dispatch_to_worker(
         self,
@@ -598,7 +701,7 @@ class WorkerPool:
             yaml_text=yaml_text,
             schedule_type=schedule_type,
             callback_url=callback_url,
-        )
+        ) is None
 
     def stop_run(self, run_id: str, pipeline_name: str) -> bool:
         """Send a stop signal to whichever worker owns run_id.
