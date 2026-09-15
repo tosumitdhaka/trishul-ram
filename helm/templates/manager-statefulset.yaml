@@ -80,6 +80,11 @@ spec:
             ## Manager mode: own all scheduling, dispatch runs to workers
             - name: TRAM_MODE
               value: "manager"
+            ## D.2 (GH #17): count=1 stream durable placement. Default "1" (on) —
+            ## set via .Values.env.TRAM_STREAM_SINGLE_PLACEMENT below (the env
+            ## range injects it into this container).
+            ##   "1" = count=1 streams get a durable 1-slot placement row
+            ##   "0" = legacy count=1 single-dispatch path (rollback)
             ## Point manager at its own service so workers can reach the callback URL
             - name: TRAM_MANAGER_URL
               value: "http://{{ include "tram.fullname" . }}:{{ .Values.service.port }}"

@@ -159,6 +159,11 @@ sharedStorage:
 env:
   TRAM_LOG_LEVEL: INFO
   TRAM_LOG_FORMAT: json
+  ## Durable placement for count=1 streams (v1.3.1, GH #17)
+  ## "1" (default) routes count=1 stream dispatch through the broadcast-placement
+  ## machinery (durable 1-slot row, reconciler-driven recovery). "0" keeps the
+  ## legacy single-dispatch path. Placement rows keep working under either value.
+  TRAM_STREAM_SINGLE_PLACEMENT: "1"
   # TRAM_NODE_ID: ""            # defaults to hostname (auto-set from pod name in StatefulSet)
   # TRAM_SHUTDOWN_TIMEOUT_SECONDS: "30"  # drain timeout before forced stop
   # --- Database (v0.7.0) ---

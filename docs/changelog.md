@@ -19,6 +19,10 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - Worker health polling now uses hysteresis — a worker is marked down only after 2 consecutive failed probes instead of a single failed probe
 - Live in-flight runs (worker streams and standalone batch runs) are now merged into the stats dashboard mid-run: the 15-minute cards, load chart, and per-pipeline rows reflect live counters instead of only completed run history, and late stale stats payloads for already-completed runs are dropped (completion-boundary guard)
 - New metric `tram_mgr_stats_missed_total{worker_id}` counts worker→manager stats-post misses (incremented on the worker process)
+- `TRAM_STREAM_SINGLE_PLACEMENT` (default `1`, GH #17): count=1 stream dispatch now produces a durable 1-slot placement row — manager-restart adoption, worker-death recovery (within ~40-60s), and stale-config detection become reconciler-driven. Rollback: set `0` and restart the manager; placement rows keep working under either value. An unrecognized value is logged at WARNING and fails open (feature ON)
+- Manager boot now materializes a placement from a pre-upgrade live count=1 run (adoption, zero interruption); the reconciler's unplaced-stream pass converts running placement-less streams without a restart, self-heals bookkeeping, and stops duplicate stray runs (earliest kept)
+- Config-drift detection: a live stream running stale YAML is stopped and redispatched with the current config, with new `tram_mgr_reconcile_action_total` labels `config_drift_redispatch`, `stream_recover`, and `adopt_materialize`; older agents that do not report `config_sha256` fail open (never acted on)
+- The worker agent now exposes `config_sha256` of the dispatched YAML in `/agent/status`, passed through the worker pool's `live_streams()`/`find_pipeline_runs()` (absent means unknown)
 
 ### Changed
 
@@ -34,6 +38,7 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - **Potentially breaking (metrics semantics):** `records_out` now counts records actually delivered to at least one sink (max of per-sink written counts) instead of the input chunk size whenever any sink wrote — for condition-filtered or partially-failing sinks the number drops to what was really written, and `bytes_out` still counts full I/O fanout. Note: with disjoint (partitioned) sink conditions the count is a conservative lower bound. Alert thresholds or capacity calculations keyed to the old numbers may need adjustment
 - `json_flatten`/`explode` transforms are now linear on large nested lists (a 10k-element explode drops from minutes to milliseconds, GH #18) and exploded records no longer alias the source record
 - Manager worker probes (health polling, status, and live-streams fan-out) now run in parallel per worker — a slow or unreachable worker no longer serializes the whole fan-out or stalls the API endpoints that trigger it
+- `/api/cluster/nodes` now reflects the debounced (2-consecutive-failure) worker health state instead of a one-shot probe result, and `/api/pipelines/{name}/placement` renders a synthetic single-slot view for streams without a placement row when live stats exist (previously a 404 in manager mode); standalone streams with no stats entry return a clean 404, which the UI renders as a hidden placement card
 
 ### Fixed
 
@@ -48,6 +53,10 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - Placement slot run-id updates are now per-slot compare-and-set writes (keyed on placement group, slot index, and expected run id) — a stale stats payload from a superseded restart can no longer regress the recorded run id, and a lost write race is detected and skipped instead of silently clobbering
 - `on_error: retry` now resets the live stats accumulator along with the retry context, so live totals match the final run-history numbers
 - Failed stats heartbeats are logged at WARNING with pipeline context and counted (previously DEBUG-swallowed, making manager outages invisible)
+- Restored broadcast placements re-register their worker-pool run assignments after a manager restart, so `stop_run` reaches the worker directly instead of falling back to probe-all
+- A running stream with no placement record and no live run is now recovered (redispatched, or marked stopped when the pipeline is disabled) instead of being stuck "running" forever (GH #17)
+- Broadcast (count=N/all/list) streams can no longer be downgraded to 1-slot placements by the unplaced-stream reconciliation pass (guard mirrors the boot path), and reconciler-side materialization now activates the pipeline's Kubernetes Service and deactivates stale placement rows, matching the boot path
+- Worker bookkeeping (`_assignments` / `_pipeline_workers` entries) is now reaped when a worker is marked down, instead of leaking until the manager restarts
 
 ---
 
