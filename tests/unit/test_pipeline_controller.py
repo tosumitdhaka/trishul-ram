@@ -718,6 +718,100 @@ class TestBootLoad:
         db.get_live_nodes.assert_not_called()
         db.expire_nodes.assert_not_called()
 
+    # ── B.6: adopt-or-skip guard for count=1 streams on manager restart ─────
+
+    def test_boot_load_adopts_live_count1_stream_without_redispatch(self):
+        """A count=1 stream still live on a worker after a manager restart is
+        adopted (lease recorded, no re-dispatch) — exactly zero dispatches, so
+        no second concurrent instance and no duplicate sink writes."""
+        wp = MagicMock()
+        wp.find_pipeline_runs.return_value = [{
+            "worker_url": "http://worker-0:8766",
+            "run_id": "live-run-1",
+            "pipeline_name": "my-stream",
+            "started_at": "2026-09-01T10:00:00+00:00",
+            "schedule_type": "stream",
+        }]
+        db = self._make_db(pipelines=[("my-stream", _STREAM_YAML)])
+        db.get_active_broadcast_placements.return_value = []
+        ctrl = _make_controller(db=db, worker_pool=wp, manager_url="http://manager:8765")
+        ctrl.start()
+
+        try:
+            assert wp.dispatch_with_result.call_count == 0, (
+                "boot must not re-dispatch an adopted live stream"
+            )
+            assert wp.find_pipeline_runs.call_count == 1
+            wp.adopt_stream_assignment.assert_called_once_with(
+                pipeline_name="my-stream",
+                run_id="live-run-1",
+                worker_url="http://worker-0:8766",
+            )
+            # Status and placement views reflect the adopted run.
+            assert ctrl._stream_run_ids["my-stream"] == ["live-run-1"]
+            assert ctrl.manager.get("my-stream").status == "running"
+        finally:
+            ctrl.stop()
+
+    def test_boot_load_redispatches_count1_stream_when_no_live_run(self):
+        """No worker reports the stream as live → normal re-dispatch (the
+        pre-restart instance is gone, so a fresh dispatch is safe)."""
+        wp = MagicMock()
+        wp.find_pipeline_runs.return_value = []
+        wp.dispatch_with_result.return_value = DispatchOutcome(
+            worker_url="http://worker-0:8766", outcome=DISPATCH_ACCEPTED,
+        )
+        db = self._make_db(pipelines=[("my-stream", _STREAM_YAML)])
+        db.get_active_broadcast_placements.return_value = []
+        ctrl = _make_controller(db=db, worker_pool=wp, manager_url="http://manager:8765")
+        ctrl.start()
+
+        try:
+            assert wp.dispatch_with_result.call_count == 1
+            wp.adopt_stream_assignment.assert_not_called()
+            assert ctrl.manager.get("my-stream").status == "running"
+            assert len(ctrl._stream_run_ids["my-stream"]) == 1
+        finally:
+            ctrl.stop()
+
+    def test_boot_load_does_not_adopt_broadcast_stream(self):
+        """The adopt guard is scoped to count=1 streams: broadcast placements
+        are restored from durable records (D.2), never adopted from live probes."""
+        wp = MagicMock()
+        wp.find_pipeline_runs.return_value = [{
+            "worker_url": "http://worker-0:8766",
+            "run_id": "live-run-1",
+            "pipeline_name": "my-count-n-stream",
+            "started_at": "2026-09-01T10:00:00+00:00",
+            "schedule_type": "stream",
+        }]
+        result = MagicMock()
+        result.accepted = ["http://worker-0:8766"]
+        result.run_ids = ["pg-x-w0"]
+        result.status = "running"
+        result.slots = [{
+            "worker_index": 0,
+            "worker_url": "http://worker-0:8766",
+            "worker_id": "tram-worker-0",
+            "pinned_worker_id": None,
+            "run_id_prefix": "pg-x-w0",
+            "current_run_id": "pg-x-w0",
+            "status": "running",
+            "restart_count": 0,
+        }]
+        wp.multi_dispatch.return_value = result
+        db = self._make_db(pipelines=[("my-count-n-stream", _COUNT_N_STREAM_YAML)])
+        db.get_active_broadcast_placements.return_value = []
+        ctrl = _make_controller(db=db, worker_pool=wp, manager_url="http://manager:8765")
+        ctrl.start()
+
+        try:
+            assert wp.find_pipeline_runs.call_count == 0
+            wp.multi_dispatch.assert_called_once()
+            wp.adopt_stream_assignment.assert_not_called()
+        finally:
+            ctrl.stop()
+
 
 # ── on_worker_run_complete (local reflection of worker callbacks) ──────────
 

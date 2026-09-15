@@ -53,7 +53,7 @@ async def readiness(request: Request) -> dict:
     """Readiness probe — returns 200 when daemon is fully initialized and DB is reachable."""
     from fastapi import HTTPException
 
-    manager = request.app.state.manager
+    controller = request.app.state.controller
     scheduler = request.app.state.scheduler
     db = getattr(request.app.state, "db", None)
     started_at = getattr(request.app.state, "started_at", None)
@@ -104,7 +104,7 @@ async def readiness(request: Request) -> dict:
         "db_engine": db_engine,
         "db_path": db_path,
         "scheduler": scheduler_status,
-        "pipelines_loaded": len(manager.list_all()),
+        "pipelines_loaded": len(controller.list_all()),
         "uptime": uptime,
         "cluster": cluster,
     }

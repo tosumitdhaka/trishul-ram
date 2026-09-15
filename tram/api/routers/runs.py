@@ -24,8 +24,8 @@ async def list_runs(
     format: Literal["json", "csv"] | None = Query(None, description="Response format (json or csv)"),
 ):
     """List run history with optional filtering and pagination."""
-    manager = request.app.state.manager
-    runs = manager.get_runs(
+    controller = request.app.state.controller
+    runs = controller.get_runs(
         pipeline_name=pipeline,
         status=status,
         limit=limit,
@@ -57,8 +57,8 @@ async def list_runs(
 @router.get("/runs/{run_id}")
 async def get_run(run_id: str, request: Request) -> dict:
     """Get a single run result by run_id."""
-    manager = request.app.state.manager
-    result = manager.get_run(run_id)
+    controller = request.app.state.controller
+    result = controller.get_run(run_id)
     if result is None:
         raise HTTPException(status_code=404, detail=f"Run '{run_id}' not found")
     return result.to_dict()

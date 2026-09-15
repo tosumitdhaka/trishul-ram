@@ -1,6 +1,7 @@
 """Tests for pipeline CRUD + lifecycle API endpoints."""
 from __future__ import annotations
 
+import textwrap
 from datetime import UTC, datetime, timedelta
 from unittest.mock import MagicMock
 
@@ -73,7 +74,7 @@ def _make_app(db=None):
 class TestListPipelines:
     def test_empty_list(self):
         app = _make_app()
-        app.state.manager.list_all.return_value = []
+        app.state.controller.list_all.return_value = []
         client = TestClient(app)
         resp = client.get("/api/pipelines")
         assert resp.status_code == 200
@@ -82,7 +83,7 @@ class TestListPipelines:
     def test_returns_pipeline_dicts(self):
         state = _make_state()
         app = _make_app()
-        app.state.manager.list_all.return_value = [state]
+        app.state.controller.list_all.return_value = [state]
         client = TestClient(app)
         resp = client.get("/api/pipelines")
         assert resp.status_code == 200
@@ -95,7 +96,7 @@ class TestGetPipeline:
     def test_returns_detail_dict(self):
         state = _make_state()
         app = _make_app()
-        app.state.manager.get.return_value = state
+        app.state.controller.get.return_value = state
         client = TestClient(app)
         resp = client.get("/api/pipelines/test-pipe")
         assert resp.status_code == 200
@@ -103,7 +104,7 @@ class TestGetPipeline:
 
     def test_not_found_returns_404(self):
         app = _make_app()
-        app.state.manager.get.side_effect = PipelineNotFoundError("test-pipe not found")
+        app.state.controller.get.side_effect = PipelineNotFoundError("test-pipe not found")
         client = TestClient(app, raise_server_exceptions=False)
         resp = client.get("/api/pipelines/test-pipe")
         assert resp.status_code == 404
@@ -529,8 +530,9 @@ class TestAlerts:
 
         app = _make_app()
         new_state = _make_state(yaml_text=yaml_text)
-        app.state.manager.get.return_value = state
-        app.state.manager.register.return_value = new_state
+        app.state.controller.get.return_value = state
+        # _save_alerts_data routes through controller.update()
+        app.state.controller.update.return_value = new_state
         return app
 
     def test_list_alerts_empty(self):
@@ -602,13 +604,75 @@ class TestAlerts:
         resp = client.delete("/api/pipelines/test-pipe/alerts/5")
         assert resp.status_code == 404
 
+    def test_alert_edits_survive_controller_restart(self, tmp_path):
+        """B.1 regression: alert-rule edits saved via the API must land in
+        the pipeline registry (db.save_pipeline) so a controller restart
+        reloads the edited rules. The old path only saved a *version*."""
+        from tram.persistence.db import TramDB
+        from tram.pipeline.controller import PipelineController
+
+        yaml_text = _MINIMAL_YAML + textwrap.dedent("""\
+            alerts:
+              - name: boot-alert
+                condition: "failed"
+                action: webhook
+                webhook_url: "http://hooks.example.com/boot"
+        """)
+
+        db = TramDB(url=f"sqlite:///{tmp_path}/alerts-restart.db", node_id="test-node")
+
+        # First controller — register a pipeline that already has one alert rule.
+        ctrl = PipelineController(db=db, node_id="test-node")
+        ctrl.start()
+        config = load_pipeline_from_yaml(yaml_text)
+        ctrl.register(config, yaml_text=yaml_text)
+
+        # Edit the alert rule through the API.
+        app = FastAPI()
+        app.include_router(router)
+        app.state.controller = ctrl
+        app.state.manager = ctrl.manager
+        app.state.scheduler = ctrl
+        app.state.config = MagicMock()
+        app.state.db = db
+        app.state.stats_store = StatsStore(interval=30)
+        client = TestClient(app)
+        resp = client.put("/api/pipelines/test-pipe/alerts/0", json={
+            "name": "edited-alert",
+            "condition": "last_run_status == 'error'",
+            "action": "webhook",
+            "webhook_url": "http://hooks.example.com/edited",
+        })
+        assert resp.status_code == 200
+        ctrl.stop()
+
+        # The edited YAML must be in the shared registry before any restart.
+        persisted = db.get_all_pipelines()
+        assert len(persisted) == 1
+        assert "edited-alert" in persisted[0][1]
+        assert "last_run_status" in persisted[0][1]
+
+        # Restart: recreate the controller from the same DB and boot-load it.
+        ctrl2 = PipelineController(db=db, node_id="test-node")
+        ctrl2.start()
+        try:
+            state = ctrl2.manager.get("test-pipe")
+            assert len(state.config.alerts) == 1, "alert rules missing after restart"
+            rule = state.config.alerts[0]
+            assert rule.name == "edited-alert"
+            assert rule.condition == "last_run_status == 'error'"
+            assert rule.webhook_url == "http://hooks.example.com/edited"
+        finally:
+            ctrl2.stop()
+            db.close()
+
 
 class TestVersions:
     def test_list_versions(self):
         state = _make_state()
         app = _make_app()
-        app.state.manager.get.return_value = state
-        app.state.manager.get_versions.return_value = [{"version": 1, "created_at": "2026-01-01"}]
+        app.state.controller.get.return_value = state
+        app.state.controller.get_versions.return_value = [{"version": 1, "created_at": "2026-01-01"}]
         client = TestClient(app)
         resp = client.get("/api/pipelines/test-pipe/versions")
         assert resp.status_code == 200
@@ -616,7 +680,7 @@ class TestVersions:
 
     def test_list_versions_not_found(self):
         app = _make_app()
-        app.state.manager.get.side_effect = PipelineNotFoundError("not found")
+        app.state.controller.get.side_effect = PipelineNotFoundError("not found")
         client = TestClient(app, raise_server_exceptions=False)
         resp = client.get("/api/pipelines/nonexistent/versions")
         assert resp.status_code == 404
@@ -624,8 +688,8 @@ class TestVersions:
     def test_get_version_yaml(self):
         state = _make_state()
         app = _make_app()
-        app.state.manager.get.return_value = state
-        app.state.manager.get_version_yaml.return_value = _MINIMAL_YAML
+        app.state.controller.get.return_value = state
+        app.state.controller.get_version_yaml.return_value = _MINIMAL_YAML
         client = TestClient(app)
         resp = client.get("/api/pipelines/test-pipe/versions/1")
         assert resp.status_code == 200
@@ -634,8 +698,8 @@ class TestVersions:
     def test_get_version_yaml_not_found(self):
         state = _make_state()
         app = _make_app()
-        app.state.manager.get.return_value = state
-        app.state.manager.get_version_yaml.side_effect = KeyError("version not found")
+        app.state.controller.get.return_value = state
+        app.state.controller.get_version_yaml.side_effect = KeyError("version not found")
         client = TestClient(app, raise_server_exceptions=False)
         resp = client.get("/api/pipelines/test-pipe/versions/99")
         assert resp.status_code == 404

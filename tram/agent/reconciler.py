@@ -150,17 +150,24 @@ class PlacementReconciler:
                 )
                 if live_item is not None:
                     live_run_id = str(live_item.get("run_id", "") or "")
+                    updates = {}
                     if live_run_id and slot.get("current_run_id") != live_run_id:
-                        slot["current_run_id"] = live_run_id
-                        placement_changed = True
+                        updates["current_run_id"] = live_run_id
                     if live_item.get("worker_url") and slot.get("worker_url") != live_item.get("worker_url"):
-                        slot["worker_url"] = live_item.get("worker_url")
-                        placement_changed = True
+                        updates["worker_url"] = live_item.get("worker_url")
                     if live_item.get("worker_id") and slot.get("worker_id") != live_item.get("worker_id"):
-                        slot["worker_id"] = live_item.get("worker_id")
-                        placement_changed = True
+                        updates["worker_id"] = live_item.get("worker_id")
                     if slot.get("status") != "running":
-                        slot["status"] = "running"
+                        updates["status"] = "running"
+                    # Commit through the controller so the mutation is applied
+                    # to the authoritative placement under the lifecycle lock
+                    # (B.6 — the reconciler holds copies, never live dicts).
+                    if updates and self._controller.update_placement_slot(
+                        placement_group_id,
+                        int(slot["worker_index"]),
+                        **updates,
+                    ):
+                        slot.update(updates)
                         placement_changed = True
                     continue
 
@@ -171,12 +178,17 @@ class PlacementReconciler:
                 is_stale = stats is None or self._stats_store.is_stale(stats)
                 if is_stale:
                     if slot.get("status") != "stale":
-                        slot["status"] = "stale"
-                        placement_changed = True
-                        from tram.metrics.registry import MGR_RECONCILE_ACTION_TOTAL
-                        MGR_RECONCILE_ACTION_TOTAL.labels(
-                            pipeline=placement["pipeline_name"], action="mark_stale"
-                        ).inc()
+                        if self._controller.update_placement_slot(
+                            placement_group_id,
+                            int(slot["worker_index"]),
+                            status="stale",
+                        ):
+                            slot["status"] = "stale"
+                            placement_changed = True
+                            from tram.metrics.registry import MGR_RECONCILE_ACTION_TOTAL
+                            MGR_RECONCILE_ACTION_TOTAL.labels(
+                                pipeline=placement["pipeline_name"], action="mark_stale"
+                            ).inc()
                     replacement_worker_url = self._select_replacement_worker(placement, slot)
                     if replacement_worker_url and self._controller.redispatch_broadcast_slot(
                         placement_group_id,
@@ -194,12 +206,17 @@ class PlacementReconciler:
                             pipeline=placement["pipeline_name"], action="redispatch"
                         ).inc()
                 elif slot.get("status") != "running":
-                    slot["status"] = "running"
-                    placement_changed = True
-                    from tram.metrics.registry import MGR_RECONCILE_ACTION_TOTAL
-                    MGR_RECONCILE_ACTION_TOTAL.labels(
-                        pipeline=placement["pipeline_name"], action="resolve_running"
-                    ).inc()
+                    if self._controller.update_placement_slot(
+                        placement_group_id,
+                        int(slot["worker_index"]),
+                        status="running",
+                    ):
+                        slot["status"] = "running"
+                        placement_changed = True
+                        from tram.metrics.registry import MGR_RECONCILE_ACTION_TOTAL
+                        MGR_RECONCILE_ACTION_TOTAL.labels(
+                            pipeline=placement["pipeline_name"], action="resolve_running"
+                        ).inc()
 
             next_status = placement["status"]
             target_count = self._target_count(placement)
@@ -223,16 +240,14 @@ class PlacementReconciler:
                 if running_slots < int(target_count):
                     next_status = "degraded"
 
-            if placement_changed and self._db is not None:
-                self._db.update_broadcast_placement_status(
-                    placement_group_id,
-                    placement["status"],
-                    slots=placement["slots"],
-                )
+            # Slot persistence happens inside update_placement_slot() /
+            # redispatch_broadcast_slot() (both under the controller lock), so
+            # a stale snapshot computed here can never be persisted over a
+            # concurrent controller update.
             if placement_changed:
                 self._controller.reconcile_kubernetes_service(placement["pipeline_name"])
             if next_status != placement["status"]:
-                self._controller._update_broadcast_placement_status(placement_group_id, next_status)
+                self._controller.update_broadcast_placement_status(placement_group_id, next_status)
 
 
 class BatchReconciler:

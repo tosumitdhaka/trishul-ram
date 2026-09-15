@@ -233,6 +233,77 @@ class TestHealthPolling:
         assert pool.least_loaded() is None
 
 
+# ── B.6: boot scan skips the health debounce ───────────────────────────────
+
+
+class TestBootProbe:
+    """WorkerPool.start() probes once; with the threshold-2 debounce a worker
+    down at boot would otherwise report healthy for one poll interval and
+    receive boot-time dispatches. The boot scan must mark first-probe failures
+    down immediately (startup hysteresis window fix)."""
+
+    def test_start_marks_unreachable_worker_down_immediately(self):
+        pool = _pool("http://w0:8766")
+        mock_client = MagicMock()
+        mock_client.__enter__ = lambda s: mock_client
+        mock_client.__exit__ = MagicMock(return_value=False)
+        mock_client.get.side_effect = ConnectionError("refused")
+
+        with patch("httpx.Client", return_value=mock_client):
+            pool.start()
+
+        try:
+            health = pool._health["http://w0:8766"]
+            assert health["ok"] is False
+            assert health["failures"] == 2  # straight to the debounce threshold
+            assert pool.healthy_workers() == []
+            # resolve/dispatch must never target the worker.
+            from tram.models.pipeline import WorkersConfig
+            assert pool.resolve(WorkersConfig(count=1)) == []
+            outcome = pool.dispatch_with_result("boot-r1", "p", "yaml", "stream")
+            assert outcome.outcome == DISPATCH_NO_CAPACITY
+        finally:
+            pool.stop()
+
+    def test_start_keeps_healthy_worker_ok(self):
+        pool = _pool("http://w0:8766")
+        mock_client = _mock_httpx_client({
+            "http://w0:8766/agent/health": {"ok": True, "active_runs": 0, "worker_id": "w0"},
+        })
+        with patch("httpx.Client", return_value=mock_client):
+            pool.start()
+
+        try:
+            health = pool._health["http://w0:8766"]
+            assert health["ok"] is True
+            assert health["failures"] == 0
+        finally:
+            pool.stop()
+
+
+# ── B.6: adopt_stream_assignment ───────────────────────────────────────────
+
+
+class TestAdoptStreamAssignment:
+    def test_records_assignment_and_pipeline_mapping(self):
+        pool = _pool("http://w0:8766", "http://w1:8766")
+        pool._health["http://w0:8766"]["active_runs"] = 0
+
+        pool.adopt_stream_assignment("pipe-a", "run-1", "http://w0:8766")
+
+        assert pool.assignment_for_run("run-1") == "http://w0:8766"
+        assert pool.workers_for_pipeline("pipe-a") == ["http://w0:8766"]
+        assert pool._health["http://w0:8766"]["active_runs"] == 1
+
+    def test_keeps_pipeline_mapping_deduped_across_runs(self):
+        pool = _pool("http://w0:8766")
+        pool.adopt_stream_assignment("pipe-a", "run-1", "http://w0:8766")
+        pool.adopt_stream_assignment("pipe-a", "run-2", "http://w0:8766")
+
+        assert pool.workers_for_pipeline("pipe-a") == ["http://w0:8766"]
+        assert pool._health["http://w0:8766"]["active_runs"] == 2
+
+
 # ── Dispatch ───────────────────────────────────────────────────────────────
 
 

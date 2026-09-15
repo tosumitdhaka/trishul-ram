@@ -159,7 +159,7 @@ class WorkerPool:
     def start(self) -> None:
         """Probe all workers once, then launch background health-poll thread."""
         self._poll_stop.clear()
-        self._poll_all()  # initial probe so manager starts with accurate state
+        self._poll_all(initial_scan=True)  # boot scan: first-probe failures mark workers down
         self._poll_thread = threading.Thread(
             target=self._poll_loop,
             name="tram-worker-health",
@@ -184,12 +184,18 @@ class WorkerPool:
         while not self._poll_stop.wait(self._poll_interval):
             self._poll_all()
 
-    def _poll_all(self) -> None:
+    def _poll_all(self, initial_scan: bool = False) -> None:
         """Probe /agent/health on every configured worker.
 
         A single failed probe does not mark a worker down: the worker is only
         marked unhealthy after ``health_failures_to_down`` consecutive failed
         probes, so a transient blip that recovers on the next poll is ignored.
+
+        During the boot scan (``initial_scan=True``) the debounce is skipped:
+        a worker that is unreachable at manager boot is marked down on the
+        first probe, otherwise boot-time dispatches would target it for one
+        poll interval while it is still reported healthy (startup hysteresis
+        window, plan B.6).
         """
         with httpx.Client(timeout=5) as client:
             for url in self._workers:
@@ -217,7 +223,13 @@ class WorkerPool:
                             "running_pipelines": pipelines,
                         })
                     else:
-                        health["failures"] = health.get("failures", 0) + 1
+                        if initial_scan:
+                            # No grace period at boot: an unreachable worker is
+                            # down from the first probe so dispatch decisions
+                            # never rely on it.
+                            health["failures"] = self._health_failures_to_down
+                        else:
+                            health["failures"] = health.get("failures", 0) + 1
                         if health["failures"] >= self._health_failures_to_down:
                             health["ok"] = False
                         health["running_pipelines"] = []
@@ -471,6 +483,24 @@ class WorkerPool:
                     "schedule_type": schedule_type,
                 })
         return matches
+
+    def adopt_stream_assignment(self, pipeline_name: str, run_id: str, worker_url: str) -> None:
+        """Record a worker-reported live stream run as manager-owned (B.6).
+
+        Used by the controller's boot adopt-or-skip guard: after a manager
+        restart a count=1 stream may still be running on a worker. This
+        re-registers the run assignment and pipeline mapping so stop_run(),
+        on_run_complete() and the status/placement views behave as if the
+        manager had dispatched the run — without any dispatch HTTP call.
+        Mirrors the assignment bookkeeping in _dispatch_to_worker().
+        """
+        with self._lock:
+            self._assignments[run_id] = worker_url
+            self._pipeline_workers.setdefault(pipeline_name, [])
+            if worker_url not in self._pipeline_workers[pipeline_name]:
+                self._pipeline_workers[pipeline_name].append(worker_url)
+            if worker_url in self._health:
+                self._health[worker_url]["active_runs"] += 1
 
     # ── Dispatch ───────────────────────────────────────────────────────────
 

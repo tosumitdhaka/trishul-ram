@@ -38,7 +38,7 @@ async def get_stats(
     granularity: Literal["5m", "15m", "1h"] = Query("5m", description="Chart bucket size"),
 ) -> dict:
     """Return aggregated pipeline and run statistics for the dashboard."""
-    manager = request.app.state.manager
+    controller = request.app.state.controller
     db = getattr(request.app.state, "db", None)
 
     now = _now()
@@ -51,7 +51,7 @@ async def get_stats(
     chart_since = now - timedelta(minutes=chart_window_minutes)
 
     # ── Pipeline status counts from in-memory manager ──────────────────────
-    all_states = manager.list_all()
+    all_states = controller.list_all()
     pipelines_total     = len(all_states)
     pipelines_running   = sum(1 for s in all_states if s.status == "running")
     pipelines_scheduled = sum(1 for s in all_states if s.status == "scheduled")

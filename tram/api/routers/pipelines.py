@@ -60,8 +60,8 @@ async def dry_run_pipeline(request: Request) -> dict:
 @router.get("")
 async def list_pipelines(request: Request) -> list[dict]:
     """List all registered pipelines with their current status."""
-    manager = request.app.state.manager
-    states = manager.list_all()
+    controller = request.app.state.controller
+    states = controller.list_all()
     return [state.to_dict() for state in states]
 
 
@@ -98,9 +98,9 @@ async def register_pipeline(request: Request) -> dict:
 
 @router.get("/{name}")
 async def get_pipeline(name: str, request: Request) -> dict:
-    manager = request.app.state.manager
+    controller = request.app.state.controller
     try:
-        state = manager.get(name)
+        state = controller.get(name)
     except PipelineNotFoundError as exc:
         raise HTTPException(status_code=404, detail=str(exc))
     return state.to_detail_dict()
@@ -373,13 +373,13 @@ async def reload_pipelines(request: Request) -> dict:
 @router.get("/{name}/versions")
 async def list_versions(name: str, request: Request) -> list[dict]:
     """List saved versions for a pipeline."""
-    manager = request.app.state.manager
+    controller = request.app.state.controller
     try:
-        manager.get(name)
+        controller.get(name)
     except PipelineNotFoundError as exc:
         raise HTTPException(status_code=404, detail=str(exc))
 
-    versions = manager.get_versions(name)
+    versions = controller.get_versions(name)
     return versions
 
 
@@ -387,13 +387,13 @@ async def list_versions(name: str, request: Request) -> list[dict]:
 async def get_version_yaml(name: str, version: int, request: Request):
     """Return raw YAML for a specific pipeline version."""
     from fastapi.responses import PlainTextResponse
-    manager = request.app.state.manager
+    controller = request.app.state.controller
     try:
-        manager.get(name)
+        controller.get(name)
     except PipelineNotFoundError as exc:
         raise HTTPException(status_code=404, detail=str(exc))
     try:
-        yaml_text = manager.get_version_yaml(name, version)
+        yaml_text = controller.get_version_yaml(name, version)
     except (KeyError, RuntimeError) as exc:
         raise HTTPException(status_code=404, detail=str(exc))
     return PlainTextResponse(yaml_text, media_type="text/plain")
@@ -402,11 +402,11 @@ async def get_version_yaml(name: str, version: int, request: Request):
 # ── Alert rules ────────────────────────────────────────────────────────────
 
 
-def _read_alerts_data(manager, name):
+def _read_alerts_data(controller, name):
     """Return (yaml_dict, state) or raise HTTPException."""
     import yaml as _yaml
     try:
-        state = manager.get(name)
+        state = controller.get(name)
     except PipelineNotFoundError as exc:
         raise HTTPException(status_code=404, detail=str(exc))
     yaml_text = getattr(state, "yaml_text", None) or ""
@@ -415,32 +415,30 @@ def _read_alerts_data(manager, name):
     return _yaml.safe_load(yaml_text) or {}, state
 
 
-def _save_alerts_data(manager, scheduler, name, data, was_running: bool):
+def _save_alerts_data(controller, name, data):
+    """Persist alert rules by routing through ``controller.update()``.
+
+    ``update()`` writes the new YAML into the pipeline registry via
+    ``db.save_pipeline`` (which boot-load reads back on restart) and performs
+    the proper stop/restart of the live pipeline when it was active. The old
+    path re-implemented deregister/register, which only saved a *version* —
+    alert edits vanished on controller restart. Alerts live inside the
+    pipeline YAML, so a real edit always produces a different document and
+    never hits ``update()``'s identical-YAML short-circuit.
+    """
     import yaml as _yaml
     new_yaml = _yaml.dump(data, default_flow_style=False, allow_unicode=True, sort_keys=False)
     try:
-        config = load_pipeline_from_yaml(new_yaml)
+        load_pipeline_from_yaml(new_yaml)
     except Exception as exc:
         raise HTTPException(status_code=400, detail=str(exc))
-    if was_running:
-        try:
-            scheduler.stop_pipeline(name)
-        except Exception:
-            pass
-    manager.deregister(name)
-    new_state = manager.register(config, yaml_text=new_yaml)
-    if was_running and config.enabled and config.schedule.type != "manual":
-        try:
-            scheduler.start_pipeline(name)
-        except Exception:
-            pass
-    return new_state
+    return controller.update(name, new_yaml)
 
 
 @router.get("/{name}/alerts")
 async def list_alerts(name: str, request: Request) -> list[dict]:
     """List alert rules for a pipeline."""
-    data, _ = _read_alerts_data(request.app.state.manager, name)
+    data, _ = _read_alerts_data(request.app.state.controller, name)
     alerts = data.get("alerts") or []
     return [{"index": i, **a} for i, a in enumerate(alerts)]
 
@@ -451,13 +449,12 @@ async def create_alert(name: str, request: Request) -> dict:
     body = await request.json()
     if not body.get("condition") or not body.get("action"):
         raise HTTPException(status_code=400, detail="condition and action are required")
-    data, state = _read_alerts_data(request.app.state.manager, name)
+    data, _ = _read_alerts_data(request.app.state.controller, name)
     alerts = list(data.get("alerts") or [])
     rule = {k: v for k, v in body.items() if v is not None}
     alerts.append(rule)
     data["alerts"] = alerts
-    _save_alerts_data(request.app.state.manager, request.app.state.scheduler,
-                      name, data, state.status == "running")
+    _save_alerts_data(request.app.state.controller, name, data)
     return {"index": len(alerts) - 1, **rule}
 
 
@@ -467,29 +464,27 @@ async def update_alert(name: str, idx: int, request: Request) -> dict:
     body = await request.json()
     if not body.get("condition") or not body.get("action"):
         raise HTTPException(status_code=400, detail="condition and action are required")
-    data, state = _read_alerts_data(request.app.state.manager, name)
+    data, _ = _read_alerts_data(request.app.state.controller, name)
     alerts = list(data.get("alerts") or [])
     if idx < 0 or idx >= len(alerts):
         raise HTTPException(status_code=404, detail=f"Alert index {idx} not found")
     rule = {k: v for k, v in body.items() if v is not None}
     alerts[idx] = rule
     data["alerts"] = alerts
-    _save_alerts_data(request.app.state.manager, request.app.state.scheduler,
-                      name, data, state.status == "running")
+    _save_alerts_data(request.app.state.controller, name, data)
     return {"index": idx, **rule}
 
 
 @router.delete("/{name}/alerts/{idx}", status_code=status.HTTP_204_NO_CONTENT)
 async def delete_alert(name: str, idx: int, request: Request) -> Response:
     """Remove an alert rule by index."""
-    data, state = _read_alerts_data(request.app.state.manager, name)
+    data, _ = _read_alerts_data(request.app.state.controller, name)
     alerts = list(data.get("alerts") or [])
     if idx < 0 or idx >= len(alerts):
         raise HTTPException(status_code=404, detail=f"Alert index {idx} not found")
     alerts.pop(idx)
     data["alerts"] = alerts
-    _save_alerts_data(request.app.state.manager, request.app.state.scheduler,
-                      name, data, state.status == "running")
+    _save_alerts_data(request.app.state.controller, name, data)
     return Response(status_code=204)
 
 

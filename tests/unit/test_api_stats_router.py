@@ -49,9 +49,10 @@ def _make_app(states=None, db=None):
     app = FastAPI()
     app.include_router(router)
 
-    mock_manager = MagicMock()
-    mock_manager.list_all.return_value = states or []
-    app.state.manager = mock_manager
+    app.state.manager = MagicMock()
+    mock_controller = MagicMock()
+    mock_controller.list_all.return_value = states or []
+    app.state.controller = mock_controller
     app.state.db = db
     return app
 
