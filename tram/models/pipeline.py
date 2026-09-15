@@ -1167,6 +1167,11 @@ class Asn1SerializerConfig(BaseModel):
     message_classes: list[str] | None = None
     encoding: Literal["ber", "der", "per", "uper", "xer", "jer"] = "ber"
     split_records: bool = False
+    # Dot-notation path to the record list inside a decoded single-frame
+    # document (GH #19). record_chunk_size then chunks the fan-out lazily.
+    split_path: str | None = None
+    # Dict of sibling values copied (deep) into every emitted split record.
+    split_path_context: dict[str, Any] | None = None
 
     @model_validator(mode="after")
     def check_message_fields(self) -> Asn1SerializerConfig:
@@ -1176,6 +1181,14 @@ class Asn1SerializerConfig(BaseModel):
             )
         if self.split_records and self.encoding != "ber":
             raise ValueError("split_records is only supported when encoding='ber'")
+        if self.split_records and self.split_path:
+            raise ValueError(
+                "split_records and split_path are mutually exclusive — split_path "
+                "splits records inside a single decoded document, split_records "
+                "splits at the BER frame boundary"
+            )
+        if self.split_path is None and self.split_path_context is not None:
+            raise ValueError("split_path_context requires split_path to be configured")
         return self
 
 
@@ -1355,6 +1368,21 @@ class PipelineConfig(BaseModel):
                 raise ValueError(
                     "kubernetes service provisioning is only supported for stream pipelines"
                 )
+        return self
+
+    @model_validator(mode="after")
+    def check_asn1_split_path_chunking(self) -> PipelineConfig:
+        """asn1 serializer_in.split_path without record_chunk_size silently
+        no-ops: the sequential batch loop only calls parse_chunks when
+        record_chunk_size is set, so require chunking explicitly (RCA #19)."""
+        ser = self.serializer_in
+        if ser.type == "asn1" and getattr(ser, "split_path", None) and not self.record_chunk_size:
+            raise ValueError(
+                "serializer_in.split_path requires record_chunk_size > 0 "
+                "to chunk the record fan-out (note: chunking bounds memory "
+                "only on sequential runs — thread_workers > 1 applies the "
+                "split eagerly)"
+            )
         return self
 
     @model_validator(mode="after")

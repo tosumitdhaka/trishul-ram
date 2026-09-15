@@ -1498,6 +1498,8 @@ Deserialize only (`serializer_in`) — use `serializer_out: type: json` (or anot
 | `message_classes` | `null` | Optional ordered fallback list of top-level ASN.1 types to try per record |
 | `encoding` | `ber` | `ber` \| `der` \| `per` \| `uper` \| `xer` \| `jer` |
 | `split_records` | `false` | BER only: split concatenated top-level TLVs and decode each separately |
+| `split_path` | `null` | Dot-notation path to the record list inside a single decoded document (e.g. `measurement.measValues`) — splits single-frame files whose records nest inside one dict; mutually exclusive with `split_records` |
+| `split_path_context` | `null` | Dict of sibling values from the same document to copy into every split record (deep-copied per record; record fields take precedence); requires `split_path` |
 
 \* Exactly one of `message_class` or `message_classes` must be provided.
 
@@ -1517,6 +1519,13 @@ Deserialize only (`serializer_in`) — use `serializer_out: type: json` (or anot
 **Concatenated BER files:** set `split_records: true` to walk the BER stream and decode one
 top-level TLV at a time. This is useful for CDR-style files that concatenate many ASN.1 records
 into a single file.
+
+**Single-frame files with nested record lists:** set `split_path` (e.g. `measurement.measValues`)
+to split the records inside one decoded document, and `split_path_context` to carry sibling
+values (element IDs, timestamps) into every record. `split_path` requires `record_chunk_size > 0`.
+**Memory note:** the chunked fan-out bounds memory only on sequential runs — a pipeline with
+`thread_workers > 1` applies the split eagerly (the full merged record list is materialized once),
+so use the sequential path for very large single-frame files.
 
 ```yaml
 serializer_in:

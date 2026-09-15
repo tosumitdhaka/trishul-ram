@@ -11,6 +11,10 @@ Usage in pipeline YAML:
       # message_classes: [CallEventRecord, GPRSRecord]
       encoding: ber                                # ber | der | per | uper | xer | jer (default: ber)
       split_records: false                         # BER only; split concatenated top-level TLVs
+      # OR (GH #19) split the record list inside a single decoded document:
+      split_path: stats.measurement                # dot-notation path to the record list
+      split_path_context:                          # dict copied into every split record
+        vendor: Ericsson
 
 Decode only — ASN.1 serializer_out / encode is intentionally not supported.
 Schema file is required; there is no schema-less fallback.
@@ -21,6 +25,7 @@ import hashlib
 import os
 from collections import OrderedDict
 from collections.abc import Iterator
+from copy import deepcopy
 from datetime import datetime
 from typing import Any
 
@@ -84,6 +89,52 @@ def _to_json_safe(obj):
     if isinstance(obj, (bytes, bytearray)):
         return obj.hex()
     return obj
+
+
+def _resolve_split_target(document: dict, split_path: str) -> list:
+    """Resolve a dot-notation split_path to the record list in a decoded
+    document. Fails loud with a path-naming error on a missing segment or a
+    non-list target (RCA #19)."""
+    current: Any = document
+    for part in split_path.split("."):
+        if not isinstance(current, dict):
+            raise SerializerError(
+                f"ASN.1 split_path '{split_path}' not addressable at segment "
+                f"'{part}' (parent is {type(current).__name__}, expected an object)"
+            )
+        if part not in current:
+            raise SerializerError(
+                f"ASN.1 split_path '{split_path}' not found in decoded document "
+                f"(missing segment '{part}')"
+            )
+        current = current[part]
+    if not isinstance(current, list):
+        raise SerializerError(
+            f"ASN.1 split_path '{split_path}' does not resolve to a list "
+            f"(found {type(current).__name__})"
+        )
+    return current
+
+
+def _emit_split_record(element: Any, context: dict | None) -> dict:
+    """Merge a deep copy of the shared context into one split record.
+
+    Each record gets its own deep copy so an in-place mutating transform
+    cannot leak changes across records (RCA #19 aliasing hazard). The
+    record's own fields take precedence over the ambient context.
+
+    The record element itself is only shallow-copied: each decoded element
+    is a distinct object (records never share sub-objects with each other),
+    and the decoded document is dropped after the fan-out, so nothing can
+    observe the sharing.
+    """
+    if isinstance(element, dict):
+        if context is None:
+            return dict(element)
+        return {**deepcopy(context), **element}
+    if context is None:
+        return {"value": element}
+    return {**deepcopy(context), "value": element}
 
 
 def _parse_tag(data: bytes, offset: int) -> tuple[int, int]:
@@ -183,6 +234,16 @@ class Asn1Serializer(BaseSerializer):
         self.split_records: bool = bool(config.get("split_records", False))
         if self.split_records and self.encoding != "ber":
             raise SerializerError("ASN.1 serializer 'split_records' is only supported for BER")
+        self.split_path: str | None = config.get("split_path")
+        self.split_path_context: dict | None = config.get("split_path_context")
+        if self.split_records and self.split_path:
+            raise SerializerError(
+                "ASN.1 serializer 'split_records' and 'split_path' are mutually exclusive"
+            )
+        if self.split_path is None and self.split_path_context is not None:
+            raise SerializerError(
+                "ASN.1 serializer 'split_path_context' requires 'split_path' to be configured"
+            )
         self._compiled = None
 
     def _get_compiled(self):
@@ -248,7 +309,20 @@ class Asn1Serializer(BaseSerializer):
         compiled = self._get_compiled()
         payloads = _split_ber_records(data) if self.split_records else [data]
         try:
-            return [self._wrap_result(self._decode_record(compiled, payload)) for payload in payloads]
+            records: list[dict] = []
+            for payload in payloads:
+                decoded = self._wrap_result(self._decode_record(compiled, payload))
+                if self.split_path:
+                    # parse() is the non-incremental path (threaded batch runs
+                    # and un-chunked sequential runs), so it fans out eagerly.
+                    # The bounded-memory path is parse_chunks().
+                    target = _resolve_split_target(decoded, self.split_path)
+                    records.extend(
+                        _emit_split_record(record, self.split_path_context) for record in target
+                    )
+                else:
+                    records.append(decoded)
+            return records
         except SerializerError:
             raise
         except Exception as exc:
@@ -268,10 +342,22 @@ class Asn1Serializer(BaseSerializer):
 
         try:
             for payload in payloads:
-                batch.append(self._wrap_result(self._decode_record(compiled, payload)))
-                if len(batch) >= record_chunk_size:
-                    yield batch
-                    batch = []
+                decoded = self._wrap_result(self._decode_record(compiled, payload))
+                if self.split_path:
+                    # Lazy fan-out: merge only one batch's worth of records at a
+                    # time instead of materializing the whole split list, which
+                    # is the memory-bound point of GH #19.
+                    target = _resolve_split_target(decoded, self.split_path)
+                    for record in target:
+                        batch.append(_emit_split_record(record, self.split_path_context))
+                        if len(batch) >= record_chunk_size:
+                            yield batch
+                            batch = []
+                else:
+                    batch.append(decoded)
+                    if len(batch) >= record_chunk_size:
+                        yield batch
+                        batch = []
             if batch:
                 yield batch
         except SerializerError:
