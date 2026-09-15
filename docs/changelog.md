@@ -17,6 +17,8 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - Added `scripts/deploy-docker-standalone.sh` to build, run, and manage a single standalone TRAM Docker container with a persisted Docker data volume, auto-created host pipeline mounts, optional host output bind mounts, timestamp-tagged local auto-builds for repo workflows, `--ghcr` pull support for the published `ghcr.io/tosumitdhaka/trishul-ram:<tag>` image, log/status helpers, optional UDP port publishing, and a README-friendly GitHub bootstrap flow
 - Manager dispatch now distinguishes `no_capacity` (no healthy workers) from `dispatch_failed` (the dispatch attempt errored) and records the real worker error in run history; both outcomes increment `tram_mgr_dispatch_total`, with `dispatch_failed` as a new result label alongside `no_workers` and `accepted`
 - Worker health polling now uses hysteresis — a worker is marked down only after 2 consecutive failed probes instead of a single failed probe
+- Live in-flight runs (worker streams and standalone batch runs) are now merged into the stats dashboard mid-run: the 15-minute cards, load chart, and per-pipeline rows reflect live counters instead of only completed run history, and late stale stats payloads for already-completed runs are dropped (completion-boundary guard)
+- New metric `tram_mgr_stats_missed_total{worker_id}` counts worker→manager stats-post misses (incremented on the worker process)
 
 ### Changed
 
@@ -29,6 +31,9 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - Serializer schema caches (`asn1`, `protobuf`) are now keyed by schema content hash instead of file mtime and bounded by a size-capped LRU; re-syncing unchanged schema assets no longer triggers a recompile, and batch runs close their sinks (including DLQ) after completion
 - The Kafka source now defaults to `enable_auto_commit: false` and commits offsets explicitly, once per poll batch, only after the batch has been consumed by the caller (at-least-once). Previously the default auto-committed offsets for messages that were polled but not yet sink-written, silently losing them on a crash. Pipelines may opt back into the legacy at-most-once behavior with `enable_auto_commit: true`. Note: with `thread_workers > 1` the batch commit can fire while up to `2 * thread_workers` messages are still queued for workers — use `thread_workers: 1` for strict at-least-once. Kafka lag metrics are now sampled once per poll batch instead of per message.
 - Restarting a local stream pipeline no longer waits up to 15s for the previous stream thread to exit: `_stop_stream()` signals the old thread and returns immediately, and `_start_stream()` starts the replacement without joining, with the old thread's cleanup identity-checked so it can never touch the new thread's bookkeeping. The old and new instances can briefly overlap (bounded by how quickly the source observes the stop event — at most one in-flight chunk), during which a record can be double-written on restart, matching the bounded stop exposure that manager-mode stream stops already have.
+- **Potentially breaking (metrics semantics):** `records_out` now counts records actually delivered to at least one sink (max of per-sink written counts) instead of the input chunk size whenever any sink wrote — for condition-filtered or partially-failing sinks the number drops to what was really written, and `bytes_out` still counts full I/O fanout. Note: with disjoint (partitioned) sink conditions the count is a conservative lower bound. Alert thresholds or capacity calculations keyed to the old numbers may need adjustment
+- `json_flatten`/`explode` transforms are now linear on large nested lists (a 10k-element explode drops from minutes to milliseconds, GH #18) and exploded records no longer alias the source record
+- Manager worker probes (health polling, status, and live-streams fan-out) now run in parallel per worker — a slow or unreachable worker no longer serializes the whole fan-out or stalls the API endpoints that trigger it
 
 ### Fixed
 
@@ -40,6 +45,9 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - Syslog-over-TCP now applies RFC 6587 framing (octet-counted with newline-delimited fallback, per-connection mode detection) with a configurable `max_message_size` guard — previously a single `recv` per connection truncated oversized messages and merged multiple messages into one record
 - Manager restart no longer double-dispatches a count=1 stream that is still live on a worker: boot load adopts the existing run instead of dispatching a second instance. A worker unreachable at manager boot is marked down immediately instead of passing one poll interval as healthy
 - Controller lifecycle transitions (trigger, update, delete, status reads, worker callbacks, broadcast-placement commits) are serialized under a reentrant lock, closing the trigger TOCTOU, the update/delete deregister window, the duplicate-callback race, and the placement-reconciler slot-mutation race; the reconciler now commits slot changes through the controller instead of writing shared state directly
+- Placement slot run-id updates are now per-slot compare-and-set writes (keyed on placement group, slot index, and expected run id) — a stale stats payload from a superseded restart can no longer regress the recorded run id, and a lost write race is detected and skipped instead of silently clobbering
+- `on_error: retry` now resets the live stats accumulator along with the retry context, so live totals match the final run-history numbers
+- Failed stats heartbeats are logged at WARNING with pipeline context and counted (previously DEBUG-swallowed, making manager outages invisible)
 
 ---
 
