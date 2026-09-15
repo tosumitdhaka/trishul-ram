@@ -78,13 +78,32 @@ class LocalSource(BaseSource):
                     "source_filename": filepath.name,
                     "source_path": fp_str,
                 }
-                self._post_read(filepath)
-                if self.skip_processed and self._file_tracker:
-                    self._file_tracker.mark_processed(self._pipeline_name, source_key, fp_str)
             except SourceError:
                 raise
             except Exception as exc:
                 raise SourceError(f"Error reading {filepath}: {exc}") from exc
+
+    def finalize(self, meta: dict, *, success: bool) -> None:
+        """Move/delete and mark the file once its chunks were fully processed.
+
+        Invoked by the executor after every chunk yielded for this file has
+        been drained from the worker pool, so the file is only moved/deleted/
+        marked after its data was actually written — never while writes are
+        still pending. On ``success=False`` the file is left untouched.
+        """
+        if not success:
+            return
+        fp_str = str(meta.get("source_path", ""))
+        if not fp_str:
+            return
+        filepath = Path(fp_str)
+        try:
+            self._post_read(filepath)
+        except Exception as exc:
+            raise SourceError(f"Error finalizing {fp_str}: {exc}") from exc
+        if self.skip_processed and self._file_tracker:
+            source_key = f"local:{self.path}"
+            self._file_tracker.mark_processed(self._pipeline_name, source_key, fp_str)
 
     def _post_read(self, filepath: Path) -> None:
         if self.move_after_read:

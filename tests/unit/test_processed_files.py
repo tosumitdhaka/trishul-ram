@@ -204,7 +204,8 @@ class TestSFTPSourceSkipProcessed:
 
     def test_skip_processed_true_yields_and_marks_new_file(self):
         """With skip_processed=True and tracker returning False, file is yielded
-        and mark_processed is called afterwards."""
+        and mark_processed is called by finalize (after the executor confirms
+        the chunk was processed)."""
         mock_sftp, mock_transport = self._make_sftp_client(
             ["new_file.json"], {"new_file.json": b'[{"y":2}]'}
         )
@@ -229,7 +230,11 @@ class TestSFTPSourceSkipProcessed:
         assert content == b'[{"y":2}]'
         assert meta["source_filename"] == "new_file.json"
 
-        # mark_processed must be called after yielding
+        # No marking inside read() — the executor calls finalize afterwards.
+        mock_tracker.mark_processed.assert_not_called()
+        source.finalize(meta, success=True)
+
+        # mark_processed must be called by finalize after processing
         mock_tracker.mark_processed.assert_called_once_with(
             "test-pipe", "sftp:test-host:/data", "/data/new_file.json"
         )
@@ -263,7 +268,31 @@ class TestSFTPSourceSkipProcessed:
         assert len(results) == 1
         assert results[0][1]["source_filename"] == "new.json"
 
-        # mark_processed called only for the new file
+        # No marking inside read(); finalize marks only the processed file
+        mock_tracker.mark_processed.assert_not_called()
+        source.finalize(results[0][1], success=True)
         mock_tracker.mark_processed.assert_called_once_with(
             "test-pipe", "sftp:test-host:/data", "/data/new.json"
         )
+
+    def test_finalize_success_false_does_not_mark(self):
+        """finalize(success=False) must leave the file unmarked (retry safety)."""
+        mock_sftp, mock_transport = self._make_sftp_client(
+            ["new_file.json"], {"new_file.json": b'[{"y":2}]'}
+        )
+        mock_tracker = MagicMock()
+        mock_tracker.is_processed.return_value = False
+
+        source = self._make_sftp_source(
+            {
+                "skip_processed": True,
+                "_pipeline_name": "test-pipe",
+                "_file_tracker": mock_tracker,
+            },
+            mock_sftp,
+            mock_transport,
+        )
+
+        results = list(source.read())
+        source.finalize(results[0][1], success=False)
+        mock_tracker.mark_processed.assert_not_called()

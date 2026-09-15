@@ -47,7 +47,9 @@ class TestLocalSource:
             "path": str(src),
             "move_after_read": str(dst),
         })
-        list(source.read())  # consume all
+        results = list(source.read())  # read() no longer moves files itself
+        for _, meta in results:
+            source.finalize(meta, success=True)
 
         assert not (src / "f.txt").exists()
         assert (dst / "f.txt").exists()
@@ -55,7 +57,9 @@ class TestLocalSource:
     def test_delete_after_read(self, tmp_path):
         (tmp_path / "f.txt").write_bytes(b"data")
         source = LocalSource({"path": str(tmp_path), "delete_after_read": True})
-        list(source.read())
+        results = list(source.read())
+        for _, meta in results:
+            source.finalize(meta, success=True)
         assert not (tmp_path / "f.txt").exists()
 
     def test_missing_path_raises(self):

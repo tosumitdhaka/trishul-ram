@@ -329,6 +329,49 @@ class TestPipelineExecutorBatchRun:
         assert result.status == RunStatus.SUCCESS
         mock_sink.close.assert_called_once()
 
+    def test_batch_run_retry_closes_sinks_and_source_from_failed_attempt(self):
+        """The retry path rebuilds sinks/source per attempt; the failed
+        attempt's instances must be closed too, not just the final attempt's
+        (the old code leaked e.g. ClickHouse flush timers from failed tries)."""
+        from tram.core.exceptions import TramError
+
+        config = _make_pipeline(
+            "on_error: retry\n"
+            "          retry_count: 1\n"
+            "          retry_delay_seconds: 0"
+        )
+        executor = PipelineExecutor()
+
+        first_source = MagicMock()
+        second_source = MagicMock()
+        first_sink = MagicMock()
+        second_sink = MagicMock()
+        first_dlq = MagicMock()
+        second_dlq = MagicMock()
+
+        with (
+            patch.object(executor, "_build_source", side_effect=[first_source, second_source]),
+            patch.object(executor, "_build_sinks", side_effect=[
+                [(first_sink, None, [])],
+                [(second_sink, None, [])],
+            ]),
+            patch.object(executor, "_build_serializer_in", return_value=MagicMock()),
+            patch.object(executor, "_build_serializer_out", return_value=MagicMock()),
+            patch.object(executor, "_build_transforms", return_value=[]),
+            patch.object(executor, "_build_dlq_sink", side_effect=[first_dlq, second_dlq]),
+            patch.object(executor, "_run_batch_chunks", side_effect=[TramError("boom"), None]),
+            patch("time.sleep"),
+        ):
+            result = executor.batch_run(config)
+
+        assert result.status == RunStatus.SUCCESS
+        first_sink.close.assert_called_once()     # failed attempt, closed at retry
+        second_sink.close.assert_called_once()    # final attempt, closed in finally
+        first_dlq.close.assert_called_once()
+        second_dlq.close.assert_called_once()
+        first_source.close.assert_called_once()   # failed attempt's source connection
+        second_source.close.assert_called_once()
+
     def test_post_batch_cleanup_ignores_missing_trim_support(self):
         config = _make_pipeline()
 

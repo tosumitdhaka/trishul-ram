@@ -54,6 +54,8 @@ class SFTPSource(BaseSource):
 
     def read(self) -> Iterator[tuple[bytes, dict]]:
         transport, sftp = self._connect()
+        self._transport = transport
+        self._sftp = sftp
         try:
             try:
                 all_files = sftp.listdir(self.remote_path)
@@ -117,24 +119,46 @@ class SFTPSource(BaseSource):
                                 "source_path": remote_file,
                                 "source_host": self.host,
                             }
-                    self._post_read(sftp, remote_file, filename)
-                    if self.skip_processed and self._file_tracker:
-                        self._file_tracker.mark_processed(
-                            self._pipeline_name, source_key, remote_file
-                        )
                 except SourceError:
                     raise
                 except Exception as exc:
                     raise SourceError(f"Error reading {remote_file}: {exc}") from exc
-        finally:
+        except SourceError:
+            raise
+        # NOTE: the sftp/transport connection is intentionally NOT closed here.
+        # finalize() still needs it after the executor drains the file's
+        # chunks, so it stays open until the executor calls source.close().
+
+    def finalize(self, meta: dict, *, success: bool) -> None:
+        """Move/delete and mark the file once its chunks were fully processed.
+
+        Invoked by the executor after every chunk yielded for this file has
+        been drained from the worker pool, so the file is only moved/deleted/
+        marked after its data was actually written — never while writes are
+        still pending. On ``success=False`` the file is left untouched.
+        """
+        if not success:
+            return
+        remote_file = str(meta.get("source_path", ""))
+        filename = str(meta.get("source_filename", ""))
+        if not remote_file or self._sftp is None:
+            return
+        self._post_read(self._sftp, remote_file, filename)
+        if self.skip_processed and self._file_tracker:
+            source_key = f"sftp:{self.host}:{self.remote_path}"
+            self._file_tracker.mark_processed(self._pipeline_name, source_key, remote_file)
+
+    def close(self) -> None:
+        """Close the connection held open across read()/finalize()."""
+        for conn in (getattr(self, "_sftp", None), getattr(self, "_transport", None)):
+            if conn is None:
+                continue
             try:
-                sftp.close()
+                conn.close()
             except Exception:
                 pass
-            try:
-                transport.close()
-            except Exception:
-                pass
+        self._sftp = None
+        self._transport = None
 
     def _post_read(self, sftp, remote_file: str, filename: str) -> None:
         """Move or delete file after successful read."""

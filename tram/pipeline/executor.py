@@ -10,8 +10,8 @@ import queue as _queue
 import random
 import threading
 import time
-from collections import OrderedDict
-from concurrent.futures import ThreadPoolExecutor, as_completed
+from collections import OrderedDict, deque
+from concurrent.futures import Future, ThreadPoolExecutor
 from datetime import UTC, datetime
 from typing import TYPE_CHECKING
 
@@ -183,6 +183,18 @@ def _try_trim_process_heap() -> bool:
         return False
 
 
+def _batch_inflight_cap(thread_workers: int) -> int:
+    """Bounded in-flight window for the threaded batch path (~2x workers).
+
+    The producer never submits more than this many chunks ahead of completion.
+    With ``thread_workers`` worker threads that keeps queued-but-unprocessed
+    payloads bounded instead of buffering the entire source (RCA #16: an
+    unbounded ``ThreadPoolExecutor`` queue doubles the peak heap at
+    ``thread_workers=2`` and OOMKills the worker pod).
+    """
+    return max(1, thread_workers * 2)
+
+
 class PipelineExecutor:
     """Executes pipeline configurations in batch or stream mode."""
 
@@ -337,6 +349,25 @@ class PipelineExecutor:
                     "Sink close failed",
                     extra={"sink_type": type(sink_instance).__name__, "error": str(exc)},
                 )
+
+    @staticmethod
+    def _close_source(source) -> None:
+        """Best-effort close of a batch-run source instance.
+
+        File sources keep their connection open across read()/finalize() and
+        release it here. close() failures are logged but never mask the run
+        result.
+        """
+        close = getattr(source, "close", None)
+        if not callable(close):
+            return
+        try:
+            close()
+        except Exception as exc:
+            logger.warning(
+                "Source close failed",
+                extra={"source_type": type(source).__name__, "error": str(exc)},
+            )
 
     def _process_records(
         self,
@@ -831,6 +862,12 @@ class PipelineExecutor:
                             },
                         )
                         time.sleep(retry_delay)
+                        # Close per-attempt resources from the failed attempt
+                        # before rebuilding, so sinks from failed attempts
+                        # (e.g. ClickHouse flush timers) and source connections
+                        # do not leak across retries.
+                        self._close_sinks(sinks, dlq_sink)
+                        self._close_source(source)
                         # Reset counters and rebuild ALL components for a clean retry.
                         # Rebuilding only the source on retry would reuse a potentially
                         # broken sink connection that caused the original failure.
@@ -853,6 +890,7 @@ class PipelineExecutor:
             return result
         finally:
             self._close_sinks(sinks, dlq_sink)
+            self._close_source(source)
             if getattr(config, "post_batch_cleanup", False):
                 self._post_batch_cleanup(config)
 
@@ -870,90 +908,193 @@ class PipelineExecutor:
         stats: PipelineStats | None = None,
     ) -> None:
         """Inner loop: read source chunks and process with optional thread pool."""
+        if config.thread_workers > 1:
+            self._run_batch_chunks_threaded(
+                config, source, sinks, serializer_in, serializer_out,
+                transforms, dlq_sink, ctx, sink_cb_keys=sink_cb_keys, stats=stats,
+            )
+            return
+        self._run_batch_chunks_sequential(
+            config, source, sinks, serializer_in, serializer_out,
+            transforms, dlq_sink, ctx, sink_cb_keys=sink_cb_keys, stats=stats,
+        )
+
+    def _run_batch_chunks_sequential(
+        self,
+        config: PipelineConfig,
+        source,
+        sinks,
+        serializer_in,
+        serializer_out,
+        transforms,
+        dlq_sink,
+        ctx: PipelineRunContext,
+        sink_cb_keys: list[str] | None = None,
+        stats: PipelineStats | None = None,
+    ) -> None:
+        """Single-threaded batch loop. Each chunk is fully processed before the
+        next one is pulled, so source finalize runs strictly after the chunk
+        writes complete."""
         batch_size = config.batch_size
         record_chunk_size = getattr(config, "record_chunk_size", None)
         on_error = config.on_error
         rate_limit_rps = config.rate_limit_rps
-
         parallel_sinks = getattr(config, "parallel_sinks", False)
 
-        if config.thread_workers > 1:
-            # Multi-threaded: submit chunks to a thread pool
-            with ThreadPoolExecutor(max_workers=config.thread_workers) as pool:
-                futures = []
-                for raw, meta in source.read():
-                    fut = pool.submit(
-                        self._process_chunk,
+        current_source_key: tuple[str, str] | None = None
+        current_source_meta: dict | None = None
+        stopped_early = False
+        try:
+            for raw, meta in source.read():
+                meta = _augment_chunk_meta(meta, ctx)
+                source_key = _source_unit_key(meta)
+                if source_key is not None:
+                    meta["enable_safe_finalize"] = True
+                    if current_source_key is not None and source_key != current_source_key:
+                        self._finalize_source_for_sinks(sinks, current_source_meta, success=True)
+                        source.finalize(current_source_meta, success=True)
+                        current_source_key = None
+                        current_source_meta = None
+                    if current_source_key is None:
+                        current_source_key = source_key
+                    current_source_meta = dict(meta)
+
+                if record_chunk_size:
+                    self._process_chunk_incrementally(
+                        raw, meta, serializer_in, transforms,
+                        serializer_out, sinks, ctx, on_error, record_chunk_size,
+                        batch_size, rate_limit_rps, dlq_sink,
+                        parallel_sinks, sink_cb_keys, stats,
+                    )
+                else:
+                    self._process_chunk(
                         raw, meta, serializer_in, transforms,
                         serializer_out, sinks, ctx, on_error,
                         rate_limit_rps, dlq_sink, parallel_sinks, sink_cb_keys, stats,
                     )
-                    futures.append(fut)
-                    # batch_size is checked after ctx.records_in is updated by workers
-                    # slight over-submission is acceptable
-                    if batch_size and ctx.records_in >= batch_size:
-                        logger.info(
-                            "batch_size limit reached, stopping source read",
-                            extra={"pipeline": config.name, "batch_size": batch_size},
-                        )
-                        break
-
-                for f in as_completed(futures):
-                    try:
-                        f.result()
-                    except TramError as exc:
-                        if on_error == "abort":
-                            # Cancel remaining futures (best-effort)
-                            for remaining in futures:
-                                remaining.cancel()
-                            raise
-                        ctx.record_error(str(exc))
-                        if stats is not None:
-                            stats.increment(skipped=1, errors=[str(exc)])
+                if batch_size and ctx.records_in >= batch_size:
+                    logger.info(
+                        "batch_size limit reached, stopping source read",
+                        extra={"pipeline": config.name, "batch_size": batch_size},
+                    )
+                    stopped_early = True
+                    break
+        except Exception:
+            if current_source_meta is not None:
+                self._finalize_source_for_sinks(sinks, current_source_meta, success=False)
+                source.finalize(current_source_meta, success=False)
+            raise
         else:
-            # Single-threaded
-            current_source_key: tuple[str, str] | None = None
-            current_source_meta: dict | None = None
-            try:
-                for raw, meta in source.read():
-                    meta = _augment_chunk_meta(meta, ctx)
-                    source_key = _source_unit_key(meta)
-                    if source_key is not None:
-                        meta["enable_safe_finalize"] = True
-                        if current_source_key is not None and source_key != current_source_key:
-                            self._finalize_source_for_sinks(sinks, current_source_meta, success=True)
-                            current_source_key = None
-                            current_source_meta = None
-                        if current_source_key is None:
-                            current_source_key = source_key
-                        current_source_meta = dict(meta)
+            if current_source_meta is not None:
+                self._finalize_source_for_sinks(sinks, current_source_meta, success=True)
+                if not stopped_early:
+                    # On a batch_size stop the source generator was abandoned
+                    # mid-file; the current file must stay unmarked so the next
+                    # run reprocesses it (matches the pre-hook behavior).
+                    source.finalize(current_source_meta, success=True)
 
-                    if record_chunk_size:
-                        self._process_chunk_incrementally(
-                            raw, meta, serializer_in, transforms,
-                            serializer_out, sinks, ctx, on_error, record_chunk_size,
-                            batch_size, rate_limit_rps, dlq_sink,
-                            parallel_sinks, sink_cb_keys, stats,
-                        )
-                    else:
-                        self._process_chunk(
-                            raw, meta, serializer_in, transforms,
-                            serializer_out, sinks, ctx, on_error,
-                            rate_limit_rps, dlq_sink, parallel_sinks, sink_cb_keys, stats,
-                        )
+    def _run_batch_chunks_threaded(
+        self,
+        config: PipelineConfig,
+        source,
+        sinks,
+        serializer_in,
+        serializer_out,
+        transforms,
+        dlq_sink,
+        ctx: PipelineRunContext,
+        sink_cb_keys: list[str] | None = None,
+        stats: PipelineStats | None = None,
+    ) -> None:
+        """Multi-threaded batch loop: bounded in-flight chunks + deferred finalize.
+
+        Chunks are submitted in read order, but once ``_batch_inflight_cap``
+        futures are outstanding the oldest one is drained (blocking) before the
+        source generator is advanced again. This bounds queued-but-unprocessed
+        payloads (~2x thread_workers) instead of buffering the entire source
+        (RCA #16).
+
+        Source units (files) are finalized only after every chunk they yielded
+        has been drained — never while writes are still pending — so
+        move/delete/mark happen strictly after the chunks were actually written
+        (code review A2). On abort the in-flight unit is left untouched so a
+        retry can reprocess it.
+        """
+        batch_size = config.batch_size
+        on_error = config.on_error
+        cap = _batch_inflight_cap(config.thread_workers)
+        parallel_sinks = getattr(config, "parallel_sinks", False)
+
+        in_flight: deque[tuple[Future, tuple | None, dict]] = deque()
+        # Source units in submission order; each entry:
+        # [source_key, first_chunk_meta, remaining_chunks, fully_submitted]
+        units: deque[list] = deque()
+
+        def _submit(raw: bytes, meta: dict) -> None:
+            fut = pool.submit(
+                self._process_chunk,
+                raw, meta, serializer_in, transforms,
+                serializer_out, sinks, ctx, on_error,
+                config.rate_limit_rps, dlq_sink, parallel_sinks, sink_cb_keys, stats,
+            )
+            key = _source_unit_key(meta)
+            if key is not None:
+                if units and units[-1][0] == key:
+                    units[-1][2] += 1
+                else:
+                    if units:
+                        units[-1][3] = True  # previous unit fully submitted
+                    units.append([key, dict(meta), 1, False])
+            in_flight.append((fut, key, meta))
+
+        def _drain_one() -> None:
+            fut, key, _meta = in_flight.popleft()
+            try:
+                fut.result()
+            except TramError as exc:
+                if on_error == "abort":
+                    raise
+                ctx.record_error(str(exc))
+                if stats is not None:
+                    stats.increment(skipped=1, errors=[str(exc)])
+            if key is not None and units and units[0][0] == key:
+                units[0][2] -= 1
+                if units[0][2] == 0 and units[0][3]:
+                    finished = units.popleft()
+                    source.finalize(finished[1], success=True)
+
+        with ThreadPoolExecutor(max_workers=config.thread_workers) as pool:
+            try:
+                stopped_early = False
+                for raw, meta in source.read():
+                    _submit(raw, meta)
+                    while len(in_flight) >= cap:
+                        _drain_one()
+                    # batch_size is checked after ctx.records_in is updated by
+                    # workers; slight over-submission is acceptable.
                     if batch_size and ctx.records_in >= batch_size:
                         logger.info(
                             "batch_size limit reached, stopping source read",
                             extra={"pipeline": config.name, "batch_size": batch_size},
                         )
+                        stopped_early = True
                         break
+                if units and not stopped_early:
+                    # Natural end of the source: the last unit is fully
+                    # submitted, so it may be finalized once its chunks drain.
+                    # On a batch_size stop the generator was abandoned mid-file
+                    # and the current unit must stay unmarked.
+                    units[-1][3] = True
+                while in_flight:
+                    _drain_one()
             except Exception:
-                if current_source_meta is not None:
-                    self._finalize_source_for_sinks(sinks, current_source_meta, success=False)
+                # Abort or source error: never finalize units whose chunks were
+                # not all drained — their files stay unmarked/unmoved so a retry
+                # can reprocess them. Cancel what can be cancelled; the pool
+                # shutdown in the with-block waits for any running futures.
+                for fut, _key, _meta in in_flight:
+                    fut.cancel()
                 raise
-            else:
-                if current_source_meta is not None:
-                    self._finalize_source_for_sinks(sinks, current_source_meta, success=True)
 
     # ── Stream run ────────────────────────────────────────────────────────────
 
@@ -997,10 +1138,23 @@ class PipelineExecutor:
                     sink_cb_keys=sink_cb_keys,
                 )
             else:
+                current_source_key: tuple[str, str] | None = None
+                current_source_meta: dict | None = None
+                stopped = False
                 for raw, meta in source.read():
                     if stop_event.is_set():
                         logger.info("Stream stop requested", extra={"pipeline": config.name})
+                        stopped = True
                         break
+                    source_key = _source_unit_key(meta)
+                    if source_key is not None:
+                        if current_source_key is not None and source_key != current_source_key:
+                            source.finalize(current_source_meta, success=True)
+                            current_source_key = None
+                            current_source_meta = None
+                        if current_source_key is None:
+                            current_source_key = source_key
+                        current_source_meta = dict(meta)
                     self._process_chunk(
                         raw, meta, serializer_in, transforms,
                         serializer_out, sinks, ctx, config.on_error,
@@ -1009,6 +1163,10 @@ class PipelineExecutor:
                         sink_cb_keys,
                         stats,
                     )
+                # On a stop the generator was abandoned mid-file; the current
+                # file stays unmarked (matches the pre-hook behavior).
+                if current_source_meta is not None and not stopped:
+                    source.finalize(current_source_meta, success=True)
         except Exception as exc:
             logger.error(
                 "Stream run error",
@@ -1017,6 +1175,7 @@ class PipelineExecutor:
             )
             raise
         finally:
+            self._close_source(source)
             logger.info(
                 "Stream run ended",
                 extra={
@@ -1082,16 +1241,31 @@ class PipelineExecutor:
             STREAM_QUEUE_DEPTH = None
 
         try:
+            current_source_key: tuple[str, str] | None = None
+            current_source_meta: dict | None = None
+            stopped = False
             for raw, meta in source.read():
                 if stop_event.is_set():
                     logger.info("Stream stop requested", extra={"pipeline": config.name})
+                    stopped = True
                     break
+                source_key = _source_unit_key(meta)
+                if source_key is not None:
+                    if current_source_key is not None and source_key != current_source_key:
+                        source.finalize(current_source_meta, success=True)
+                        current_source_key = None
+                        current_source_meta = None
+                    if current_source_key is None:
+                        current_source_key = source_key
+                    current_source_meta = dict(meta)
                 chunk_q.put((raw, meta))  # blocks if queue full (backpressure)
                 if STREAM_QUEUE_DEPTH is not None:
                     try:
                         STREAM_QUEUE_DEPTH.labels(pipeline=config.name).set(chunk_q.qsize())
                     except Exception:
                         pass
+            if current_source_meta is not None and not stopped:
+                source.finalize(current_source_meta, success=True)
         finally:
             # Signal all workers to stop
             for _ in threads:

@@ -1,17 +1,25 @@
-"""Tests for thread_workers functionality in PipelineExecutor (v0.9.0)."""
+"""Tests for thread_workers functionality in PipelineExecutor (v0.9.0).
+
+The multi-threaded tests use a real ThreadPoolExecutor and a real file
+source: mocking _process_chunk cannot catch the mark-before-write window
+(code review A2) or the unbounded submission (RCA #16) that this file's
+tests were written to lock down.
+"""
 
 from __future__ import annotations
 
 import json
 import threading
-from concurrent.futures import Future
+import time
+from concurrent.futures import Future, ThreadPoolExecutor
 from unittest.mock import MagicMock, patch
 
 import pytest
 
+from tram.connectors.local.source import LocalSource
 from tram.core.context import PipelineRunContext, RunStatus
 from tram.core.exceptions import TramError
-from tram.pipeline.executor import PipelineExecutor
+from tram.pipeline.executor import PipelineExecutor, _batch_inflight_cap
 
 # ── PipelineRunContext thread-safety ──────────────────────────────────────
 
@@ -247,6 +255,10 @@ class TestRunBatchChunksSingleThreaded:
         assert second_meta["pipeline_name"] == "test-pipe"
         assert first_success is True
         assert second_success is True
+        # The source-side finalize hook fires per file after its chunks drain.
+        assert mock_source.finalize.call_count == 2
+        assert mock_source.finalize.call_args_list[0].kwargs["success"] is True
+        assert mock_source.finalize.call_args_list[1].kwargs["success"] is True
 
     def test_single_threaded_failure_finalizes_current_source_with_failure(self):
         chunks = [
@@ -274,22 +286,71 @@ class TestRunBatchChunksSingleThreaded:
         assert failed_meta["source_filename"] == "a.ber"
         assert failed_meta["run_id"] == ctx.run_id
         assert failed_success is False
+        # The source-side hook is told the unit failed (a no-op in the file
+        # sources) so the file is left unmarked for a retry.
+        mock_source.finalize.assert_called_once()
+        assert mock_source.finalize.call_args.kwargs["success"] is False
+
+    def test_single_threaded_batch_size_stop_finalizes_completed_files_only(self):
+        """batch_size stop abandons the read mid-file: files finalized before
+        the stop are marked, the current (last-read) file is left unmarked."""
+        chunks = [
+            (b'[{"x":1}]', {"source_filename": "a.json", "source_path": "/in/a.json"}),
+            (b'[{"x":2}]', {"source_filename": "b.json", "source_path": "/in/b.json"}),
+            (b'[{"x":3}]', {"source_filename": "c.json", "source_path": "/in/c.json"}),
+        ]
+        config, _ = self._make_config(chunks, thread_workers=1, batch_size=2)
+        mock_source = MagicMock()
+        mock_source.read.return_value = iter(chunks)
+
+        mock_sink = MagicMock()
+        mock_ser_in = MagicMock()
+        mock_ser_in.parse.side_effect = lambda raw: json.loads(raw)
+        mock_ser_out = MagicMock()
+        mock_ser_out.serialize.return_value = b"[]"
+        sinks = [(mock_sink, None, [])]
+
+        executor = PipelineExecutor()
+        ctx = PipelineRunContext(pipeline_name="test-pipe")
+
+        executor._run_batch_chunks(
+            config, mock_source, sinks, mock_ser_in, mock_ser_out, [], None, ctx
+        )
+
+        # a.json was fully processed before the b.json chunk tripped batch_size,
+        # so only a.json is finalized; b.json (current) and c.json stay unmarked.
+        assert mock_source.finalize.call_count == 1
+        finalized_meta = mock_source.finalize.call_args.args[0]
+        assert finalized_meta["source_filename"] == "a.json"
+        assert mock_source.finalize.call_args.kwargs["success"] is True
 
 
 # ── _run_batch_chunks: multi-threaded path ────────────────────────────────
 
 
 class TestRunBatchChunksMultiThreaded:
-    """Verify ThreadPoolExecutor is used when thread_workers > 1."""
+    """Verify the bounded ThreadPoolExecutor path when thread_workers > 1.
+
+    These tests use a REAL ThreadPoolExecutor (no _process_chunk mock) so the
+    two defects this path used to have are observable: files marked before
+    their chunks' writes complete (code review A2) and unbounded submission of
+    the whole source into the pool queue (RCA #16).
+    """
+
+    @staticmethod
+    def _make_threaded_config(thread_workers=2, on_error="continue"):
+        config = MagicMock()
+        config.name = "threaded-pipe"
+        config.thread_workers = thread_workers
+        config.batch_size = None
+        config.on_error = on_error
+        config.rate_limit_rps = None
+        config.parallel_sinks = False
+        return config
 
     def test_multi_threaded_uses_thread_pool_executor(self):
         """When thread_workers=3, _run_batch_chunks should use ThreadPoolExecutor."""
-        config = MagicMock()
-        config.name = "threaded-pipe"
-        config.thread_workers = 3
-        config.batch_size = None
-        config.on_error = "continue"
-        config.rate_limit_rps = None
+        config = self._make_threaded_config(thread_workers=3)
 
         chunks = [
             (b'[{"n": 1}]', {}),
@@ -320,22 +381,16 @@ class TestRunBatchChunksMultiThreaded:
             future2.set_result(True)
             mock_pool.submit.side_effect = [future1, future2]
 
-            with patch("tram.pipeline.executor.as_completed", return_value=iter([future1, future2])):
-                executor._run_batch_chunks(
-                    config, mock_source, sinks, mock_ser_in, mock_ser_out, [], None, ctx
-                )
+            executor._run_batch_chunks(
+                config, mock_source, sinks, mock_ser_in, mock_ser_out, [], None, ctx
+            )
 
             mock_pool_cls.assert_called_once_with(max_workers=3)
             assert mock_pool.submit.call_count == 2
 
     def test_multi_threaded_submit_calls_process_chunk(self):
         """Submitted futures should wrap _process_chunk calls."""
-        config = MagicMock()
-        config.name = "threaded-pipe"
-        config.thread_workers = 2
-        config.batch_size = None
-        config.on_error = "continue"
-        config.rate_limit_rps = None
+        config = self._make_threaded_config(thread_workers=2)
 
         chunks = [(b'[{"x": 1}]', {"meta": "a"})]
         mock_source = MagicMock()
@@ -367,10 +422,9 @@ class TestRunBatchChunksMultiThreaded:
 
             mock_pool.submit.side_effect = capture_submit
 
-            with patch("tram.pipeline.executor.as_completed", return_value=iter([fut])):
-                executor._run_batch_chunks(
-                    config, mock_source, sinks, mock_ser_in, mock_ser_out, [], None, ctx
-                )
+            executor._run_batch_chunks(
+                config, mock_source, sinks, mock_ser_in, mock_ser_out, [], None, ctx
+            )
 
         # The submitted function should be executor._process_chunk
         # Note: bound methods are re-created on each attribute access so we compare
@@ -378,6 +432,173 @@ class TestRunBatchChunksMultiThreaded:
         assert len(submitted_fns) == 1
         assert submitted_fns[0].__func__ is PipelineExecutor._process_chunk
         assert submitted_fns[0].__self__ is executor
+
+    def test_threaded_finalizes_files_after_their_chunks_complete(self, tmp_path):
+        """Success path: files are moved+marked only after their chunks drain."""
+        src = tmp_path / "in"
+        dst = tmp_path / "processed"
+        src.mkdir()
+        for name in ("a.json", "b.json"):
+            (src / name).write_bytes(b'[{"x":1}]')
+
+        config = self._make_threaded_config(thread_workers=2, on_error="continue")
+
+        source = LocalSource({
+            "path": str(src),
+            "move_after_read": str(dst),
+            "skip_processed": True,
+            "_pipeline_name": "threaded-pipe",
+        })
+        tracker = _RecordingTracker()
+        source._file_tracker = tracker
+
+        sink = MagicMock()
+        mock_ser_in = MagicMock()
+        mock_ser_in.parse.side_effect = lambda raw: json.loads(raw)
+        mock_ser_out = MagicMock()
+        mock_ser_out.serialize.return_value = b"[]"
+        sinks = [(sink, None, [])]
+
+        executor = PipelineExecutor()
+        ctx = PipelineRunContext(pipeline_name="threaded-pipe")
+
+        executor._run_batch_chunks(
+            config, source, sinks, mock_ser_in, mock_ser_out, [], None, ctx
+        )
+
+        assert sorted(p.name for p in dst.iterdir()) == ["a.json", "b.json"]
+        assert sorted(p.name for p in src.iterdir()) == []
+        assert sorted(tracker.marked) == sorted([
+            str(src / "a.json"),
+            str(src / "b.json"),
+        ])
+
+    def test_threaded_mid_run_failure_leaves_files_unmarked_and_unmoved(self, tmp_path):
+        """A chunk failure after some chunks were submitted must not mark or
+        move the files whose chunks did not all complete — the old generator
+        marked them at *submit* time (code review A2: permanent data loss)."""
+        src = tmp_path / "in"
+        dst = tmp_path / "processed"
+        src.mkdir()
+        for name in ("a.json", "b.json", "c.json"):
+            (src / name).write_bytes(b'[{"x":1}]')
+
+        config = self._make_threaded_config(thread_workers=2, on_error="abort")
+
+        source = LocalSource({
+            "path": str(src),
+            "move_after_read": str(dst),
+            "skip_processed": True,
+            "_pipeline_name": "threaded-pipe",
+        })
+        tracker = _RecordingTracker()
+        source._file_tracker = tracker
+
+        sink = MagicMock()
+
+        def flaky_write(serialized, sink_meta):
+            if sink_meta.get("source_filename") == "b.json":
+                raise ValueError("boom")
+
+        sink.write.side_effect = flaky_write
+        mock_ser_in = MagicMock()
+        mock_ser_in.parse.side_effect = lambda raw: json.loads(raw)
+        mock_ser_out = MagicMock()
+        mock_ser_out.serialize.return_value = b"[]"
+        sinks = [(sink, None, [])]
+
+        executor = PipelineExecutor()
+        ctx = PipelineRunContext(pipeline_name="threaded-pipe")
+
+        with pytest.raises(TramError):
+            executor._run_batch_chunks(
+                config, source, sinks, mock_ser_in, mock_ser_out, [], None, ctx
+            )
+
+        # a.json was fully drained before b.json failed → moved + marked.
+        # b.json (failed) and c.json (cancelled) stay in the source dir,
+        # unmarked and unmoved, so a retry can reprocess them.
+        assert sorted(p.name for p in dst.iterdir()) == ["a.json"]
+        assert sorted(p.name for p in src.iterdir()) == ["b.json", "c.json"]
+        assert tracker.marked == [str(src / "a.json")]
+
+    def test_threaded_inflight_cap_limits_outstanding_futures(self):
+        """The producer never holds more than _batch_inflight_cap futures
+        pending — the old code submitted the entire source into the unbounded
+        pool queue (RCA #16: thread_workers=2 doubled the peak heap)."""
+        config = self._make_threaded_config(thread_workers=2, on_error="continue")
+        cap = _batch_inflight_cap(config.thread_workers)
+        assert cap == 4
+
+        n = 8
+        chunks = [
+            (
+                f'[{{"x":{i}}}]'.encode(),
+                {"source_filename": f"f{i}.json", "source_path": f"/in/f{i}.json"},
+            )
+            for i in range(n)
+        ]
+        mock_source = MagicMock()
+        mock_source.read.return_value = iter(chunks)
+
+        sink = MagicMock()
+        sink.write.side_effect = lambda *args, **kwargs: time.sleep(0.03)
+        mock_ser_in = MagicMock()
+        mock_ser_in.parse.side_effect = lambda raw: json.loads(raw)
+        mock_ser_out = MagicMock()
+        mock_ser_out.serialize.return_value = b"[]"
+        sinks = [(sink, None, [])]
+
+        executor = PipelineExecutor()
+        ctx = PipelineRunContext(pipeline_name="threaded-pipe")
+
+        pools = []
+
+        class TrackingPool(ThreadPoolExecutor):
+            """Real pool that records submitted-but-not-yet-completed futures."""
+
+            def __init__(self, *args, **kwargs):
+                super().__init__(*args, **kwargs)
+                self._lock = threading.Lock()
+                self.pending = 0
+                self.max_pending = 0
+                pools.append(self)
+
+            def submit(self, fn, *args, **kwargs):
+                with self._lock:
+                    self.pending += 1
+                    self.max_pending = max(self.max_pending, self.pending)
+                fut = super().submit(fn, *args, **kwargs)
+                fut.add_done_callback(self._on_done)
+                return fut
+
+            def _on_done(self, fut):
+                with self._lock:
+                    self.pending -= 1
+
+        with patch("tram.pipeline.executor.ThreadPoolExecutor", TrackingPool):
+            executor._run_batch_chunks(
+                config, mock_source, sinks, mock_ser_in, mock_ser_out, [], None, ctx
+            )
+
+        assert pools, "threaded path did not create a ThreadPoolExecutor"
+        assert pools[0].max_pending <= cap
+        # More than the worker count was in flight, proving the window is a
+        # bounded buffer, not accidental serialization.
+        assert pools[0].max_pending >= 2
+
+
+class _RecordingTracker:
+    """Minimal ProcessedFileTracker stand-in that records mark_processed calls."""
+
+    def __init__(self):
+        self.marked = []
+
+    def is_processed(self, pipeline_name, source_key, filepath):
+        return False
+
+    def mark_processed(self, pipeline_name, source_key, filepath):
+        self.marked.append(filepath)
 
 
 # ── batch_run with thread_workers=1 ──────────────────────────────────────
