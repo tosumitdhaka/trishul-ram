@@ -10,9 +10,39 @@ from pathlib import Path
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
-    from tram.pipeline.manager import PipelineManager
+    from tram.models.pipeline import PipelineConfig
+    from tram.pipeline.controller import PipelineController
 
 logger = logging.getLogger(__name__)
+
+
+class PipelineWatcherController:
+    """Thin delegating façade over ``PipelineController`` for the watcher's needs.
+
+    The watcher needs exactly three lifecycle operations — register (file
+    created), reload/update (file modified), and remove/stop (file deleted) —
+    plus existence checks. All real work is delegated to the controller, which
+    is the single authority for stopping/starting pipelines, deregistering them,
+    and persisting changes to the DB.
+    """
+
+    def __init__(self, controller: PipelineController) -> None:
+        self._controller = controller
+
+    def exists(self, name: str) -> bool:
+        return self._controller.exists(name)
+
+    def register(self, config: PipelineConfig, yaml_text: str) -> None:
+        """Register a brand-new pipeline discovered on disk (persists to DB)."""
+        self._controller.register(config, yaml_text=yaml_text, source="disk")
+
+    def reload(self, name: str, yaml_text: str) -> None:
+        """Reload an existing pipeline, mirroring ``controller.update`` persistence."""
+        self._controller.update(name, yaml_text)
+
+    def remove(self, name: str) -> None:
+        """Stop execution and remove a pipeline whose file was deleted."""
+        self._controller.delete(name)
 
 
 class PipelineWatcher:
@@ -23,9 +53,9 @@ class PipelineWatcher:
         - File deleted → stop and deregister the pipeline
     """
 
-    def __init__(self, pipeline_dir: str, manager: PipelineManager) -> None:
+    def __init__(self, pipeline_dir: str, controller: PipelineController) -> None:
         self._pipeline_dir = pipeline_dir
-        self._manager = manager
+        self._controller = PipelineWatcherController(controller)
         self._observer = None
 
     def start(self) -> None:
@@ -39,7 +69,7 @@ class PipelineWatcher:
                 "install with: pip install tram[watch]"
             ) from exc
 
-        manager = self._manager
+        controller = self._controller
 
         class _Handler(FileSystemEventHandler):
             def _is_yaml(self, path: str) -> bool:
@@ -59,28 +89,32 @@ class PipelineWatcher:
                 if event.is_directory or not self._is_yaml(event.src_path):
                     return
                 name = Path(event.src_path).stem
-                if manager.exists(name):
-                    try:
-                        manager.stop_pipeline(name)
-                    except Exception:
-                        pass
-                    try:
-                        manager.deregister(name)
-                        logger.info("Pipeline removed (file deleted)", extra={"pipeline": name})
-                    except Exception as exc:
-                        logger.warning("Failed to deregister pipeline %s: %s", name, exc)
+                if not controller.exists(name):
+                    return
+                try:
+                    controller.remove(name)
+                    logger.info("Pipeline removed (file deleted)", extra={"pipeline": name})
+                except Exception as exc:
+                    logger.error(
+                        "Failed to stop and remove pipeline %s after its file was deleted: %s",
+                        name, exc, exc_info=True,
+                    )
 
             def _reload(self, path: str):
                 from tram.core.exceptions import ConfigError
                 from tram.pipeline.loader import load_pipeline
                 try:
                     config, yaml_text = load_pipeline(path)
-                    manager.register(config, replace=True, yaml_text=yaml_text)
-                    logger.info("Pipeline reloaded (file changed)", extra={"pipeline": config.name, "path": path})
+                    if controller.exists(config.name):
+                        controller.reload(config.name, yaml_text)
+                    else:
+                        controller.register(config, yaml_text)
+                    logger.info("Pipeline reloaded (file changed)",
+                                extra={"pipeline": config.name, "path": path})
                 except ConfigError as exc:
                     logger.warning("Pipeline reload failed (config error): %s — %s", path, exc)
                 except Exception as exc:
-                    logger.warning("Pipeline reload failed: %s — %s", path, exc)
+                    logger.error("Pipeline reload failed: %s — %s", path, exc, exc_info=True)
 
         self._observer = Observer()
         self._observer.schedule(_Handler(), self._pipeline_dir, recursive=False)

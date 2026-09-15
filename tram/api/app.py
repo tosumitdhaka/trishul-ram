@@ -96,7 +96,7 @@ async def lifespan(app: FastAPI):
         try:
             from tram.watcher.pipeline_watcher import PipelineWatcher
             watcher = PipelineWatcher(pipeline_dir=config.pipeline_dir,
-                                      manager=controller.manager)
+                                      controller=controller)
             watcher.start()
             logger.info("Pipeline file watcher started", extra={"dir": config.pipeline_dir})
         except ImportError:
