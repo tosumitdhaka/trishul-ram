@@ -378,10 +378,32 @@ class TestConfigSha256:
             assert stopped.wait(timeout=3)
 
 
+def _route_paths(app) -> set:
+    """Flatten route paths across FastAPI versions.
+
+    fastapi>=0.141 represents ``include_router`` on the app as an
+    ``_IncludedRouter`` wrapper (no ``.path``) holding the original router;
+    older versions flatten the included routes directly onto ``app.routes``.
+    """
+    paths = set()
+
+    def _walk(routes):
+        for route in routes:
+            path = getattr(route, "path", None)
+            if path is not None:
+                paths.add(path)
+            included = getattr(route, "original_router", None)
+            if included is not None:
+                _walk(included.routes)
+
+    _walk(app.routes)
+    return paths
+
+
 class TestIngressApp:
     def test_create_worker_ingress_app_has_no_agent_routes(self):
         app = create_worker_ingress_app(worker_id="w0")
-        route_paths = {route.path for route in app.routes}
+        route_paths = _route_paths(app)
 
         assert "/webhooks/{path:path}" in route_paths
         assert "/agent/run" not in route_paths

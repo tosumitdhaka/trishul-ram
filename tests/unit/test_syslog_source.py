@@ -339,6 +339,23 @@ def _wait_for(records, present, timeout=15.0):
     )
 
 
+def _connect_with_retry(port: int, timeout: float = 10.0) -> socket.socket:
+    """Connect to a source's TCP listener, tolerating the startup race.
+
+    The listener is bound inside ``read()`` on the consumer thread; on
+    loaded CI runners the main thread can reach ``create_connection``
+    before the listener socket exists (ConnectionRefused).
+    """
+    deadline = time.monotonic() + timeout
+    while True:
+        try:
+            return socket.create_connection(("127.0.0.1", port))
+        except ConnectionRefusedError:
+            if time.monotonic() > deadline:
+                raise
+            time.sleep(0.02)
+
+
 class TestTcpConcurrency:
     """TCP connections are served concurrently by per-connection threads."""
 
@@ -359,8 +376,8 @@ class TestTcpConcurrency:
             m1 = b"<34>Oct 11 22:14:15 host app: from-client-one"
             m2 = b"<165>1 2023-01-01T00:00:00Z host2 app 1 ID1 - from-client-two"
             m3 = b"<34>Oct 11 22:14:16 host app: still-served"
-            c1 = socket.create_connection(("127.0.0.1", port))
-            c2 = socket.create_connection(("127.0.0.1", port))
+            c1 = _connect_with_retry(port)
+            c2 = _connect_with_retry(port)
             c1.sendall(m1 + b"\n")
             c2.sendall(m2 + b"\n")
             _wait_for(records, {m1, m2})
@@ -394,10 +411,10 @@ class TestTcpConcurrency:
             m1 = b"<34>Oct 11 22:14:15 host app: one"
             m2 = b"<34>Oct 11 22:14:15 host app: two"
             m3 = b"<34>Oct 11 22:14:15 host app: three"
-            c1 = socket.create_connection(("127.0.0.1", port))
+            c1 = _connect_with_retry(port)
             c1.sendall(m1 + b"\n")
             _wait_for(records, {m1})
-            c2 = socket.create_connection(("127.0.0.1", port))
+            c2 = _connect_with_retry(port)
             c2.sendall(m2 + b"\n")
             _wait_for(records, {m1, m2})
             # Cap of 2 reached: the third connection is refused (immediate EOF).
@@ -428,8 +445,8 @@ class TestTcpConcurrency:
         try:
             m1 = b"<34>Oct 11 22:14:15 host app: one"
             m2 = b"<34>Oct 11 22:14:15 host app: two"
-            c1 = socket.create_connection(("127.0.0.1", port))
-            c2 = socket.create_connection(("127.0.0.1", port))
+            c1 = _connect_with_retry(port)
+            c2 = _connect_with_retry(port)
             c1.sendall(m1 + b"\n")
             c2.sendall(m2 + b"\n")
             _wait_for(records, {m1, m2})
