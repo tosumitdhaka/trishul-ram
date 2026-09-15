@@ -36,7 +36,9 @@ All configuration is via environment variables (12-factor).
 | `TRAM_SMTP_PASS` | _(none)_ | SMTP password (optional) |
 | `TRAM_SMTP_TLS` | `true` | Use STARTTLS (`false` for plain SMTP) |
 | `TRAM_SMTP_FROM` | `tram@localhost` | Sender address for alert emails |
-| `TRAM_API_KEY` | _(empty)_ | API key for request authentication; empty = auth disabled |
+| `TRAM_API_KEY` | _(empty)_ | API key for request authentication via the `X-API-Key` header (empty = auth disabled; the legacy `?api_key=` query param was removed) |
+| `TRAM_INTERNAL_AUTH_MODE` | `warn` | How internal machine-to-machine surfaces (`/api/internal/*` on the manager, `/agent/*` on workers) treat requests with a missing/invalid key: `off` (pass through, no log), `warn` (log at WARNING, still serve), `enforce` (reject with 401). Default `warn` — flipping to `enforce` in a later phase requires no code changes |
+| `TRAM_WEBHOOK_MAX_BODY_BYTES` | `10485760` | Maximum accepted webhook request body size in bytes; oversized payloads are rejected with 413 (v1.4.0) |
 | `TRAM_AUTH_USERS` | _(empty)_ | Comma-separated `user:password` pairs for browser UI login (v1.0.8); issues 8-hour HMAC session tokens; coexists with `TRAM_API_KEY` |
 | `TRAM_AUTH_SECRET` | _(random)_ | Shared HMAC signing secret for session tokens (v1.0.8); **required in cluster mode** — without a shared secret each pod signs tokens independently and cross-pod requests return 401 |
 | `TRAM_RATE_LIMIT` | `0` | Max requests per minute per IP for `/api/*`; 0 = disabled |
@@ -180,19 +182,43 @@ The worker image exposes port `8766` for the internal agent API and port `8767` 
 ## API Key Authentication (v1.0.0)
 
 Set `TRAM_API_KEY` to a secret string to require authentication on all `/api/*` endpoints.
-Clients must pass the key via:
+Clients must pass the key via the `X-API-Key` header:
 
 ```bash
-# Header (recommended)
 curl -H "X-API-Key: $TRAM_API_KEY" http://localhost:8765/api/pipelines
-
-# Query parameter (useful for webhooks)
-curl "http://localhost:8765/api/pipelines?api_key=$TRAM_API_KEY"
 ```
 
-Exempt paths (no key needed): `/api/health`, `/api/ready`, `/metrics`, `/webhooks/*`, `/ui/*`, `/`
+Exempt paths (no key needed): `/api/health`, `/api/ready`, `/agent/health`, `/metrics`, `/webhooks/*`, `/ui/*`, `/`
 
 When `TRAM_API_KEY` is empty (default), all requests pass through without authentication.
+
+### Internal machine-to-machine surfaces (`/api/internal/*`, `/agent/*`)
+
+The manager's `/api/internal/*` endpoints (worker run-complete/stats callbacks) and the
+worker agent `/agent/*` endpoints are authenticated with the **same** `TRAM_API_KEY`.
+K8s probe paths (`/api/health`, `/api/ready`, `/agent/health`) are always exempt and never
+need a key, regardless of the mode below.
+
+`TRAM_INTERNAL_AUTH_MODE` controls how those internal surfaces treat a missing/invalid key:
+
+| Mode | Behavior |
+|------|----------|
+| `off` (no key) | Pass through with no check and no log |
+| `warn` (default) | Log a WARNING (path + client) and still serve the request |
+| `enforce` | Reject with 401 — requires `TRAM_API_KEY` to be set on the server |
+
+**Rollout order (non-breaking):** deploy workers first (workers now send `X-API-Key` on
+every run-complete/stats callback automatically when `TRAM_API_KEY` is set on the worker),
+then set `TRAM_INTERNAL_AUTH_MODE=warn` and watch the WARNING logs for clients that still
+miss the key, then flip to `enforce`. The default is `warn`, so nothing 401s a working
+deployment at any point in this sequence.
+
+**Fail-closed guidance:** if `TRAM_API_KEY` is unset, authentication is entirely disabled —
+anyone with network reach can call `/api/*`, `/api/internal/*`, and `/agent/*`. Production
+deployments must set a real secret (not the old committed `tram-internal-2026` default) via
+the `apiKey` Helm value or `envSecret.TRAM_API_KEY`, and set `TRAM_INTERNAL_AUTH_MODE=enforce`
+after the rollout window. Workers automatically receive the same key from the chart
+(`worker-statefulset.yaml` injects `.Values.apiKey` as `TRAM_API_KEY`).
 
 ## TLS / HTTPS (v1.0.0)
 
@@ -613,8 +639,8 @@ helm upgrade tram oci://ghcr.io/tosumitdhaka/charts/trishul-ram \
 | `schemaRegistry.password` | `""` | Registry basic-auth password; prefer `envSecret` in production |
 | `service.snmpTrapPorts` | `[]` | List of UDP ports to expose for `snmp_trap` sources (e.g. `[1162, 1163]`); each entry creates one Service port + containerPort; requires `helm upgrade` to add/remove |
 | `ui.enabled` | `true` | Serve tram-ui static assets at `/ui`; set to `false` to disable without rebuilding the image (injects `TRAM_UI_DIR=""`) |
-| `apiKey` | `""` | API key (X-API-Key header / `api_key` query param) for machine clients; empty = disabled |
-| `authUsers` | `""` | Comma-separated `user:password` pairs for browser login bootstrap; with `TRAM_DB_URL`, changed passwords are stored as scrypt hashes in `user_passwords` and override the env value |
+| `apiKey` | `""` | API key (`X-API-Key` header) for machine clients; empty = auth disabled. There is **no committed plaintext default** — set explicitly or via `envSecret.TRAM_API_KEY` for any shared cluster; dev/kind deployments may leave it empty |
+| `authUsers` | `""` | Comma-separated `user:password` pairs for browser login bootstrap; with `TRAM_DB_URL`, changed passwords are stored as scrypt hashes in `user_passwords` and override the env value. No committed plaintext default — set explicitly or via `envSecret.TRAM_AUTH_USERS` |
 | `postgresql.enabled` | `false` | Deploy Bitnami PostgreSQL subchart and auto-wire `TRAM_DB_URL` (v1.0.8) |
 | `postgresql.auth.username` | `tram` | PostgreSQL username |
 | `postgresql.auth.password` | `tram` | PostgreSQL password (use external secret for production) |

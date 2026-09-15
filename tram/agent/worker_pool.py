@@ -104,8 +104,26 @@ class WorkerPool:
         self._last_healthy_count: int = -1
         self._lock = threading.Lock()
 
+        # Shared machine key for manager→worker agent calls. Sent as
+        # X-API-Key when configured; no header when unset — mirrors the agent
+        # server's callback pattern (`server.py`).
+        self._api_key = os.environ.get("TRAM_API_KEY", "")
+
         self._poll_stop = threading.Event()
         self._poll_thread: threading.Thread | None = None
+
+    # ── Manager→worker HTTP ────────────────────────────────────────────────
+
+    def _agent_client(self, timeout: float) -> httpx.Client:
+        """Return an httpx client preconfigured for agent endpoints.
+
+        Every manager→worker HTTP call (health probes, dispatch, stop, status)
+        goes through this helper so the shared machine key is attached as
+        ``X-API-Key`` whenever ``TRAM_API_KEY`` is set. Without a key the
+        client carries no header, matching the agent server's behavior.
+        """
+        headers = {"X-API-Key": self._api_key} if self._api_key else None
+        return httpx.Client(timeout=timeout, headers=headers)
 
     # ── Discovery ──────────────────────────────────────────────────────────
 
@@ -197,7 +215,7 @@ class WorkerPool:
         poll interval while it is still reported healthy (startup hysteresis
         window, plan B.6).
         """
-        with httpx.Client(timeout=5) as client:
+        with self._agent_client(5) as client:
             for url in self._workers:
                 probe_error: str | None = None
                 try:
@@ -408,7 +426,7 @@ class WorkerPool:
 
     def worker_status(self, worker_url: str) -> dict | None:
         try:
-            with httpx.Client(timeout=5) as client:
+            with self._agent_client(5) as client:
                 resp = client.get(f"{worker_url}/agent/status")
                 resp.raise_for_status()
                 data = resp.json()
@@ -529,7 +547,7 @@ class WorkerPool:
             "callback_url": callback_url,
         }
         try:
-            with httpx.Client(timeout=10) as client:
+            with self._agent_client(10) as client:
                 resp = client.post(f"{worker_url}/agent/run", json=payload)
                 resp.raise_for_status()
         except Exception as exc:
@@ -751,7 +769,7 @@ class WorkerPool:
 
     def _stop_run_on_worker(self, worker_url: str, run_id: str, pipeline_name: str) -> bool:
         try:
-            with httpx.Client(timeout=5) as client:
+            with self._agent_client(5) as client:
                 resp = client.post(
                     f"{worker_url}/agent/stop",
                     json={"pipeline_name": pipeline_name, "run_id": run_id},
@@ -771,7 +789,7 @@ class WorkerPool:
         with self._lock:
             worker_urls = list(self._workers)
 
-        with httpx.Client(timeout=5) as client:
+        with self._agent_client(5) as client:
             for worker_url in worker_urls:
                 try:
                     resp = client.get(f"{worker_url}/agent/status")

@@ -9,6 +9,10 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Added
 
+- Added warn-only auth mode for internal machine-to-machine surfaces: `TRAM_INTERNAL_AUTH_MODE=off|warn|enforce` (default `warn`) now governs `/api/internal/*` on the manager and `/agent/*` on workers — missing/invalid keys are logged at WARNING and still served, so rolling out keys never 401s a working deployment; `enforce` (401) is the Phase 2 flip with no code changes. An invalid `TRAM_INTERNAL_AUTH_MODE` value is logged at WARNING and falls back to `warn`
+- Worker callbacks now authenticate: `_post_run_complete` and `_post_stats` send `X-API-Key` (from the worker's `TRAM_API_KEY`) on every run-complete/stats POST to the manager
+- Worker agent API (`/agent/*`) now runs the same `APIKeyMiddleware` as the manager ingress; `/agent/health` (K8s liveness/readiness probe) is unconditionally exempt on both the manager and worker servers
+- Webhook ingestion now enforces a configurable body-size limit (`TRAM_WEBHOOK_MAX_BODY_BYTES`, default 10 MiB) — oversized payloads are rejected with 413 instead of being fully buffered in memory
 - Added local-image retention cleanup to both `scripts/deploy-docker-standalone.sh` and `scripts/deploy-kind-tram-dev.sh`, keeping the newest 5 `local-*` images per repository by default with a `--keep-images` override
 - Added `scripts/deploy-docker-standalone.sh` to build, run, and manage a single standalone TRAM Docker container with a persisted Docker data volume, auto-created host pipeline mounts, optional host output bind mounts, timestamp-tagged local auto-builds for repo workflows, `--ghcr` pull support for the published `ghcr.io/tosumitdhaka/trishul-ram:<tag>` image, log/status helpers, optional UDP port publishing, and a README-friendly GitHub bootstrap flow
 - Manager dispatch now distinguishes `no_capacity` (no healthy workers) from `dispatch_failed` (the dispatch attempt errored) and records the real worker error in run history; both outcomes increment `tram_mgr_dispatch_total`, with `dispatch_failed` as a new result label alongside `no_workers` and `accepted`
@@ -16,6 +20,10 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Changed
 
+- Removed the committed plaintext defaults `apiKey: "tram-internal-2026"` and `authUsers: "admin:tram@2026"` from `helm/values.yaml` — both now default to empty (auth disabled for dev/kind); production must set them explicitly or via `envSecret.TRAM_API_KEY` / `envSecret.TRAM_AUTH_USERS`. Note that `TRAM_INTERNAL_AUTH_MODE=enforce` only rejects missing/invalid keys when `TRAM_API_KEY` is actually set — without a key configured, internal surfaces pass through (the server cannot validate a key it does not have). **Upgrade note for Helm users:** the chart no longer ships default `apiKey`/`authUsers`; set them explicitly (or via `envSecret`) in the same upgrade that installs this release, otherwise previously-protected deployments become unauthenticated — the old committed defaults silently authenticated every install
+- **Potentially breaking:** webhook ingestion now rejects bodies larger than `TRAM_WEBHOOK_MAX_BODY_BYTES` (default 10 MiB) with `413` instead of buffering them — webhooks sending larger payloads must raise the limit via the env var
+- **Potentially breaking:** the ClickHouse `table` config is validated as an identifier at construction time — quoted/bracketed table names (e.g. backticked `` `tbl` ``) and any value containing quotes, semicolons, or other break-out characters are now rejected with a `SinkError`; plain identifiers and qualified `db.table` names remain accepted
+- API key authentication via the `?api_key=` query param was removed — clients must send the `X-API-Key` header; query-param keys leaked into access/proxy logs and browser history
 - `post_batch_cleanup` now defaults to `true` instead of `false`: existing batch pipelines get a post-batch `gc.collect()` and best-effort `malloc_trim(0)` unless they opt out with `post_batch_cleanup: false`
 - The worker image now sets `MALLOC_ARENA_MAX=2` to mitigate glibc per-arena heap fragmentation in long-lived worker processes (GH #16)
 - Serializer schema caches (`asn1`, `protobuf`) are now keyed by schema content hash instead of file mtime and bounded by a size-capped LRU; re-syncing unchanged schema assets no longer triggers a recompile, and batch runs close their sinks (including DLQ) after completion
@@ -24,6 +32,8 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Fixed
 
+- API-key and webhook-secret comparisons now use `hmac.compare_digest` (constant-time) instead of plain `==` — closes the timing side-channel on the global API key (`middleware.py`) and per-webhook `Authorization: Bearer` secrets (`webhooks.py`)
+- ClickHouse sink now validates the `table` config as a bare or qualified identifier (`events`, `db.table`) at construction time, rejecting quoted/bracketed names and anything that could break out of the interpolated `INSERT INTO ... VALUES` statement
 - Alert-rule edits made via the API now survive controller restarts: the alert save path routes through `controller.update()` and persists to the registered-pipelines store. Previously it re-registered in memory and saved only a version-history row, so alert changes vanished on restart
 - The pipeline watcher now stops and removes a pipeline when its file is deleted from the watched directory (previously a swallowed `AttributeError` left streams and jobs running), and file-triggered reloads persist via the DB
 - Threaded batch runs (`thread_workers > 1`) no longer mark source files as processed before their records are fully written: sources gain a deferred `finalize()` hook invoked after a file's chunks drain, and the in-flight chunk window is capped at `2 × thread_workers` (closes the crash data-loss window and bounds executor queue memory). Failed retry attempts now close their sinks instead of leaking them

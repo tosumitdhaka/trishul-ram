@@ -13,6 +13,7 @@ from tram.agent.server import (
     WorkerState,
     _emit_stats_once,
     _post_run_complete,
+    _post_stats,
     create_worker_app,
     create_worker_ingress_app,
 )
@@ -90,6 +91,7 @@ class TestPostRunComplete:
         def _fake_post(url, **kwargs):
             captured["url"] = url
             captured["json"] = kwargs.get("json")
+            captured["headers"] = kwargs.get("headers")
             resp = MagicMock()
             resp.raise_for_status = MagicMock()
             return resp
@@ -116,6 +118,54 @@ class TestPostRunComplete:
         assert captured["json"]["bytes_in"] == 1024
         assert captured["json"]["started_at"] == started_at
         assert captured["json"]["finished_at"] == finished_at
+        # No key configured → no headers sent (harmless to the unauthenticated endpoint)
+        assert captured["headers"] is None
+
+    def test_posts_api_key_header_when_configured(self):
+        """When TRAM_API_KEY is set on the worker, callbacks carry X-API-Key."""
+        captured = {}
+
+        def _fake_post(url, **kwargs):
+            captured["headers"] = kwargs.get("headers")
+            resp = MagicMock()
+            resp.raise_for_status = MagicMock()
+            return resp
+
+        with patch("httpx.Client") as mock_client_cls:
+            mock_client = MagicMock()
+            mock_client.__enter__ = lambda s: mock_client
+            mock_client.__exit__ = MagicMock(return_value=False)
+            mock_client.post.side_effect = _fake_post
+            mock_client_cls.return_value = mock_client
+
+            _post_run_complete(
+                "http://manager/api/internal/run-complete",
+                "run-42", "my-pipe", "worker-7", "success", 10, 8, 1024, 768, None,
+                api_key="secret",
+            )
+
+        assert captured["headers"] == {"X-API-Key": "secret"}
+
+    def test_posts_stats_api_key_header(self):
+        """_post_stats forwards X-API-Key when the worker has a key."""
+        captured = {}
+
+        def _fake_post(url, **kwargs):
+            captured["headers"] = kwargs.get("headers")
+            resp = MagicMock()
+            resp.raise_for_status = MagicMock()
+            return resp
+
+        with patch("httpx.Client") as mock_client_cls:
+            mock_client = MagicMock()
+            mock_client.__enter__ = lambda s: mock_client
+            mock_client.__exit__ = MagicMock(return_value=False)
+            mock_client.post.side_effect = _fake_post
+            mock_client_cls.return_value = mock_client
+
+            _post_stats("http://manager/api/internal/pipeline-stats", {"run_id": "r1"}, api_key="secret")
+
+        assert captured["headers"] == {"X-API-Key": "secret"}
 
     def test_swallows_http_error(self):
         with patch("httpx.Client") as mock_client_cls:
@@ -457,3 +507,75 @@ class TestStatsHelpers:
         assert captured["json"]["records_in"] == 5
         assert captured["json"]["error_count"] == 1
         assert run.stats.errors_last_window == []
+
+    def test_emit_stats_once_sends_api_key_header(self):
+        state = WorkerState(worker_id="w0", manager_url="http://manager", api_key="secret")
+        run = ActiveRun(
+            run_id="run-1",
+            pipeline_name="pipe-a",
+            schedule_type="stream",
+            started_at="2026-04-17T12:00:00+00:00",
+            stats_url="http://manager/api/internal/pipeline-stats",
+        )
+        from tram.agent.metrics import PipelineStats
+        run.stats = PipelineStats(run_id="run-1", pipeline_name="pipe-a", schedule_type="stream")
+        state.add(run)
+
+        captured = {}
+
+        def _fake_post(url, **kwargs):
+            captured["headers"] = kwargs.get("headers")
+            resp = MagicMock()
+            resp.raise_for_status = MagicMock()
+            return resp
+
+        with patch("httpx.Client") as mock_client_cls:
+            mock_client = MagicMock()
+            mock_client.__enter__ = lambda s: mock_client
+            mock_client.__exit__ = MagicMock(return_value=False)
+            mock_client.post.side_effect = _fake_post
+            mock_client_cls.return_value = mock_client
+
+            _emit_stats_once(state)
+
+        assert captured["headers"] == {"X-API-Key": "secret"}
+
+
+# ── Agent API auth middleware (warn/enforce) ──────────────────────────────
+
+
+class TestAgentApiAuth:
+    def test_warn_mode_serves_without_key(self, monkeypatch, caplog):
+        """Default warn mode: /agent/* without a key is served and logged."""
+        import logging
+
+        caplog.set_level(logging.WARNING, logger="tram.api.middleware")
+        monkeypatch.setenv("TRAM_API_KEY", "secret")
+        monkeypatch.setenv("TRAM_INTERNAL_AUTH_MODE", "warn")
+        client = _make_client()
+        resp = client.get("/agent/status")
+        assert resp.status_code == 200
+        assert any("missing or invalid API key" in rec.getMessage() for rec in caplog.records)
+
+    def test_enforce_mode_requires_key(self, monkeypatch):
+        monkeypatch.setenv("TRAM_API_KEY", "secret")
+        monkeypatch.setenv("TRAM_INTERNAL_AUTH_MODE", "enforce")
+        client = _make_client()
+
+        # Missing key → 401
+        assert client.get("/agent/status").status_code == 401
+        # Correct key → 200
+        resp = client.get("/agent/status", headers={"X-API-Key": "secret"})
+        assert resp.status_code == 200
+
+    def test_probe_exempt_in_enforce_mode(self, monkeypatch):
+        """K8s probes hit /agent/health keyless — always exempt."""
+        monkeypatch.setenv("TRAM_API_KEY", "secret")
+        monkeypatch.setenv("TRAM_INTERNAL_AUTH_MODE", "enforce")
+        client = _make_client()
+        assert client.get("/agent/health").status_code == 200
+
+    def test_no_key_configured_passes(self):
+        """No TRAM_API_KEY on the worker → everything passes."""
+        client = _make_client()
+        assert client.get("/agent/status").status_code == 200

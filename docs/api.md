@@ -470,17 +470,23 @@ Per-pipeline aggregated stats for the last hour (records in/out, error rate, avg
 
 ## Authentication (v1.0.0)
 
-When `TRAM_API_KEY` is set (or `apiKey` in Helm values), all `/api/*` requests must include the key:
+When `TRAM_API_KEY` is set (or `apiKey` in Helm values), all protected `/api/*` requests must include the key via the `X-API-Key` header:
 
 ```bash
-# Header (preferred)
 curl -H "X-API-Key: mysecret" http://localhost:8765/api/pipelines
-
-# Query param (convenience)
-curl "http://localhost:8765/api/pipelines?api_key=mysecret"
 ```
 
-Exempt paths (always unauthenticated): `/api/health`, `/api/ready`, `/metrics`, `/webhooks/*`, `/api/auth/login`
+The `?api_key=` query param is removed — keys in URLs end up in access/proxy logs and browser history.
+
+Exempt paths (always unauthenticated): `/api/health`, `/api/ready`, `/agent/health`, `/metrics`, `/`, `/api/auth/login`, `/favicon.ico`, `/docs`, `/redoc`, `/openapi.json`, and the `/webhooks/*` and `/ui` prefixes.
+
+Internal machine-to-machine surfaces (`/api/internal/*` on the manager, `/agent/*` on workers) honor `TRAM_INTERNAL_AUTH_MODE`:
+
+- `off` — requests pass through with no check and no log
+- `warn` (default) — missing/invalid keys are logged at WARNING but requests are still served
+- `enforce` — missing/invalid keys are rejected with `401`; requires `TRAM_API_KEY` to be set (without a key configured, internal surfaces pass through)
+
+An invalid `TRAM_INTERNAL_AUTH_MODE` value is logged at WARNING and falls back to `warn`.
 
 Returns `401 Unauthorized` when the key is missing or wrong.
 

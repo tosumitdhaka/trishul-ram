@@ -627,6 +627,95 @@ class TestDispatch:
         ]
 
 
+# ── Manager→worker auth header ──────────────────────────────────────────────
+
+
+class TestManagerToWorkerAuthHeader:
+    """Every manager→worker HTTP call must carry X-API-Key when TRAM_API_KEY
+    is set, and no header when it is not (mirrors the agent server pattern)."""
+
+    def _pool_with_env_key(self, monkeypatch, key: str = "manager-key"):
+        monkeypatch.setenv("TRAM_API_KEY", key)
+        return _pool("http://w0:8766")
+
+    def _capture_client(self):
+        captured = []
+        mock_client = MagicMock()
+        mock_client.__enter__ = lambda s: mock_client
+        mock_client.__exit__ = MagicMock(return_value=False)
+        mock_client.post.return_value = MagicMock(raise_for_status=MagicMock())
+        mock_client.get.return_value = MagicMock(
+            status_code=200,
+            raise_for_status=MagicMock(),
+        )
+        mock_client.get.return_value.json.return_value = {
+            "ok": True, "active_runs": 0, "worker_id": "w0",
+        }
+
+        def _factory(*args, **kwargs):
+            captured.append(kwargs)
+            return mock_client
+
+        return captured, mock_client, _factory
+
+    def test_dispatch_carries_api_key_header_when_configured(self, monkeypatch):
+        pool = self._pool_with_env_key(monkeypatch)
+        captured, mock_client, factory = self._capture_client()
+        with patch("httpx.Client", side_effect=factory):
+            pool.dispatch("r1", "p", "yaml", "batch")
+        assert captured[0]["headers"] == {"X-API-Key": "manager-key"}
+        assert captured[0]["timeout"] == 10
+
+    def test_stop_run_carries_api_key_header_when_configured(self, monkeypatch):
+        pool = self._pool_with_env_key(monkeypatch)
+        pool._assignments["s1"] = "http://w0:8766"
+        captured, mock_client, factory = self._capture_client()
+        with patch("httpx.Client", side_effect=factory):
+            assert pool.stop_run("s1", "p") is True
+        assert captured[0]["headers"] == {"X-API-Key": "manager-key"}
+
+    def test_worker_status_carries_api_key_header_when_configured(self, monkeypatch):
+        pool = self._pool_with_env_key(monkeypatch)
+        captured, mock_client, factory = self._capture_client()
+        with patch("httpx.Client", side_effect=factory):
+            pool.worker_status("http://w0:8766")
+        assert captured[0]["headers"] == {"X-API-Key": "manager-key"}
+
+    def test_health_probe_carries_api_key_header_when_configured(self, monkeypatch):
+        pool = self._pool_with_env_key(monkeypatch)
+        captured, mock_client, factory = self._capture_client()
+        with patch("httpx.Client", side_effect=factory):
+            pool._poll_all()
+        assert captured[0]["headers"] == {"X-API-Key": "manager-key"}
+
+    def test_stop_pipeline_runs_carries_api_key_header_when_configured(self, monkeypatch):
+        pool = self._pool_with_env_key(monkeypatch)
+        captured, mock_client, factory = self._capture_client()
+
+        def _get(url, **kwargs):
+            resp = MagicMock()
+            resp.raise_for_status = MagicMock()
+            resp.json.return_value = {
+                "running": [{"run_id": "b1", "pipeline": "pipe-a", "started_at": "now"}],
+                "streams": [],
+            }
+            return resp
+
+        mock_client.get.side_effect = _get
+        with patch("httpx.Client", side_effect=factory):
+            stopped = pool.stop_pipeline_runs("pipe-a")
+        assert stopped == ["b1"]
+        assert captured[0]["headers"] == {"X-API-Key": "manager-key"}
+
+    def test_no_api_key_means_no_header(self, monkeypatch):
+        monkeypatch.delenv("TRAM_API_KEY", raising=False)
+        pool = _pool("http://w0:8766")
+        captured, mock_client, factory = self._capture_client()
+        with patch("httpx.Client", side_effect=factory):
+            pool.dispatch("r1", "p", "yaml", "batch")
+        assert captured[0]["headers"] is None
+
+
 # ── stop_run ───────────────────────────────────────────────────────────────
 
 
