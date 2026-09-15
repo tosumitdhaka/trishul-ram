@@ -38,6 +38,24 @@ def test_mgr_series_importable():
     assert MGR_STATS_MISSED_TOTAL is not None
 
 
+# ── Stateful-transform series (F.1) are importable ──────────────────────────
+
+
+def test_transform_series_importable():
+    from tram.metrics.registry import (
+        TRANSFORM_COUNTER_RESETS_TOTAL,
+        TRANSFORM_COUNTER_WRAPS_TOTAL,
+        TRANSFORM_STATE_IO_TOTAL,
+        TRANSFORM_WINDOW_LATE_DROPPED_TOTAL,
+        TRANSFORM_WINDOWS_EMITTED_TOTAL,
+    )
+    assert TRANSFORM_COUNTER_WRAPS_TOTAL is not None
+    assert TRANSFORM_COUNTER_RESETS_TOTAL is not None
+    assert TRANSFORM_STATE_IO_TOTAL is not None
+    assert TRANSFORM_WINDOW_LATE_DROPPED_TOTAL is not None
+    assert TRANSFORM_WINDOWS_EMITTED_TOTAL is not None
+
+
 # ── No-op behaviour when prometheus_client is absent ──────────────────────
 
 
@@ -55,4 +73,11 @@ def test_mgr_series_are_noop_when_prometheus_absent():
     registry.MGR_RUN_COMPLETE_RECEIVED_TOTAL.labels(pipeline="p", status="success").inc()
     registry.MGR_PIPELINE_STATS_RECEIVED_TOTAL.inc()
     registry.MGR_STATS_MISSED_TOTAL.labels(worker_id="w0").inc()
+    registry.TRANSFORM_COUNTER_WRAPS_TOTAL.labels(pipeline="p", field="f").inc()
+    registry.TRANSFORM_COUNTER_RESETS_TOTAL.labels(pipeline="p", field="f").inc()
+    registry.TRANSFORM_STATE_IO_TOTAL.labels(op="put", result="ok").inc()
+    registry.TRANSFORM_WINDOW_LATE_DROPPED_TOTAL.labels(pipeline="p").inc()
+    registry.TRANSFORM_WINDOWS_EMITTED_TOTAL.labels(
+        pipeline="p", complete="complete"
+    ).inc()
     assert registry._PROMETHEUS_AVAILABLE is False

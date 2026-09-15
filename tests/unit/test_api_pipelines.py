@@ -561,6 +561,32 @@ class TestLifecycle:
         assert resp.status_code == 200
         assert resp.json()["run_id"] == "run-123"
 
+    def test_trigger_run_with_flush_query(self):
+        """?flush=true forwards the F.1 flush-run flag to the controller."""
+        state = _make_state()
+        app = _make_app()
+        app.state.controller.get.return_value = state
+        app.state.controller.trigger_run.return_value = "run-flush-1"
+        client = TestClient(app)
+        resp = client.post("/api/pipelines/test-pipe/run?flush=true")
+        assert resp.status_code == 200
+        app.state.controller.trigger_run.assert_called_once_with(
+            "test-pipe", flush=True
+        )
+
+    def test_trigger_run_flush_defaults_false(self):
+        """Without ?flush, the run is a normal (non-flush) run."""
+        state = _make_state()
+        app = _make_app()
+        app.state.controller.get.return_value = state
+        app.state.controller.trigger_run.return_value = "run-norm-1"
+        client = TestClient(app)
+        resp = client.post("/api/pipelines/test-pipe/run")
+        assert resp.status_code == 200
+        app.state.controller.trigger_run.assert_called_once_with(
+            "test-pipe", flush=False
+        )
+
     def test_trigger_stream_pipeline_returns_400(self):
         app = _make_app()
         app.state.controller.get.return_value = _make_state()

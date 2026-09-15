@@ -352,7 +352,7 @@ class TestConfigSha256:
         expected = hashlib.sha256(_MINIMAL_YAML.encode()).hexdigest()[:16]
         stopped = threading.Event()
 
-        def _fake_stream_run(config, stop_event, stats=None):
+        def _fake_stream_run(config, stop_event, stats=None, config_sha256=""):
             stop_event.wait(timeout=5)
             stopped.set()
 
@@ -511,7 +511,7 @@ class TestRunEndpoint:
         """Stream run: POST /agent/run then POST /agent/stop signals completion."""
         stopped = threading.Event()
 
-        def _fake_stream_run(config, stop_event, stats=None):
+        def _fake_stream_run(config, stop_event, stats=None, config_sha256=""):
             # Block until stop is requested (simulates a real stream)
             if stats is not None:
                 stats.increment(records_in=7, records_out=6, skipped=1, bytes_in=700, bytes_out=600)
@@ -710,3 +710,298 @@ class TestAgentApiAuth:
         """No TRAM_API_KEY on the worker → everything passes."""
         client = _make_client()
         assert client.get("/agent/status").status_code == 200
+
+
+class TestStatefulTransformWiring:
+    """F.1 §3.2b: worker runs reach the transform-state blob via the manager's
+    internal API, and the D.2 config fingerprint is passed to the executor."""
+
+    def test_batch_run_uses_http_state_store_and_config_sha(self):
+        from datetime import UTC, datetime
+        from unittest.mock import patch
+
+        from tram.core.context import RunResult, RunStatus
+        from tram.pipeline.state_store import HttpTransformStateStore
+
+        captured = {}
+
+        def _fake_init(self, file_tracker=None, state_store=None):
+            captured["state_store"] = state_store
+
+        mock_result = RunResult(
+            run_id="r-state-1",
+            pipeline_name="test-pipe",
+            status=RunStatus.SUCCESS,
+            started_at=datetime.now(UTC),
+            finished_at=datetime.now(UTC),
+            records_in=0,
+            records_out=0,
+            records_skipped=0,
+        )
+
+        expected_sha = hashlib.sha256(_MINIMAL_YAML.encode()).hexdigest()[:16]
+
+        with patch("tram.pipeline.executor.PipelineExecutor.__init__", _fake_init), \
+             patch("tram.agent.assets.sync_assets"), \
+             patch(
+                 "tram.pipeline.executor.PipelineExecutor.batch_run",
+                 return_value=mock_result,
+             ) as batch_mock:
+            client = _make_client(worker_id="w0", manager_url="http://mgr:8765")
+            resp = client.post("/agent/run", json={
+                "pipeline_name": "test-pipe",
+                "yaml_text": _MINIMAL_YAML,
+                "run_id": "r-state-1",
+                "schedule_type": "batch",
+            })
+            assert resp.status_code == 202
+
+            # The executor receives an HttpTransformStateStore wired to the
+            # manager URL (batch thread completes async; poll briefly).
+            deadline = time.time() + 3
+            while time.time() < deadline and "state_store" not in captured:
+                time.sleep(0.02)
+
+        store = captured.get("state_store")
+        assert isinstance(store, HttpTransformStateStore)
+        assert store.manager_url == "http://mgr:8765"
+        deadline = time.time() + 3
+        while time.time() < deadline and not batch_mock.called:
+            time.sleep(0.02)
+        assert batch_mock.called
+        kwargs = batch_mock.call_args.kwargs
+        assert kwargs["config_sha256"] == expected_sha
+
+    def test_no_state_store_without_manager_url(self):
+        from datetime import UTC, datetime
+        from unittest.mock import patch
+
+        from tram.core.context import RunResult, RunStatus
+
+        captured = {}
+
+        def _fake_init(self, file_tracker=None, state_store=None):
+            captured["state_store"] = state_store
+
+        mock_result = RunResult(
+            run_id="r-state-2",
+            pipeline_name="test-pipe",
+            status=RunStatus.SUCCESS,
+            started_at=datetime.now(UTC),
+            finished_at=datetime.now(UTC),
+            records_in=0,
+            records_out=0,
+            records_skipped=0,
+        )
+
+        with patch("tram.pipeline.executor.PipelineExecutor.__init__", _fake_init), \
+             patch(
+                 "tram.pipeline.executor.PipelineExecutor.batch_run",
+                 return_value=mock_result,
+             ):
+            client = _make_client(worker_id="w0", manager_url="")
+            resp = client.post("/agent/run", json={
+                "pipeline_name": "test-pipe",
+                "yaml_text": _MINIMAL_YAML,
+                "run_id": "r-state-2",
+                "schedule_type": "batch",
+            })
+            assert resp.status_code == 202
+            deadline = time.time() + 3
+            while time.time() < deadline and "state_store" not in captured:
+                time.sleep(0.02)
+
+        assert captured.get("state_store") is None
+
+    def test_run_request_flush_forwarded_to_executor(self):
+        """F.1 §5: RunRequest.flush (default false) reaches executor.batch_run."""
+        from datetime import UTC, datetime
+        from unittest.mock import patch
+
+        from tram.core.context import RunResult, RunStatus
+
+        mock_result = RunResult(
+            run_id="r-flush-1",
+            pipeline_name="test-pipe",
+            status=RunStatus.SUCCESS,
+            started_at=datetime.now(UTC),
+            finished_at=datetime.now(UTC),
+            records_in=0,
+            records_out=0,
+            records_skipped=0,
+        )
+        captured = {}
+
+        def _fake_batch_run(self, config, run_id=None, stats=None,
+                            config_sha256="", flush=False):
+            captured["flush"] = flush
+            return mock_result
+
+        with patch("tram.pipeline.executor.PipelineExecutor.__init__", lambda self, **kw: None), \
+             patch("tram.agent.assets.sync_assets"), \
+             patch(
+                 "tram.pipeline.executor.PipelineExecutor.batch_run",
+                 _fake_batch_run,
+             ):
+            client = _make_client(worker_id="w0", manager_url="")
+            resp = client.post("/agent/run", json={
+                "pipeline_name": "test-pipe",
+                "yaml_text": _MINIMAL_YAML,
+                "run_id": "r-flush-1",
+                "schedule_type": "batch",
+                "flush": True,
+            })
+            assert resp.status_code == 202
+            deadline = time.time() + 3
+            while time.time() < deadline and not captured:
+                time.sleep(0.02)
+
+        assert captured.get("flush") is True
+
+    def test_run_request_flush_defaults_false(self):
+        """Omitting flush on the dispatch envelope is a normal (non-flush) run."""
+        from datetime import UTC, datetime
+        from unittest.mock import patch
+
+        from tram.core.context import RunResult, RunStatus
+
+        mock_result = RunResult(
+            run_id="r-norm-1",
+            pipeline_name="test-pipe",
+            status=RunStatus.SUCCESS,
+            started_at=datetime.now(UTC),
+            finished_at=datetime.now(UTC),
+            records_in=0,
+            records_out=0,
+            records_skipped=0,
+        )
+        captured = {}
+
+        def _fake_batch_run(self, config, run_id=None, stats=None,
+                            config_sha256="", flush=False):
+            captured["flush"] = flush
+            return mock_result
+
+        with patch("tram.pipeline.executor.PipelineExecutor.__init__", lambda self, **kw: None), \
+             patch("tram.agent.assets.sync_assets"), \
+             patch(
+                 "tram.pipeline.executor.PipelineExecutor.batch_run",
+                 _fake_batch_run,
+             ):
+            client = _make_client(worker_id="w0", manager_url="")
+            resp = client.post("/agent/run", json={
+                "pipeline_name": "test-pipe",
+                "yaml_text": _MINIMAL_YAML,
+                "run_id": "r-norm-1",
+                "schedule_type": "batch",
+            })
+            assert resp.status_code == 202
+            deadline = time.time() + 3
+            while time.time() < deadline and not captured:
+                time.sleep(0.02)
+
+        assert captured.get("flush") is False
+
+    def test_flush_chain_end_to_end_clears_state(self):
+        """F.1 §5 E2E: the ?flush=true dispatch envelope → /agent/run → the
+        REAL executor runs close(flush=True) → the hydrated open window is
+        emitted as a partial and the state PUT to the manager records the
+        cleared windows."""
+        import json as _json
+        import textwrap
+
+        import httpx
+
+        from tram.pipeline.executor import PipelineExecutor
+        from tram.pipeline.state_store import HttpTransformStateStore
+
+        yaml_text = textwrap.dedent("""\
+            name: flush-pipe
+            schedule:
+              type: manual
+            source:
+              type: local
+              path: /tmp/in
+            serializer_in:
+              type: json
+            sinks:
+              - type: local
+                path: /tmp/out
+            transforms:
+              - type: window_aggregate
+                window_seconds: 900
+                allowed_lateness_seconds: 60
+                timestamp_field: [_polled_at, timestamp]
+                group_by: [_index]
+                operations:
+                  mean_rate: "avg:rate"
+                flush_on_close: true
+        """)
+        sha = hashlib.sha256(yaml_text.encode()).hexdigest()[:16]
+        start = int(datetime(2026, 9, 16, 9, 0, tzinfo=UTC).timestamp())
+        end = int(datetime(2026, 9, 16, 9, 15, tzinfo=UTC).timestamp())
+        # A pre-hydrated open 09:00–09:15 window (watermark 09:09:00 < end).
+        open_window = {
+            "max_ts": float(start + 600),
+            "windows": {
+                "1": {str(end): {
+                    "start": start, "end": end, "sample_count": 1,
+                    "group_values": ["1"],
+                    "acc": {"mean_rate": {"sum": 100.0, "count": 1}},
+                }},
+            },
+        }
+        puts = []
+
+        def _state_handler(request: httpx.Request) -> httpx.Response:
+            if request.method == "GET":
+                return httpx.Response(200, json={
+                    "state": {"window_aggregate:0": open_window},
+                    "config_sha256": sha,
+                })
+            puts.append(_json.loads(request.content))
+            return httpx.Response(200, json={"ok": True})
+
+        store = HttpTransformStateStore(
+            "http://mgr:8765", "", transport=httpx.MockTransport(_state_handler)
+        )
+
+        ser_out = MagicMock()
+        ser_out.serialize.side_effect = lambda recs: _json.dumps(recs).encode()
+        mock_source = MagicMock()
+        mock_source.read.return_value = iter([])  # the run itself reads nothing
+
+        with patch("tram.pipeline.state_store.HttpTransformStateStore", return_value=store), \
+             patch.object(PipelineExecutor, "_build_source", return_value=mock_source), \
+             patch.object(PipelineExecutor, "_build_sinks",
+                          return_value=[(MagicMock(), None, [])]), \
+             patch.object(PipelineExecutor, "_build_serializer_in",
+                          return_value=MagicMock()), \
+             patch.object(PipelineExecutor, "_build_serializer_out",
+                          return_value=ser_out), \
+             patch("tram.agent.assets.sync_assets"), \
+             patch("tram.agent.server._post_run_complete"), \
+             patch("tram.agent.server._post_stats"):
+            client = _make_client(worker_id="w0", manager_url="http://mgr:8765")
+            resp = client.post("/agent/run", json={
+                "pipeline_name": "flush-pipe",
+                "yaml_text": yaml_text,
+                "run_id": "r-flush-chain",
+                "schedule_type": "batch",
+                "flush": True,
+            })
+            assert resp.status_code == 202
+            # The batch thread is async — poll for the state PUT.
+            deadline = time.time() + 5
+            while time.time() < deadline and not puts:
+                time.sleep(0.02)
+
+        assert puts, "the flush run must PUT the cleared state blob"
+        saved = puts[0]["state"]["window_aggregate:0"]
+        assert saved["windows"] == {}
+        # The hydrated open window was emitted as a partial before the clear.
+        assert ser_out.serialize.call_args is not None
+        partial = ser_out.serialize.call_args[0][0][0]
+        assert partial["window_complete"] is False
+        assert partial["mean_rate"] == 100.0
+        assert partial["_index"] == "1"

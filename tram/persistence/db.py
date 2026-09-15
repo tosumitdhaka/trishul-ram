@@ -207,6 +207,23 @@ def _create_tables(engine: Engine) -> None:
             "CREATE INDEX IF NOT EXISTS idx_qr_status ON queued_runs(status)"
         ))
 
+        # F.1 (GH #W-5.1): durable transform-state blobs — one row per pipeline
+        # holding a JSON blob of every stateful transform's state, keyed by a
+        # stable state_key (transform type + position in the transforms list).
+        # Write rate is one row per pipeline per tick (see design §3.2a).
+        conn.execute(text("""
+            CREATE TABLE IF NOT EXISTS transform_state (
+                pipeline_name TEXT PRIMARY KEY NOT NULL,
+                state_json    TEXT NOT NULL,           -- {state_key: transform-specific blob}
+                config_sha256 TEXT NOT NULL,           -- D.2 §6.1 convention
+                updated_at    TEXT NOT NULL,
+                updated_by    TEXT NOT NULL            -- run_id (audit)
+            )
+        """))
+        conn.execute(text(
+            "CREATE INDEX IF NOT EXISTS idx_ts_updated ON transform_state(updated_at)"
+        ))
+
         # v0.7.0 column migrations: add new columns to existing databases
         _add_column_if_missing(conn, dialect, "run_history", "node_id", "TEXT NOT NULL DEFAULT ''")
         _add_column_if_missing(conn, dialect, "run_history", "dlq_count", "INTEGER NOT NULL DEFAULT 0")
@@ -1112,6 +1129,72 @@ class TramDB:
                 WHERE status = 'dispatching'
             """))
         return result.rowcount
+
+    # ── Transform state (F.1 / GH #W-5.1) ─────────────────────────────────
+
+    def load_transform_state(self, pipeline_name: str) -> dict | None:
+        """Return a pipeline's transform_state row, or None when absent.
+
+        The ``state`` value is the decoded JSON blob (``{state_key: blob}``);
+        ``config_sha256`` lets the executor discard state on config change
+        (D.2 §6.1 convention, design §3.2d).
+        """
+        with self._engine.connect() as conn:
+            row = conn.execute(
+                text(
+                    "SELECT state_json, config_sha256, updated_at, updated_by "
+                    "FROM transform_state WHERE pipeline_name = :pn"
+                ),
+                {"pn": pipeline_name},
+            ).mappings().fetchone()
+        if row is None:
+            return None
+        return {
+            "state": json.loads(row["state_json"]),
+            "config_sha256": row["config_sha256"],
+            "updated_at": row["updated_at"],
+            "updated_by": row["updated_by"],
+        }
+
+    def save_transform_state(
+        self,
+        pipeline_name: str,
+        state: dict,
+        config_sha256: str,
+        updated_by: str = "",
+    ) -> None:
+        """Upsert a pipeline's transform-state blob (one row per pipeline).
+
+        Uses the E.2 ``_upsert`` helper; the row is replaced wholesale (single
+        writer per pipeline, design §3.3), ``updated_at`` refreshed and
+        ``updated_by`` recording the last writer's run_id for audit.
+        """
+        now = datetime.now(UTC).isoformat()
+        self._upsert(
+            "transform_state",
+            {
+                "pipeline_name": pipeline_name,
+                "state_json": json.dumps(state),
+                "config_sha256": config_sha256,
+                "updated_at": now,
+                "updated_by": updated_by,
+            },
+            key_columns=("pipeline_name",),
+            update_columns=("state_json", "config_sha256", "updated_at", "updated_by"),
+        )
+
+    def delete_transform_state(self, pipeline_name: str) -> None:
+        """Remove a pipeline's transform-state row.
+
+        Belt-and-braces config currency (design §3.2d): a changed transform
+        list may change key semantics, so ``controller.update()``/``delete()``
+        delete the row outright instead of letting hydration discard it.
+        """
+        with self._engine.begin() as conn:
+            conn.execute(
+                text("DELETE FROM transform_state WHERE pipeline_name = :pn"),
+                {"pn": pipeline_name},
+            )
 
     # ── Lifecycle ──────────────────────────────────────────────────────────
 

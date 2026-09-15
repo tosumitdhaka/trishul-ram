@@ -571,6 +571,7 @@ class TestDispatch:
             "run_id": "slot-r1",
             "schedule_type": "stream",
             "callback_url": "http://manager/api/internal/run-complete",
+            "flush": False,  # F.1 §5 flush-run flag rides the dispatch envelope
         })]
 
     def test_multi_dispatch_count_all_tracks_all_workers(self):

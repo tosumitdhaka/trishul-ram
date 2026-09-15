@@ -118,6 +118,32 @@ try:
         "Drain attempt outcomes",
         ["pipeline", "result"],
     )
+    # ── Stateful transforms (F.1) ────────────────────────────────────────
+    TRANSFORM_COUNTER_WRAPS_TOTAL = Counter(
+        "tram_transform_counter_wraps_total",
+        "Counter wraps classified by the counter_delta transform",
+        ["pipeline", "field"],
+    )
+    TRANSFORM_COUNTER_RESETS_TOTAL = Counter(
+        "tram_transform_counter_resets_total",
+        "Counter resets classified by the counter_delta transform",
+        ["pipeline", "field"],
+    )
+    TRANSFORM_STATE_IO_TOTAL = Counter(
+        "tram_transform_state_io_total",
+        "Transform state store I/O operations (standalone/worker side)",
+        ["op", "result"],
+    )
+    TRANSFORM_WINDOW_LATE_DROPPED_TOTAL = Counter(
+        "tram_transform_window_late_dropped_total",
+        "Records dropped by window_aggregate for already-finalized windows",
+        ["pipeline"],
+    )
+    TRANSFORM_WINDOWS_EMITTED_TOTAL = Counter(
+        "tram_transform_windows_emitted_total",
+        "Windows emitted by window_aggregate (label complete=complete|partial)",
+        ["pipeline", "complete"],
+    )
 
     RECORDS_IN = Counter(
         "tram_records_in_total",
@@ -178,6 +204,11 @@ except ImportError:
     MGR_QUEUE_EXPIRED_TOTAL = _NoOpCounter()  # type: ignore[assignment]
     MGR_QUEUE_WAIT_SECONDS = _NoOpHistogram()  # type: ignore[assignment]
     MGR_QUEUE_DRAIN_RESULT_TOTAL = _NoOpCounter()  # type: ignore[assignment]
+    TRANSFORM_COUNTER_WRAPS_TOTAL = _NoOpCounter()  # type: ignore[assignment]
+    TRANSFORM_COUNTER_RESETS_TOTAL = _NoOpCounter()  # type: ignore[assignment]
+    TRANSFORM_STATE_IO_TOTAL = _NoOpCounter()  # type: ignore[assignment]
+    TRANSFORM_WINDOW_LATE_DROPPED_TOTAL = _NoOpCounter()  # type: ignore[assignment]
+    TRANSFORM_WINDOWS_EMITTED_TOTAL = _NoOpCounter()  # type: ignore[assignment]
     RECORDS_IN = _NoOpCounter()  # type: ignore[assignment]
     RECORDS_OUT = _NoOpCounter()  # type: ignore[assignment]
     RECORDS_SKIP = _NoOpCounter()  # type: ignore[assignment]

@@ -615,6 +615,7 @@ class WorkerPool:
         yaml_text: str,
         schedule_type: str,
         callback_url: str = "",
+        flush: bool = False,
     ) -> str | None:
         """POST a run to a specific worker.
 
@@ -630,6 +631,7 @@ class WorkerPool:
             "run_id": run_id,
             "schedule_type": schedule_type,
             "callback_url": callback_url,
+            "flush": flush,  # F.1 §5: manual flush run flag
         }
         try:
             with self._agent_client(10) as client:
@@ -670,6 +672,7 @@ class WorkerPool:
         workers_cfg: WorkersConfig,
         schedule_type: str,
         callback_url: str = "",
+        flush: bool = False,
     ) -> BroadcastResult:
         """POST a run to one or more selected workers."""
         worker_urls = self.resolve(workers_cfg)
@@ -720,6 +723,7 @@ class WorkerPool:
                     yaml_text=yaml_text,
                     schedule_type=schedule_type,
                     callback_url=callback_url,
+                    flush=flush,
                 )
                 if dispatch_error is None:
                     accepted.append(worker_url)
@@ -785,6 +789,7 @@ class WorkerPool:
         yaml_text: str,
         schedule_type: str,
         callback_url: str = "",
+        flush: bool = False,
     ) -> DispatchOutcome:
         """POST a run to the least-loaded healthy worker, labeling the outcome.
 
@@ -802,6 +807,7 @@ class WorkerPool:
             workers_cfg=WorkersConfig(count=1),
             schedule_type=schedule_type,
             callback_url=callback_url,
+            flush=flush,
         )
         if result.accepted:
             return DispatchOutcome(worker_url=result.accepted[0], outcome=DISPATCH_ACCEPTED)

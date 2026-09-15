@@ -89,6 +89,10 @@ spec:
             ## triggered with no healthy workers is durably queued and dispatched
             ## when capacity returns; set via .Values.env.TRAM_QUEUE_MANUAL_RUNS
             ## below. "0" = legacy fail-fast (rollback).
+            ## F.1: stateful transforms. Default "1" (on) — counter_delta and its
+            ## durable per-pipeline state (transform_state table / internal API);
+            ## set via .Values.env.TRAM_STATEFUL_TRANSFORMS below. "0" = disabled
+            ## (rollback: validation rejects the transforms, endpoints 404).
             ## Point manager at its own service so workers can reach the callback URL
             - name: TRAM_MANAGER_URL
               value: "http://{{ include "tram.fullname" . }}:{{ .Values.service.port }}"

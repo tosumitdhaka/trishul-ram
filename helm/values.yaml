@@ -169,6 +169,12 @@ env:
   ## workers and dispatches it when capacity returns (API returns 202). "0"
   ## restores the legacy fail-fast behavior. An unrecognized value fails open.
   TRAM_QUEUE_MANUAL_RUNS: "1"
+  ## Stateful transforms (F.1): counter_delta now, window_aggregate next.
+  ## "1" (default) enables stateful transforms and their durable per-pipeline
+  ## state (transform_state table / internal API). "0" disables them: pipelines
+  ## using them fail validation and the internal endpoints 404. Fails open on
+  ## unrecognized values.
+  TRAM_STATEFUL_TRANSFORMS: "1"
   # TRAM_QUEUE_TTL_SECONDS: "900"  # max wait for capacity before expiry
   # TRAM_NODE_ID: ""            # defaults to hostname (auto-set from pod name in StatefulSet)
   # TRAM_SHUTDOWN_TIMEOUT_SECONDS: "30"  # drain timeout before forced stop

@@ -1,6 +1,7 @@
 """Unit tests for internal worker-to-manager callbacks."""
 from __future__ import annotations
 
+import types
 from datetime import datetime
 from unittest.mock import MagicMock
 
@@ -8,6 +9,7 @@ from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
 from tram.api.routers.internal import router
+from tram.persistence.db import TramDB
 
 
 def _make_app():
@@ -163,3 +165,85 @@ class TestPipelineStatsEndpoint:
         store.remove.assert_called_once_with("run-1")
         store.update.assert_not_called()
         app.state.controller.on_pipeline_stats.assert_not_called()
+
+
+# ── Transform-state endpoints (F.1 §3.2b) ───────────────────────────────────
+
+
+class TestTransformStateEndpoints:
+    def _make_app(self, tmp_path, enabled=True):
+        app = FastAPI()
+        app.include_router(router)
+        app.state.controller = MagicMock()
+        app.state.stats_store = MagicMock()
+        app.state.db = TramDB(url=f"sqlite:///{tmp_path}/internal.db")
+        app.state.config = types.SimpleNamespace(stateful_transforms=enabled)
+        return TestClient(app)
+
+    def test_put_then_get_roundtrip(self, tmp_path):
+        client = self._make_app(tmp_path)
+        resp = client.put("/api/internal/transform-state/pipe-a", json={
+            "state": {"counter_delta:0": {"k": {"v": 42}}},
+            "config_sha256": "abc123",
+            "run_id": "r1",
+        })
+        assert resp.status_code == 200
+        assert resp.json() == {"ok": True}
+
+        resp = client.get("/api/internal/transform-state/pipe-a")
+        assert resp.status_code == 200
+        body = resp.json()
+        assert body["state"] == {"counter_delta:0": {"k": {"v": 42}}}
+        assert body["config_sha256"] == "abc123"
+        # run_id lands in the audit column
+        assert client.app.state.db.load_transform_state("pipe-a")["updated_by"] == "r1"
+
+    def test_get_missing_returns_404(self, tmp_path):
+        client = self._make_app(tmp_path)
+        assert client.get("/api/internal/transform-state/nope").status_code == 404
+
+    def test_flag_off_404s_both_endpoints(self, tmp_path):
+        client = self._make_app(tmp_path, enabled=False)
+        assert client.get("/api/internal/transform-state/pipe-a").status_code == 404
+        assert client.put("/api/internal/transform-state/pipe-a", json={
+            "state": {}, "config_sha256": "",
+        }).status_code == 404
+
+    def test_put_oversized_state_413(self, tmp_path, monkeypatch):
+        """A state blob larger than TRAM_STATE_MAX_BYTES is rejected with 413."""
+        monkeypatch.setenv("TRAM_STATE_MAX_BYTES", "100")
+        client = self._make_app(tmp_path)
+        resp = client.put("/api/internal/transform-state/pipe-a", json={
+            "state": {"counter_delta:0": {"k" * 200: {"v": "x" * 500}}},
+            "config_sha256": "abc",
+        })
+        assert resp.status_code == 413
+        # Nothing was saved.
+        assert client.get("/api/internal/transform-state/pipe-a").status_code == 404
+
+    def test_put_oversized_state_413_config_source(self, tmp_path):
+        """The cap also reads from app.state.config.state_max_bytes (the real app)."""
+        client = self._make_app(tmp_path)
+        client.app.state.config = types.SimpleNamespace(
+            stateful_transforms=True, state_max_bytes=64
+        )
+        resp = client.put("/api/internal/transform-state/pipe-a", json={
+            "state": {"counter_delta:0": {"k" * 100: {"v": "x" * 100}}},
+        })
+        assert resp.status_code == 413
+
+    def test_put_missing_body_422(self, tmp_path):
+        """A PUT with no JSON body is rejected at validation (422)."""
+        client = self._make_app(tmp_path)
+        assert client.put("/api/internal/transform-state/pipe-a", content=b"").status_code == 422
+
+    def test_put_empty_state_ok(self, tmp_path):
+        """An empty-but-present state dict passes the cap."""
+        client = self._make_app(tmp_path)
+        resp = client.put("/api/internal/transform-state/pipe-a", json={"state": {}})
+        assert resp.status_code == 200
+
+    def test_not_in_openapi_schema(self, tmp_path):
+        client = self._make_app(tmp_path)
+        paths = client.get("/openapi.json").json().get("paths", {})
+        assert "/api/internal/transform-state/{pipeline}" not in paths

@@ -43,6 +43,8 @@ class RunRequest(BaseModel):
     run_id: str
     schedule_type: str = "batch"   # "batch" | "stream"
     callback_url: str = ""         # manager endpoint for run-complete; may be empty
+    flush: bool = False            # F.1 §5: manual flush run — close(flush=True) emits
+                                   # open windows as partials and clears them from state
 
 
 class StopRequest(BaseModel):
@@ -395,7 +397,18 @@ def create_worker_app(worker_id: str = "", manager_url: str = "", stats_interval
                 schedule_type=req.schedule_type,
             ),
         )
-        executor = PipelineExecutor()
+        # F.1 (§3.2b): worker-mode runs reach the transform-state blob through
+        # the manager's internal API (the same availability envelope as the
+        # dispatch that created this run). No manager URL → no store, so
+        # stateful transforms stay in-memory (correct for a single run).
+        from tram.pipeline.state_store import HttpTransformStateStore
+
+        state_store = (
+            HttpTransformStateStore(state.manager_url, state.api_key)
+            if state.manager_url
+            else None
+        )
+        executor = PipelineExecutor(state_store=state_store)
 
         data_dir = os.environ.get("TRAM_DATA_DIR", "/data")
         api_key  = os.environ.get("TRAM_API_KEY", "")
@@ -405,7 +418,10 @@ def create_worker_app(worker_id: str = "", manager_url: str = "", stats_interval
                 try:
                     from tram.agent.assets import sync_assets
                     sync_assets(config, state.manager_url, data_dir, api_key)
-                    executor.stream_run(config, active_run.stop_event, stats=active_run.stats)
+                    executor.stream_run(
+                        config, active_run.stop_event, stats=active_run.stats,
+                        config_sha256=config_sha256,
+                    )
                     stats_snapshot = _final_stats_snapshot(active_run)
                     _post_run_complete(
                         callback_url, req.run_id, req.pipeline_name, state.worker_id,
@@ -450,7 +466,11 @@ def create_worker_app(worker_id: str = "", manager_url: str = "", stats_interval
                 try:
                     from tram.agent.assets import sync_assets
                     sync_assets(config, state.manager_url, data_dir, api_key)
-                    result = executor.batch_run(config, run_id=req.run_id, stats=active_run.stats)
+                    result = executor.batch_run(
+                        config, run_id=req.run_id, stats=active_run.stats,
+                        config_sha256=config_sha256,
+                        flush=req.flush,
+                    )
                     if active_run.stats is not None:
                         payload = {
                             "worker_id": state.worker_id,

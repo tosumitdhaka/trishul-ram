@@ -554,7 +554,7 @@ class TestEnqueue:
             assert result.disposition == "dispatched"
             assert db.get_active_queued_runs() == []
             # submitted with origin="manual" so the fallback site can distinguish
-            assert captured["fn"].keywords == {"origin": "manual"}
+            assert captured["fn"].keywords == {"origin": "manual", "flush": False}
             assert _wait_until(lambda: wp.dispatch_with_result.call_count >= 1)
             assert wp.dispatch_with_result.call_args.kwargs["run_id"] == result.run_id
         finally:

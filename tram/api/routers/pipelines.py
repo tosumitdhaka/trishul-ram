@@ -368,7 +368,11 @@ async def restart_pipeline(name: str, request: Request) -> dict:
 
 
 @router.post("/{name}/run")
-async def trigger_run(name: str, request: Request) -> dict:
+async def trigger_run(
+    name: str,
+    request: Request,
+    flush: bool = Query(False, description="Flush run (F.1 §5): stateful transforms emit open windows as partials and clear them from state"),
+) -> dict:
     controller = request.app.state.controller
 
     try:
@@ -377,7 +381,7 @@ async def trigger_run(name: str, request: Request) -> dict:
         raise HTTPException(status_code=404, detail=str(exc))
 
     try:
-        result = controller.trigger_run(name)
+        result = controller.trigger_run(name, flush=flush)
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc))
     except Exception as exc:

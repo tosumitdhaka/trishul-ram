@@ -99,7 +99,7 @@ class _CountingExecutor:
         self._gate = threading.Event()
         self._lock = threading.Lock()
 
-    def batch_run(self, config, run_id=None):
+    def batch_run(self, config, run_id=None, stats=None, config_sha256="", flush=False):
         with self._lock:
             self.enter_count += 1
             self.batch_calls += 1

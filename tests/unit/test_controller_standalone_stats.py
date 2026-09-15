@@ -58,7 +58,7 @@ def test_stream_worker_registers_local_run():
     stop_event = threading.Event()
     registered: list[str] = []
 
-    def fake_stream_run(cfg, stop_ev, stats=None):
+    def fake_stream_run(cfg, stop_ev, stats=None, config_sha256=""):
         with ctrl._local_stats_lock:
             registered.extend(ctrl._local_active_stats.keys())
         stop_event.set()
@@ -102,7 +102,7 @@ def test_stream_worker_removes_from_stats_store_on_exit():
     stop_event = threading.Event()
     seen_run_id: list[str] = []
 
-    def fake_stream_run(cfg, stop_ev, stats=None):
+    def fake_stream_run(cfg, stop_ev, stats=None, config_sha256=""):
         if stats is not None:
             seen_run_id.append(stats.run_id)
             # Manually pre-populate the store to confirm remove() is called
@@ -293,7 +293,7 @@ def test_run_batch_local_path_registers_and_removes_local_run():
 
     captured = {}
 
-    def fake_batch_run(cfg, run_id=None, stats=None):
+    def fake_batch_run(cfg, run_id=None, stats=None, config_sha256="", flush=False):
         captured["stats"] = stats
         captured["run_id"] = run_id
         return MagicMock(status="success", run_id=run_id)
@@ -321,7 +321,7 @@ def test_run_batch_emits_live_stats_and_lands_in_run_history():
     mid_run = {}
     captured = {}
 
-    def fake_batch_run(cfg, run_id=None, stats=None):
+    def fake_batch_run(cfg, run_id=None, stats=None, config_sha256="", flush=False):
         captured["stats"] = stats
         stats.increment(records_in=25, records_out=24)
         ctrl._emit_local_stats_once()  # simulate a loop tick mid-run
@@ -354,7 +354,7 @@ def test_run_batch_exception_still_removes_local_run():
     config = load_pipeline_from_yaml(_BATCH_YAML)
     ctrl = _batch_controller(store, config)
 
-    def fake_batch_run(cfg, run_id=None, stats=None):
+    def fake_batch_run(cfg, run_id=None, stats=None, config_sha256="", flush=False):
         # Pre-populate the store as if a loop tick already wrote it.
         from tram.api.routers.internal import PipelineStatsPayload
         store.update(PipelineStatsPayload(

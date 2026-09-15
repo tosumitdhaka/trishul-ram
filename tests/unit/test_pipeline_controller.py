@@ -468,7 +468,7 @@ class TestLocalStreamExecution:
 
         done = threading.Event()
 
-        def _fake_stream_run(cfg, stop_event, stats=None):
+        def _fake_stream_run(cfg, stop_event, stats=None, config_sha256=""):
             done.wait(timeout=2)
 
         ctrl.executor = MagicMock()
@@ -491,7 +491,7 @@ class TestLocalStreamExecution:
         received_stop = threading.Event()
         test_done = threading.Event()
 
-        def _fake_stream_run(cfg, stop_event, stats=None):
+        def _fake_stream_run(cfg, stop_event, stats=None, config_sha256=""):
             stop_event.wait(timeout=5)
             received_stop.set()
             test_done.wait(timeout=2)
@@ -514,7 +514,7 @@ class TestLocalStreamExecution:
         ctrl.manager.register(config, yaml_text=_STREAM_YAML)
 
         # First thread exits quickly when its stop_event fires
-        def _fake_stream_run(cfg, stop_event, stats=None):
+        def _fake_stream_run(cfg, stop_event, stats=None, config_sha256=""):
             stop_event.wait(timeout=5)
 
         ctrl.executor = MagicMock()
@@ -1746,3 +1746,183 @@ class TestSingleStreamPlacementFlag:
         assert AppConfig.from_env().stream_single_placement is True
         monkeypatch.setenv("TRAM_STREAM_SINGLE_PLACEMENT", "0")
         assert AppConfig.from_env().stream_single_placement is False
+
+
+# ── F.1 §6: broadcast-stream guard for stateful transforms ──────────────────
+
+
+_STATEFUL_STREAM_YAML = """\
+name: my-stateful-stream
+schedule:
+  type: stream
+source:
+  type: kafka
+  topic: events
+  brokers:
+    - localhost:9092
+  group_id: test-group
+serializer_in:
+  type: json
+workers:
+  count: 2
+transforms:
+  - type: window_aggregate
+    window_seconds: 900
+    operations:
+      mean_rate: "avg:rate"
+sinks:
+  - type: local
+    path: /tmp/out
+"""
+
+_COUNT_N_INTERVAL_YAML = """\
+name: my-count-n-interval
+schedule:
+  type: interval
+  interval_seconds: 60
+source:
+  type: local
+  path: /tmp/in
+  file_pattern: "*.noop"
+serializer_in:
+  type: json
+workers:
+  count: 2
+sinks:
+  - type: local
+    path: /tmp/out
+"""
+
+
+class TestStatefulBroadcastGuard:
+    def _worker_pool(self):
+        wp = MagicMock()
+        wp.multi_dispatch.return_value = MagicMock(
+            accepted=["http://worker-0:8766"],
+            run_ids=["pg1-w0"],
+            rejected=[],
+            status="running",
+            placement_group_id="pg1",
+            slots=[{
+                "worker_index": 0,
+                "worker_url": "http://worker-0:8766",
+                "run_id_prefix": "pg1-w0",
+                "current_run_id": "pg1-w0",
+                "status": "running",
+                "restart_count": 0,
+            }],
+        )
+        wp.dispatch_with_result.return_value = DispatchOutcome(
+            worker_url="http://worker-0:8766", outcome=DISPATCH_ACCEPTED,
+        )
+        return wp
+
+    def test_start_stream_guard_rejects_broadcast_with_stateful(self):
+        """Manager mode + count=2 stream + stateful transform → pipeline error."""
+        wp = self._worker_pool()
+        ctrl = _started_controller(worker_pool=wp, manager_url="http://manager:8765")
+        config = load_pipeline_from_yaml(_STATEFUL_STREAM_YAML)
+        ctrl.register(config, yaml_text=_STATEFUL_STREAM_YAML)
+
+        assert ctrl.manager.get("my-stateful-stream").status == "error"
+        wp.multi_dispatch.assert_not_called()
+        wp.dispatch_with_result.assert_not_called()
+        ctrl.stop()
+
+    def test_start_stream_guard_standalone_fine(self):
+        """Standalone (no worker pool) starts the stateful stream normally."""
+        ctrl = _started_controller()
+        config = load_pipeline_from_yaml(_STATEFUL_STREAM_YAML)
+        done = threading.Event()
+
+        def _fake_stream_run(cfg, stop_event, stats=None, config_sha256=""):
+            done.wait(timeout=2)
+
+        ctrl.executor = MagicMock()
+        ctrl.executor.stream_run.side_effect = _fake_stream_run
+
+        ctrl.register(config, yaml_text=_STATEFUL_STREAM_YAML)
+
+        assert ctrl.manager.get("my-stateful-stream").status == "running"
+        assert "my-stateful-stream" in ctrl._stream_threads
+        done.set()
+        ctrl.stop()
+
+    def test_start_stream_guard_flag_off_inert(self):
+        """TRAM_STATEFUL_TRANSFORMS off → the guard is inert; dispatch proceeds."""
+        wp = self._worker_pool()
+        ctrl = PipelineController(
+            worker_pool=wp,
+            manager_url="http://manager:8765",
+            stateful_transforms=False,
+        )
+        ctrl.start()
+        config = load_pipeline_from_yaml(_STATEFUL_STREAM_YAML)
+        ctrl.register(config, yaml_text=_STATEFUL_STREAM_YAML)
+
+        wp.multi_dispatch.assert_called_once()
+        assert ctrl.manager.get("my-stateful-stream").status == "running"
+        ctrl.stop()
+
+    def test_start_stream_guard_count1_stream_starts(self):
+        """count=1 stream + stateful transform is allowed (single slot)."""
+        yaml = _STATEFUL_STREAM_YAML.replace("  count: 2", "  count: 1")
+        wp = self._worker_pool()
+        ctrl = _started_controller(worker_pool=wp, manager_url="http://manager:8765")
+        config = load_pipeline_from_yaml(yaml)
+        ctrl.register(config, yaml_text=yaml)
+
+        assert ctrl.manager.get("my-stateful-stream").status == "running"
+        wp.multi_dispatch.assert_called_once()
+        ctrl.stop()
+
+    def test_batch_dispatch_ignores_broadcast(self):
+        """count=N interval pipelines still dispatch single-slot (pre-existing
+        behavior, now asserted — F.1 §3.4/§10)."""
+        wp = self._worker_pool()
+        ctrl = _started_controller(worker_pool=wp, manager_url="http://manager:8765")
+        config = load_pipeline_from_yaml(_COUNT_N_INTERVAL_YAML)
+        ctrl.register(config, yaml_text=_COUNT_N_INTERVAL_YAML)
+        wp.dispatch_with_result.reset_mock()
+        wp.multi_dispatch.reset_mock()
+        ctrl.manager.set_status("my-count-n-interval", "scheduled")
+
+        ctrl._run_batch("my-count-n-interval", run_id="r-broadcast")
+
+        wp.dispatch_with_result.assert_called_once()
+        wp.multi_dispatch.assert_not_called()
+        ctrl.stop()
+
+    def test_trigger_run_flush_reaches_local_executor(self):
+        """A standalone flush run forwards the flag to executor.batch_run."""
+        ctrl = _started_controller()
+        config = load_pipeline_from_yaml(_MANUAL_YAML)
+        ctrl.register(config, yaml_text=_MANUAL_YAML)
+        ctrl.manager.set_status("my-manual", "stopped")
+
+        result = _make_result("my-manual", RunStatus.SUCCESS)
+        ctrl.executor = MagicMock()
+        ctrl.executor.batch_run.return_value = result
+
+        trigger = ctrl.trigger_run("my-manual", flush=True)
+        assert trigger.disposition == "dispatched"
+        time.sleep(0.1)
+        ctrl.executor.batch_run.assert_called_once()
+        assert ctrl.executor.batch_run.call_args.kwargs["flush"] is True
+        ctrl.stop()
+
+    def test_trigger_run_flush_false_by_default(self):
+        """trigger_run without flush keeps the executor's default (False)."""
+        ctrl = _started_controller()
+        config = load_pipeline_from_yaml(_MANUAL_YAML)
+        ctrl.register(config, yaml_text=_MANUAL_YAML)
+        ctrl.manager.set_status("my-manual", "stopped")
+
+        result = _make_result("my-manual", RunStatus.SUCCESS)
+        ctrl.executor = MagicMock()
+        ctrl.executor.batch_run.return_value = result
+
+        ctrl.trigger_run("my-manual")
+        time.sleep(0.1)
+        assert ctrl.executor.batch_run.call_args.kwargs["flush"] is False
+        ctrl.stop()

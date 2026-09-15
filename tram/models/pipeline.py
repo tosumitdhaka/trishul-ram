@@ -480,6 +480,90 @@ class AggregateTransformConfig(BaseModel):
     operations: dict[str, Any]
 
 
+# Stateful transform types (design F.1 §6). The registry drives the §6
+# mode-gating validators, the controller's _start_stream broadcast guard, and
+# the linter's stateful+broadcast warning.
+_STATEFUL_TRANSFORM_TYPES = ("counter_delta", "window_aggregate")
+
+
+class CounterDeltaTransformConfig(BaseModel):
+    """Per-key counter deltas with Counter32/64 wrap correction and rates (F.1 §4/§7).
+
+    ``fields`` are dotted paths to cumulative counter values; per configured
+    field ``f`` the transform emits ``f_delta`` and/or ``f_rate`` alongside the
+    original (``keep_raw: false`` drops the raw value). Counter identity is
+    (source identity from the chunk's ``source_host`` meta, ``key_fields``
+    values, field path). Requires the ``TRAM_STATEFUL_TRANSFORMS`` flag (on by
+    default) and is rejected in sink-level transforms or with
+    ``thread_workers > 1`` (§6).
+    """
+
+    type: Literal["counter_delta"]
+    fields: list[str]
+    key_fields: list[str] = Field(default_factory=lambda: ["_index"])
+    timestamp_field: str | list[str] = ["_polled_at", "timestamp"]
+    width: Literal["auto", 32, 64] = "auto"
+    output: Literal["delta", "rate", "both"] = "both"
+    keep_raw: bool = True
+    first_sample: Literal["pass", "drop"] = "pass"
+    reset_threshold: float = 0.5
+    max_gap_seconds: float | None = None
+    on_error: Literal["raise", "null", "keep"] = "raise"
+
+    @field_validator("fields")
+    @classmethod
+    def validate_fields(cls, value: list[str]) -> list[str]:
+        if not value:
+            raise ValueError("fields must not be empty")
+        return value
+
+    @field_validator("reset_threshold")
+    @classmethod
+    def validate_reset_threshold(cls, value: float) -> float:
+        if not 0 < value < 1:
+            raise ValueError("reset_threshold must be between 0 and 1 (exclusive)")
+        return value
+
+    @field_validator("max_gap_seconds")
+    @classmethod
+    def validate_max_gap(cls, value: float | None) -> float | None:
+        if value is not None and value <= 0:
+            raise ValueError("max_gap_seconds must be > 0")
+        return value
+
+
+class WindowAggregateTransformConfig(BaseModel):
+    """Tumbling epoch-aligned UTC window aggregation (design F.1 §5/§7).
+
+    Accumulates op-relevant running values (not raw samples) per group+window
+    in the pipeline's durable state blob; a window finalizes (emits with
+    ``window_complete: true``) when the watermark — max event time observed
+    minus ``allowed_lateness_seconds`` — passes its end. Records for an
+    already-finalized window are dropped and counted in
+    ``TRANSFORM_WINDOW_LATE_DROPPED_TOTAL``. ``close(flush=True)`` (a manual
+    flush run, or a graceful stream stop honoring ``flush_on_close``) emits
+    open windows with ``window_complete: false`` and clears them from the
+    saved state; a crashed stream keeps its open windows in state so a
+    redispatch continues them. Stateful: same mode gating as
+    ``counter_delta`` (§6).
+    """
+
+    type: Literal["window_aggregate"]
+    window_seconds: int = Field(900, ge=1)
+    allowed_lateness_seconds: int = Field(60, ge=0)
+    timestamp_field: str | list[str] = ["_polled_at", "timestamp"]
+    group_by: list[str] = Field(default_factory=list)
+    operations: dict[str, Any]
+    flush_on_close: bool = False
+
+    @field_validator("operations")
+    @classmethod
+    def validate_operations(cls, value: dict[str, Any]) -> dict[str, Any]:
+        if not value:
+            raise ValueError("operations must not be empty")
+        return value
+
+
 class EnrichTransformConfig(BaseModel):
     type: Literal["enrich"]
     lookup_file: str
@@ -698,7 +782,7 @@ class HexDecodeTransformConfig(BaseModel):
 
 
 TransformConfig = Annotated[
-    RenameTransformConfig | CastTransformConfig | AddFieldTransformConfig | DropTransformConfig | ValueMapTransformConfig | FilterTransformConfig | FlattenTransformConfig | TimestampNormalizeTransformConfig | AggregateTransformConfig | EnrichTransformConfig | ExplodeTransformConfig | DeduplicateTransformConfig | RegexExtractTransformConfig | InjectMetaTransformConfig | TemplateTransformConfig | MaskTransformConfig | ValidateTransformConfig | SortTransformConfig | LimitTransformConfig | JmesPathExtractTransformConfig | UnnestTransformConfig | CoalesceFieldsTransformConfig | SelectFromListTransformConfig | ProjectTransformConfig | JsonFlattenTransformConfig | HexDecodeTransformConfig,
+    RenameTransformConfig | CastTransformConfig | AddFieldTransformConfig | DropTransformConfig | ValueMapTransformConfig | FilterTransformConfig | FlattenTransformConfig | TimestampNormalizeTransformConfig | AggregateTransformConfig | CounterDeltaTransformConfig | WindowAggregateTransformConfig | EnrichTransformConfig | ExplodeTransformConfig | DeduplicateTransformConfig | RegexExtractTransformConfig | InjectMetaTransformConfig | TemplateTransformConfig | MaskTransformConfig | ValidateTransformConfig | SortTransformConfig | LimitTransformConfig | JmesPathExtractTransformConfig | UnnestTransformConfig | CoalesceFieldsTransformConfig | SelectFromListTransformConfig | ProjectTransformConfig | JsonFlattenTransformConfig | HexDecodeTransformConfig,
     Field(discriminator="type"),
 ]
 
@@ -1380,6 +1464,14 @@ class PipelineConfig(BaseModel):
     # opt out explicitly with `post_batch_cleanup: false`.
     post_batch_cleanup: bool = True
 
+    # Stateful transform state persistence (F.1 §3.2c): in stream mode, PUT the
+    # pipeline's transform-state blob at most every N seconds, timed with the
+    # chunk loop (no extra thread). 0 (default) = off — streams then persist
+    # state only at run end (graceful stop). Bounds a D.2 redispatch's loss to
+    # one persist interval. Only meaningful for pipelines with stateful
+    # transforms; ignored otherwise.
+    state_persist_interval_s: float = Field(0, ge=0)
+
     # Error handling
     on_error: Literal["continue", "abort", "retry", "dlq"] = "continue"
     retry_count: int = 3
@@ -1427,6 +1519,52 @@ class PipelineConfig(BaseModel):
                 self.workers = WorkersConfig(count="all")
             else:
                 self.workers = WorkersConfig(count=1)
+        return self
+
+    @model_validator(mode="after")
+    def check_stateful_transforms(self) -> PipelineConfig:
+        """Mode gating for stateful transforms (design F.1 §6).
+
+        Rejects: (a) stateful transforms while ``TRAM_STATEFUL_TRANSFORMS`` is
+        off, (b) stateful transforms in sink-level ``transforms`` (they would
+        fork state per sink), and (c) ``thread_workers > 1`` with stateful
+        transforms (chunks process concurrently and possibly out of order, so
+        ``v_now`` could pair with an older ``v_prev``). The broadcast-stream
+        runtime guard is a later step (controller ``_start_stream``).
+        """
+        from tram.core.config import stateful_transforms_enabled
+
+        def _sink_stateful() -> list[str]:
+            found = []
+            for sink in self.sinks:
+                for t_cfg in getattr(sink, "transforms", []):
+                    if t_cfg.type in _STATEFUL_TRANSFORM_TYPES:
+                        found.append(t_cfg.type)
+            return found
+
+        top_level_stateful = [t.type for t in self.transforms if t.type in _STATEFUL_TRANSFORM_TYPES]
+
+        if not stateful_transforms_enabled():
+            offenders = top_level_stateful + _sink_stateful()
+            if offenders:
+                raise ValueError(
+                    "stateful transforms disabled (TRAM_STATEFUL_TRANSFORMS=0): "
+                    f"{', '.join(sorted(set(offenders)))}"
+                )
+        if top_level_stateful:
+            if self.thread_workers > 1:
+                raise ValueError(
+                    "stateful transforms cannot be used with thread_workers > 1: "
+                    "chunks process concurrently and possibly out of order, so a "
+                    "counter sample can pair with an older previous value "
+                    f"({', '.join(top_level_stateful)})"
+                )
+        if _sink_stateful():
+            raise ValueError(
+                "stateful transforms are not allowed in sink-level transforms: "
+                "per-sink transforms would fork state per sink "
+                f"({', '.join(sorted(set(_sink_stateful())))})"
+            )
         return self
 
     @field_validator("name")

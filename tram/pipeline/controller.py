@@ -90,6 +90,7 @@ class PipelineController:
         single_stream_placements: bool | None = None,
         queue_manual_runs: bool | None = None,
         queue_ttl_seconds: int = 900,
+        stateful_transforms: bool | None = None,
     ) -> None:
         self._db = db
         self._node_id = node_id
@@ -138,8 +139,26 @@ class PipelineController:
         # across manager restarts — Decision 4).
         self._queue_ttl_seconds = max(1, queue_ttl_seconds)
 
+        # F.1 feature flag (GH #W-5.1): stateful transforms. Read once at
+        # construction; the flag gates the validation rejections (models), the
+        # internal endpoints (routers) and — next step — the _start_stream
+        # broadcast guard. Fail-open parse mirrors the D.2/E.2 flags.
+        if stateful_transforms is None:
+            from tram.core.config import stateful_transforms_enabled
+            self._stateful_transforms = stateful_transforms_enabled()
+        else:
+            self._stateful_transforms = stateful_transforms
+
         self.manager = PipelineManager(db=db)
-        self.executor = PipelineExecutor(file_tracker=file_tracker)
+        # Standalone execution reaches the transform-state blob via the DB
+        # directly; worker mode uses the internal HTTP endpoints instead
+        # (design F.1 §3.2b).
+        if db is not None:
+            from tram.pipeline.state_store import DbTransformStateStore
+            state_store = DbTransformStateStore(db)
+        else:
+            state_store = None
+        self.executor = PipelineExecutor(file_tracker=file_tracker, state_store=state_store)
 
         # Controller-level lifecycle lock. RLock (not Lock) because lifecycle
         # helpers call each other on the same thread (update() -> _stop_execution()
@@ -398,6 +417,10 @@ class PipelineController:
                 # updated config — refresh its yaml_snapshot so the auditable
                 # snapshot column stays the dispatch source.
                 self._db.refresh_queued_run_yaml(name, yaml_text)
+                # F.1 (§3.2d) belt and braces: a changed transform list may
+                # change key semantics — delete the state row outright instead
+                # of relying on hydration's config-sha discard.
+                self._db.delete_transform_state(name)
 
             if was_active and config.enabled and self._may_schedule(name):
                 self._do_schedule(name)
@@ -426,6 +449,8 @@ class PipelineController:
             self.manager.deregister(name)
             if self._db is not None:
                 self._db.delete_pipeline(name)
+                # F.1 (§3.2d): a deleted pipeline's state row is garbage.
+                self._db.delete_transform_state(name)
             logger.info("Deleted pipeline", extra={"pipeline": name})
 
     def start_pipeline(self, name: str) -> Literal["started", "already_running", "disabled", "manual"]:
@@ -499,8 +524,14 @@ class PipelineController:
 
             logger.info("Restarted pipeline", extra={"pipeline": name})
 
-    def trigger_run(self, name: str) -> TriggerResult:
+    def trigger_run(self, name: str, flush: bool = False) -> TriggerResult:
         """Immediate one-shot run. Works even when pipeline is stopped.
+
+        *flush* (F.1 §5) is a manual flush run: the executor calls stateful
+        transforms' ``close(flush=True)`` so open windows emit as partials and
+        are cleared from the saved state. The flag is NOT carried through the
+        E.2 queue: a queued flush run that lost the flag executes as a normal
+        run when capacity returns.
 
         Manager+worker mode with the queue flag on and zero healthy workers
         (debounced health state): durably enqueue instead of submitting a run
@@ -544,7 +575,7 @@ class PipelineController:
                     # run_id the user already saw.
                     existing = self._db.get_active_queued_run_for_pipeline(name)
                     return TriggerResult(existing["run_id"], "queued")
-            self._thread_pool.submit(partial(self._run_batch, name, run_id, origin="manual"))
+            self._thread_pool.submit(partial(self._run_batch, name, run_id, origin="manual", flush=flush))
             return TriggerResult(run_id, "dispatched")
 
     # ── Queued manual runs (E.2 / GH #21) ────────────────────────────────
@@ -933,7 +964,7 @@ class PipelineController:
             logger.info("Scheduled cron pipeline",
                         extra={"pipeline": config.name, "cron": config.schedule.cron})
 
-    def _run_batch(self, pipeline_name: str, run_id: str | None = None, *, origin: str = "scheduled") -> None:
+    def _run_batch(self, pipeline_name: str, run_id: str | None = None, *, origin: str = "scheduled", flush: bool = False) -> None:
         """APScheduler/thread-pool callback — one batch execution.
 
         ``origin`` is keyword-only so manual triggers are distinguishable from
@@ -942,6 +973,11 @@ class PipelineController:
         default ("scheduled") keeps the APScheduler call sites untouched; the
         E.2 no-capacity fallback enqueue site keys off ``origin == "manual"``
         only.
+
+        ``flush`` (F.1 §5) marks a manual flush run: it rides the worker
+        dispatch envelope (``RunRequest.flush``) and the local executor path
+        so stateful transforms' ``close(flush=True)`` emits open windows as
+        partials and clears them from the saved state.
 
         Claim phase: the existence check + running-guard + status flip + config
         snapshot happen atomically under the lifecycle RLock, so trigger_run()
@@ -994,6 +1030,7 @@ class PipelineController:
                 yaml_text=yaml_text,
                 schedule_type=schedule_type,
                 callback_url=callback_url,
+                flush=flush,
             )
             if outcome.outcome == DISPATCH_NO_CAPACITY:
                 # E.2 (§4.2): the fallback enqueue site — capacity vanished
@@ -1104,10 +1141,18 @@ class PipelineController:
                 self._local_active_stats[run_id] = local_run
 
         try:
+            # D.2 §6.1 fingerprint of the dispatched YAML: the executor uses it
+            # to discard stale transform state on config change (F.1 §3.2d).
+            config_sha256 = hashlib.sha256(str(yaml_text or "").encode()).hexdigest()[:16]
             if stats is not None:
-                result = self.executor.batch_run(config, run_id=run_id, stats=stats)
+                result = self.executor.batch_run(
+                    config, run_id=run_id, stats=stats, config_sha256=config_sha256,
+                    flush=flush,
+                )
             else:
-                result = self.executor.batch_run(config, run_id=run_id)
+                result = self.executor.batch_run(
+                    config, run_id=run_id, config_sha256=config_sha256, flush=flush,
+                )
             self._finalize_batch_result(pipeline_name, result)
         except Exception as exc:
             logger.error("Batch run exception",
@@ -1359,6 +1404,41 @@ class PipelineController:
             # must be atomic against delete()/_stop_stream() so a deleted stream
             # is never (re-)dispatched and stop/start cannot interleave.
             with self._lock:
+                # F.1 §6 broadcast guard: manager mode + broadcast workers
+                # (count>1/all/list) + any stateful transform is rejected —
+                # multi_dispatch sends whole pipelines, so each worker sees a
+                # partial (Kafka/syslog) or duplicated (gNMI) stream with no
+                # key affinity and per-worker state computes silently wrong or
+                # duplicated values. Flag-gated (the one hot-path line the
+                # TRAM_STATEFUL_TRANSFORMS flag exists to revert); standalone
+                # is unaffected (this branch is manager-only).
+                from tram.models.pipeline import _STATEFUL_TRANSFORM_TYPES
+                if (
+                    self._stateful_transforms
+                    and self._is_broadcast_workers(config.workers)
+                    and any(
+                        t.type in _STATEFUL_TRANSFORM_TYPES
+                        for t in config.transforms
+                    )
+                ):
+                    stateful = sorted(
+                        {
+                            t.type
+                            for t in config.transforms
+                            if t.type in _STATEFUL_TRANSFORM_TYPES
+                        }
+                    )
+                    logger.error(
+                        "Stream rejected — stateful transforms cannot run with "
+                        "broadcast placement",
+                        extra={
+                            "pipeline": config.name,
+                            "stateful_transforms": stateful,
+                            "workers": config.workers.model_dump(),
+                        },
+                    )
+                    self.manager.set_status(config.name, "error")
+                    return
                 if config.name in self._stream_run_ids:
                     logger.debug("Stream already dispatched to worker",
                                  extra={"pipeline": config.name})
@@ -1552,7 +1632,17 @@ class PipelineController:
             stats = None
 
         try:
-            self.executor.stream_run(config, stop_event, stats=stats)
+            # D.2 §6.1 fingerprint of the stream's YAML (F.1 §3.2d): a stale
+            # config redispatch must not hydrate the old key semantics.
+            yaml_text = (
+                self.manager.get(config.name).yaml_text
+                if self.manager.exists(config.name)
+                else ""
+            )
+            config_sha256 = hashlib.sha256(str(yaml_text or "").encode()).hexdigest()[:16]
+            self.executor.stream_run(
+                config, stop_event, stats=stats, config_sha256=config_sha256
+            )
         except Exception as exc:
             logger.error("Stream pipeline crashed",
                          extra={"pipeline": config.name, "error": str(exc)}, exc_info=True)

@@ -436,6 +436,53 @@ class TestBuildV3Auth:
         assert call_kwargs["privProtocol"] == "AES128_CONST"
 
 
+# ── _classify_bindings _snmp_widths (F.1 §4.4) ──────────────────────────────
+
+
+class TestClassifyBindingsSnmpWidths:
+    """counter_delta's authoritative width source must be emitted for
+    Counter32/Counter64 fields and absent for everything else."""
+
+    def test_counter32_and_counter64_get_widths(self):
+        classified = SNMPPollSource._classify_bindings({
+            "ifInOctets.1": ("4135975078", "Counter32"),
+            "ifHCInOctets.1": ("123456789012", "Counter64"),
+            "ifSpeed.1": ("1000000000", "Gauge32"),
+            "ifDescr.1": ("eth0", "OctetString"),
+            "ifAdminStatus.1": ("1", "Integer32"),
+        })
+        assert classified["_snmp_widths"] == {
+            "ifInOctets": 32,
+            "ifHCInOctets": 64,
+        }
+        # Gauges/labels carry no width (they are not cumulative counters).
+        assert "ifSpeed" not in classified["_snmp_widths"]
+        assert "ifDescr" not in classified["_snmp_widths"]
+        assert "ifAdminStatus" not in classified["_snmp_widths"]
+        assert classified["_metrics"]["ifInOctets"] == 4135975078
+        assert classified["_metrics"]["ifHCInOctets"] == 123456789012
+
+    def test_widths_use_base_field_after_index_strip(self):
+        """The first dot-segment is the base field (matching the existing
+        metric/label classification); widths keyed by that base."""
+        classified = SNMPPollSource._classify_bindings({
+            "ifInOctets.1": ("100", "Counter32"),
+        })
+        assert classified["_snmp_widths"] == {"ifInOctets": 32}
+
+    def test_yield_rows_classify_preserves_widths(self):
+        """The per-row classify path (both call sites share the static method)
+        keeps _snmp_widths keyed by base field name for counter_delta."""
+        row_typed = {
+            "ifInOctets.1": ("100", "Counter32"),
+            "ifDescr.1": ("eth0", "OctetString"),
+        }
+        classified = SNMPPollSource._classify_bindings(row_typed)
+        classified["_index"] = "1"
+        assert classified["_snmp_widths"] == {"ifInOctets": 32}
+        assert "_index" in classified
+
+
 class TestSNMPPollSourceV3Config:
     """Verify SNMPPollSource stores v3 config fields correctly."""
 

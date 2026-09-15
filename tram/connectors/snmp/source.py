@@ -430,13 +430,23 @@ class SNMPPollSource(BaseSource):
         - Integer32 ending in an Id/Index/Port/Vdom suffix → label (str)
         - Integer32 (other) → metric (int)
         - Everything else (OctetString, IpAddress, ObjectIdentifier, ...) → label (str)
+
+        Additionally emits ``_snmp_widths: {field: 32|64}`` for Counter32/
+        Counter64 fields — the SNMP type name is in hand here and otherwise
+        discarded, which would leave wrap-width inference to a heuristic (F.1
+        §4.4). ``counter_delta`` consumes ``_snmp_widths`` as authoritative.
         """
         metrics: dict = {}
         labels: dict = {}
+        widths: dict = {}
         for key, (str_val, type_name) in bindings_typed.items():
             # Strip trailing dot-index portion (e.g. "ifDescr.1" → base="ifDescr")
             base = key.split(".")[0] if "." in key else key
             if type_name in SNMPPollSource._METRIC_TYPES:
+                if type_name == "Counter32":
+                    widths[base] = 32
+                elif type_name == "Counter64":
+                    widths[base] = 64
                 try:
                     metrics[base] = int(str_val)
                 except ValueError:
@@ -451,7 +461,7 @@ class SNMPPollSource(BaseSource):
                         metrics[base] = str_val
             else:
                 labels[base] = str_val
-        return {"_metrics": metrics, "_labels": labels}
+        return {"_metrics": metrics, "_labels": labels, "_snmp_widths": widths}
 
     @staticmethod
     def _snmp_val_to_str(val_obj) -> str:

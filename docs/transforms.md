@@ -236,6 +236,121 @@ Group records and compute aggregations. Collapses batch into one row per group.
 
 ---
 
+## counter_delta
+
+Compute per-key counter deltas with Counter32 wrap correction and
+reboot/reset detection, plus an optional per-second rate. The defining
+PM-mediation primitive for cumulative SNMP/gNMI counters.
+
+```yaml
+- type: counter_delta
+  fields: ["_metrics.ifInOctets", "_metrics.ifOutOctets"]  # required, dotted paths
+  key_fields: ["_index"]                # counter series identity (+ source host from chunk meta)
+  timestamp_field: ["_polled_at", "timestamp"]  # str or list; default shown
+  width: "auto"                          # "auto" | 32 | 64  (SNMP _snmp_widths wins when present)
+  output: "both"                         # "delta" | "rate" | "both"
+  keep_raw: true                         # false drops the raw cumulative value
+  first_sample: "pass"                   # "pass" | "drop"
+  reset_threshold: 0.5                   # wrap-corrected delta above this × width ⇒ reset
+  max_gap_seconds: null                  # optional outage guard
+  on_error: "raise"                      # "raise" | "null" | "keep"
+```
+
+For each configured field `f` the transform emits `f_delta` and/or `f_rate`
+next to the original value. **Wrap vs reset is distinguished by gap size**: a
+decrease whose wrap-corrected delta exceeds `reset_threshold × width` is a
+device reboot (reset) → `delta = v_now` and `_counter_reset: true`; otherwise
+it is a genuine wrap and the corrected delta stands. Counter64 never wraps in
+practice, so a 64-bit decrease is always a reset. The rate uses the actual
+elapsed time between samples, so polls with jitter still produce exact rates.
+
+**Counter identity** = (source host from the chunk's runtime meta +
+`key_fields` values + field path), so two hosts polled by one pipeline never
+cross-contaminate. The first sight of a series passes through with
+`delta`/`rate` set to `null` (or `first_sample: "drop"` removes the sample
+entirely — **record-level**: the whole record is dropped when *any* configured
+field is first-sight). **Width** resolution: the SNMP source's `_snmp_widths`
+record field (`32`/`64`, emitted by `_classify_bindings` for Counter32/Counter64) is
+authoritative; explicit `width: 32|64` is next; `"auto"` infers 64 when either
+sample is ≥ 2³². Known edge: a 64-bit counter reset where both values sit
+below 2³² can be misread as a 32-bit wrap — escape with explicit `width: 64`.
+
+**`on_error` on a bad record** (missing key field, missing/non-numeric field
+value, or missing timestamp): `raise` raises; `null` nulls the failing
+field's outputs *and any not-yet-processed fields* — fields already computed
+before the failure keep their valid delta/rate; `keep` returns the record as
+it arrived (a true snapshot — no outputs are written at all).
+
+Stateful: deltas survive across interval polls and stream redispatches via the
+pipeline's durable state blob (`transform_state` table in standalone mode,
+internal API in worker mode). Rejected at validation with
+`thread_workers > 1` or inside sink-level `transforms`. Disabled entirely when
+`TRAM_STATEFUL_TRANSFORMS=0`. Streams may set the pipeline-level
+`state_persist_interval_s` to snapshot the blob periodically so a redispatch
+recovers the counters up to the last snapshot.
+
+---
+
+## window_aggregate
+
+Tumbling **epoch-aligned UTC** time windows (15-min telecom PM default) with
+watermark-driven finalization and bounded lateness. The composable mediation
+pattern: `counter_delta` per poll → `window_aggregate` over the rate samples.
+
+```yaml
+- type: window_aggregate
+  window_seconds: 900                    # telecom 15-min default
+  allowed_lateness_seconds: 60
+  timestamp_field: ["_polled_at", "timestamp"]  # str or list; default shown
+  group_by: ["_labels.ifDescr", "_index"]
+  operations:                            # aggregate-transform spec syntax, reused
+    mean_rx_rate: "avg:_metrics.ifInOctets_rate"
+    peak_rx_rate: "max:_metrics.ifInOctets_rate"
+  flush_on_close: false                  # batch and stream default; streams flush
+                                         # on graceful stop only when true
+```
+
+A record's event time (from `timestamp_field`, same candidate default as
+`counter_delta`) places it in the epoch-aligned window
+`floor(ts / window_seconds) × window_seconds`; 23:47:12 lands in 23:45–00:00.
+The **watermark** = max event time observed − `allowed_lateness_seconds`; a
+window finalizes (emits with `window_complete: true`) when the watermark passes
+its end. Records for an already-finalized window are **dropped and counted**
+(`tram_transform_window_late_dropped_total`), never merged into an emitted
+window (sinks are append-only).
+
+**State holds accumulators, not samples** — per group+window only the
+op-relevant running values (sum/count for `avg`, running `max`, `first`/`last`,
+…) live in the pipeline's durable state blob, so interval polls round-trip open
+windows tick to tick at O(groups × windows × ops). `group_by` fields are copied
+verbatim into the output record (dotted paths appear as-is). Output shape:
+
+```json
+{"_labels.ifDescr": "eth0", "_index": "1",
+ "window_start": "2026-09-16T09:15:00Z", "window_end": "2026-09-16T09:30:00Z",
+ "mean_rx_rate": 84213.7, "peak_rx_rate": 91002.1,
+ "sample_count": 4, "window_complete": true}
+```
+
+**Flush on stop**: a stopped pipeline must not silently lose its open window.
+Batch runs never flush partials per tick (`close(flush=False)`) — the window
+finalizes naturally when the pipeline resumes and the watermark advances. A
+manual **flush run** — `POST /api/pipelines/{name}/run?flush=true` — runs the
+pipeline as usual and then emits every open window with `window_complete:
+false`, clearing them from the saved state (they are never re-emitted after
+rehydration); a flush run is authoritative over the transform's
+`flush_on_close` field. Streams honor `flush_on_close` on graceful stop
+(`true` → open windows emit as partials and clear; `false` → they stay in
+state and finalize when the stream resumes). A stream that crashes or raises
+never flushes: open windows stay in the saved state so a redispatch continues
+them. A queued flush run executes as a normal run when capacity returns —
+re-issue `?flush=true` after capacity returns to flush. Stateful: same mode
+gating as `counter_delta` (`thread_workers > 1` and sink-level placement are
+rejected at validation; broadcast stream placement is an error in manager mode,
+a warning at `tram validate`).
+
+---
+
 ## enrich
 
 Left-join records with a static lookup file loaded once at init.

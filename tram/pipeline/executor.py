@@ -19,11 +19,13 @@ from tram.connectors.file_sink_common import extract_field_paths, validate_templ
 from tram.core.context import PipelineRunContext, RunResult, RunStatus
 from tram.core.exceptions import TramError
 from tram.registry.registry import get_serializer, get_sink, get_source, get_transform
+from tram.transforms.stateful import StatefulTransform
 
 if TYPE_CHECKING:
     from tram.agent.metrics import PipelineStats
     from tram.models.pipeline import PipelineConfig
     from tram.persistence.file_tracker import ProcessedFileTracker
+    from tram.pipeline.state_store import TransformStateStore
 
 logger = logging.getLogger(__name__)
 
@@ -198,11 +200,19 @@ def _batch_inflight_cap(thread_workers: int) -> int:
 class PipelineExecutor:
     """Executes pipeline configurations in batch or stream mode."""
 
-    def __init__(self, file_tracker: ProcessedFileTracker | None = None) -> None:
+    def __init__(
+        self,
+        file_tracker: ProcessedFileTracker | None = None,
+        state_store: TransformStateStore | None = None,
+    ) -> None:
         self._last_refill: float = 0.0
         self._tokens: float = 0.0
         self._rate_lock = threading.Lock()  # guards _tokens and _last_refill
         self._file_tracker = file_tracker
+        # Durable transform-state store (design F.1 §3.2b) — None disables
+        # persistence entirely (stateful transforms then stay in-memory only,
+        # which is correct for single-run manual execution).
+        self._state_store = state_store
         # Circuit breaker state: {sink_key: (failure_count, open_until_monotonic)}
         self._cb_state: dict[str, tuple[int, float]] = {}
         self._cb_lock = threading.Lock()
@@ -284,12 +294,170 @@ class PipelineExecutor:
     def _build_transforms(self, config: PipelineConfig) -> list:
         pipeline_ctx = {"name": config.name, "source": config.source.model_dump()}
         transforms = []
-        for t_cfg in config.transforms:
+        for idx, t_cfg in enumerate(config.transforms):
             t_cls = get_transform(t_cfg.type)
             d = t_cfg.model_dump()
             d["_pipeline"] = pipeline_ctx
-            transforms.append(t_cls(d))
+            transform = t_cls(d)
+            if isinstance(transform, StatefulTransform):
+                # Stable state blob key: transform type + position in the
+                # transforms list (design F.1 §3.2a).
+                transform.state_key = f"{t_cfg.type}:{idx}"
+            transforms.append(transform)
         return transforms
+
+    # ── Stateful transform state (design F.1 §3.2c) ────────────────────────
+
+    @staticmethod
+    def _stateful_transforms(transforms: list) -> list:
+        return [t for t in transforms if isinstance(t, StatefulTransform)]
+
+    @staticmethod
+    def _apply_state(transforms: list, blob: dict) -> None:
+        """Hydrate stateful transforms from a blob (best-effort per transform)."""
+        for transform in transforms:
+            if not isinstance(transform, StatefulTransform):
+                continue
+            try:
+                transform.set_state(blob.get(transform.state_key, {}))
+            except Exception as exc:
+                logger.warning(
+                    "Transform state hydration failed",
+                    extra={"state_key": transform.state_key, "error": str(exc)},
+                )
+
+    def _hydrate_state_from_store(
+        self, config: PipelineConfig, transforms: list, config_sha256: str
+    ) -> dict:
+        """Load the pipeline's durable state and hydrate stateful transforms.
+
+        Returns the *in-run snapshot* (the state as loaded) so a retry rebuild
+        can re-hydrate from the same snapshot — a failed attempt's partial
+        writes are discarded (design §3.2c). Discards the blob on config-sha
+        mismatch (D.2 §6.1 pattern → one first-sight interval).
+        """
+        if self._state_store is None or not self._stateful_transforms(transforms):
+            return {}
+        try:
+            loaded = self._state_store.get(config.name)
+        except Exception as exc:
+            logger.warning(
+                "Transform state load failed — continuing unhydrated",
+                extra={"pipeline": config.name, "error": str(exc)},
+            )
+            return {}
+        if loaded is None:
+            return {}
+        if config_sha256 and loaded.config_sha256 != config_sha256:
+            logger.info(
+                "Transform state discarded — config_sha256 mismatch",
+                extra={"pipeline": config.name},
+            )
+            return {}
+        self._apply_state(transforms, loaded.state)
+        return loaded.state
+
+    def _save_state_to_store(
+        self, config: PipelineConfig, transforms: list, config_sha256: str, run_id: str
+    ) -> None:
+        """Collect stateful transforms' blobs and persist them (best-effort)."""
+        if self._state_store is None:
+            return
+        stateful = self._stateful_transforms(transforms)
+        if not stateful:
+            return
+        blob: dict = {}
+        for transform in stateful:
+            try:
+                blob[transform.state_key] = transform.get_state() or {}
+            except Exception as exc:
+                blob[transform.state_key] = {}
+                logger.warning(
+                    "Transform state collection failed",
+                    extra={"state_key": transform.state_key, "error": str(exc)},
+                )
+        try:
+            self._state_store.put(config.name, blob, config_sha256, run_id=run_id)
+        except Exception as exc:
+            logger.warning(
+                "Transform state save failed — counters self-heal over the "
+                "longer interval",
+                extra={"pipeline": config.name, "error": str(exc)},
+            )
+
+    @staticmethod
+    def _close_stateful_transforms(
+        transforms: list,
+        flush: bool = False,
+        flush_resolver=None,
+    ) -> list:
+        """Best-effort ``close(flush)`` on stateful transforms at run end.
+
+        Returns the partial-output records a transform emitted during close
+        (``window_aggregate`` returns its flushed open windows on ``flush=True``;
+        transforms whose ``close`` is a no-op return ``None``). Batch runs pass
+        ``flush=False`` per tick — flushing per tick would emit a partial window
+        record and then re-emit the same window after state rehydration (double
+        counting); a manual flush run passes ``flush=True`` (authoritative over
+        each transform's ``flush_on_close`` field). The stream ``finally``
+        passes a ``flush_resolver`` — a callable(transform) → bool consulted
+        per transform — so each stateful transform's ``flush_on_close`` field
+        gates its graceful-stop flush, and a crash path resolves to ``False``
+        (windows stay in state for a redispatch to continue).
+        """
+        emitted: list = []
+        for transform in transforms:
+            if not isinstance(transform, StatefulTransform):
+                continue
+            try:
+                effective = flush if flush_resolver is None else flush_resolver(transform)
+                out = transform.close(flush=effective)
+            except Exception as exc:
+                logger.warning(
+                    "Stateful transform close failed",
+                    extra={"state_key": transform.state_key, "error": str(exc)},
+                )
+                continue
+            if isinstance(out, (list, tuple)):
+                emitted.extend(out)
+        return emitted
+
+    def _route_stateful_flush_records(
+        self,
+        config: PipelineConfig,
+        flush_records: list,
+        serializer_out,
+        sinks: list[tuple],
+        ctx: PipelineRunContext,
+        dlq_sink=None,
+        sink_cb_keys: list[str] | None = None,
+    ) -> None:
+        """Write partial-window records from ``close(flush=True)`` to the sinks.
+
+        Runs after the chunk loop (in the flush path / stream finally) so a
+        stopped or flushed pipeline does not silently lose its open windows.
+        Failures are logged, never raised (the run result is already decided).
+        """
+        if not flush_records:
+            return
+        try:
+            self._process_records(
+                flush_records,
+                {},
+                [],
+                serializer_out,
+                sinks,
+                ctx,
+                config.on_error,
+                dlq_sink=dlq_sink,
+                parallel_sinks=getattr(config, "parallel_sinks", False),
+                sink_cb_keys=sink_cb_keys,
+            )
+        except Exception as exc:
+            logger.warning(
+                "Stateful flush records not delivered to sinks",
+                extra={"pipeline": config.name, "error": str(exc)},
+            )
 
     @staticmethod
     def _post_batch_cleanup(config: PipelineConfig) -> None:
@@ -801,8 +969,19 @@ class PipelineExecutor:
         config: PipelineConfig,
         run_id: str | None = None,
         stats: PipelineStats | None = None,
+        config_sha256: str = "",
+        flush: bool = False,
     ) -> RunResult:
-        """Execute one discrete batch run."""
+        """Execute one discrete batch run.
+
+        *config_sha256* is the D.2 §6.1 YAML fingerprint used to discard stale
+        transform state on config change (design F.1 §3.2d).
+
+        *flush* is the manual flush-run flag (design §5): ``close(flush=True)``
+        then emits any open windows as partials (``window_complete: false``)
+        and clears them from state before the final PUT — the saved blob
+        reflects the cleared windows, so the partials are never re-emitted.
+        """
         import contextlib
         try:
             from tram.telemetry.tracing import get_tracer
@@ -812,13 +991,18 @@ class PipelineExecutor:
             span_ctx = contextlib.nullcontext()
 
         with span_ctx:
-            return self._batch_run_inner(config, run_id=run_id, stats=stats)
+            return self._batch_run_inner(
+                config, run_id=run_id, stats=stats, config_sha256=config_sha256,
+                flush=flush,
+            )
 
     def _batch_run_inner(
         self,
         config: PipelineConfig,
         run_id: str | None = None,
         stats: PipelineStats | None = None,
+        config_sha256: str = "",
+        flush: bool = False,
     ) -> RunResult:
         kw = {"run_id": run_id} if run_id else {}
         ctx = PipelineRunContext(pipeline_name=config.name, **kw)
@@ -835,6 +1019,9 @@ class PipelineExecutor:
         dlq_sink = self._build_dlq_sink(config)
         # Pre-compute stable circuit-breaker keys for all sinks.
         sink_cb_keys = [self._make_sink_cb_key(config, i) for i in range(len(sinks))]
+        # Load the durable state once at run start and hydrate; retries re-hydrate
+        # from this same in-run snapshot (failed attempts persist nothing).
+        in_run_snapshot = self._hydrate_state_from_store(config, transforms, config_sha256)
 
         retry_count = config.retry_count if config.on_error == "retry" else 0
         retry_delay = config.retry_delay_seconds
@@ -848,7 +1035,29 @@ class PipelineExecutor:
                         transforms, dlq_sink, ctx, sink_cb_keys=sink_cb_keys, stats=stats,
                     )
 
+                    if flush:
+                        # Manual flush run (design §5): emit open windows as
+                        # partials (window_complete: false) and clear them from
+                        # state BEFORE the save, so the persisted blob reflects
+                        # the cleared windows — a later run rehydrates empty
+                        # windows and never re-emits the partials (no double
+                        # counting).
+                        flush_records = self._close_stateful_transforms(
+                            transforms, flush=True
+                        )
+                        if flush_records:
+                            self._route_stateful_flush_records(
+                                config, flush_records, serializer_out, sinks,
+                                ctx, dlq_sink=dlq_sink, sink_cb_keys=sink_cb_keys,
+                            )
+
                     result = RunResult.from_context(ctx, RunStatus.SUCCESS)
+                    # Persist transform state only on the success path: a failed
+                    # run keeps the previous snapshot intact (counters are
+                    # cumulative, so a lost update spans the gap correctly).
+                    self._save_state_to_store(
+                        config, transforms, config_sha256, ctx.run_id
+                    )
                     logger.info(
                         "Batch run completed",
                         extra={
@@ -898,6 +1107,10 @@ class PipelineExecutor:
                         transforms = self._build_transforms(config)
                         dlq_sink = self._build_dlq_sink(config)
                         sink_cb_keys = [self._make_sink_cb_key(config, i) for i in range(len(sinks))]
+                        # Re-hydrate the rebuilt transforms from the in-run
+                        # snapshot — never from a fresh GET — so a failed
+                        # attempt's partial writes are discarded.
+                        self._apply_state(transforms, in_run_snapshot)
                         continue
 
                     result = RunResult.from_context(ctx, RunStatus.FAILED, error=str(exc))
@@ -908,6 +1121,7 @@ class PipelineExecutor:
                     return result
             return result
         finally:
+            self._close_stateful_transforms(transforms)
             self._close_sinks(sinks, dlq_sink)
             self._close_source(source)
             if getattr(config, "post_batch_cleanup", False):
@@ -1122,8 +1336,16 @@ class PipelineExecutor:
         config: PipelineConfig,
         stop_event: threading.Event,
         stats: PipelineStats | None = None,
+        config_sha256: str = "",
     ) -> None:
-        """Run indefinitely until stop_event is set."""
+        """Run indefinitely until stop_event is set.
+
+        *config_sha256* is the D.2 §6.1 YAML fingerprint used to discard stale
+        transform state on config change (design F.1 §3.2d). When the pipeline
+        sets ``state_persist_interval_s``, the durable state blob is PUT
+        periodically (timed with the chunk loop, not a new thread) so a D.2
+        redispatch that hydrates recovers the state up to the last snapshot.
+        """
         logger.info("Stream run started", extra={"pipeline": config.name})
 
         source = self._build_source(config)
@@ -1135,6 +1357,21 @@ class PipelineExecutor:
         sink_cb_keys = [self._make_sink_cb_key(config, i) for i in range(len(sinks))]
 
         ctx = PipelineRunContext(pipeline_name=config.name)
+
+        # Hydrate stateful transforms at run start; a D.2 redispatch then
+        # recovers state up to the last persisted snapshot.
+        self._hydrate_state_from_store(config, transforms, config_sha256)
+
+        persist_interval = float(getattr(config, "state_persist_interval_s", 0) or 0)
+        last_persist = time.monotonic()
+
+        def _maybe_persist_state() -> None:
+            nonlocal last_persist
+            if persist_interval <= 0:
+                return
+            if time.monotonic() - last_persist >= persist_interval:
+                self._save_state_to_store(config, transforms, config_sha256, ctx.run_id)
+                last_persist = time.monotonic()
 
         # Watcher: when the APScheduler stop_event fires, also call source.stop()
         # so that blocking sources (e.g. WebhookSource.read()) unblock immediately.
@@ -1149,12 +1386,14 @@ class PipelineExecutor:
         watcher = threading.Thread(target=_stop_watcher, daemon=True, name="tram-stop-watcher")
         watcher.start()
 
+        graceful_stop = False
         try:
             if config.thread_workers > 1:
                 self._stream_run_threaded(
                     config, source, sinks, serializer_in, serializer_out,
                     transforms, dlq_sink, ctx, stop_event, stats,
                     sink_cb_keys=sink_cb_keys,
+                    on_persist=_maybe_persist_state,
                 )
             else:
                 current_source_key: tuple[str, str] | None = None
@@ -1182,10 +1421,14 @@ class PipelineExecutor:
                         sink_cb_keys,
                         stats,
                     )
+                    _maybe_persist_state()
                 # On a stop the generator was abandoned mid-file; the current
                 # file stays unmarked (matches the pre-hook behavior).
                 if current_source_meta is not None and not stopped:
                     source.finalize(current_source_meta, success=True)
+            # The chunk loop drained (or was stopped) without an exception:
+            # this is a graceful stop.
+            graceful_stop = True
         except Exception as exc:
             logger.error(
                 "Stream run error",
@@ -1194,6 +1437,30 @@ class PipelineExecutor:
             )
             raise
         finally:
+            # Graceful stop: close hooks honoring each stateful transform's
+            # flush_on_close field (window_aggregate emits its open windows as
+            # partials, then the final state blob reflects the cleared windows
+            # — no double emission after a redispatch). An exception/crash
+            # path never flushes: partials are not emitted and the open
+            # windows stay in the saved state so a redispatch continues them
+            # (the D.2 snapshot-recovery story).
+            if graceful_stop:
+                flush_records = self._close_stateful_transforms(
+                    transforms,
+                    flush_resolver=lambda t: bool(
+                        getattr(t, "flush_on_close", False)
+                    ),
+                )
+            else:
+                flush_records = self._close_stateful_transforms(
+                    transforms, flush=False
+                )
+            if flush_records:
+                self._route_stateful_flush_records(
+                    config, flush_records, serializer_out, sinks, ctx,
+                    dlq_sink=dlq_sink, sink_cb_keys=sink_cb_keys,
+                )
+            self._save_state_to_store(config, transforms, config_sha256, ctx.run_id)
             self._close_source(source)
             logger.info(
                 "Stream run ended",
@@ -1218,6 +1485,7 @@ class PipelineExecutor:
         stop_event: threading.Event,
         stats: PipelineStats | None = None,
         sink_cb_keys: list[str] | None = None,
+        on_persist=None,
     ) -> None:
         """Stream mode with N worker threads. Producer reads; workers process."""
         # Bounded queue gives backpressure: producer blocks if workers are slow
@@ -1278,6 +1546,8 @@ class PipelineExecutor:
                         current_source_key = source_key
                     current_source_meta = dict(meta)
                 chunk_q.put((raw, meta))  # blocks if queue full (backpressure)
+                if on_persist is not None:
+                    on_persist()
                 if STREAM_QUEUE_DEPTH is not None:
                     try:
                         STREAM_QUEUE_DEPTH.labels(pipeline=config.name).set(chunk_q.qsize())

@@ -393,6 +393,12 @@ Polls SNMP agents via GET or WALK. Batch mode. Requires `pip install tram[snmp]`
 
 Every record includes `_polled_at` (UTC ISO 8601).
 
+**`_snmp_widths`** (F.1): when `classify: true`, classified records additionally
+carry `_snmp_widths: {field: 32|64}` for Counter32/Counter64 fields — the SNMP
+type name, which `_classify_bindings` would otherwise discard after converting
+to `int`. The `counter_delta` transform consumes it as the authoritative wrap
+width (explicit `width:` config and the `auto` heuristic come after it).
+
 ```yaml
 # Walk IF-MIB, one record per interface row
 source:

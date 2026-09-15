@@ -219,6 +219,7 @@ def create_app(config: AppConfig | None = None) -> FastAPI:
         single_stream_placements=config.stream_single_placement,
         queue_manual_runs=config.queue_manual_runs,
         queue_ttl_seconds=config.queue_ttl_seconds,
+        stateful_transforms=config.stateful_transforms,
     )
     # Keep manager reference on controller's alert evaluator
     controller.manager._alert_evaluator = alert_evaluator
