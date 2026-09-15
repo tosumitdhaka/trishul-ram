@@ -402,7 +402,11 @@ class TestTcpConcurrency:
             _wait_for(records, {m1, m2})
             # Cap of 2 reached: the third connection is refused (immediate EOF).
             c3 = socket.create_connection(("127.0.0.1", port))
-            c3.settimeout(5.0)
+            # Refusal is accept-then-close, so EOF timing depends on the
+            # accept loop's scheduling: use a load-tolerant timeout. A
+            # wrongly-served connection still fails (it would return data
+            # or hit the timeout instead of clean EOF).
+            c3.settimeout(15.0)
             assert c3.recv(1024) == b""
             # Existing connections keep working after the refusal.
             c1.sendall(m3 + b"\n")
