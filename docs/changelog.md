@@ -11,6 +11,14 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 - Added local-image retention cleanup to both `scripts/deploy-docker-standalone.sh` and `scripts/deploy-kind-tram-dev.sh`, keeping the newest 5 `local-*` images per repository by default with a `--keep-images` override
 - Added `scripts/deploy-docker-standalone.sh` to build, run, and manage a single standalone TRAM Docker container with a persisted Docker data volume, auto-created host pipeline mounts, optional host output bind mounts, timestamp-tagged local auto-builds for repo workflows, `--ghcr` pull support for the published `ghcr.io/tosumitdhaka/trishul-ram:<tag>` image, log/status helpers, optional UDP port publishing, and a README-friendly GitHub bootstrap flow
+- Manager dispatch now distinguishes `no_capacity` (no healthy workers) from `dispatch_failed` (the dispatch attempt errored) and records the real worker error in run history; both outcomes increment `tram_mgr_dispatch_total`, with `dispatch_failed` as a new result label alongside `no_workers` and `accepted`
+- Worker health polling now uses hysteresis — a worker is marked down only after 2 consecutive failed probes instead of a single failed probe
+
+### Changed
+
+- `post_batch_cleanup` now defaults to `true` instead of `false`: existing batch pipelines get a post-batch `gc.collect()` and best-effort `malloc_trim(0)` unless they opt out with `post_batch_cleanup: false`
+- The worker image now sets `MALLOC_ARENA_MAX=2` to mitigate glibc per-arena heap fragmentation in long-lived worker processes (GH #16)
+- Serializer schema caches (`asn1`, `protobuf`) are now keyed by schema content hash instead of file mtime and bounded by a size-capped LRU; re-syncing unchanged schema assets no longer triggers a recompile, and batch runs close their sinks (including DLQ) after completion
 
 ---
 
