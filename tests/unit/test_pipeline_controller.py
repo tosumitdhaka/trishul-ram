@@ -176,6 +176,7 @@ def _make_controller(
     worker_pool=None,
     manager_url="",
     kubernetes_service_manager=None,
+    single_stream_placements=True,
 ) -> PipelineController:
     """Build a controller with a patched BackgroundScheduler that doesn't start."""
     ctrl = PipelineController(
@@ -184,6 +185,7 @@ def _make_controller(
         worker_pool=worker_pool,
         manager_url=manager_url,
         kubernetes_service_manager=kubernetes_service_manager,
+        single_stream_placements=single_stream_placements,
     )
     return ctrl
 
@@ -754,8 +756,9 @@ class TestBootLoad:
             ctrl.stop()
 
     def test_boot_load_redispatches_count1_stream_when_no_live_run(self):
-        """No worker reports the stream as live → normal re-dispatch (the
-        pre-restart instance is gone, so a fresh dispatch is safe)."""
+        """Legacy flag-off regression (D.2): no worker reports the stream as
+        live → normal re-dispatch (the pre-restart instance is gone, so a fresh
+        dispatch is safe)."""
         wp = MagicMock()
         wp.find_pipeline_runs.return_value = []
         wp.dispatch_with_result.return_value = DispatchOutcome(
@@ -763,7 +766,10 @@ class TestBootLoad:
         )
         db = self._make_db(pipelines=[("my-stream", _STREAM_YAML)])
         db.get_active_broadcast_placements.return_value = []
-        ctrl = _make_controller(db=db, worker_pool=wp, manager_url="http://manager:8765")
+        ctrl = _make_controller(
+            db=db, worker_pool=wp, manager_url="http://manager:8765",
+            single_stream_placements=False,
+        )
         ctrl.start()
 
         try:
@@ -1193,8 +1199,9 @@ class TestWorkerDispatch:
         ctrl.stop()
 
     def test_start_stream_dispatches_to_worker(self):
+        """Legacy flag-off regression (D.2): count=1 uses dispatch_with_result."""
         wp = self._worker_pool()
-        ctrl = _started_controller(worker_pool=wp)
+        ctrl = _started_controller(worker_pool=wp, single_stream_placements=False)
         config = load_pipeline_from_yaml(_STREAM_YAML)
         ctrl.register(config, yaml_text=_STREAM_YAML)
 
@@ -1436,8 +1443,9 @@ class TestWorkerDispatch:
         db.close()
 
     def test_start_stream_no_healthy_workers_sets_error(self):
+        """Legacy flag-off regression (D.2): no-capacity → status error."""
         wp = self._worker_pool(dispatch_return=None)
-        ctrl = _started_controller(worker_pool=wp)
+        ctrl = _started_controller(worker_pool=wp, single_stream_placements=False)
         config = load_pipeline_from_yaml(_STREAM_YAML)
         ctrl.register(config, yaml_text=_STREAM_YAML)
 
@@ -1446,9 +1454,10 @@ class TestWorkerDispatch:
         ctrl.stop()
 
     def test_start_stream_second_call_is_no_op(self):
-        """When stream already dispatched, second call is skipped."""
+        """Legacy flag-off regression (D.2): when stream already dispatched,
+        second call is skipped."""
         wp = self._worker_pool()
-        ctrl = _started_controller(worker_pool=wp)
+        ctrl = _started_controller(worker_pool=wp, single_stream_placements=False)
         config = load_pipeline_from_yaml(_STREAM_YAML)
         ctrl.register(config, yaml_text=_STREAM_YAML)
 
@@ -1710,3 +1719,28 @@ class TestGetSchedulerStatus:
         status = ctrl.get_scheduler_status()
         assert status["workers"] == {"workers": []}
         ctrl.stop()
+
+
+# ── D.2 (GH #17): TRAM_STREAM_SINGLE_PLACEMENT flag plumbing (§9.1) ─────────
+
+
+class TestSingleStreamPlacementFlag:
+    def test_flag_defaults_on_from_env(self, monkeypatch):
+        monkeypatch.delenv("TRAM_STREAM_SINGLE_PLACEMENT", raising=False)
+        assert PipelineController()._single_stream_placements is True
+
+    def test_flag_off_from_env(self, monkeypatch):
+        monkeypatch.setenv("TRAM_STREAM_SINGLE_PLACEMENT", "0")
+        assert PipelineController()._single_stream_placements is False
+
+    def test_constructor_arg_wins_over_env(self, monkeypatch):
+        monkeypatch.setenv("TRAM_STREAM_SINGLE_PLACEMENT", "0")
+        assert PipelineController(single_stream_placements=True)._single_stream_placements is True
+
+    def test_app_config_exposes_flag(self, monkeypatch):
+        from tram.core.config import AppConfig
+
+        monkeypatch.delenv("TRAM_STREAM_SINGLE_PLACEMENT", raising=False)
+        assert AppConfig.from_env().stream_single_placement is True
+        monkeypatch.setenv("TRAM_STREAM_SINGLE_PLACEMENT", "0")
+        assert AppConfig.from_env().stream_single_placement is False

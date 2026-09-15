@@ -925,6 +925,30 @@ class TramDB:
         with self._engine.begin() as conn:
             conn.execute(text(sql), params)
 
+    def deactivate_other_placements(self, pipeline_name: str, keep_placement_group_id: str) -> int:
+        """Mark every other active placement row for a pipeline as stopped.
+
+        Enforces the one-active-row-per-pipeline invariant (§7.5): a crash
+        between a redispatch and a stop could otherwise leave two active rows.
+        A single dialect-free UPDATE — no per-dialect JSON extraction needed
+        because the WHERE clause only touches scalar columns.
+        """
+        now = datetime.now(UTC).isoformat()
+        with self._engine.begin() as conn:
+            result = conn.execute(text("""
+                UPDATE broadcast_placements
+                SET status = 'stopped', stopped_at = :now
+                WHERE pipeline_name = :pipeline_name
+                  AND stopped_at IS NULL
+                  AND status != 'stopped'
+                  AND placement_group_id != :keep
+            """), {
+                "now": now,
+                "pipeline_name": pipeline_name,
+                "keep": keep_placement_group_id,
+            })
+        return result.rowcount
+
     def update_slot_run_id(
         self,
         placement_group_id: str,

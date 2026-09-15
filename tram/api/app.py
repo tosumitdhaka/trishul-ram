@@ -216,6 +216,7 @@ def create_app(config: AppConfig | None = None) -> FastAPI:
         manager_url=config.manager_url,
         stats_store=stats_store,
         kubernetes_service_manager=kubernetes_service_manager,
+        single_stream_placements=config.stream_single_placement,
     )
     # Keep manager reference on controller's alert evaluator
     controller.manager._alert_evaluator = alert_evaluator

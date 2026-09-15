@@ -49,6 +49,10 @@ def _make_manager_controller():
         node_id="mgr",
         worker_pool=worker_pool,
         manager_url="http://manager:8765",
+        # The "Stream single-dispatch" metric tests below exercise the legacy
+        # count=1 dispatch path (D.2 flag off) — that is the path whose labels
+        # they assert parity for.
+        single_stream_placements=False,
     )
     ctrl.manager = MagicMock()
     ctrl.executor = MagicMock()

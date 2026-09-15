@@ -21,6 +21,10 @@ class PlacementReconciler:
         self._interval = min(stats_interval, 10)
         self._stop = threading.Event()
         self._thread: threading.Thread | None = None
+        # Consecutive passes with no liveness signal for an unplaced running
+        # stream (D.2 §5.3). Reset on any sighting, on fresh stats, or when the
+        # pipeline leaves the candidate set; recovery fires at 2 misses.
+        self._unplaced_misses: dict[str, int] = {}
 
     def _slot_dispatch_time(self, placement: dict, slot: dict) -> datetime:
         raw = slot.get("dispatched_at") or placement.get("started_at") or datetime.now(UTC)
@@ -140,6 +144,7 @@ class PlacementReconciler:
         for placement in self._controller.get_active_broadcast_placements():
             placement_group_id = placement["placement_group_id"]
             placement_changed = False
+            placement_drifted = False
 
             for slot in placement["slots"]:
                 live_item = self._find_live_slot(
@@ -149,6 +154,19 @@ class PlacementReconciler:
                     live_by_pipeline_worker,
                 )
                 if live_item is not None:
+                    # §6.2 stale-config policy: a live run whose config hash
+                    # differs from the manager's current config is stopped and
+                    # redispatched with the new YAML. Missing/empty/unknown hash
+                    # (older agent during a rolling upgrade) fails open — adopt.
+                    live_sha = live_item.get("config_sha256")
+                    if live_sha not in ("", None, "unknown"):
+                        expected = self._controller.pipeline_config_sha(placement["pipeline_name"])
+                        if expected and live_sha != expected:
+                            self._controller.reconcile_placement_config_drift(placement_group_id)
+                            # The swap re-dispatches every slot of this placement;
+                            # this copy is now stale — skip status recomputation.
+                            placement_drifted = True
+                            break
                     live_run_id = str(live_item.get("run_id", "") or "")
                     updates = {}
                     if live_run_id and slot.get("current_run_id") != live_run_id:
@@ -224,6 +242,11 @@ class PlacementReconciler:
                 slot.get("status") == "running" and slot.get("current_run_id")
                 for slot in placement["slots"]
             )
+            if placement_drifted:
+                # The drift swap already mutated the authoritative placement and
+                # redispatched every slot; never recompute status from this
+                # stale copy (it could clobber the post-swap state).
+                continue
             if placement["status"] == "reconciling":
                 age_seconds = (now - placement["started_at"]).total_seconds()
                 if age_seconds > self._stats_interval * 2:
@@ -248,6 +271,77 @@ class PlacementReconciler:
                 self._controller.reconcile_kubernetes_service(placement["pipeline_name"])
             if next_status != placement["status"]:
                 self._controller.update_broadcast_placement_status(placement_group_id, next_status)
+
+        self._reconcile_unplaced_streams(live_streams)
+
+    def _reconcile_unplaced_streams(self, live_streams: list[dict]) -> None:
+        """Streams with manager status 'running' but no placement group (D.2 §5.3).
+
+        Flag-off adoption, failed placement persistence, or drift leave a
+        running count=1 stream without a placement row. This pass reuses the
+        live snapshot already fetched by run_once (zero additional worker
+        probes) and the StatsStore for a second, independent liveness signal:
+
+        - Live (snapshot sighting OR non-stale stats) → self-heal bookkeeping;
+          stop all but the earliest of multiple live runs for one pipeline.
+        - Not live → 2-consecutive-miss hysteresis, then recover_unplaced_stream
+          (redispatch, or mark stopped when it may not run).
+        """
+        candidates = self._controller.stream_liveness_candidates()
+        if not candidates:
+            self._unplaced_misses.clear()
+            return
+        candidate_names = {c["name"] for c in candidates}
+        for name in list(self._unplaced_misses):
+            if name not in candidate_names:
+                del self._unplaced_misses[name]
+
+        for candidate in candidates:
+            name = candidate["name"]
+            if candidate.get("has_placement"):
+                self._unplaced_misses.pop(name, None)
+                continue
+            sightings = [
+                item for item in live_streams
+                if str(item.get("pipeline_name", "") or "") == name
+            ]
+            fresh_stats = self._stats_store.for_pipeline(name)
+            if sightings or fresh_stats:
+                self._unplaced_misses.pop(name, None)
+                if not sightings:
+                    continue  # live via stats only — nothing to bookkeep
+                ordered = sorted(
+                    sightings,
+                    key=lambda item: str(item.get("started_at") or ""),
+                )
+                earliest = ordered[0]
+                self._controller.adopt_unplaced_stream_bookkeeping(
+                    name,
+                    str(earliest.get("run_id") or ""),
+                    str(earliest.get("worker_url") or ""),
+                    started_at=earliest.get("started_at"),
+                )
+                # Pre-D.2 double-dispatch residue: a count=1 pipeline must have
+                # at most one live run. The reconciler is the only component
+                # with a global view — stop every run but the earliest.
+                for extra in ordered[1:]:
+                    extra_run = str(extra.get("run_id") or "")
+                    if extra_run:
+                        self._worker_pool.stop_run(extra_run, name)
+                        logger.warning(
+                            "Stopped duplicate live stream run",
+                            extra={"pipeline": name, "run_id": extra_run},
+                        )
+                continue
+
+            # Not alive on either signal. Hysteresis: 2 consecutive misses
+            # (matching worker_pool's health_failures_to_down) before acting.
+            self._unplaced_misses[name] = self._unplaced_misses.get(name, 0) + 1
+            if self._unplaced_misses[name] >= 2:
+                self._controller.recover_unplaced_stream(name)
+                # Reset so a just-recovered run (not yet visible in the live
+                # snapshot) is not immediately re-dispatched on the next pass.
+                self._unplaced_misses[name] = 0
 
 
 class BatchReconciler:

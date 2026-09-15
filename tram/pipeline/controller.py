@@ -17,7 +17,9 @@ State machine
 
 from __future__ import annotations
 
+import hashlib
 import logging
+import os
 import re
 import threading
 import uuid
@@ -33,7 +35,7 @@ from tram.pipeline.manager import PipelineManager, PipelineState
 if TYPE_CHECKING:
     from tram.agent.metrics import PipelineStats
     from tram.agent.worker_pool import WorkerPool
-    from tram.models.pipeline import PipelineConfig
+    from tram.models.pipeline import PipelineConfig, WorkersConfig
     from tram.persistence.db import TramDB
     from tram.persistence.file_tracker import ProcessedFileTracker
 
@@ -71,6 +73,7 @@ class PipelineController:
         manager_url: str = "",
         stats_store=None,
         kubernetes_service_manager=None,
+        single_stream_placements: bool | None = None,
     ) -> None:
         self._db = db
         self._node_id = node_id
@@ -78,6 +81,23 @@ class PipelineController:
         self._manager_url = manager_url
         self._stats_store = stats_store
         self._kubernetes_service_manager = kubernetes_service_manager
+        # D.2 feature flag (GH #17): route count=1 stream dispatch through the
+        # durable broadcast-placement machinery. Default ON ("1"); "0" keeps the
+        # legacy count=1 single-dispatch path verbatim. Read once at construction.
+        if single_stream_placements is None:
+            raw_flag = os.environ.get("TRAM_STREAM_SINGLE_PLACEMENT", "1")
+            self._single_stream_placements = raw_flag != "0"
+            if raw_flag not in ("0", "1"):
+                # Fail open: anything other than an explicit "0" enables the
+                # durable-placement path. A typo'd value is loud here instead
+                # of silently flipping a deployment's stream semantics.
+                logger.warning(
+                    "Unrecognized TRAM_STREAM_SINGLE_PLACEMENT value — "
+                    'treating as enabled ("1")',
+                    extra={"value": raw_flag},
+                )
+        else:
+            self._single_stream_placements = single_stream_placements
 
         self.manager = PipelineManager(db=db)
         self.executor = PipelineExecutor(file_tracker=file_tracker)
@@ -237,11 +257,7 @@ class PipelineController:
         if config.schedule.type != "stream":
             return False
         workers_cfg = config.workers
-        if workers_cfg is not None and (
-            workers_cfg.count == "all"
-            or (isinstance(workers_cfg.count, int) and workers_cfg.count > 1)
-            or workers_cfg.worker_ids is not None
-        ):
+        if self._is_broadcast_workers(workers_cfg):
             # Broadcast placements are durable and restored by _boot_load via
             # _restore_broadcast_placement; only the single-dispatch count=1
             # path lacks a durable record and needs the live-run guard.
@@ -251,6 +267,22 @@ class PipelineController:
         if not matches:
             return False
         adopted = min(matches, key=lambda item: str(item.get("started_at") or ""))
+        if self._single_stream_placements:
+            # D.2 migration bridge: materialize a 1-slot placement row from the
+            # worker-reported live run so the stream joins the durable-placement
+            # regime without a restart (design §5.2).
+            self._materialize_placement_from_adoption(config, adopted)
+            self.manager.set_status(config.name, "running")
+            self._activate_kubernetes_service(config)
+            logger.info(
+                "Boot: materialized placement from live stream run",
+                extra={
+                    "pipeline": config.name,
+                    "worker": str(adopted["worker_url"]),
+                    "run_id": str(adopted["run_id"]),
+                },
+            )
+            return True
         run_id = str(adopted["run_id"])
         worker_url = str(adopted["worker_url"])
         self._stream_run_ids[config.name] = [run_id]
@@ -923,6 +955,23 @@ class PipelineController:
 
     # ── Stream execution ───────────────────────────────────────────────────
 
+    @staticmethod
+    def _is_broadcast_workers(workers_cfg: WorkersConfig | None) -> bool:
+        """True when the workers config selects more than one slot (or pins a list).
+
+        count == "all", count > 1, and ``workers.list`` all produce a placement
+        row; the count=1 single-dispatch path does not (D.2 flag off / legacy).
+        Workers is never None post-validation (apply_workers_default assigns it).
+        """
+        if workers_cfg is None:
+            return False
+        if workers_cfg.worker_ids is not None:
+            return True
+        return (
+            workers_cfg.count == "all"
+            or (isinstance(workers_cfg.count, int) and workers_cfg.count > 1)
+        )
+
     def _start_stream(self, config: PipelineConfig) -> None:
         # ── Manager+worker dispatch path ───────────────────────────────────
         if self._worker_pool is not None:
@@ -941,11 +990,72 @@ class PipelineController:
                     f"{self._manager_url}/api/internal/run-complete"
                     if self._manager_url else ""
                 )
-                if workers_cfg is not None and (
-                    workers_cfg.count == "all"
-                    or (isinstance(workers_cfg.count, int) and workers_cfg.count > 1)
-                    or workers_cfg.worker_ids is not None
-                ):
+                if self._single_stream_placements:
+                    # D.2 unified path: every worker-mode stream (count=1, N,
+                    # all, list) is dispatched through multi_dispatch and
+                    # recorded as a durable placement row. count=1 is the
+                    # degenerate 1-slot case — multi_dispatch resolves one slot
+                    # and sets slot_run_id == placement_group_id. The
+                    # already-dispatched guard covers both the legacy
+                    # _stream_run_ids bookkeeping and the placement group, so
+                    # no scheduler or boot path can enter twice.
+                    if config.name in self._active_placement_group:
+                        logger.debug("Stream already dispatched",
+                                     extra={"pipeline": config.name})
+                        return
+                    placement_group_id = self._make_placement_group_id(config.name)
+                    result = self._worker_pool.multi_dispatch(
+                        placement_group_id=placement_group_id,
+                        pipeline_name=config.name,
+                        yaml_text=state.yaml_text,
+                        workers_cfg=config.workers,
+                        schedule_type="stream",
+                        callback_url=callback_url,
+                    )
+                    from tram.metrics.registry import MGR_DISPATCH_TOTAL
+                    if not result.accepted:
+                        # Label parity with the legacy count=1 branch
+                        # (worker_pool.multi_dispatch returns rejected slots
+                        # only when a dispatch attempt was made and failed):
+                        #   result.rejected non-empty  -> dispatch_failed
+                        #   result.rejected empty      -> no_capacity
+                        if result.rejected:
+                            logger.error(
+                                "Stream dispatch attempt failed",
+                                extra={
+                                    "pipeline": config.name,
+                                    "error": result.slots[0].get("error") if result.slots else None,
+                                },
+                            )
+                            MGR_DISPATCH_TOTAL.labels(pipeline=config.name, result="dispatch_failed").inc()
+                        else:
+                            logger.error("Stream dispatch failed: no healthy workers",
+                                         extra={"pipeline": config.name})
+                            MGR_DISPATCH_TOTAL.labels(pipeline=config.name, result="no_workers").inc()
+                        self.manager.set_status(config.name, "error")
+                        return
+                    # Legacy semantics preserved per worker: the broadcast
+                    # branch incremented MGR_DISPATCH_TOTAL{accepted} once per
+                    # accepted worker (count=N/all), so the unified branch must
+                    # not collapse it to one increment — count=1 still lands at
+                    # one because result.accepted has exactly one entry.
+                    for _ in result.accepted:
+                        MGR_DISPATCH_TOTAL.labels(pipeline=config.name, result="accepted").inc()
+                    self._record_broadcast_placement(config.name, placement_group_id, result, config.workers)
+                    self.manager.set_status(config.name, result.status)
+                    self._activate_kubernetes_service(config)
+                    logger.info(
+                        "Dispatched stream to workers",
+                        extra={
+                            "pipeline": config.name,
+                            "workers": result.accepted,
+                            "placement_group_id": placement_group_id,
+                            "run_ids": result.run_ids,
+                        },
+                    )
+                    return
+
+                if self._is_broadcast_workers(workers_cfg):
                     placement_group_id = self._make_placement_group_id(config.name)
                     result = self._worker_pool.multi_dispatch(
                         placement_group_id=placement_group_id,
@@ -1199,6 +1309,17 @@ class PipelineController:
         self._broadcast_placements[placement_group_id] = placement_copy
         self._active_placement_group[pipeline_name] = placement_group_id
         self._sync_stream_run_ids_from_slots(pipeline_name, placement_copy["slots"])
+        # Re-register the worker-pool run assignments so stop_run(run_id) reaches
+        # the worker after a restart. Without this the only fallback is the
+        # stop_pipeline_runs probe-all (slow and log-noisy). D.2 §5.1.
+        if self._worker_pool is not None:
+            for slot in placement_copy["slots"]:
+                if slot.get("current_run_id") and slot.get("worker_url"):
+                    self._worker_pool.adopt_stream_assignment(
+                        pipeline_name=pipeline_name,
+                        run_id=str(slot["current_run_id"]),
+                        worker_url=str(slot["worker_url"]),
+                    )
         if self._db is not None:
             self._db.update_broadcast_placement_status(
                 placement_group_id,
@@ -1239,6 +1360,10 @@ class PipelineController:
         self._active_placement_group[pipeline_name] = placement_group_id
         self._sync_stream_run_ids_from_slots(pipeline_name, slots)
         if self._db is not None:
+            # One active placement row per pipeline (§7.5): a crash between a
+            # redispatch and a stop could otherwise leave two active rows for
+            # the same pipeline.
+            self._db.deactivate_other_placements(pipeline_name, placement_group_id)
             self._db.save_broadcast_placement(
                 placement_group_id=placement_group_id,
                 pipeline_name=pipeline_name,
@@ -1247,6 +1372,77 @@ class PipelineController:
                 status=result.status,
                 started_at=placement["started_at"],
             )
+
+    def _materialize_placement_from_adoption(self, config: PipelineConfig, adopted: dict) -> None:
+        """Create a 1-slot placement row from a worker-reported live run (D.2 §5.2).
+
+        B.6 → D.2 migration bridge: a count=1 stream running at upgrade time has
+        no placement row; when the boot guard (or the reconciler's unplaced-stream
+        pass) sights the live run with the flag on, materialize the row so the
+        stream joins the durable-placement regime without a restart. The adopted
+        run_id becomes the run_id_prefix, status is set straight to "running"
+        (the run was just probed live), and the slot is marked ``adopted: true``
+        as provenance. Caller holds the lock.
+        """
+        placement_group_id = self._make_placement_group_id(config.name)
+        run_id = str(adopted["run_id"])
+        worker_url = str(adopted["worker_url"])
+        started_at = datetime.now(UTC)
+        raw_started = adopted.get("started_at")
+        if raw_started:
+            try:
+                parsed = datetime.fromisoformat(str(raw_started))
+                started_at = parsed if parsed.tzinfo is not None else parsed.replace(tzinfo=UTC)
+            except ValueError:
+                pass
+        slot = {
+            "worker_index": 0,
+            "worker_url": worker_url,
+            "worker_id": self._worker_pool.worker_id_for_url(worker_url) or "",
+            "pinned_worker_id": None,
+            "run_id_prefix": run_id,  # redispatch will use f"{run_id}-r{n}"
+            "current_run_id": run_id,
+            "dispatched_at": datetime.now(UTC).isoformat(),
+            "status": "running",
+            "restart_count": 0,
+            "adopted": True,  # provenance marker
+        }
+        placement = {
+            "placement_group_id": placement_group_id,
+            "pipeline_name": config.name,
+            "slots": [slot],
+            "target_count": 1,
+            "started_at": started_at,
+            "status": "running",
+        }
+        self._broadcast_placements[placement_group_id] = placement
+        self._active_placement_group[config.name] = placement_group_id
+        self._sync_stream_run_ids_from_slots(config.name, [slot])
+        if self._worker_pool is not None:
+            self._worker_pool.adopt_stream_assignment(
+                pipeline_name=config.name, run_id=run_id, worker_url=worker_url
+            )
+        if self._db is not None:
+            # One active placement row per pipeline (§7.5) — mirror
+            # _record_broadcast_placement: a stale active row (e.g. a crash
+            # between a redispatch and a stop) is deactivated before the
+            # materialized row is persisted.
+            self._db.deactivate_other_placements(config.name, placement_group_id)
+            self._db.save_broadcast_placement(
+                placement_group_id=placement_group_id,
+                pipeline_name=config.name,
+                slots=[slot],
+                target_count=1,
+                status="running",
+                started_at=started_at,
+            )
+        from tram.metrics.registry import MGR_RECONCILE_ACTION_TOTAL
+        MGR_RECONCILE_ACTION_TOTAL.labels(pipeline=config.name, action="adopt_materialize").inc()
+        logger.info(
+            "Materialized placement from adopted stream run",
+            extra={"pipeline": config.name, "worker": worker_url, "run_id": run_id,
+                   "placement_group_id": placement_group_id},
+        )
 
     def _sync_stream_run_ids_from_slots(self, pipeline_name: str, slots: list[dict]) -> None:
         run_ids = [
@@ -1298,6 +1494,167 @@ class PipelineController:
         ``_update_broadcast_placement_status``.
         """
         self._update_broadcast_placement_status(placement_group_id, status)
+
+    # ── Unplaced-stream liveness reconciliation (D.2 §5.3) ──────────────────
+
+    def stream_liveness_candidates(self) -> list[dict]:
+        """[{"name": str, "has_placement": bool}] — stream pipelines, manager+worker
+        mode, status == "running"."""
+        with self._lock:
+            if self._worker_pool is None:
+                return []
+            candidates = []
+            for state in self.manager.list_all():
+                if state.config.schedule.type != "stream":
+                    continue
+                if state.status != "running":
+                    continue
+                if self._is_broadcast_workers(state.config.workers):
+                    # Broadcast streams carry durable placement rows restored by
+                    # _boot_load via _restore_broadcast_placement; the unplaced
+                    # liveness pass exists for the count=1 single-dispatch path
+                    # only. A broadcast stream that reached the alive-branch
+                    # would be materialized as a 1-slot placement (permanently
+                    # downgrading it) and its duplicate-live-run sweep would stop
+                    # every slot but one — so it is never a candidate (mirrors
+                    # the boot guard's early return).
+                    continue
+                candidates.append({
+                    "name": state.config.name,
+                    "has_placement": state.config.name in self._active_placement_group,
+                })
+            return candidates
+
+    def adopt_unplaced_stream_bookkeeping(
+        self,
+        name: str,
+        run_id: str,
+        worker_url: str,
+        started_at=None,
+    ) -> bool:
+        """Record a live-but-untracked stream run (unplaced reconciliation, §5.3.2).
+
+        Flag on: the live run is the migration bridge — materialize the 1-slot
+        placement row. Flag off: repair the manager bookkeeping (worker-pool
+        assignment + _stream_run_ids) so stop/run-complete paths work. Idempotent;
+        returns False when the pipeline is gone or already has a placement.
+        """
+        with self._lock:
+            if not self.manager.exists(name):
+                return False
+            if name in self._active_placement_group:
+                return False
+            state = self.manager.get(name)
+            if self._is_broadcast_workers(state.config.workers):
+                # Broadcast streams are never adopted as count=1 placements:
+                # their durable placement rows are the authority and are
+                # restored at boot (mirrors the boot guard and the candidate
+                # filter above). A 1-slot materialization here would permanently
+                # downgrade the broadcast stream.
+                return False
+            if self._single_stream_placements and state.config.schedule.type == "stream":
+                adopted = {
+                    "run_id": run_id,
+                    "worker_url": worker_url,
+                    "started_at": started_at,
+                }
+                self._materialize_placement_from_adoption(state.config, adopted)
+                # Mirror the boot path (line ~267): a NodePort-configured stream
+                # materialized via the reconciler gets its Service now, not on
+                # the next dispatch.
+                self._activate_kubernetes_service(state.config)
+                return True
+            # Legacy bookkeeping repair (flag off).
+            run_ids = self._stream_run_ids.get(name)
+            if run_id not in (run_ids or []):
+                self._stream_run_ids.setdefault(name, []).append(run_id)
+            if self._worker_pool is not None and self._worker_pool.assignment_for_run(run_id) is None:
+                self._worker_pool.adopt_stream_assignment(
+                    pipeline_name=name, run_id=run_id, worker_url=worker_url
+                )
+            if state.status != "running":
+                self.manager.set_status(name, "running")
+            return True
+
+    def recover_unplaced_stream(self, name: str) -> None:
+        """Recovery for a running stream with no placement record and no live run.
+
+        Idempotent; RLock-reentrant down into _do_schedule (the reconciler
+        thread is the only caller on this path). Re-dispatches when the pipeline
+        may run, otherwise drops the stale "running" status.
+        """
+        with self._lock:
+            if not self.manager.exists(name):
+                return
+            state = self.manager.get(name)
+            if state.config.schedule.type != "stream":
+                return
+            if name in self._active_placement_group:
+                return  # raced with materialization/placement creation
+            self._stream_run_ids.pop(name, None)
+            if self._may_schedule(name):
+                self._do_schedule(name)  # routes via the flag → placement or legacy
+                from tram.metrics.registry import MGR_RECONCILE_ACTION_TOTAL
+                MGR_RECONCILE_ACTION_TOTAL.labels(pipeline=name, action="stream_recover").inc()
+                logger.info(
+                    "Recovered unplaced stream",
+                    extra={"pipeline": name},
+                )
+            else:
+                self.manager.set_status(name, "stopped")
+                logger.info(
+                    "Marked unplaced stream stopped",
+                    extra={"pipeline": name},
+                )
+
+    # ── Stale-config adoption policy (D.2 §6.2) ─────────────────────────────
+
+    def pipeline_config_sha(self, name: str) -> str:
+        """sha256(state.yaml_text)[:16] for a registered pipeline, "" when absent."""
+        with self._lock:
+            state = self.manager.get(name) if self.manager.exists(name) else None
+            if state is None:
+                return ""
+            return hashlib.sha256(state.yaml_text.encode()).hexdigest()[:16]
+
+    def reconcile_placement_config_drift(self, placement_group_id: str) -> bool:
+        """Config drift on a live placement: stop all slot runs, then redispatch
+        each slot with the current YAML (redispatch_broadcast_slot sends the
+        current state.yaml_text). Returns True when re-dispatched.
+
+        Claim + mark under the RLock, then stop/redispatch as network I/O
+        outside the lock. The claim bumps each slot's in-memory status to "stale"
+        (persisted) so a concurrent reconciler pass cannot also act on it; the
+        existing redispatch CAS serializes against stop/delete.
+        """
+        with self._lock:
+            placement = self._broadcast_placements.get(placement_group_id)
+            if placement is None:
+                return False
+            name = placement["pipeline_name"]
+            if not self.manager.exists(name):
+                return False
+            if not self._may_schedule(name):
+                return False  # stopped meanwhile → normal stop path
+            for s in placement["slots"]:
+                s["status"] = "stale"  # visible during the swap
+            if self._db is not None:
+                self._db.update_broadcast_placement_status(
+                    placement_group_id,
+                    placement["status"],
+                    slots=placement["slots"],
+                )
+        # Network I/O outside the lock.
+        self._worker_pool.stop_pipeline_runs(name)
+        for slot in placement["slots"]:
+            self.redispatch_broadcast_slot(placement_group_id, int(slot["worker_index"]))
+        from tram.metrics.registry import MGR_RECONCILE_ACTION_TOTAL
+        MGR_RECONCILE_ACTION_TOTAL.labels(pipeline=name, action="config_drift_redispatch").inc()
+        logger.warning(
+            "Config drift: stopped and redispatched placement slots",
+            extra={"pipeline": name, "placement_group_id": placement_group_id},
+        )
+        return True
 
     # ── Standalone live stats ──────────────────────────────────────────────
 

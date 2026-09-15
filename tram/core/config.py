@@ -2,9 +2,12 @@
 
 from __future__ import annotations
 
+import logging
 import os
 import socket
 from dataclasses import dataclass
+
+logger = logging.getLogger(__name__)
 
 
 def _env_int(name: str, default: int) -> int:
@@ -73,10 +76,22 @@ class AppConfig:
     worker_namespace: str  # K8s namespace
     worker_port: int     # worker agent port
     worker_ingress_port: int  # worker public ingress port
+    # v1.3.1 D.2 (GH #17): count=1 stream durable placement
+    stream_single_placement: bool = True  # "1" (default) durable 1-slot placement / "0" legacy
 
     @classmethod
     def from_env(cls) -> AppConfig:
         node_id = os.environ.get("TRAM_NODE_ID", socket.gethostname())
+        stream_single_placement_raw = os.environ.get("TRAM_STREAM_SINGLE_PLACEMENT", "1")
+        if stream_single_placement_raw not in ("0", "1"):
+            # Fail open: anything other than an explicit "0" enables the
+            # durable-placement path. A typo'd value is loud here instead
+            # of silently flipping a deployment's stream semantics.
+            logger.warning(
+                "Unrecognized TRAM_STREAM_SINGLE_PLACEMENT value — "
+                'treating as enabled ("1")',
+                extra={"value": stream_single_placement_raw},
+            )
         return cls(
             host=os.environ.get("TRAM_HOST", "0.0.0.0"),
             port=_env_int("TRAM_PORT", 8765),
@@ -109,6 +124,7 @@ class AppConfig:
             tram_mode=os.environ.get("TRAM_MODE", "standalone").lower(),
             manager_url=os.environ.get("TRAM_MANAGER_URL", ""),
             stats_interval=_env_int("TRAM_STATS_INTERVAL", 30),
+            stream_single_placement=stream_single_placement_raw != "0",
             worker_urls=os.environ.get("TRAM_WORKER_URLS", ""),
             worker_replicas=_env_int("TRAM_WORKER_REPLICAS", 0),
             worker_service=os.environ.get("TRAM_WORKER_SERVICE", "tram-worker"),
