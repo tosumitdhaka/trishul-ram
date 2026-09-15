@@ -221,6 +221,53 @@ def test_file_sink_json_output_rejects_rolling():
         load_pipeline_from_yaml(yaml_text)
 
 
+def test_timestamp_normalize_source_timezone_valid():
+    yaml_text = textwrap.dedent("""
+        pipeline:
+          name: test-tz-valid
+          source:
+            type: local
+            path: /tmp/in
+          serializer_in:
+            type: json
+          transforms:
+            - type: timestamp_normalize
+              fields: [ts]
+              source_timezone: Asia/Tokyo
+          serializer_out:
+            type: json
+          sink:
+            type: local
+            path: /tmp/out
+    """)
+    config = load_pipeline_from_yaml(yaml_text)
+    assert config.transforms[0].source_timezone == "Asia/Tokyo"
+
+
+def test_timestamp_normalize_invalid_source_timezone_rejected_at_load():
+    yaml_text = textwrap.dedent("""
+        pipeline:
+          name: test-tz-invalid
+          source:
+            type: local
+            path: /tmp/in
+          serializer_in:
+            type: json
+          transforms:
+            - type: timestamp_normalize
+              fields: [ts]
+              source_timezone: Mars/Olympus
+          serializer_out:
+            type: json
+          sink:
+            type: local
+            path: /tmp/out
+    """)
+    # invalid timezone fails loudly at config load, not at first record
+    with pytest.raises(ConfigError, match="source_timezone"):
+        load_pipeline_from_yaml(yaml_text)
+
+
 # ── load_pipeline (file-based) ─────────────────────────────────────────────
 
 

@@ -194,10 +194,27 @@ Normalize heterogeneous timestamp strings/ints to a uniform format.
 ```yaml
 - type: timestamp_normalize
   fields: [created_at, updated_at]
-  input_format: null     # auto-detect (unix ms/us/ns, ISO-8601, etc.)
-  output_format: iso     # "iso" or strftime pattern
-  on_error: raise        # raise | null | keep
+  input_format: null        # auto-detect (unix ms/us/ns, ISO-8601, etc.)
+  output_format: iso        # "iso" or strftime pattern
+  on_error: raise           # raise | null | keep
+  source_timezone: null     # IANA name (e.g. "Asia/Tokyo", "Europe/Berlin");
+                            # naive timestamps are interpreted in this zone
+                            # (DST-aware) and converted to UTC.
+                            # null = naive timestamps assumed UTC (default)
 ```
+
+`source_timezone` (optional) sets the timezone naive input timestamps are interpreted in.
+Network elements frequently report PM timestamps in local time — with
+`source_timezone: "Europe/Berlin"`, a naive `2024-03-31T03:30:00` is normalized to
+`2024-03-31T01:30:00.000Z` (CEST, UTC+2), and DST transitions are handled automatically via
+`zoneinfo`. When unset (default), naive timestamps are assumed UTC, matching previous
+behavior. Timestamps that already carry an explicit offset or timezone pass through
+unchanged regardless of this setting.
+
+`zoneinfo` resolves IANA names from the system tzdata database: on systems without
+tzdata installed (common in minimal containers), *every* `source_timezone` value fails
+at config load with an invalid-timezone error — install the `tzdata` package (e.g.
+`pip install tzdata` or the distro package) in that case.
 
 ---
 

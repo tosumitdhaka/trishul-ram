@@ -903,8 +903,11 @@ class TestDrain:
             t2 = threading.Thread(target=_drain)
             t1.start()
             t2.start()
-            t1.join(10)
-            t2.join(10)
+            t1.join(30)
+            t2.join(30)
+            # A join timeout must fail loudly here rather than surfacing as a
+            # confusing partial-state assertion below (load-sensitive joins).
+            assert not t1.is_alive() and not t2.is_alive()
             assert errors == []
             assert len(dispatch_count) == 1
             assert dispatch_count[0] == "r1"

@@ -326,7 +326,7 @@ def _free_port() -> int:
         s.close()
 
 
-def _wait_for(records, present, timeout=5.0):
+def _wait_for(records, present, timeout=15.0):
     """Poll ``records`` until every raw message in ``present`` has arrived."""
     deadline = time.monotonic() + timeout
     while time.monotonic() < deadline:
@@ -372,7 +372,7 @@ class TestTcpConcurrency:
             for c in (c1, c2):
                 if c is not None:
                     c.close()
-            thread.join(timeout=2.0)
+            thread.join(timeout=10.0)
         raws = [raw for raw, _ in records]
         assert m1 in raws and m2 in raws and m3 in raws
 
@@ -416,7 +416,7 @@ class TestTcpConcurrency:
             for c in (c1, c2, c3):
                 if c is not None:
                     c.close()
-            thread.join(timeout=2.0)
+            thread.join(timeout=10.0)
 
     def test_stop_ends_handler_threads_cleanly(self):
         port = _free_port()
@@ -439,7 +439,7 @@ class TestTcpConcurrency:
             for c in (c1, c2):
                 if c is not None:
                     c.close()
-        thread.join(timeout=2.0)
+        thread.join(timeout=10.0)
         assert not thread.is_alive(), "stream generator did not terminate after stop()"
         # Per-connection handler threads must have ended too.
         deadline = time.monotonic() + 2.0

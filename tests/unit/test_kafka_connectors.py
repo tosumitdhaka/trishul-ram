@@ -2,6 +2,8 @@
 from __future__ import annotations
 
 import sys
+import threading
+import time
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -333,3 +335,131 @@ class TestKafkaSourceRead:
         # error; the partial/next batch is never committed.
         mock_consumer.commit.assert_called_once()
         it.close()
+
+
+class TestKafkaSourceLag:
+    def test_lag_sampled_once_per_poll_batch(self):
+        """B4 regression: the end_offsets broker round-trip runs once per poll
+        batch, never per message."""
+        tp = _TopicPartition("events", 0)
+        msg1 = TestKafkaSourceRead._make_msg(offset=0)
+        msg2 = TestKafkaSourceRead._make_msg(offset=1)
+        sentinel = TestKafkaSourceRead._make_msg(value=b"SENTINEL", offset=2)
+        mock_consumer = MagicMock()
+        mock_consumer.assignment.return_value = [tp]
+        mock_consumer.end_offsets.return_value = {tp: 100}
+        mock_consumer.position.return_value = 90
+        mock_consumer.poll.side_effect = [
+            {tp: [msg1, msg2]},
+            {tp: [sentinel]},
+        ]
+        mock_kafka = MagicMock()
+        mock_kafka.KafkaConsumer.return_value = mock_consumer
+
+        with (
+            patch.dict(sys.modules, {"kafka": mock_kafka}),
+            patch("tram.metrics.registry.KAFKA_LAG") as mock_gauge,
+        ):
+            src = _make_source({"_pipeline_name": "pm-ingest"})
+            it = src.read()
+            assert next(it)[0] == b'{"x":1}'   # msg1
+            assert next(it)[0] == b'{"x":1}'   # msg2 — same batch
+            assert next(it)[0] == b"SENTINEL"  # second poll batch
+            it.close()
+
+        # Three messages across two poll batches → exactly two end_offsets
+        # calls, and one lag value recorded per batch.
+        assert mock_consumer.end_offsets.call_count == 2
+        assert mock_consumer.position.call_count == 2
+        assert mock_gauge.labels.call_count == 2
+        mock_gauge.labels.assert_called_with(
+            pipeline="pm-ingest", topic="events", partition="0"
+        )
+        mock_gauge.labels.return_value.set.assert_called_with(10)
+
+
+class TestKafkaSourceStop:
+    def test_stop_terminates_idle_poll_loop(self):
+        """A quiet topic (empty polls forever) must terminate promptly on stop()."""
+        started = threading.Event()
+        mock_consumer = MagicMock()
+        mock_consumer.assignment.return_value = []
+        mock_consumer.end_offsets.return_value = {}
+        mock_consumer.poll.return_value = {}
+        mock_kafka = MagicMock()
+        mock_kafka.KafkaConsumer.return_value = mock_consumer
+
+        with patch.dict(sys.modules, {"kafka": mock_kafka}):
+            src = _make_source({"_pipeline_name": "pm-ingest"})
+
+            def _poll(**kwargs):
+                started.set()
+                return {}
+
+            mock_consumer.poll.side_effect = _poll
+            it = src.read()
+            results = []
+            reader = threading.Thread(target=lambda: results.append(list(it)))
+            reader.start()
+            assert started.wait(timeout=2.0)
+            src.stop()
+            reader.join(timeout=2.0)
+
+        assert results == [[]]
+        mock_consumer.close.assert_called()
+        mock_consumer.commit.assert_not_called()
+
+    def test_stop_interrupts_reconnect_backoff(self):
+        """stop() during a reconnect backoff must exit without retrying."""
+        mock_consumer = MagicMock()
+        mock_consumer.assignment.return_value = []
+        mock_consumer.end_offsets.return_value = {}
+        mock_consumer.poll.side_effect = RuntimeError("conn lost")
+        mock_kafka = MagicMock()
+        mock_kafka.KafkaConsumer.return_value = mock_consumer
+
+        with patch.dict(sys.modules, {"kafka": mock_kafka}):
+            src = _make_source({"reconnect_delay_seconds": 60})
+            it = src.read()
+            results = []
+            reader = threading.Thread(target=lambda: results.append(list(it)))
+            reader.start()
+            time.sleep(0.2)  # let the first failure enter the backoff sleep
+            src.stop()
+            reader.join(timeout=2.0)
+
+        assert results == [[]]
+        assert mock_consumer.poll.call_count == 1
+
+    def test_stop_mid_batch_drains_batch_then_commits(self):
+        """stop() must not abort an in-flight poll batch: the remaining messages
+        are delivered and the batch committed (at-least-once), then the loop
+        exits on the stop flag without reconnecting."""
+        msg1 = TestKafkaSourceRead._make_msg(offset=0)
+        msg2 = TestKafkaSourceRead._make_msg(offset=1)
+        mock_consumer = MagicMock()
+        mock_consumer.assignment.return_value = []
+        mock_consumer.end_offsets.return_value = {}
+        mock_consumer.poll.return_value = {_TopicPartition("events", 0): [msg1, msg2]}
+        mock_kafka = MagicMock()
+        mock_kafka.KafkaConsumer.return_value = mock_consumer
+
+        with patch.dict(sys.modules, {"kafka": mock_kafka}):
+            src = _make_source()
+            it = src.read()
+            assert next(it)[0] == b'{"x":1}'
+            src.stop()  # stop mid-batch
+            assert next(it)[0] == b'{"x":1}'  # remaining message still delivered
+            with pytest.raises(StopIteration):
+                next(it)  # batch committed, then the stop flag ends the loop
+
+        mock_consumer.commit.assert_called_once()
+        # Note: this mock's commit() always succeeds, which simplifies the
+        # real behavior — in production stop() has already closed the consumer
+        # by the time the read loop reaches the per-batch commit, and
+        # kafka-python's commit() on a closed consumer raises. That raise lands
+        # in the read loop's stop-flag branch, which exits without reconnecting
+        # and without committing (safe no-commit direction: the batch is
+        # re-polled on restart, preserving at-least-once). The mock here only
+        # pins the loop structure, not the closed-consumer failure mode.
+        assert mock_consumer.poll.call_count == 1

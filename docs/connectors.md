@@ -94,6 +94,9 @@ Reads files from an SFTP server. Batch mode: one run = all matching files.
 | `move_after_read` | — | Move files to this remote path after reading |
 | `delete_after_read` | `false` | Delete files after reading |
 | `skip_processed` | `false` | Skip files already seen by this pipeline (tracked in DB) |
+| `file_stability_seconds` | `0` | Require a file's size + mtime to be unchanged across two scans separated by this many seconds before reading it (`0` = off). Prevents reading a half-written file while the NE is still transferring it. |
+| `file_min_age_seconds` | `0` | Skip files whose last-modified time is younger than this many seconds (`0` = off). Cheap write-in-progress gate for environments where files grow in place. |
+| `file_done_suffix` | — | When set (e.g. `.done`), only collect files whose name ends with this suffix — the upstream transfer/rotation renames files to mark completion. The suffix is stripped from the `source_filename` metadata so `{source_stem}` / `{source_suffix}` sink tokens (and files moved via `move_after_read`) do not carry the marker. |
 
 ```yaml
 source:
@@ -102,10 +105,27 @@ source:
   username: ${SFTP_USER}
   password: ${SFTP_PASS}
   remote_path: /pm/counters/hourly
-  file_pattern: "A*.xml"
+  file_pattern: "*.done"
+  file_done_suffix: ".done"
+  file_stability_seconds: 30
   move_after_read: /pm/counters/processed
   skip_processed: true
 ```
+
+> **File-done semantics** (telecom PM collection): both file sources are batch —
+> they list the remote directory once per run. The stability guard therefore
+> performs a **two-phase scan within the run**: every candidate is stat'ed,
+> the source waits `file_stability_seconds`, then every candidate is stat'ed
+> again; only files whose size and mtime are identical across both
+> observations are read. A file that is still growing or still being written is
+> skipped and picked up by the next run (interval/cron pipelines naturally
+> re-scan across runs). All three knobs default to "off" so existing pipelines
+> behave exactly as before; for PM dumps that take minutes to transfer, enable
+> `file_stability_seconds` (≈30–60) or pair `file_done_suffix` with the
+> upstream rename-to-complete convention. Enabling the suffix on an existing
+> pipeline changes `{source_stem}`-tokened sink names and `move_after_read`
+> destinations — previously written outputs don't migrate, and same-stem cycles
+> (a renamed file renamed back) can overwrite earlier data.
 
 ---
 
@@ -121,14 +141,24 @@ Reads files from the local filesystem. Batch mode.
 | `move_after_read` | — | Move files to this path after reading |
 | `delete_after_read` | `false` | Delete files after reading |
 | `skip_processed` | `false` | Skip already-processed files (tracked in DB) |
+| `file_stability_seconds` | `0` | Require a file's size + mtime to be unchanged across two scans separated by this many seconds before reading it (`0` = off). Prevents reading a half-written file while the upstream transfer is still writing it. |
+| `file_min_age_seconds` | `0` | Skip files whose last-modified time is younger than this many seconds (`0` = off). Cheap write-in-progress gate for environments where files grow in place. |
+| `file_done_suffix` | — | When set (e.g. `.done`), only collect files whose name ends with this suffix — the upstream transfer/rotation renames files to mark completion. The suffix is stripped from the `source_filename` metadata so `{source_stem}` / `{source_suffix}` sink tokens (and files moved via `move_after_read`) do not carry the marker. |
 
 ```yaml
 source:
   type: local
   path: /data/input
-  file_pattern: "*.csv"
+  file_pattern: "*.done"
+  file_done_suffix: ".done"
+  file_stability_seconds: 30
   skip_processed: true
 ```
+
+The `file_stability_seconds` guard uses the same two-phase in-run scan described
+under the [sftp source](#sftp): stat all candidates, wait the interval, stat
+again, read only files whose size and mtime are unchanged. Defaults are all
+"off", preserving existing behavior exactly.
 
 ---
 
@@ -199,6 +229,8 @@ Consumes messages from a Kafka topic. Stream mode.
 | `ssl_cafile` | — | Path to CA certificate |
 | `reconnect_delay_seconds` | `5.0` | Seconds between reconnect attempts |
 | `max_reconnect_attempts` | `0` | Max reconnects; `0` = infinite |
+
+On a lost connection the consumer reconnects with `reconnect_delay_seconds` backoff. The consumer-lag metric samples broker `end_offsets` once per poll batch, not per message. `stop()` closes the consumer immediately so stream shutdown is not delayed by a quiet poll.
 
 ```yaml
 source:
@@ -452,6 +484,7 @@ source:
 ### gnmi
 
 Subscribes to gNMI telemetry streams. Stream mode. Requires `pip install tram[gnmi]`.
+A lost gNMI session is automatically re-established with backoff (`reconnect_delay_seconds`), so a target reload or transient TCP break no longer silently ends the pipeline.
 
 | Parameter | Default | Description |
 |---|---|---|
@@ -460,7 +493,17 @@ Subscribes to gNMI telemetry streams. Stream mode. Requires `pip install tram[gn
 | `username` | — | gRPC auth username |
 | `password` | — | gRPC auth password |
 | `insecure` | `false` | Skip TLS verification |
+| `subscription_mode` | `stream` | `stream` \| `once` \| `poll` (see below) |
+| `poll_interval_seconds` | `60` | Seconds between re-gets in `poll` mode |
+| `reconnect_delay_seconds` | `5.0` | Backoff between reconnect attempts |
+| `max_reconnect_attempts` | `0` | Max reconnects; `0` = infinite |
 | `subscriptions` | required | List of subscription dicts (see below) |
+
+`subscription_mode` follows the gNMI spec's top-level subscription modes:
+
+- `stream` (default) — continuous telemetry stream; reconnects with backoff on session loss.
+- `once` — a single snapshot subscription that ends after the initial data (gNMI end-of-stream semantics). Use an interval schedule for repeated snapshots.
+- `poll` — gNMI `POLL` is mapped to a periodic re-get: TRAM issues a fresh `ONCE` subscription every `poll_interval_seconds`. The gNMI SUBSCRIBE poll channel requires holding a live gRPC session and client-initiated poll calls, which does not fit TRAM's pull-based `read()` plus the reconnect loop; a periodic `ONCE` re-get delivers the same data with the same session lifecycle as `stream` mode.
 
 Each subscription dict: `path` (XPath), `mode` (`SAMPLE`/`ON_CHANGE`/`TARGET_DEFINED`), `sample_interval` (nanoseconds).
 
@@ -472,6 +515,8 @@ source:
   username: ${GNMI_USER}
   password: ${GNMI_PASS}
   insecure: true
+  subscription_mode: stream
+  reconnect_delay_seconds: 5.0
   subscriptions:
     - path: /interfaces/interface/state/counters
       mode: SAMPLE
@@ -772,6 +817,9 @@ Invokes a remote CORBA operation via DII (no compiled stubs needed). Covers 3GPP
 | `args` | `[]` | Positional arguments |
 | `timeout_seconds` | `30` | ORB request timeout |
 | `skip_processed` | `false` | Skip if this `(operation, args)` has already run for this pipeline |
+| `dedupe_window_seconds` | `300` | Time-bucket width for the `skip_processed` key (see below) |
+
+With `skip_processed: true` the recorded dedupe key is `operation:args:<bucket>` where `bucket = floor(now / dedupe_window_seconds)`. Re-invocations with the same operation and args are deduped within the same time window, but the next scheduled run lands in a fresh bucket and runs again — a plain `operation + args` key previously skipped every subsequent scheduled collection forever.
 
 ```yaml
 source:

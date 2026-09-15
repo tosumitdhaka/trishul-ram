@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from typing import Annotated, Any, Literal
+from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from pydantic import AliasChoices, Field, field_validator, model_validator
 from pydantic import BaseModel as PydanticBaseModel
@@ -44,6 +45,12 @@ class SFTPSourceConfig(BaseModel):
     delete_after_read: bool = False
     skip_processed: bool = False   # track processed files in DB; skip on re-run
     read_chunk_bytes: int = 0      # 0 = read all at once; >0 = stream in chunks
+    # File-done semantics (F.2 part 1). Defaults are all "off" so existing
+    # pipelines behave exactly as before; enable per source where the upstream
+    # transfer writes files in place (telecom PM dumps).
+    file_stability_seconds: int = 0    # >0: read only when size+mtime unchanged across two scans this far apart
+    file_min_age_seconds: int = 0      # >0: skip files whose mtime is younger than this (cheap write-in-progress gate)
+    file_done_suffix: str | None = None  # e.g. ".done": collect only files ending with this; stripped from filename tokens
 
     @model_validator(mode="after")
     def check_auth(self) -> SFTPSourceConfig:
@@ -60,6 +67,12 @@ class LocalSourceConfig(BaseModel):
     delete_after_read: bool = False
     recursive: bool = False
     skip_processed: bool = False
+    # File-done semantics (F.2 part 1). Defaults are all "off" so existing
+    # pipelines behave exactly as before; enable per source where the upstream
+    # transfer writes files in place (telecom PM dumps).
+    file_stability_seconds: int = 0    # >0: read only when size+mtime unchanged across two scans this far apart
+    file_min_age_seconds: int = 0      # >0: skip files whose mtime is younger than this (cheap write-in-progress gate)
+    file_done_suffix: str | None = None  # e.g. ".done": collect only files ending with this; stripped from filename tokens
 
 
 class RestSourceConfig(BaseModel):
@@ -229,6 +242,10 @@ class GnmiSourceConfig(BaseModel):
     tls: bool = True
     tls_ca: str | None = None
     subscriptions: list[dict[str, Any]] = Field(default_factory=list)
+    subscription_mode: Literal["once", "poll", "stream"] = "stream"
+    poll_interval_seconds: int = 60
+    reconnect_delay_seconds: float = 5.0
+    max_reconnect_attempts: int = 0
 
 
 class SqlSourceConfig(BaseModel):
@@ -354,6 +371,10 @@ class CorbaSourceConfig(BaseModel):
         args             (list, default [])  Positional arguments (simple Python scalars)
         timeout_seconds  (int, default 30)  ORB request timeout
         skip_processed   (bool, default False)  Skip invocations already recorded in DB
+        dedupe_window_seconds (int, default 300)  Time-bucket width for the skip_processed
+                                             key, so the same operation+args is deduped
+                                             within a window but the next scheduled run
+                                             (fresh bucket) runs again
     """
     type: Literal["corba"]
     ior: str | None = None
@@ -363,6 +384,7 @@ class CorbaSourceConfig(BaseModel):
     args: list = Field(default_factory=list)
     timeout_seconds: int = 30
     skip_processed: bool = False
+    dedupe_window_seconds: int = Field(300, ge=1)
 
     @model_validator(mode="after")
     def check_endpoint(self) -> CorbaSourceConfig:
@@ -437,6 +459,19 @@ class TimestampNormalizeTransformConfig(BaseModel):
     input_format: str | None = None
     output_format: str = "iso"
     on_error: Literal["raise", "null", "keep"] = "raise"
+    source_timezone: str | None = None
+
+    @field_validator("source_timezone")
+    @classmethod
+    def validate_source_timezone(cls, value: str | None) -> str | None:
+        if value is not None:
+            try:
+                ZoneInfo(value)
+            except (ZoneInfoNotFoundError, ValueError) as exc:
+                raise ValueError(
+                    f"source_timezone must be a valid IANA timezone name, got {value!r}"
+                ) from exc
+        return value
 
 
 class AggregateTransformConfig(BaseModel):

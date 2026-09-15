@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import logging
+import threading
+import time
 from collections.abc import Iterator
 
 from tram.core.exceptions import SourceError
@@ -69,6 +71,36 @@ class KafkaSource(BaseSource):
         self.ssl_cafile: str | None = config.get("ssl_cafile")
         self.reconnect_delay_seconds: float = float(config.get("reconnect_delay_seconds", 5.0))
         self.max_reconnect_attempts: int = int(config.get("max_reconnect_attempts", 0))
+        self._stop_event: threading.Event = threading.Event()
+        self._consumer = None
+
+    # ── Lifecycle ──────────────────────────────────────────────────────────
+
+    def stop(self) -> None:
+        """Interrupt read(): wake a blocked poll and skip the reconnect backoff.
+
+        Called by the executor's stop-watcher thread when the pipeline stop
+        event fires.  Closes the active consumer so a blocked ``poll()``
+        unblocks immediately instead of waiting out the poll timeout; the read
+        loop then observes the stop flag and exits without reconnecting.
+        """
+        self._stop_event.set()
+        consumer = self._consumer
+        if consumer is not None:
+            try:
+                consumer.close()
+            except Exception:
+                pass
+
+    def _sleep_interruptible(self, seconds: float) -> bool:
+        """Sleep in slices so stop() interrupts the delay. Returns True if stopped."""
+        deadline = time.monotonic() + seconds
+        while not self._stop_event.is_set():
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                return False
+            self._stop_event.wait(timeout=min(0.25, remaining))
+        return True
 
     def _build_consumer(self):
         try:
@@ -97,7 +129,6 @@ class KafkaSource(BaseSource):
         return KafkaConsumer(*self.topics, **kwargs)
 
     def test_connection(self) -> dict:
-        import time
         t0 = time.monotonic()
         try:
             from kafka import KafkaAdminClient
@@ -152,6 +183,8 @@ class KafkaSource(BaseSource):
         max_attempts = self.max_reconnect_attempts  # 0 = infinite
 
         while True:
+            if self._stop_event.is_set():
+                return
             consumer = None
             try:
                 try:
@@ -162,7 +195,10 @@ class KafkaSource(BaseSource):
                     raise SourceError(f"Kafka consumer init failed: {exc}") from exc
 
                 attempt = 0  # Reset on successful connect
+                self._consumer = consumer
                 while True:
+                    if self._stop_event.is_set():
+                        return
                     batch = consumer.poll(timeout_ms=1000)
                     if not batch:
                         continue
@@ -190,6 +226,10 @@ class KafkaSource(BaseSource):
             except SourceError:
                 raise
             except Exception as exc:
+                if self._stop_event.is_set():
+                    # stop() closed the consumer mid-poll; exit instead of
+                    # treating the closure as a connection loss to retry.
+                    return
                 attempt += 1
                 if max_attempts > 0 and attempt >= max_attempts:
                     raise SourceError(
@@ -204,8 +244,8 @@ class KafkaSource(BaseSource):
                         "error": str(exc),
                     },
                 )
-                import time
-                time.sleep(self.reconnect_delay_seconds)
+                if self._sleep_interruptible(self.reconnect_delay_seconds):
+                    return
             finally:
                 if consumer is not None:
                     # Deliberately NO commit() here: a finally-commit would
@@ -218,3 +258,5 @@ class KafkaSource(BaseSource):
                         logger.info("Kafka consumer closed", extra={"topics": self.topics})
                     except Exception:
                         pass
+                    finally:
+                        self._consumer = None
