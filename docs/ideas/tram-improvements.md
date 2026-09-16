@@ -1,3 +1,5 @@
+> **Note (2026-09-16):** This analysis predates v1.4.0 — its open items (counter delta/rate, windowed aggregation, timezone handling, memory/visibility gaps, and more) shipped in v1.4.0. Kept as a historical record; see `docs/changelog.md` and `docs/plans/issue-implementation-plan.md` for what actually landed.
+
 # TRAM — Improvement Recommendations
 
 > **Status:** Recommendations derived Aug 2026 from the [TRAM vs Telegraf comparison](./tram-vs-telegraf-comparison.md).

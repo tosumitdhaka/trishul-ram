@@ -121,7 +121,7 @@ unconfirmed work lives in the backlog at the bottom.
 
 ## v1.4.0 — Implementation Waves A–F (GH #16–#22)
 
-> Full plan: [`docs/plans/issue-implementation-plan.md`](plans/issue-implementation-plan.md) · release record: [`v1.4.0_plan.md`](v1.4.0_plan.md) · verification: [`reviews/kind-verification.md`](reviews/kind-verification.md)
+> Full plan: [`docs/plans/issue-implementation-plan.md`](plans/issue-implementation-plan.md) · release record: [`v1.4.0_plan.md`](plans/v1.4.0_plan.md) · verification: [`reviews/kind-verification.md`](reviews/kind-verification.md)
 
 - [x] **A — stopgaps (#16 mitigation, #21 labeling)**: `MALLOC_ARENA_MAX=2` + `post_batch_cleanup` default on + schema-cache LRU + asset-sync skip + sink close; `no_capacity` vs `dispatch_failed` run-history labeling with health hysteresis; dead-code removal
 - [x] **B — correctness core**: alert CRUD persistence, watcher delete lifecycle, threaded batch-path rework (deferred source finalize + bounded in-flight cap), syslog RFC 6587 + concurrent TCP, controller lifecycle RLock, manager-restart adopt guard, Kafka `enable_auto_commit=false` default

@@ -420,7 +420,7 @@ Run history. Query params:
 |-------|---------|-------------|
 | `pipeline` | — | Filter by pipeline name |
 | `limit` | 100 | Max records to return |
-| `status` | — | Filter: `success` \| `failed` \| `partial` |
+| `status` | — | Filter: `success` \| `failed` \| `aborted` |
 | `offset` | 0 | Pagination offset (v0.7.0) |
 | `from_dt` | — | ISO8601 lower bound on `started_at` (v0.7.0) |
 | `format` | — | Set to `csv` to get `text/csv` export (v1.0.0) |
@@ -637,8 +637,8 @@ Configure via env vars:
 | Env Var | Description |
 |---------|-------------|
 | `TRAM_AI_API_KEY` | API key for the AI provider |
-| `TRAM_AI_PROVIDER` | `openai` or `anthropic` (default: `openai`) |
-| `TRAM_AI_MODEL` | Model name (default: `gpt-4o` for OpenAI, `claude-sonnet-4-6` for Anthropic) |
+| `TRAM_AI_PROVIDER` | `anthropic`, `openai`, or `bedrock` (default: `anthropic`) |
+| `TRAM_AI_MODEL` | Model name (defaults: `claude-haiku-4-5-20251001` for Anthropic, `gpt-4o-mini` for OpenAI, `us.anthropic.claude-sonnet-4-6` for Bedrock) |
 | `TRAM_AI_BASE_URL` | Custom base URL (e.g. for Ollama or Azure OpenAI) |
 
 ---
@@ -866,7 +866,7 @@ Graceful shutdown.
 | Code | Meaning |
 |------|---------|
 | 400 | Invalid pipeline YAML or config |
-| 401 | Missing/invalid `X-API-Key` header or query param (v1.0.0); or missing/invalid `Authorization: Bearer` for webhook secret |
+| 401 | Missing/invalid `X-API-Key` header (the legacy `?api_key=` query param was removed in v1.4.0); or missing/invalid `Authorization: Bearer` for webhook secret |
 | 404 | Pipeline, run, or webhook path not found |
 | 409 | Pipeline already registered |
 | 422 | Pydantic validation error |

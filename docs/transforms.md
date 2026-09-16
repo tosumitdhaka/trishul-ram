@@ -597,6 +597,64 @@ If `value_field` is missing or not a dict, the record passes through unchanged.
 
 ---
 
+## select_from_list
+
+Project fields from matching elements of a list **without exploding** the record — pick items by
+exact match or first-item rule and lift selected fields to the top level.
+
+```yaml
+- type: select_from_list
+  field: measurements              # dotted path to a list of dicts
+  select:
+    - name: rrc_conn              # optional label used in error messages
+      match: {counter: rrcConnMax}   # item must match ALL of these fields exactly
+      output: {value: rrc_conn_value}  # source path (relative to the item) -> output field
+    - name: first_meas
+      first_item: true            # exactly one of `match` or `first_item: true` per selection
+      output: {timestamp: first_ts}
+  on_no_match: null_fields         # null_fields | raise
+```
+
+For each selection, the first matching list item is picked and each `output` source path is
+projected onto the record. When no item matches (or the list is absent), output fields are set to
+`null` (`null_fields`) or the transform raises (`raise`). Duplicate output fields across
+selections are rejected at validation.
+
+---
+
+## coalesce_fields
+
+Write each output field from the first non-empty candidate source path.
+
+```yaml
+- type: coalesce_fields
+  fields:
+    node_id:
+      sources: [ne_id, "metadata.nodeId", hostname]   # dotted paths, first non-empty wins
+      default: unknown        # used when every source is empty or missing
+      empty_values: [null, ""]  # values treated as empty (default: null, "")
+```
+
+`{"ne_id": null, "hostname": "oslo-gw-1"}` → `{"node_id": "oslo-gw-1"}`
+
+---
+
+## inject_meta
+
+Copy selected chunk metadata (source host, filename, run context) into every record.
+
+```yaml
+- type: inject_meta
+  fields: {source_host: ne_host}   # meta key -> output field name
+  # include_all: true             # copy all metadata keys instead of `fields`
+  prefix: ""                      # prefix applied to injected field names
+  on_missing: skip                # skip | null — absent meta key: omit, or write null
+```
+
+`{"records_in": 42}` with meta `{"source_host": "10.0.0.1"}` → `{"records_in": 42, "ne_host": "10.0.0.1"}`
+
+---
+
 ## Transform Ordering Tips
 
 1. **rename** early — rename before other transforms reference field names

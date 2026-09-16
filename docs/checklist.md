@@ -179,6 +179,23 @@ Releases to track the shipped version explicitly.
 - A successful `./scripts/deploy-kind-tram-dev.sh --tag <tag>` run for the release candidate can stand in for separate local Docker build checks and the Helm install-path sanity check, because it already builds images, loads them into kind, and performs a live `helm upgrade --install`; still record `helm dependency update helm/` and `helm lint helm/` explicitly.
 - Keep this file procedural. Release history belongs in `docs/changelog.md`.
 
+## v1.4.0 Status — 2026-09-16
+
+This section records the current known status of the `1.4.0` release pass (branch `wave-a-stopgaps`, PR #25).
+
+### Completed
+- [x] `pyproject.toml`, `helm/Chart.yaml` (chart + appVersion), and `tram/ui/package.json` bumped to `1.4.0`
+- [x] Release-facing docs updated (`docs/changelog.md`, `docs/index.md`, `docs/deployment.md`, `docs/roadmap.md`, `docs/api.md`, `docs/architecture.md`, `README.md`, `.env.example`); release record at `docs/plans/v1.4.0_plan.md`
+- [x] Docs directory restructured (historical plans → `archive/`, active plans + release record → `plans/`) and an independent docs audit remediated (see the audit findings applied on this branch)
+- [x] Full local validation: `ruff check .`, full backend suite (2130 passed), `cd tram/ui && npm run build`, `helm lint helm/` (0 failures)
+- [x] Live kind-cluster verification (`./scripts/deploy-kind-tram-dev.sh`): `tram 1.4.0` + `/api/meta` 1.4.0 from the bumped images, and all wave exit-criteria gates passed — E.2 queued-runs lifecycle, F.1 stateful-transform semantics, D.2 placement lifecycle, #16 RSS soak (13 threaded runs, stable peak, zero OOMKills); report at `docs/reviews/kind-verification.md`
+- [x] CI green on the release branch (Test + Docker Build Validation)
+
+### Still Open
+- [ ] PR #25 merge to `main` (pending review)
+- [ ] Post-push artifact verification (GHCR images for `1.4.0`)
+- [ ] Optional Git tag / GitHub Release status is not recorded here yet
+
 ## v1.3.3 Status — 2026-05-01
 
 This section records the current known status of the `1.3.3` release pass.

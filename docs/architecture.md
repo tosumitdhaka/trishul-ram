@@ -55,8 +55,8 @@ Every record is a plain Python `dict`. Global transforms apply per-record so a s
 │  └──────────────────────────┘                                               │
 │               │                                                              │
 │  WorkerPool  (manager mode only)                                             │
-│  least_loaded() dispatch + round-robin tiebreaker                            │
-│  poll /agent/health every 10s → single summary log on change                │
+│  dispatch_with_result() → least-loaded + round-robin tiebreaker             │
+│  poll /agent/health every 10s; down only after 2 consecutive failures       │
 │               │                                                              │
 │  PipelineManager ── TramDB (SQLAlchemy)  ── AlertEvaluator                  │
 │        │            run_history (+ node_id,   │  check(result, config)       │
@@ -64,6 +64,8 @@ Every record is a plain Python `dict`. Global transforms apply per-record so a s
 │        │            pipeline_versions         │  → email (smtplib)           │
 │        │            alert_state (cooldown)    │                              │
 │        │            processed_files           │                              │
+│        │            queued_runs (v1.4.0)      │                              │
+│        │            transform_state (v1.4.0)  │                              │
 │        │                                                                     │
 │  PipelineExecutor                                                            │
 │  ┌─────┴──────────────────────┐                                              │
@@ -80,6 +82,10 @@ Every record is a plain Python `dict`. Global transforms apply per-record so a s
 │  tram_records_in/out/skipped/errors/dlq_total + chunk duration histogram     │
 │  tram_kafka_consumer_lag{pipeline,topic,partition} (v1.0.0)                  │
 │  tram_stream_queue_depth{pipeline} (v1.0.0)                                  │
+│  tram_mgr_dispatch_total{result} · tram_mgr_stats_missed_total (v1.4.0)    │
+│  tram_mgr_queue_* · tram_mgr_reconcile_action_total (v1.4.0)               │
+│  tram_transform_counter_wraps/resets_total · state_io_total (v1.4.0)      │
+│  tram_transform_window_late_dropped/windows_emitted_total (v1.4.0)         │
 └──────────────────────────────────────────────────────────────────────────────┘
 ```
 
@@ -94,14 +100,14 @@ class KafkaSource(BaseSource): ...
 
 The three `__init__.py` files in `connectors/`, `transforms/`, and `serializers/` import all submodules, firing decorators during package import at startup.
 
-### Plugin Registry Keys (v1.3.0)
+### Plugin Registry Keys (v1.3.0; transforms updated v1.4.0)
 
 | Category | Count | Keys |
 |----------|-------|------|
 | Sources | 24 | `sftp`, `local`, `rest`, `kafka`, `ftp`, `s3`, `syslog`, `snmp_poll`, `snmp_trap`, `mqtt`, `amqp`, `nats`, `gnmi`, `sql`, `influxdb`, `redis`, `gcs`, `azure_blob`, `webhook`, `websocket`, `elasticsearch`, `clickhouse`, `prometheus_rw`, `corba` |
 | Sinks | 20 | `sftp`, `local`, `rest`, `kafka`, `opensearch`, `ftp`, `ves`, `s3`, `snmp_trap`, `mqtt`, `amqp`, `nats`, `sql`, `influxdb`, `redis`, `gcs`, `azure_blob`, `websocket`, `elasticsearch`, `clickhouse` |
 | Serializers | 12 | `json`, `ndjson`, `csv`, `xml`, `avro`, `parquet`, `msgpack`, `protobuf`, `bytes`, `text`, `asn1`, `pm_xml` |
-| Transforms | 21 | `rename`, `cast`, `add_field`, `drop`, `value_map`, `filter`, `flatten`, `timestamp_normalize`, `aggregate`, `enrich`, `explode`, `deduplicate`, `regex_extract`, `template`, `mask`, `validate`, `sort`, `limit`, `jmespath`, `unnest`, `melt` |
+| Transforms | 29 | `rename`, `cast`, `add_field`, `drop`, `value_map`, `filter`, `flatten`, `json_flatten`, `timestamp_normalize`, `aggregate`, `enrich`, `explode`, `deduplicate`, `regex_extract`, `template`, `mask`, `validate`, `sort`, `limit`, `jmespath`, `unnest`, `melt`, `select_from_list`, `coalesce_fields`, `project`, `inject_meta`, `hex_decode`, `counter_delta` (v1.4.0), `window_aggregate` (v1.4.0) |
 
 ## Execution Modes
 
@@ -156,20 +162,26 @@ for sink, condition, sink_transforms in sinks:
 
 Token-bucket algorithm on `PipelineExecutor`. One token consumed per sink write. Tokens refill at `rate_limit_rps` per second. Blocks (sleeps) when bucket is empty.
 
-## Thread Workers (v0.9.0)
+## Thread Workers (v0.9.0; threaded path reworked v1.4.0)
 
 `PipelineConfig.thread_workers: int = 1` — number of parallel worker threads per pipeline run.
 
-**Batch mode** (`thread_workers > 1`): source chunks are submitted to a `ThreadPoolExecutor`. N
-chunks process concurrently. `batch_size` checks are approximate across threads.
+**Batch mode** (`thread_workers > 1`): source chunks are submitted to a `ThreadPoolExecutor`, with
+**in-flight chunks capped at `2 × thread_workers`** (bounded memory — GH #16's OOMKill root cause).
+File sources defer their finalize (`move_after_read`, `skip_processed` marking) until their chunks
+have drained, so a crash mid-run no longer loses data that was marked processed but not yet written.
+`batch_size` checks are approximate across threads. Retry attempts close their sinks/DLQ/source.
 
 **Serial batch mode with `record_chunk_size`**: the executor can ask a serializer for
 `parse_chunks(data, record_chunk_size)` and process bounded decoded record windows instead of one
 large in-memory list. This is the preferred path for very large file batches such as concatenated
-ASN.1 BER CDR files.
+ASN.1 BER CDR files. `asn1.split_path` (v1.4.0) splits the record list inside one decoded BER
+document before chunking — on threaded runs the split is applied eagerly (bounded by the in-flight
+cap, not by `record_chunk_size`).
 
-**Current scope note:** threaded batch execution still uses the eager parse path in `v1.3.2`;
-bounded record chunking is implemented in the serial batch path.
+**Stateful transforms** (`counter_delta`, `window_aggregate`) are rejected at validation when
+combined with `thread_workers > 1` or in sink-level transforms — their durable state assumes
+sequential per-key processing.
 
 **Stream mode** (`thread_workers > 1`): a bounded `Queue(maxsize=thread_workers * 2)` decouples
 the source producer from N worker threads, providing natural backpressure.
@@ -181,6 +193,8 @@ the source producer from N worker threads, providing natural backpressure.
 `skip_processed: true` on any file/object-storage source (`sftp`, `local`, `s3`, `ftp`, `gcs`, `azure_blob`) causes the connector to skip files that have been successfully processed in a previous run.
 
 State is persisted in the `processed_files` SQLite table, keyed by `(pipeline_name, source_key, filepath)`. `ProcessedFileTracker` is injected by `PipelineExecutor._build_source()` into the source config dict at runtime.
+
+**File-done guards (v1.4.0)** — the `local` and `sftp` sources can additionally gate on write-in-progress files: `file_stability_seconds` (read only when size+mtime are unchanged across two scans that far apart), `file_min_age_seconds` (future-mtime tolerant), and `file_done_suffix` (collect only files renamed to a done suffix). All default off.
 
 ## Dead-Letter Queue (DLQ)
 
@@ -240,24 +254,30 @@ TRAM v1.2.0 replaces the previous shared-DB cluster model with a dedicated **man
 │                                                                        │
 │  PipelineController ──── APScheduler ──── PipelineManager             │
 │         │                                      │                       │
-│         │  WorkerPool.dispatch()             TramDB (SQLite, RWO PVC) │
-│         │  WorkerPool.multi_dispatch()       broadcast_placements      │
+│         │  WorkerPool.dispatch_with_result()    TramDB (SQLite, RWO PVC)    │
+│         │  WorkerPool.multi_dispatch()       broadcast_placements          │
 │         ▼                                                              │
 │  WorkerPool                                                            │
 │  ├── least_loaded() + round-robin tiebreaker (batch/poll sources)      │
 │  ├── multi_dispatch(count:all) → all healthy workers for push-HTTP      │
-│  └── poll /agent/health every 10s → single summary log on change      │
+│  └── poll /agent/health every 10s; hysteresis (2 failures → down)     │
 │                   │                                                    │
 │  PlacementReconciler (background thread)                               │
 │  ├── stale slot detection (age > 3 × TRAM_STATS_INTERVAL)             │
 │  └── re-dispatch + reconciling-window timeout                          │
 │  BatchReconciler (background thread)                                   │
 │  ├── adopt orphaned running batch runs from worker /agent/status       │
-│  └── mark lost worker-owned batch runs failed before they stick        │
+│  ├── mark lost worker-owned batch runs failed before they stick        │
+│  ├── recover count=1 streams: worker death → re-dispatch (~40-60s,     │
+│  │   2-pass hysteresis); manager restart → adopt in place, never       │
+│  │   double-dispatch; stale config → stop + redispatch (config_sha256) │
+│  ├── drain queued manual runs when worker capacity returns (v1.4.0)   │
+│  └── stop duplicate stray runs (earliest kept)                         │
 │                   │                                                    │
 │  FastAPI REST API + Web UI                                             │
-│  POST /api/internal/run-complete  ← worker callback                   │
-│  POST /api/internal/pipeline-stats ← worker stats                     │
+│  POST /api/internal/run-complete  ← worker callback (X-API-Key)      │
+│  POST /api/internal/pipeline-stats ← worker stats (X-API-Key)        │
+│  GET/PUT /api/internal/transform-state/{pipeline} (v1.4.0)            │
 │  GET  /api/pipelines/{name}/placement                                  │
 │  GET  /api/cluster/streams                                             │
 └──────────────────────────┬────────────────────────────────────────────┘
@@ -291,16 +311,22 @@ TRAM v1.2.0 replaces the previous shared-DB cluster model with a dedicated **man
 ### Run lifecycle — batch/poll
 
 1. APScheduler fires → `PipelineController._run_batch()`
-2. Manager calls `WorkerPool.dispatch()` → picks least-loaded worker (round-robin on ties)
+2. Manager calls `WorkerPool.dispatch_with_result()` → picks least-loaded worker (round-robin on ties); the outcome is labeled `accepted` / `no_capacity` / `dispatch_failed` (persisted to run history + `tram_mgr_dispatch_total{result}`)
 3. Controller records an active batch lease for the dispatched worker/run pair
 4. Worker receives `POST /agent/run` with YAML + run_id
 5. Worker syncs schemas/MIBs from manager (`GET /api/schemas`, `GET /api/mibs/{name}`)
-6. Worker executes `PipelineExecutor.batch_run()` in a background thread; tracks `bytes_in`/`bytes_out`
-7. Worker POSTs `run-complete` to manager: `records_in/out/skipped`, `bytes_in/bytes_out`, `error`, `errors[]`
-8. Manager calls `on_worker_run_complete()` → saves to DB (including byte counters), updates pipeline state
-9. If the manager restarts or the worker disappears before callback, `BatchReconciler` scans
-   worker `/agent/status` to adopt surviving runs or mark lost runs failed through the same normal
-   completion path
+6. For pipelines with stateful transforms, the worker GETs the pipeline's transform state from the manager (`GET /api/internal/transform-state/{pipeline}`); retries re-hydrate from the same in-run snapshot
+7. Worker executes `PipelineExecutor.batch_run()` in a background thread; tracks `bytes_in`/`bytes_out`; on success PUTs the transform state back (state is only saved after a successful run)
+8. Worker POSTs `run-complete` to manager: `records_in/out/skipped`, `bytes_in/bytes_out`, `error`, `errors[]` — all callbacks carry `X-API-Key`
+9. Manager calls `on_worker_run_complete()` → saves to DB (including byte counters), updates pipeline state
+10. If the manager restarts or the worker disappears before callback, `BatchReconciler` scans
+    worker `/agent/status` to adopt surviving runs or mark lost runs failed through the same normal
+    completion path
+
+**No worker capacity** (v1.4.0): a manual run triggered with zero healthy workers is durably
+queued (`queued_runs` table, `TRAM_QUEUE_MANUAL_RUNS=1` default) — the API returns
+`202 {status: "queued"}`; the row survives manager restarts on an absolute TTL clock
+(`TRAM_QUEUE_TTL_SECONDS`, default 900) and `BatchReconciler` drains it when capacity returns.
 
 ### Run lifecycle — multi-worker streams (`webhook`, `prometheus_rw`)
 
@@ -310,6 +336,21 @@ TRAM v1.2.0 replaces the previous shared-DB cluster model with a dedicated **man
 4. `StatsStore` holds live per-slot stats; `PlacementReconciler` polls every `min(TRAM_STATS_INTERVAL, 10)s`
 5. Stale slot (age > `3 × TRAM_STATS_INTERVAL`): reconciler re-dispatches to same worker, updates `current_run_id`
 6. Reconciling-window timeout after `2 × TRAM_STATS_INTERVAL`: partial recovery → `degraded`; none → re-dispatch
+
+### Run lifecycle — count=1 streams (v1.4.0, GH #17)
+
+With `TRAM_STREAM_SINGLE_PLACEMENT=1` (default), all worker-mode streams route through the
+placement machinery and a count=1 stream produces a durable **1-slot placement row** instead of
+manager-memory-only tracking:
+
+- **Manager restart** adopts the live run in place (zero interruption, no double-dispatch)
+- **Worker death** recovers to a healthy worker within ~40-60s (2-pass liveness hysteresis);
+  the reconciler increments the slot's `restart_count` and stops any duplicate stray run
+- **Config drift**: the worker reports `config_sha256` in `/agent/status`; a mismatch against the
+  current pipeline config stops and redispatches the stream with the fresh YAML (older agents
+  without the field fail open)
+- Rollback: `TRAM_STREAM_SINGLE_PLACEMENT=0` + manager restart (existing placement rows remain
+  inert); kind-verified liveness, recovery, and adoption: `docs/reviews/kind-verification.md`
 
 ### Worker discovery
 
@@ -332,11 +373,13 @@ Both threads start together; if either exits the pod sends `SIGTERM` to itself s
 
 ### Worker agent API (`:8766`)
 
+Honors `TRAM_INTERNAL_AUTH_MODE` (`/agent/health` exempt); probe paths never 401.
+
 | Method | Path | Description |
 |--------|------|-------------|
 | `POST` | `/agent/run` | Dispatch a pipeline run (YAML + run_id) |
 | `POST` | `/agent/stop` | Signal a running pipeline to stop |
-| `GET` | `/agent/status` | Active batch runs and streams |
+| `GET` | `/agent/status` | Active batch runs and streams, including per-run `config_sha256` (v1.4.0 — consumed by the reconciler's config-drift detection; absent means unknown, which fails open) |
 | `GET` | `/agent/health` | Liveness + active_runs + running_pipelines + ingress_up |
 
 ### Worker ingress API (`:8767`)
@@ -385,6 +428,10 @@ Tables:
 - `processed_files` — `(pipeline_name, source_key, filepath, processed_at)`; used by `skip_processed` to make file-source runs idempotent
 - `user_passwords` — scrypt-hashed passwords for browser auth (override `TRAM_AUTH_USERS` bootstrap values)
 - `broadcast_placements` — active multi-worker placement groups; persists `slots_json` (including mutable `current_run_id` per slot) so the manager can reconcile after restart
+- `queued_runs` (v1.4.0) — durably queued manual runs: stable `run_id`, YAML snapshot, status (`queued` → `dispatching` → terminal), absolute `expires_at` TTL; claim/commit/revert transitions are conditional-UPDATE fenced for single-claim
+- `registered_pipelines` — the manager's durable pipeline registry (active config per pipeline); makes API updates and alert-rule edits survive manager restarts
+- `settings` — key/value settings store
+- `transform_state` (v1.4.0) — per-pipeline stateful-transform state blob (`counter_delta` last values, `window_aggregate` open windows) + `config_sha256`; a hash mismatch discards the state so new transform identities start fresh; `update()`/`delete()` purge the row
 
 **Schema migrations**: `_create_tables()` runs `CREATE TABLE IF NOT EXISTS` + `ALTER TABLE ADD COLUMN` guards at startup. Existing databases from v0.6.0 are upgraded automatically.
 
@@ -419,10 +466,15 @@ In manager+worker mode the full `errors` list is sent in the worker callback pay
 
 ## Security
 
+- API key auth on `/api/*` via the `X-API-Key` header (`TRAM_API_KEY`; empty = disabled) — the legacy `?api_key=` query param is removed (keys leak into logs)
+- Internal machine-to-machine surfaces (`/api/internal/*` on the manager, `/agent/*` on workers) honor `TRAM_INTERNAL_AUTH_MODE` (`off | warn | enforce`, default `warn`): warn-only logs missing keys, `enforce` rejects with 401; `/agent/health` and K8s probe paths are unconditionally exempt
+- Worker → manager callbacks (`run-complete`, `pipeline-stats`) send `X-API-Key` on every POST
+- Webhook ingress enforces a body-size limit (`TRAM_WEBHOOK_MAX_BODY_BYTES`, default 10 MiB; 413 on excess)
+- ClickHouse sink validates the `table` identifier (`db.table` accepted; quoted/bracketed names rejected)
 - XML input uses `defusedxml` to prevent XXE attacks
 - Expression evaluation uses `simpleeval` (safe sandbox, no builtins, no exec)
 - Credentials always from environment variables, never in YAML files
-- Webhook `secret` validated via `Authorization: Bearer` header
+- Webhook `secret` validated via `Authorization: Bearer` header (constant-time compare)
 - Container runs as non-root user (uid 1000)
 
 ## Adding a New Protocol

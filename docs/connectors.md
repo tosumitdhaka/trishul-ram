@@ -325,13 +325,25 @@ go through a per-pipeline Kubernetes Service. Set `kubernetes.enabled: true` on 
 | `host` | `0.0.0.0` | Bind address |
 | `port` | `514` | UDP/TCP port (use `1514`+ for non-root) |
 | `protocol` | `udp` | `udp` \| `tcp` |
+| `buffer_size` | `65535` | UDP receive buffer size in bytes |
+| `encoding` | `utf-8` | Message decoding charset |
+| `max_message_size` | `65535` | TCP message size guard (v1.4.0) — oversized messages are truncated and logged |
+| `max_connections` | `64` | Max concurrent TCP clients (v1.4.0); excess connections are refused |
+
+**TCP mode (v1.4.0)** — RFC 6587 framing with per-connection mode detection: both octet-counted
+(`123 <message>`) and newline-delimited framing are auto-detected per connection, fragmented
+messages are buffered across reads, and each message is checked against `max_message_size`.
+Connections are served concurrently (capped by `max_connections`) so one slow client cannot
+block the others.
 
 ```yaml
 source:
   type: syslog
   host: 0.0.0.0
   port: 1514
-  protocol: udp
+  protocol: tcp
+  max_message_size: 65535
+  max_connections: 64
 ```
 
 ---
@@ -498,7 +510,8 @@ A lost gNMI session is automatically re-established with backoff (`reconnect_del
 | `port` | `57400` | gNMI port |
 | `username` | — | gRPC auth username |
 | `password` | — | gRPC auth password |
-| `insecure` | `false` | Skip TLS verification |
+| `tls` | `true` | Enable TLS for the gRPC session (`false` = plaintext) |
+| `tls_ca` | — | Path to a custom CA bundle for verifying the target's certificate |
 | `subscription_mode` | `stream` | `stream` \| `once` \| `poll` (see below) |
 | `poll_interval_seconds` | `60` | Seconds between re-gets in `poll` mode |
 | `reconnect_delay_seconds` | `5.0` | Backoff between reconnect attempts |
@@ -520,7 +533,7 @@ source:
   port: 57400
   username: ${GNMI_USER}
   password: ${GNMI_PASS}
-  insecure: true
+  tls: false                       # plaintext gRPC (skip TLS)
   subscription_mode: stream
   reconnect_delay_seconds: 5.0
   subscriptions:
@@ -1614,8 +1627,6 @@ Upload the schema via the UI or API:
 curl -F "file=@3gpp_32401.asn" \
   "http://localhost:8765/api/schemas/upload?subdir=ericsson"
 ```
-
-A reference schema for Ericsson 3GPP TS 32.401 PM statsfiles is shipped at `docs/schemas/3gpp_32401.asn`.
 
 ---
 

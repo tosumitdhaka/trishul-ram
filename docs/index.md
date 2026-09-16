@@ -36,10 +36,10 @@ Lightweight, container-native Python daemon for telecom data pipeline orchestrat
 
 ### Design & Roadmap
 
-- **[Pipeline Controller Design](pipeline-controller-design.md)** - Historical design notes for the v1.1.x controller transition; current manager/worker architecture is documented in `architecture.md`
+- **[Pipeline Controller Design](archive/pipeline-controller-design.md)** - Historical design notes for the v1.1.x controller transition; current manager/worker architecture is documented in `architecture.md`
 - **[Roadmap](roadmap.md)** - Planned features and version checklist
-- **[v1.4.0 Plan](v1.4.0_plan.md)** - Implementation-plan waves A–F: stopgaps, correctness core, security rollout, visibility/stats, enhancements, and domain gaps (GH #16–#22) with full kind-cluster verification
-- **[v1.3.3 Plan](v1.3.3_plan.md)** - Completed UI revalidation, shared-system consolidation, and release-close record for `1.3.3`
+- **[v1.4.0 Plan](plans/v1.4.0_plan.md)** - Implementation-plan waves A–F: stopgaps, correctness core, security rollout, visibility/stats, enhancements, and domain gaps (GH #16–#22) with full kind-cluster verification
+- **[v1.3.3 Plan](archive/v1.3.3_plan.md)** - Completed UI revalidation, shared-system consolidation, and release-close record for `1.3.3`
 - **Archive**
   - **[v1.3.2 Plan](archive/v1.3.2-plan.md)** - Archived consolidated `1.3.2` design and implementation plan covering stats parity, multi-worker UDP streams, ASN.1 flattening, CDR record shaping, and batch resilience
   - **[v1.3.1 Plan](archive/v1.3.1-plan.md)** - Archived planning document for the `1.3.1` implementation slice set
@@ -102,7 +102,7 @@ helm install tram oci://ghcr.io/tosumitdhaka/charts/trishul-ram \
 | **Sources** | 24 | sftp, kafka, rest, snmp_poll, snmp_trap, syslog, webhook, mqtt, amqp, nats, gnmi, sql, clickhouse, influxdb, corba, websocket, prometheus_rw |
 | **Sinks** | 20 | sftp, kafka, rest, opensearch, snmp_trap, mqtt, amqp, nats, sql, clickhouse, influxdb, ves, websocket, elasticsearch |
 | **Serializers** | 12 | json, ndjson, csv, xml, avro, parquet, protobuf, msgpack, bytes, text, asn1, pm_xml |
-| **Transforms** | 27 | rename, cast, filter, aggregate, jmespath, flatten, json_flatten, explode, unnest, select_from_list, coalesce_fields, project, inject_meta, melt, deduplicate, mask, validate, template, enrich, hex_decode |
+| **Transforms** | 29 | rename, cast, filter, aggregate, jmespath, flatten, json_flatten, explode, unnest, select_from_list, coalesce_fields, project, inject_meta, melt, deduplicate, mask, validate, template, enrich, hex_decode, sort, limit, value_map, regex_extract, timestamp_normalize, counter_delta, window_aggregate |
 
 ---
 
@@ -181,16 +181,13 @@ docs/
 ├── connectors.md                 # All sources and sinks
 ├── deployment.md                 # Docker, k8s, environment variables
 ├── transforms.md                 # Transform reference
-├── pipeline-controller-design.md # Historical v1.1.x controller design notes
-├── roadmap.md                    # Planned features and version checklist
-├── v1.4.0_plan.md                # v1.4.0 release record (waves A–F)
-├── v1.3.3_plan.md                # 1.3.3 release record and UI validation plan
 ├── changelog.md                  # Full release history
-├── checklist.md                  # Development checklist
-└── archive/                      # Archived version-specific design and planning docs
-    ├── v1.3.2-plan.md            # Archived consolidated 1.3.2 backend implementation plan
-    ├── v1.3.1-plan.md            # Archived 1.3.1 implementation plan
-    └── v1.3.0-plan.md            # Archived 1.3.0 implementation plan
+├── checklist.md                  # Development & release checklist
+├── roadmap.md                    # Planned features and version checklist
+├── plans/                        # Implementation plan, approved design docs, v1.4.0 release record
+├── reviews/                      # Code/domain/UI reviews, RCA reports, kind verification
+├── ideas/                        # Analysis and improvement notes
+└── archive/                      # Historical plans (v1.3.0–v1.3.3) and controller design notes
 ```
 
 ---
@@ -208,6 +205,14 @@ docs/
 See [changelog.md](changelog.md) for detailed release notes.
 
 **Current Release:** v1.4.0 (2026-09-16)
+- Correctness & security core: threaded batch-path rework (bounded in-flight chunks, deferred source finalize — the #16 OOMKill root cause), alert-rule edits persist across restarts, watcher delete stops pipelines, syslog RFC 6587 framing + concurrent TCP, internal-surface auth (`TRAM_INTERNAL_AUTH_MODE`), webhook body-size limit, Kafka at-least-once default
+- Visibility: durable count=1 stream placements with manager-restart adoption, worker-death recovery, and config-drift redispatch (GH #17); live mid-run dashboard stats (GH #22); linear-time `json_flatten`/`explode` (GH #18)
+- Enhancements: ASN.1 `split_path` (GH #19), queued manual runs — durable, auto-dispatched on capacity (GH #21), templates-page action contract (GH #20)
+- Stateful transforms: `counter_delta` (Counter32/64 wrap correction, per-second rates) and `window_aggregate` (epoch-aligned tumbling windows, watermark finalization) with durable per-pipeline state
+- Domain gaps: local/SFTP file-done guards, gNMI subscription modes + reconnect, CORBA dedupe window, `source_timezone` for timestamp normalization
+- Worker memory: `MALLOC_ARENA_MAX=2` + `post_batch_cleanup` default on + schema-cache LRU — kind-verified with a 13-run threaded RSS soak, stable peak, zero OOMKills
+
+**v1.3.3** (2026-05-01)
 - Full UI revalidation completed across Dashboard, Pipelines, Detail, Editor, Runs, Cluster, Templates, Settings, MIBs, Schemas, and Plugins in both manager and standalone mode
 - Dashboard overview now uses shared records/bytes in/out cards, a bytes-processed load chart with metric toggle and bucket tooltip, contextual `Run now` handling for manual pipelines, and manual refresh
 - Cluster now presents runtime state first, merged input/output traffic summaries, per-worker processed records/bytes totals, and clearer active pipeline/live metric truth
@@ -243,4 +248,4 @@ See [changelog.md](changelog.md) for detailed release notes.
 
 ---
 
-*Last updated: 2026-05-01*
+*Last updated: 2026-09-16*
