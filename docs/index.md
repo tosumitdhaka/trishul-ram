@@ -9,7 +9,7 @@ title: TRAM Documentation
 
 Lightweight, container-native Python daemon for telecom data pipeline orchestration.
 
-**Version:** 1.3.3 | **Status:** Production-ready | **Python:** 3.13+
+**Version:** 1.4.0 | **Status:** Production-ready | **Python:** 3.13+
 
 ---
 
@@ -38,6 +38,7 @@ Lightweight, container-native Python daemon for telecom data pipeline orchestrat
 
 - **[Pipeline Controller Design](pipeline-controller-design.md)** - Historical design notes for the v1.1.x controller transition; current manager/worker architecture is documented in `architecture.md`
 - **[Roadmap](roadmap.md)** - Planned features and version checklist
+- **[v1.4.0 Plan](v1.4.0_plan.md)** - Implementation-plan waves A–F: stopgaps, correctness core, security rollout, visibility/stats, enhancements, and domain gaps (GH #16–#22) with full kind-cluster verification
 - **[v1.3.3 Plan](v1.3.3_plan.md)** - Completed UI revalidation, shared-system consolidation, and release-close record for `1.3.3`
 - **Archive**
   - **[v1.3.2 Plan](archive/v1.3.2-plan.md)** - Archived consolidated `1.3.2` design and implementation plan covering stats parity, multi-worker UDP streams, ASN.1 flattening, CDR record shaping, and batch resilience
@@ -75,7 +76,7 @@ curl http://localhost:8765/api/ready
 
 ### Kubernetes (Helm)
 
-Quick-start examples below use `latest`. For production, pin `image.tag` to a specific release such as `1.3.3`.
+Quick-start examples below use `latest`. For production, pin `image.tag` to a specific release such as `1.4.0`.
 
 ```bash
 # Standalone mode (SQLite, single pod)
@@ -182,7 +183,8 @@ docs/
 ├── transforms.md                 # Transform reference
 ├── pipeline-controller-design.md # Historical v1.1.x controller design notes
 ├── roadmap.md                    # Planned features and version checklist
-├── v1.3.3_plan.md                # Current 1.3.3 release record and UI validation plan
+├── v1.4.0_plan.md                # v1.4.0 release record (waves A–F)
+├── v1.3.3_plan.md                # 1.3.3 release record and UI validation plan
 ├── changelog.md                  # Full release history
 ├── checklist.md                  # Development checklist
 └── archive/                      # Archived version-specific design and planning docs
@@ -205,7 +207,7 @@ docs/
 
 See [changelog.md](changelog.md) for detailed release notes.
 
-**Current Release:** v1.3.3 (2026-05-01)
+**Current Release:** v1.4.0 (2026-09-16)
 - Full UI revalidation completed across Dashboard, Pipelines, Detail, Editor, Runs, Cluster, Templates, Settings, MIBs, Schemas, and Plugins in both manager and standalone mode
 - Dashboard overview now uses shared records/bytes in/out cards, a bytes-processed load chart with metric toggle and bucket tooltip, contextual `Run now` handling for manual pipelines, and manual refresh
 - Cluster now presents runtime state first, merged input/output traffic summaries, per-worker processed records/bytes totals, and clearer active pipeline/live metric truth

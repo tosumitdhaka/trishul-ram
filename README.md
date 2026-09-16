@@ -248,7 +248,7 @@ For a single standalone container without Compose:
 ./scripts/deploy-docker-standalone.sh up
 ./scripts/deploy-docker-standalone.sh up --tag local-test
 ./scripts/deploy-docker-standalone.sh up --ghcr
-./scripts/deploy-docker-standalone.sh up --ghcr --tag 1.3.3
+./scripts/deploy-docker-standalone.sh up --ghcr --tag 1.4.0
 ./scripts/deploy-docker-standalone.sh up --ghcr --env 'TRAM_AUTH_USERS=admin:changeme123'
 ./scripts/deploy-docker-standalone.sh status
 ```

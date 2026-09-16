@@ -37,7 +37,7 @@ Readiness probe. Returns 200 once startup is complete, 503 if DB or scheduler is
 Build and version information.
 
 ```json
-{"version": "1.3.3", "build_time": "2026-05-01T12:00:00+00:00", "python_version": "3.13.0"}
+{"version": "1.4.0", "build_time": "2026-05-01T12:00:00+00:00", "python_version": "3.13.0"}
 ```
 
 ### GET /api/plugins
@@ -286,6 +286,14 @@ Trigger one immediate batch run (not valid for stream pipelines).
 {"name": "pm-ingest", "status": "triggered"}
 ```
 
+**Queued response (v1.4.0)** — in manager+worker mode with no healthy workers and queued runs enabled (`TRAM_QUEUE_MANUAL_RUNS=1`, the default), the run is durably queued instead of failing: it survives manager restarts and is dispatched automatically when worker capacity returns. The response is `202 Accepted` with the stable run_id and absolute TTL:
+
+```json
+{"name": "pm-ingest", "status": "queued", "run_id": "…", "expires_at": "…"}
+```
+
+**Flush runs (v1.4.0)** — `?flush=true` makes stateful transforms emit their open windows as partials (`window_complete: false`) and clear them from the saved state. The flag is not carried through the queue: a queued flush run executes as a normal run when capacity returns — re-issue `?flush=true` once capacity is back to flush.
+
 ### POST /api/pipelines/reload
 Re-scan `TRAM_PIPELINE_DIR`, reload all YAML files.
 
@@ -445,6 +453,20 @@ With SQLite/DB persistence, run history survives daemon restarts.
 
 ### GET /api/runs/{run_id}
 Get a single run result.
+
+## Internal Transform State (v1.4.0)
+
+Durable per-pipeline state for stateful transforms (`counter_delta`, `window_aggregate`). In manager+worker mode the worker GETs the state at run start and PUTs it back only after a successful run (retries re-hydrate from the same in-run snapshot); in standalone mode the state lives in the local `transform_state` table. Requires `TRAM_STATEFUL_TRANSFORMS=1` (default); `0` disables both the transforms and these endpoints (404). `update()`/`delete()` on the pipeline purge the row; a config-hash mismatch discards the stored state so the new transform identities start fresh.
+
+### GET /api/internal/transform-state/{pipeline}
+Returns the persisted state blob and its config hash.
+
+```json
+{"pipeline": "pm-counters", "state": {"counter_delta:0": {"…identity…": {"v": 1500, "t": 1789534920.0}}}, "config_sha256": "1c3036a4cf884027"}
+```
+
+### PUT /api/internal/transform-state/{pipeline}
+Replaces the state. Bodies over `TRAM_STATE_MAX_BYTES` (default 20 MiB) are rejected with `413`.
 
 ---
 
