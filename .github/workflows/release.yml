@@ -51,19 +51,12 @@ jobs:
           echo "VERSION=$VERSION" >> $GITHUB_ENV
           echo "Detected version: $VERSION"
 
-      - name: Validate GHCR token
-        run: |
-          if [ -z "${{ secrets.GHCR_TOKEN }}" ]; then
-            echo "GHCR_TOKEN secret is missing or empty."
-            exit 1
-          fi
-
       - name: Log in to GHCR
         uses: docker/login-action@v3
         with:
           registry: ghcr.io
-          username: ${{ github.repository_owner }}
-          password: ${{ secrets.GHCR_TOKEN }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Extract Docker metadata
         id: meta
@@ -110,19 +103,12 @@ jobs:
           echo "VERSION=$VERSION" >> $GITHUB_ENV
           echo "Detected version: $VERSION"
 
-      - name: Validate GHCR token
-        run: |
-          if [ -z "${{ secrets.GHCR_TOKEN }}" ]; then
-            echo "GHCR_TOKEN secret is missing or empty."
-            exit 1
-          fi
-
       - name: Log in to GHCR
         uses: docker/login-action@v3
         with:
           registry: ghcr.io
-          username: ${{ github.repository_owner }}
-          password: ${{ secrets.GHCR_TOKEN }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Extract Docker metadata
         id: meta
@@ -169,19 +155,12 @@ jobs:
           echo "VERSION=$VERSION" >> $GITHUB_ENV
           echo "Detected version: $VERSION"
 
-      - name: Validate GHCR token
-        run: |
-          if [ -z "${{ secrets.GHCR_TOKEN }}" ]; then
-            echo "GHCR_TOKEN secret is missing or empty."
-            exit 1
-          fi
-
       - name: Log in to GHCR
         uses: docker/login-action@v3
         with:
           registry: ghcr.io
-          username: ${{ github.repository_owner }}
-          password: ${{ secrets.GHCR_TOKEN }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Extract Docker metadata
         id: meta
@@ -228,13 +207,6 @@ jobs:
           echo "VERSION=$VERSION" >> $GITHUB_ENV
           echo "Using version: $VERSION"
 
-      - name: Validate GHCR token
-        run: |
-          if [ -z "${{ secrets.GHCR_TOKEN }}" ]; then
-            echo "GHCR_TOKEN secret is missing or empty."
-            exit 1
-          fi
-
       - name: Set up Helm
         uses: azure/setup-helm@v4
         with:
@@ -248,9 +220,9 @@ jobs:
 
       - name: Log in to GHCR (Helm OCI)
         run: |
-          echo "${{ secrets.GHCR_TOKEN }}" | \
+          echo "${{ secrets.GITHUB_TOKEN }}" | \
             helm registry login ghcr.io \
-              --username ${{ github.repository_owner }} \
+              --username ${{ github.actor }} \
               --password-stdin
 
       - name: Push Helm chart to OCI registry

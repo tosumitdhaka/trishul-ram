@@ -132,7 +132,7 @@ Recommended for releases that touch scheduling, placement, stats, K8s behavior, 
 - [ ] Confirm `release.yml` reads the version from `pyproject.toml`
 - [ ] Confirm `release.yml` runs `helm dependency update helm/` before packaging
 - [ ] Confirm `release.yml` publishes both versioned and `latest` tags for manager and worker images
-- [ ] Confirm `GHCR_TOKEN` is still the required registry secret
+- [ ] Registry auth uses the built-in `GITHUB_TOKEN` (`packages: write`) — no PAT secret to rotate
 
 ### 8. Commit and Push
 - [ ] Stage version bump and release-doc files

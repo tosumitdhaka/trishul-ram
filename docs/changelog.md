@@ -7,6 +7,9 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+### Changed
+- Release workflow authenticates to GHCR with the built-in `GITHUB_TOKEN` instead of the `GHCR_TOKEN` PAT — the token can no longer expire, and pushed packages stay linked to the repository (the `GHCR_TOKEN` secret can be deleted)
+
 ### Fixed
 - Docker images: the UI build stage (`ui-builder`) in `Dockerfile` and `Dockerfile.manager` now runs
   natively on the build host via `--platform=$BUILDPLATFORM` instead of under QEMU emulation on the
