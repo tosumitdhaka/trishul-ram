@@ -21,7 +21,10 @@
 # Stage 2  runtime     — final image
 
 # ── Stage 0: build web UI ────────────────────────────────────────────────────
-FROM node:20-alpine AS ui-builder
+# $BUILDPLATFORM: run node natively on the build host regardless of target arch.
+# The output (static JS/CSS) is architecture-independent; running node under
+# QEMU emulation on the arm64 leg is slow and prone to libuv/V8 deadlocks.
+FROM --platform=$BUILDPLATFORM node:20-alpine AS ui-builder
 
 WORKDIR /ui-src
 COPY tram/ui/package.json tram/ui/package-lock.json ./

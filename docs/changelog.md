@@ -7,6 +7,12 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+### Fixed
+- Docker images: the UI build stage (`ui-builder`) in `Dockerfile` and `Dockerfile.manager` now runs
+  natively on the build host via `--platform=$BUILDPLATFORM` instead of under QEMU emulation on the
+  arm64 leg. The static assets are architecture-independent; node-under-QEMU is slow and prone to
+  sporadic libuv/V8 deadlocks (the 1.4.0 standalone arm64 build hung 4+ hours in `npm ci` because of it).
+
 ## [1.4.0] - 2026-09-16
 
 ### Added
