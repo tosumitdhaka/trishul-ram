@@ -38,7 +38,7 @@ async def get_stats(
     granularity: Literal["5m", "15m", "1h"] = Query("5m", description="Chart bucket size"),
 ) -> dict:
     """Return aggregated pipeline and run statistics for the dashboard."""
-    manager = request.app.state.manager
+    controller = request.app.state.controller
     db = getattr(request.app.state, "db", None)
 
     now = _now()
@@ -51,7 +51,7 @@ async def get_stats(
     chart_since = now - timedelta(minutes=chart_window_minutes)
 
     # ── Pipeline status counts from in-memory manager ──────────────────────
-    all_states = manager.list_all()
+    all_states = controller.list_all()
     pipelines_total     = len(all_states)
     pipelines_running   = sum(1 for s in all_states if s.status == "running")
     pipelines_scheduled = sum(1 for s in all_states if s.status == "scheduled")
@@ -77,11 +77,74 @@ async def get_stats(
         per_pipeline = _mem_per_pipeline(all_states, since_1h)
         sparkline   = _mem_sparkline(all_runs, chart_since, bucket_count=bucket_count, minutes=bucket_minutes)
 
-    chart_total = sum(point["bytes_processed"] for point in sparkline)
+    # ── Live in-flight runs from StatsStore ─────────────────────────────────
+    stats_store = getattr(request.app.state, "stats_store", None)
+    live = _live_entries(stats_store, all_states, db, since_1h)
+
+    # 15-minute cards: live counters are cumulative for each in-flight run.
+    stats_15m["records_in"]  += sum(int(getattr(e, "records_in", 0) or 0) for e in live)
+    stats_15m["records_out"] += sum(int(getattr(e, "records_out", 0) or 0) for e in live)
+    stats_15m["bytes_in"]    += sum(int(getattr(e, "bytes_in", 0) or 0) for e in live)
+    stats_15m["bytes_out"]   += sum(int(getattr(e, "bytes_out", 0) or 0) for e in live)
+    stats_15m["errors"]      += sum(int(getattr(e, "error_count", 0) or 0) for e in live)
+
+    # Chart: each live entry lands in the bucket containing its snapshot
+    # timestamp, so the current bucket increments mid-run.
+    live_sparkline = _bucket_sparkline(
+        [
+            (
+                str(e.timestamp),
+                getattr(e, "records_out", 0) or 0,
+                getattr(e, "bytes_in", 0) or 0,
+                getattr(e, "bytes_out", 0) or 0,
+            )
+            for e in live
+        ],
+        chart_since,
+        bucket_count=bucket_count,
+        minutes=bucket_minutes,
+    )
+    sparkline = [
+        {
+            "bucket": point["bucket"],
+            "bucket_start": point["bucket_start"],
+            "bucket_end": point["bucket_end"],
+            "records_out": point["records_out"] + live_point["records_out"],
+            "bytes_processed": point["bytes_processed"] + live_point["bytes_processed"],
+        }
+        for point, live_point in zip(sparkline, live_sparkline)
+    ]
+
+    # Per-pipeline rows: merge live entries into their pipeline's row, or add a
+    # fresh row for pipelines that only have live runs in the window.
+    live_by_pipeline: dict[str, list] = {}
+    for entry in live:
+        live_by_pipeline.setdefault(entry.pipeline_name, []).append(entry)
+    for row in per_pipeline:
+        entries = live_by_pipeline.pop(row["name"], [])
+        if not entries:
+            continue
+        row["runs_last_hour"] += len(entries)
+        row["records_in"]  += sum(int(getattr(e, "records_in", 0) or 0) for e in entries)
+        row["records_out"] += sum(int(getattr(e, "records_out", 0) or 0) for e in entries)
+        row["errors"]      += sum(int(getattr(e, "error_count", 0) or 0) for e in entries)
+    for pipeline_name, entries in live_by_pipeline.items():
+        state = next((s for s in all_states if s.config.name == pipeline_name), None)
+        per_pipeline.append({
+            "name": pipeline_name,
+            "status": state.status if state is not None else "running",
+            "runs_last_hour": len(entries),
+            "records_in":  sum(int(getattr(e, "records_in", 0) or 0) for e in entries),
+            "records_out": sum(int(getattr(e, "records_out", 0) or 0) for e in entries),
+            "errors":      sum(int(getattr(e, "error_count", 0) or 0) for e in entries),
+        })
+
     sparkline_legacy = [
         {"bucket": point["bucket"], "records_out": point["records_out"]}
         for point in sparkline
     ]
+
+    chart_total = sum(point["bytes_processed"] for point in sparkline)
 
     return {
         "pipelines_total":      pipelines_total,
@@ -313,3 +376,50 @@ def _bucket_sparkline(rows, since: datetime, *, bucket_count: int, minutes: int)
             "bytes_processed": bytes_counts[i],
         })
     return points
+
+
+# ── Live StatsStore merge ──────────────────────────────────────────────────
+
+def _completed_run_ids(all_states, db, since: datetime) -> set[str]:
+    """Run ids already present in run history.
+
+    The completion-boundary guard: a delayed live snapshot for a run whose
+    final numbers were already recorded must be dropped, otherwise a
+    pre-completion payload landing after finalization resurrects a phantom
+    live entry that overrides the final run-history numbers.
+    """
+    completed: set[str] = set()
+    for state in all_states:
+        for run in state.run_history:
+            run_id = getattr(run, "run_id", None)
+            if run_id:
+                completed.add(str(run_id))
+    if db is not None:
+        from sqlalchemy import text
+        try:
+            with db._engine.connect() as conn:
+                rows = conn.execute(
+                    text("SELECT run_id FROM run_history WHERE finished_at >= :since"),
+                    {"since": since.isoformat()},
+                ).fetchall()
+            completed.update(str(row[0]) for row in rows)
+        except Exception:
+            # A query failure must not take the whole stats endpoint down.
+            pass
+    return completed
+
+
+def _live_entries(stats_store, all_states, db, since: datetime) -> list:
+    """StatsStore entries that are still genuinely live.
+
+    Drops final payloads (the store removes them immediately on arrival) and
+    entries for runs already present in run history (completion boundary).
+    """
+    if stats_store is None:
+        return []
+    completed = _completed_run_ids(all_states, db, since)
+    return [
+        entry for entry in stats_store.all_active()
+        if not getattr(entry, "is_final", False)
+        and entry.run_id not in completed
+    ]

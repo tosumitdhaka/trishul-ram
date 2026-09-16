@@ -37,7 +37,7 @@ Readiness probe. Returns 200 once startup is complete, 503 if DB or scheduler is
 Build and version information.
 
 ```json
-{"version": "1.3.3", "build_time": "2026-05-01T12:00:00+00:00", "python_version": "3.13.0"}
+{"version": "1.4.0", "build_time": "2026-05-01T12:00:00+00:00", "python_version": "3.13.0"}
 ```
 
 ### GET /api/plugins
@@ -286,6 +286,14 @@ Trigger one immediate batch run (not valid for stream pipelines).
 {"name": "pm-ingest", "status": "triggered"}
 ```
 
+**Queued response (v1.4.0)** — in manager+worker mode with no healthy workers and queued runs enabled (`TRAM_QUEUE_MANUAL_RUNS=1`, the default), the run is durably queued instead of failing: it survives manager restarts and is dispatched automatically when worker capacity returns. The response is `202 Accepted` with the stable run_id and absolute TTL:
+
+```json
+{"name": "pm-ingest", "status": "queued", "run_id": "…", "expires_at": "…"}
+```
+
+**Flush runs (v1.4.0)** — `?flush=true` makes stateful transforms emit their open windows as partials (`window_complete: false`) and clear them from the saved state. The flag is not carried through the queue: a queued flush run executes as a normal run when capacity returns — re-issue `?flush=true` once capacity is back to flush.
+
 ### POST /api/pipelines/reload
 Re-scan `TRAM_PIPELINE_DIR`, reload all YAML files.
 
@@ -412,7 +420,7 @@ Run history. Query params:
 |-------|---------|-------------|
 | `pipeline` | — | Filter by pipeline name |
 | `limit` | 100 | Max records to return |
-| `status` | — | Filter: `success` \| `failed` \| `partial` |
+| `status` | — | Filter: `success` \| `failed` \| `aborted` |
 | `offset` | 0 | Pagination offset (v0.7.0) |
 | `from_dt` | — | ISO8601 lower bound on `started_at` (v0.7.0) |
 | `format` | — | Set to `csv` to get `text/csv` export (v1.0.0) |
@@ -446,6 +454,20 @@ With SQLite/DB persistence, run history survives daemon restarts.
 ### GET /api/runs/{run_id}
 Get a single run result.
 
+## Internal Transform State (v1.4.0)
+
+Durable per-pipeline state for stateful transforms (`counter_delta`, `window_aggregate`). In manager+worker mode the worker GETs the state at run start and PUTs it back only after a successful run (retries re-hydrate from the same in-run snapshot); in standalone mode the state lives in the local `transform_state` table. Requires `TRAM_STATEFUL_TRANSFORMS=1` (default); `0` disables both the transforms and these endpoints (404). `update()`/`delete()` on the pipeline purge the row; a config-hash mismatch discards the stored state so the new transform identities start fresh.
+
+### GET /api/internal/transform-state/{pipeline}
+Returns the persisted state blob and its config hash.
+
+```json
+{"pipeline": "pm-counters", "state": {"counter_delta:0": {"…identity…": {"v": 1500, "t": 1789534920.0}}}, "config_sha256": "1c3036a4cf884027"}
+```
+
+### PUT /api/internal/transform-state/{pipeline}
+Replaces the state. Bodies over `TRAM_STATE_MAX_BYTES` (default 20 MiB) are rejected with `413`.
+
 ---
 
 ## Live Stats (v1.1.0)
@@ -470,17 +492,23 @@ Per-pipeline aggregated stats for the last hour (records in/out, error rate, avg
 
 ## Authentication (v1.0.0)
 
-When `TRAM_API_KEY` is set (or `apiKey` in Helm values), all `/api/*` requests must include the key:
+When `TRAM_API_KEY` is set (or `apiKey` in Helm values), all protected `/api/*` requests must include the key via the `X-API-Key` header:
 
 ```bash
-# Header (preferred)
 curl -H "X-API-Key: mysecret" http://localhost:8765/api/pipelines
-
-# Query param (convenience)
-curl "http://localhost:8765/api/pipelines?api_key=mysecret"
 ```
 
-Exempt paths (always unauthenticated): `/api/health`, `/api/ready`, `/metrics`, `/webhooks/*`, `/api/auth/login`
+The `?api_key=` query param is removed — keys in URLs end up in access/proxy logs and browser history.
+
+Exempt paths (always unauthenticated): `/api/health`, `/api/ready`, `/agent/health`, `/metrics`, `/`, `/api/auth/login`, `/favicon.ico`, `/docs`, `/redoc`, `/openapi.json`, and the `/webhooks/*` and `/ui` prefixes.
+
+Internal machine-to-machine surfaces (`/api/internal/*` on the manager, `/agent/*` on workers) honor `TRAM_INTERNAL_AUTH_MODE`:
+
+- `off` — requests pass through with no check and no log
+- `warn` (default) — missing/invalid keys are logged at WARNING but requests are still served
+- `enforce` — missing/invalid keys are rejected with `401`; requires `TRAM_API_KEY` to be set (without a key configured, internal surfaces pass through)
+
+An invalid `TRAM_INTERNAL_AUTH_MODE` value is logged at WARNING and falls back to `warn`.
 
 Returns `401 Unauthorized` when the key is missing or wrong.
 
@@ -609,8 +637,8 @@ Configure via env vars:
 | Env Var | Description |
 |---------|-------------|
 | `TRAM_AI_API_KEY` | API key for the AI provider |
-| `TRAM_AI_PROVIDER` | `openai` or `anthropic` (default: `openai`) |
-| `TRAM_AI_MODEL` | Model name (default: `gpt-4o` for OpenAI, `claude-sonnet-4-6` for Anthropic) |
+| `TRAM_AI_PROVIDER` | `anthropic`, `openai`, or `bedrock` (default: `anthropic`) |
+| `TRAM_AI_MODEL` | Model name (defaults: `claude-haiku-4-5-20251001` for Anthropic, `gpt-4o-mini` for OpenAI, `us.anthropic.claude-sonnet-4-6` for Bedrock) |
 | `TRAM_AI_BASE_URL` | Custom base URL (e.g. for Ollama or Azure OpenAI) |
 
 ---
@@ -838,7 +866,7 @@ Graceful shutdown.
 | Code | Meaning |
 |------|---------|
 | 400 | Invalid pipeline YAML or config |
-| 401 | Missing/invalid `X-API-Key` header or query param (v1.0.0); or missing/invalid `Authorization: Bearer` for webhook secret |
+| 401 | Missing/invalid `X-API-Key` header (the legacy `?api_key=` query param was removed in v1.4.0); or missing/invalid `Authorization: Bearer` for webhook secret |
 | 404 | Pipeline, run, or webhook path not found |
 | 409 | Pipeline already registered |
 | 422 | Pydantic validation error |

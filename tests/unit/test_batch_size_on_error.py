@@ -269,3 +269,85 @@ class TestOnErrorDlqExecution:
         envelope = _json.loads(mock_dlq.write.call_args[0][0])
         assert envelope["_stage"] == "parse"
         assert ctx.dlq_count == 1
+
+
+# ── asn1 split_path model validation (GH #19 / RCA §#19) ─────────────────
+
+
+def _asn1_pipeline_dict(serializer_extra: dict | None = None, pipeline_extra: dict | None = None):
+    serializer_in = {
+        "type": "asn1",
+        "schema_file": "/tmp/test.asn",
+        "message_class": "Foo",
+    }
+    serializer_in.update(serializer_extra or {})
+    data = {
+        "name": "asn1-split",
+        "source": {"type": "local", "path": "/tmp/in"},
+        "serializer_in": serializer_in,
+        "serializer_out": {"type": "json"},
+        "sinks": [{"type": "local", "path": "/tmp/out"}],
+    }
+    data.update(pipeline_extra or {})
+    return data
+
+
+class TestAsn1SplitPathModel:
+    def test_split_path_keys_accepted_with_record_chunk_size(self):
+        cfg = PipelineConfig.model_validate(
+            _asn1_pipeline_dict(
+                serializer_extra={"split_path": "stats.measurement", "split_path_context": {"vendor": "E"}},
+                pipeline_extra={"record_chunk_size": 100},
+            )
+        )
+        assert cfg.serializer_in.split_path == "stats.measurement"
+        assert cfg.serializer_in.split_path_context == {"vendor": "E"}
+        assert cfg.record_chunk_size == 100
+
+    def test_split_path_requires_record_chunk_size(self):
+        """split_path without record_chunk_size must be a pipeline-level
+        validation error — otherwise the sequential loop silently no-ops."""
+        with pytest.raises(ValidationError, match="record_chunk_size"):
+            PipelineConfig.model_validate(
+                _asn1_pipeline_dict(serializer_extra={"split_path": "stats.measurement"})
+            )
+
+    def test_split_path_and_split_records_are_mutually_exclusive(self):
+        with pytest.raises(ValidationError, match="mutually exclusive"):
+            PipelineConfig.model_validate(
+                _asn1_pipeline_dict(
+                    serializer_extra={"split_records": True, "split_path": "stats.measurement"},
+                    pipeline_extra={"record_chunk_size": 100},
+                )
+            )
+
+    def test_split_path_context_requires_split_path(self):
+        with pytest.raises(ValidationError, match="requires split_path"):
+            PipelineConfig.model_validate(
+                _asn1_pipeline_dict(
+                    serializer_extra={"split_path_context": {"vendor": "E"}},
+                    pipeline_extra={"record_chunk_size": 100},
+                )
+            )
+
+    def test_unknown_keys_still_rejected(self):
+        """extra='forbid' is lifted only for the two new keys."""
+        with pytest.raises(ValidationError, match="bogus_key"):
+            PipelineConfig.model_validate(
+                _asn1_pipeline_dict(
+                    serializer_extra={"split_path": "stats.measurement", "bogus_key": 1},
+                    pipeline_extra={"record_chunk_size": 100},
+                )
+            )
+
+    def test_split_path_chunking_requirement_only_applies_to_asn1(self):
+        """The chunk-size requirement is scoped to asn1 serializer_in."""
+        cfg = PipelineConfig.model_validate({
+            "name": "json-pipe",
+            "source": {"type": "local", "path": "/tmp/in"},
+            "serializer_in": {"type": "json"},
+            "serializer_out": {"type": "json"},
+            "sinks": [{"type": "local", "path": "/tmp/out"}],
+        })
+        assert cfg.serializer_in.type == "json"
+        assert cfg.record_chunk_size is None

@@ -2,9 +2,12 @@
 
 from __future__ import annotations
 
+import logging
 import os
 import socket
 from dataclasses import dataclass
+
+logger = logging.getLogger(__name__)
 
 
 def _env_int(name: str, default: int) -> int:
@@ -18,6 +21,51 @@ def _env_int(name: str, default: int) -> int:
         raise ValueError(
             f"Environment variable {name}={raw!r} is not a valid integer"
         ) from None
+
+
+def stateful_transforms_enabled() -> bool:
+    """``TRAM_STATEFUL_TRANSFORMS`` feature flag (F.1 §9) — default ON, fails open.
+
+    "0" disables stateful transforms: pipelines using them fail validation
+    with "stateful transforms disabled" and the internal transform-state
+    endpoints return 404. Any unrecognized value is logged at WARNING and
+    treated as enabled, so a typo'd value never silently flips a deployment's
+    transform semantics (the D.2/E.2 flag convention).
+    """
+    raw = os.environ.get("TRAM_STATEFUL_TRANSFORMS", "1")
+    if raw not in ("0", "1"):
+        logger.warning(
+            "Unrecognized TRAM_STATEFUL_TRANSFORMS value — treating as enabled (\"1\")",
+            extra={"value": raw},
+        )
+    return raw != "0"
+
+
+# TRAM_STATE_MAX_BYTES default: 20 MiB. Justification — the design F.1 §3.2a
+# blob bound is ~2.5 MB at 50k counter keys; 20 MiB is ~8× that, so a
+# ``window_aggregate`` group/window blob has room to grow between polls
+# without letting a runaway blob inflate the ``transform_state`` DB row
+# unbounded.
+_STATE_MAX_BYTES_DEFAULT = 20 * 1024 * 1024
+
+
+def state_max_bytes() -> int:
+    """``TRAM_STATE_MAX_BYTES`` cap on the transform-state PUT body (F.1 §3.2b).
+
+    Oversized blobs are rejected with 413. Invalid values are logged at
+    WARNING and fall back to the default (the webhook body-cap convention).
+    """
+    raw = os.environ.get("TRAM_STATE_MAX_BYTES")
+    if raw is None:
+        return _STATE_MAX_BYTES_DEFAULT
+    try:
+        return max(int(raw), 0)
+    except ValueError:
+        logger.warning(
+            "Invalid TRAM_STATE_MAX_BYTES=%r — using default",
+            raw,
+        )
+        return _STATE_MAX_BYTES_DEFAULT
 
 
 @dataclass(frozen=True)
@@ -73,10 +121,39 @@ class AppConfig:
     worker_namespace: str  # K8s namespace
     worker_port: int     # worker agent port
     worker_ingress_port: int  # worker public ingress port
+    # v1.3.1 D.2 (GH #17): count=1 stream durable placement
+    stream_single_placement: bool = True  # "1" (default) durable 1-slot placement / "0" legacy
+    # v1.4.0 E.2 (GH #21): queued manual runs
+    queue_manual_runs: bool = True    # "1" (default) queue manual runs on no-capacity / "0" fail-fast
+    queue_ttl_seconds: int = 900      # how long a queued run waits for capacity before expiring
+    # F.1 (GH #W-5.1): stateful transforms (counter_delta, later window_aggregate)
+    stateful_transforms: bool = True  # "1" (default) enabled / "0" disabled (rollback)
+    # F.1 (§3.2b): body-size cap for the internal transform-state PUT (20 MiB default)
+    state_max_bytes: int = _STATE_MAX_BYTES_DEFAULT
 
     @classmethod
     def from_env(cls) -> AppConfig:
         node_id = os.environ.get("TRAM_NODE_ID", socket.gethostname())
+        stream_single_placement_raw = os.environ.get("TRAM_STREAM_SINGLE_PLACEMENT", "1")
+        if stream_single_placement_raw not in ("0", "1"):
+            # Fail open: anything other than an explicit "0" enables the
+            # durable-placement path. A typo'd value is loud here instead
+            # of silently flipping a deployment's stream semantics.
+            logger.warning(
+                "Unrecognized TRAM_STREAM_SINGLE_PLACEMENT value — "
+                'treating as enabled ("1")',
+                extra={"value": stream_single_placement_raw},
+            )
+        queue_manual_runs_raw = os.environ.get("TRAM_QUEUE_MANUAL_RUNS", "1")
+        if queue_manual_runs_raw not in ("0", "1"):
+            # Fail open: anything other than an explicit "0" enables the
+            # queue. A typo'd value is loud here instead of silently
+            # flipping a deployment's manual-run semantics.
+            logger.warning(
+                "Unrecognized TRAM_QUEUE_MANUAL_RUNS value — "
+                'treating as enabled ("1")',
+                extra={"value": queue_manual_runs_raw},
+            )
         return cls(
             host=os.environ.get("TRAM_HOST", "0.0.0.0"),
             port=_env_int("TRAM_PORT", 8765),
@@ -109,6 +186,11 @@ class AppConfig:
             tram_mode=os.environ.get("TRAM_MODE", "standalone").lower(),
             manager_url=os.environ.get("TRAM_MANAGER_URL", ""),
             stats_interval=_env_int("TRAM_STATS_INTERVAL", 30),
+            stream_single_placement=stream_single_placement_raw != "0",
+            queue_manual_runs=queue_manual_runs_raw != "0",
+            queue_ttl_seconds=_env_int("TRAM_QUEUE_TTL_SECONDS", 900),
+            stateful_transforms=stateful_transforms_enabled(),
+            state_max_bytes=state_max_bytes(),
             worker_urls=os.environ.get("TRAM_WORKER_URLS", ""),
             worker_replicas=_env_int("TRAM_WORKER_REPLICAS", 0),
             worker_service=os.environ.get("TRAM_WORKER_SERVICE", "tram-worker"),

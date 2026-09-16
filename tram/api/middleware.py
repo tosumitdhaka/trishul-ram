@@ -3,6 +3,9 @@
 from __future__ import annotations
 
 import asyncio
+import hmac
+import logging
+import os
 import time
 from collections import deque
 from typing import TYPE_CHECKING
@@ -15,21 +18,51 @@ from tram.core.config import AppConfig
 if TYPE_CHECKING:
     from starlette.requests import Request
 
+logger = logging.getLogger(__name__)
+
 
 class APIKeyMiddleware(BaseHTTPMiddleware):
-    """Require X-API-Key header (or ?api_key= query param) for protected endpoints.
+    """Require X-API-Key header for protected endpoints.
 
-    Health probes and webhook ingestion paths are always exempt so container
-    orchestrators and external producers never need credentials.
+    Health probes, webhook ingestion paths, and the web UI are always exempt so
+    container orchestrators and external producers never need credentials.
+
+    Internal machine-to-machine surfaces (``/api/internal/*`` by default, or any
+    prefix passed as ``internal_prefixes``) honor ``TRAM_INTERNAL_AUTH_MODE``:
+
+    * ``off``     — requests pass through with no check and no log
+    * ``warn``    — requests with a missing/invalid key are logged at WARNING
+                    but still served
+    * ``enforce`` — requests with a missing/invalid key are rejected with 401
+
+    The default is ``warn`` (non-breaking rollout): Phase 2 of the security
+    rollout flips this to ``enforce`` without code changes. An invalid
+    ``TRAM_INTERNAL_AUTH_MODE`` value is logged at WARNING and falls back to
+    ``warn``.
     """
 
-    EXEMPT = {"/api/health", "/api/ready", "/metrics", "/", "/api/auth/login", "/favicon.ico",
-              "/docs", "/redoc", "/openapi.json"}
-    EXEMPT_PREFIX = ("/webhooks/", "/ui", "/api/internal/")
+    EXEMPT = {"/api/health", "/api/ready", "/agent/health", "/metrics", "/", "/api/auth/login",
+              "/favicon.ico", "/docs", "/redoc", "/openapi.json"}
+    EXEMPT_PREFIX = ("/webhooks/", "/ui")
+    INTERNAL_PREFIX = ("/api/internal/",)
 
-    def __init__(self, app) -> None:
+    def __init__(self, app, internal_prefixes=None) -> None:
         super().__init__(app)
         self._settings = AppConfig.from_env()
+        raw_mode = os.environ.get("TRAM_INTERNAL_AUTH_MODE", "warn")
+        self._mode = raw_mode.lower()
+        if self._mode not in ("off", "warn", "enforce"):
+            logger.warning(
+                "Invalid TRAM_INTERNAL_AUTH_MODE=%r — falling back to 'warn'",
+                raw_mode,
+            )
+            self._mode = "warn"
+        self._internal_prefixes = (
+            tuple(internal_prefixes) if internal_prefixes else self.INTERNAL_PREFIX
+        )
+
+    def _is_internal(self, path: str) -> bool:
+        return any(path.startswith(p) for p in self._internal_prefixes)
 
     async def dispatch(self, request: Request, call_next):
         settings = self._settings
@@ -42,10 +75,36 @@ class APIKeyMiddleware(BaseHTTPMiddleware):
         if path in self.EXEMPT or any(path.startswith(p) for p in self.EXEMPT_PREFIX):
             return await call_next(request)
 
-        # Machine-to-machine: X-API-Key
+        is_internal = self._is_internal(path)
+
+        # Internal machine-to-machine surfaces need a shared machine key; without
+        # one there is nothing to validate, so they pass through untouched
+        # (enforcement requires TRAM_API_KEY on the server).
+        if is_internal and not settings.api_key:
+            return await call_next(request)
+
+        # Machine-to-machine: X-API-Key header. The legacy ?api_key= query param
+        # was removed — keys in URLs end up in access/proxy logs and history.
         if settings.api_key:
-            key = request.headers.get("X-API-Key") or request.query_params.get("api_key")
-            if key == settings.api_key:
+            key = request.headers.get("X-API-Key")
+            # compare_digest needs bytes; HTTP/1.1 headers arrive latin-1
+            # decoded so latin-1 round-trips any raw value (never raises),
+            # while the env-configured key is a proper Unicode string (UTF-8
+            # encodes any str). A non-ASCII header therefore yields a clean
+            # 401 instead of a TypeError/500.
+            if key and hmac.compare_digest(key.encode("latin-1"), settings.api_key.encode()):
+                return await call_next(request)
+            if is_internal:
+                # Internal surfaces respect the auth-mode knob so deployments
+                # can roll out keys first and flip to enforcement later.
+                if self._mode == "enforce":
+                    return JSONResponse({"detail": "Unauthorized"}, status_code=401)
+                if self._mode == "warn":
+                    remote = request.client.host if request.client else "unknown"
+                    logger.warning(
+                        "Internal endpoint request with missing or invalid API key",
+                        extra={"path": path, "remote": remote},
+                    )
                 return await call_next(request)
 
         # Browser session: Bearer token

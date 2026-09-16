@@ -7,6 +7,7 @@ import sys
 from datetime import UTC, datetime
 
 from fastapi import APIRouter, Request
+from fastapi.concurrency import run_in_threadpool
 
 from tram import __version__
 from tram.api.config_schema import SCHEMA_FIELDS
@@ -53,7 +54,7 @@ async def readiness(request: Request) -> dict:
     """Readiness probe — returns 200 when daemon is fully initialized and DB is reachable."""
     from fastapi import HTTPException
 
-    manager = request.app.state.manager
+    controller = request.app.state.controller
     scheduler = request.app.state.scheduler
     db = getattr(request.app.state, "db", None)
     started_at = getattr(request.app.state, "started_at", None)
@@ -104,7 +105,7 @@ async def readiness(request: Request) -> dict:
         "db_engine": db_engine,
         "db_path": db_path,
         "scheduler": scheduler_status,
-        "pipelines_loaded": len(manager.list_all()),
+        "pipelines_loaded": len(controller.list_all()),
         "uptime": uptime,
         "cluster": cluster,
     }
@@ -207,9 +208,18 @@ async def cluster_nodes(request: Request) -> dict:
     if worker_pool is None:
         return {"mode": mode, "workers": []}
 
-    workers = worker_pool.status()
+    # worker_pool.status() fans out blocking /agent/status probes — offload it
+    # so one slow worker cannot stall the event loop (plan D.6).
+    workers = await run_in_threadpool(worker_pool.status)
+    # Health gate: healthy_workers() is the hysteresis-backed health state — a
+    # worker only drops after N consecutive failed health polls (plan A.6) — so
+    # a single failed poll (health or the one-shot /agent/status probe inside
+    # status()) must not blank a worker's row (RCA #17, plan D.3). Reconcile
+    # each row's ok flag against that state instead of the probe result.
+    healthy = set(worker_pool.healthy_workers())
     current_assignments = _current_worker_assignments(controller)
     for worker in workers:
+        worker["ok"] = worker.get("url") in healthy
         worker["assigned_pipelines"] = current_assignments.get(worker.get("url"), [])
 
     return {
@@ -238,6 +248,8 @@ async def cluster_streams(request: Request) -> dict:
         "streams": build_cluster_streams(
             placements,
             stats_store,
-            worker_pool.live_streams() if worker_pool is not None else None,
+            # Blocking per-worker /agent/status fan-out — off the event loop
+            # (plan D.6).
+            await run_in_threadpool(worker_pool.live_streams) if worker_pool is not None else None,
         ),
     }

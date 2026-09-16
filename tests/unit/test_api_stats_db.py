@@ -46,9 +46,10 @@ def _make_db_mock(fetchone_val=None, fetchall_val=None):
 def _make_app_with_db(states=None, db=None):
     app = FastAPI()
     app.include_router(router)
-    mock_manager = MagicMock()
-    mock_manager.list_all.return_value = states or []
-    app.state.manager = mock_manager
+    app.state.manager = MagicMock()
+    mock_controller = MagicMock()
+    mock_controller.list_all.return_value = states or []
+    app.state.controller = mock_controller
     if db is not None:
         app.state.db = db
     return app

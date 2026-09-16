@@ -159,6 +159,23 @@ sharedStorage:
 env:
   TRAM_LOG_LEVEL: INFO
   TRAM_LOG_FORMAT: json
+  ## Durable placement for count=1 streams (v1.3.1, GH #17)
+  ## "1" (default) routes count=1 stream dispatch through the broadcast-placement
+  ## machinery (durable 1-slot row, reconciler-driven recovery). "0" keeps the
+  ## legacy single-dispatch path. Placement rows keep working under either value.
+  TRAM_STREAM_SINGLE_PLACEMENT: "1"
+  ## Queued manual runs (v1.4.0, GH #21)
+  ## "1" (default) durably queues a manual run triggered with no healthy
+  ## workers and dispatches it when capacity returns (API returns 202). "0"
+  ## restores the legacy fail-fast behavior. An unrecognized value fails open.
+  TRAM_QUEUE_MANUAL_RUNS: "1"
+  ## Stateful transforms (F.1): counter_delta now, window_aggregate next.
+  ## "1" (default) enables stateful transforms and their durable per-pipeline
+  ## state (transform_state table / internal API). "0" disables them: pipelines
+  ## using them fail validation and the internal endpoints 404. Fails open on
+  ## unrecognized values.
+  TRAM_STATEFUL_TRANSFORMS: "1"
+  # TRAM_QUEUE_TTL_SECONDS: "900"  # max wait for capacity before expiry
   # TRAM_NODE_ID: ""            # defaults to hostname (auto-set from pod name in StatefulSet)
   # TRAM_SHUTDOWN_TIMEOUT_SECONDS: "30"  # drain timeout before forced stop
   # --- Database (v0.7.0) ---
@@ -175,6 +192,10 @@ env:
   # Note: API key is preferably set via .Values.apiKey (injected as TRAM_API_KEY automatically)
   # or via envSecret to avoid storing secrets in values.yaml.
   # TRAM_RATE_LIMIT: "0"          # requests/minute per client IP; 0 = disabled
+  # TRAM_INTERNAL_AUTH_MODE: "warn"  # off|warn|enforce — how /api/internal/* (manager)
+  #                               # and /agent/* (worker) treat missing/invalid keys.
+  #                               # warn (default) logs and serves; enforce rejects with 401.
+  # TRAM_WEBHOOK_MAX_BODY_BYTES: "10485760"  # max webhook body size; oversized → 413
   # --- Browser auth (v1.0.8) ---
   # TRAM_AUTH_SECRET: ""          # Shared HMAC signing secret for session tokens.
   #                               # REQUIRED in cluster mode — without it each pod
@@ -272,7 +293,13 @@ ui:
 ## Set apiKey to enable X-API-Key authentication on /api/* endpoints.
 ## Health probes (/api/health, /api/ready), webhooks (/webhooks/), and the
 ## web UI (/ui) are always exempt from API key checks.
-apiKey: "tram-internal-2026"   # Also configurable via TRAM_API_KEY env var
+## There is NO committed plaintext default — set a real secret here or via
+## envSecret.TRAM_API_KEY for any shared cluster; leave empty to disable auth
+## (dev/kind deployments). Internal machine-to-machine surfaces (/api/internal/*
+## on the manager, /agent/* on workers) honor TRAM_INTERNAL_AUTH_MODE
+## (off|warn|enforce, default warn): warn logs would-be-rejected requests and
+## still serves them, so rolling out keys never breaks a working deployment.
+apiKey: ""   # no plaintext default — set explicitly or via envSecret.TRAM_API_KEY
 
 ## Browser user authentication (v1.0.8)
 ## Comma-separated list of username:password pairs for UI login.
@@ -280,7 +307,7 @@ apiKey: "tram-internal-2026"   # Also configurable via TRAM_API_KEY env var
 ## Coexists with apiKey — machine clients use X-API-Key, browser users log in.
 ## Use envSecret.TRAM_AUTH_USERS for production to avoid plaintext passwords.
 ## Example: authUsers: "admin:secret,viewer:readonly"
-authUsers: "admin:tram@2026"
+authUsers: ""   # no plaintext default — set explicitly or via envSecret.TRAM_AUTH_USERS
 
 ## Pod security context
 ## fsGroup ensures Secret-mounted volumes (keys) are group-owned by the tram gid

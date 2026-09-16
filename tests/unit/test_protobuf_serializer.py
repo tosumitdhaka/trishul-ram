@@ -1,6 +1,7 @@
 """Tests for Protobuf serializer."""
 from __future__ import annotations
 
+import os
 import struct
 import sys
 from unittest.mock import MagicMock, patch
@@ -8,7 +9,11 @@ from unittest.mock import MagicMock, patch
 import pytest
 
 from tram.core.exceptions import SerializerError
-from tram.serializers.protobuf_serializer import ProtobufSerializer
+from tram.serializers.protobuf_serializer import (
+    _MODULE_CACHE,
+    ProtobufSerializer,
+    _proto_content_hash,
+)
 
 
 class TestProtobufSerializer:
@@ -129,13 +134,11 @@ class TestProtobufSerializer:
                 s._compile_proto()
 
     def test_cache_hit_skips_compilation(self, tmp_path):
-        from tram.serializers.protobuf_serializer import _MODULE_CACHE
         proto_file = tmp_path / "test.proto"
         proto_file.write_text('')
         s = ProtobufSerializer({"schema_file": str(proto_file), "message_class": "Foo"})
         mock_module = MagicMock()
-        mtime = proto_file.stat().st_mtime
-        cache_key = (s.schema_file, mtime)
+        cache_key = _proto_content_hash(str(proto_file))
         _MODULE_CACHE[cache_key] = mock_module
         mock_grpc = MagicMock()
         mock_pb = MagicMock()
@@ -151,6 +154,31 @@ class TestProtobufSerializer:
             mock_grpc.protoc.main.assert_not_called()
         finally:
             _MODULE_CACHE.pop(cache_key, None)
+
+    def test_same_content_varying_mtime_keeps_cache_at_one(self, tmp_path):
+        """Identical proto bytes with churning mtimes must not grow the cache."""
+        proto_file = tmp_path / "test.proto"
+        proto_file.write_text('syntax = "proto3";')
+        mock_grpc = MagicMock()
+        mock_grpc.protoc.main.return_value = 0
+        mock_pb = MagicMock()
+        mock_module = MagicMock()
+        with patch.dict(sys.modules, {
+            "grpc_tools": mock_grpc,
+            "grpc_tools.protoc": mock_grpc.protoc,
+            "google": mock_pb,
+            "google.protobuf": mock_pb,
+        }), patch("atexit.register"), patch("shutil.rmtree"), \
+             patch("importlib.import_module", return_value=mock_module):
+            for mtime in (1000.0, 2000.0, 3000.0):
+                os.utime(proto_file, (mtime, mtime))
+                s = ProtobufSerializer({"schema_file": str(proto_file), "message_class": "Foo"})
+                s._compile_proto()
+        try:
+            assert len(_MODULE_CACHE) == 1
+            mock_grpc.protoc.main.assert_called_once()
+        finally:
+            _MODULE_CACHE.clear()
 
     def test_protoc_failure_raises(self, tmp_path):
         proto_file = tmp_path / "test.proto"

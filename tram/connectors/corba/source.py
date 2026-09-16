@@ -26,12 +26,22 @@ Config keys:
                                       key is recorded in the DB so the same
                                       (pipeline, endpoint, operation+args) is
                                       not repeated on the next run.
+    dedupe_window_seconds (int, default 300)  Width of the time bucket used in
+                                      the skip_processed key.  The recorded key
+                                      is ``operation:args:<bucket>`` where
+                                      ``bucket = floor(now / window)``, so
+                                      re-invocations within the same window are
+                                      deduped but the next scheduled run lands
+                                      in a fresh bucket and runs again (a plain
+                                      operation+args key skipped scheduled
+                                      collections forever).
 """
 
 from __future__ import annotations
 
 import json
 import logging
+import time
 from collections.abc import Iterator
 
 from tram.core.exceptions import SourceError
@@ -77,6 +87,7 @@ class CorbaSource(BaseSource):
         self.args: list = config.get("args", [])
         self.timeout_seconds: int = int(config.get("timeout_seconds", 30))
         self.skip_processed: bool = bool(config.get("skip_processed", False))
+        self.dedupe_window_seconds: int = int(config.get("dedupe_window_seconds", 300))
         self._pipeline_name: str = config.get("_pipeline_name", "")
         self._file_tracker = config.get("_file_tracker")
 
@@ -154,11 +165,16 @@ class CorbaSource(BaseSource):
         return {"ok": True, "latency_ms": None, "detail": "No remote test available for IOR-based CORBA"}
 
     def read(self) -> Iterator[tuple[bytes, dict]]:
-        # Build a stable invocation key for skip_processed tracking
+        # Build a stable invocation key for skip_processed tracking. The
+        # per-invocation filepath is time-bucketed so a scheduled re-invocation
+        # with the same operation+args is not skipped forever: re-invocations
+        # within the same window dedupe, but the next scheduled run lands in a
+        # fresh bucket and runs again (telecom-domain review).
         invocation_key = f"{self.ior or self.naming_service}/{self.operation}"
         args_repr = json.dumps(self.args, sort_keys=True, default=str)
         source_key = f"corba:{invocation_key}"
-        track_fp = f"{self.operation}:{args_repr}"
+        bucket = int(time.time() / max(self.dedupe_window_seconds, 1))
+        track_fp = f"{self.operation}:{args_repr}:{bucket}"
 
         if self.skip_processed and self._file_tracker:
             if self._file_tracker.is_processed(self._pipeline_name, source_key, track_fp):

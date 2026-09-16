@@ -117,6 +117,18 @@ unconfirmed work lives in the backlog at the bottom.
 - [x] **Pipeline detail completeness** — schedule, alert, run-history, versioning, placement, and error-policy views all reflect current backend fields without fallback mismatches
 - [x] **Plugin/templates/settings pages revalidation** — remove stale assumptions, ensure live API-backed rendering, and verify empty/error states
 - [x] **Responsive/browser pass** — light/dark mode, mobile/tablet layout, console-clean build, and page-level smoke checks
+---
+
+## v1.4.0 — Implementation Waves A–F (GH #16–#22)
+
+> Full plan: [`docs/plans/issue-implementation-plan.md`](plans/issue-implementation-plan.md) · release record: [`v1.4.0_plan.md`](plans/v1.4.0_plan.md) · verification: [`reviews/kind-verification.md`](reviews/kind-verification.md)
+
+- [x] **A — stopgaps (#16 mitigation, #21 labeling)**: `MALLOC_ARENA_MAX=2` + `post_batch_cleanup` default on + schema-cache LRU + asset-sync skip + sink close; `no_capacity` vs `dispatch_failed` run-history labeling with health hysteresis; dead-code removal
+- [x] **B — correctness core**: alert CRUD persistence, watcher delete lifecycle, threaded batch-path rework (deferred source finalize + bounded in-flight cap), syslog RFC 6587 + concurrent TCP, controller lifecycle RLock, manager-restart adopt guard, Kafka `enable_auto_commit=false` default
+- [x] **C — security rollout (phase 1, warn-only)**: `TRAM_INTERNAL_AUTH_MODE`, bidirectional `X-API-Key` on worker↔manager traffic, probe exemptions, constant-time compares, webhook body-size limit, ClickHouse identifier validation, chart defaults rotated out
+- [x] **D — visibility/stats (#17, #22, #18)**: durable count=1 stream placements with worker-death recovery + manager-restart adoption + config-drift redispatch; live mid-run dashboard stats; `json_flatten`/explode linear-time fix; per-slot placement CAS
+- [x] **E — enhancements (#19, #21, #20)**: ASN.1 `split_path`/`split_path_context`; queued manual runs (durable queue, auto-dispatch, TTL, six metrics); templates-page shared action contract
+- [x] **F — domain gaps**: `counter_delta` + `window_aggregate` stateful transforms with durable per-pipeline state (manager-mediated in worker mode); local/SFTP file-done guards; gNMI subscription modes + reconnect; Kafka stop + lag; CORBA dedupe window; `source_timezone` for timestamp normalization
 
 ---
 
@@ -171,6 +183,7 @@ unconfirmed work lives in the backlog at the bottom.
 
 | Version | Theme |
 |---------|-------|
+| v1.4.0 | Implementation waves A–F: correctness core, security rollout, visibility/stats, queued runs, stateful transforms, domain gaps (GH #16–#22) |
 | v1.3.0 | Broadcast streams; push-source scaling; placement reconciliation; manager StatefulSet |
 | v1.2.3 | SNMP Poll v3 validation; ASN.1 decode hardening |
 | v1.2.2 | Stability & polish; CI fixes; docs alignment |

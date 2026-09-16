@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import json
 import logging
+import re
 import threading
 
 from tram.core.exceptions import SinkError
@@ -10,6 +11,8 @@ from tram.interfaces.base_sink import BaseSink
 from tram.registry.registry import register_sink
 
 logger = logging.getLogger(__name__)
+
+_IDENTIFIER_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*(\.[A-Za-z_][A-Za-z0-9_]*)?$")
 
 
 @register_sink("clickhouse")
@@ -47,6 +50,11 @@ class ClickHouseSink(BaseSink):
         self.username: str = config.get("username", "default")
         self.password: str = config.get("password", "")
         self.table: str = config["table"]
+        if not _IDENTIFIER_RE.fullmatch(self.table):
+            raise SinkError(
+                f"ClickHouse table name {self.table!r} is not a valid identifier — "
+                "use letters, digits, underscores, and at most one dot (db.table)"
+            )
         self.secure: bool = bool(config.get("secure", False))
         self.verify: bool = bool(config.get("verify", True))
         self.connect_timeout: int = int(config.get("connect_timeout", 10))
@@ -89,10 +97,13 @@ class ClickHouseSink(BaseSink):
         self._insert_rows(rows)
 
     def close(self) -> None:
-        """Flush remaining buffer and stop the timer. Called by executor on stream stop."""
+        """Flush remaining buffer and stop the timer. Idempotent — safe to call twice."""
+        if self._closed:
+            return
         self._closed = True
         if self._flush_timer is not None:
             self._flush_timer.cancel()
+            self._flush_timer = None
         if self.batch_flush_on_stop:
             try:
                 self._flush()

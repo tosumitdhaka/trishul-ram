@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import logging
+import threading
+import time
 from collections.abc import Iterator
 
 from tram.core.exceptions import SourceError
@@ -24,7 +26,9 @@ class KafkaSource(BaseSource):
         topic             (str or list[str], req.)  Topic(s) to subscribe to.
         group_id          (str, default pipeline name)  Consumer group ID.
         auto_offset_reset (str, default "latest")   "latest" | "earliest"
-        enable_auto_commit (bool, default True)     Auto-commit offsets.
+        enable_auto_commit (bool, default False)    Auto-commit offsets. Default
+                                                    False for at-least-once (see
+                                                    commit semantics below).
         max_poll_records  (int, default 500)        Max records per poll.
         session_timeout_ms (int, default 30000)     Session timeout.
         security_protocol (str, default "PLAINTEXT") "PLAINTEXT" | "SSL" | "SASL_PLAINTEXT" | "SASL_SSL"
@@ -32,6 +36,21 @@ class KafkaSource(BaseSource):
         sasl_username     (str, optional)           SASL username.
         sasl_password     (str, optional)           SASL password.
         ssl_cafile        (str, optional)           CA certificate path.
+
+    Commit semantics (at-least-once default):
+    With ``enable_auto_commit: false`` (the default) offsets are committed
+    explicitly, once per poll batch, only after every message in that batch
+    has been consumed by the caller. In the default single-threaded path
+    (``thread_workers: 1``) a message is consumed only after its sink write
+    (or retry / skip / DLQ resolution under ``on_error``) has completed, so a
+    crash at any point leaves the uncommitted batch to be re-polled on restart
+    instead of losing it. With ``thread_workers > 1`` the executor submits up
+    to ``2 * thread_workers`` messages ahead of the sink writes, so the batch
+    commit can fire while some of its messages are still queued — a crash in
+    that window loses those messages, so use ``thread_workers: 1`` for strict
+    at-least-once. Setting ``enable_auto_commit: true`` restores the legacy
+    at-most-once behavior: the consumer commits on its own ~5s timer regardless
+    of sink progress, and the explicit batch commit is disabled.
     """
 
     def __init__(self, config: dict) -> None:
@@ -42,7 +61,7 @@ class KafkaSource(BaseSource):
         self.topics: list[str] = topics if isinstance(topics, list) else [topics]
         self.group_id: str = config.get("group_id") or config.get("_pipeline_name", "tram")
         self.auto_offset_reset: str = config.get("auto_offset_reset", "latest")
-        self.enable_auto_commit: bool = bool(config.get("enable_auto_commit", True))
+        self.enable_auto_commit: bool = bool(config.get("enable_auto_commit", False))
         self.max_poll_records: int = int(config.get("max_poll_records", 500))
         self.session_timeout_ms: int = int(config.get("session_timeout_ms", 30000))
         self.security_protocol: str = config.get("security_protocol", "PLAINTEXT")
@@ -52,6 +71,36 @@ class KafkaSource(BaseSource):
         self.ssl_cafile: str | None = config.get("ssl_cafile")
         self.reconnect_delay_seconds: float = float(config.get("reconnect_delay_seconds", 5.0))
         self.max_reconnect_attempts: int = int(config.get("max_reconnect_attempts", 0))
+        self._stop_event: threading.Event = threading.Event()
+        self._consumer = None
+
+    # ── Lifecycle ──────────────────────────────────────────────────────────
+
+    def stop(self) -> None:
+        """Interrupt read(): wake a blocked poll and skip the reconnect backoff.
+
+        Called by the executor's stop-watcher thread when the pipeline stop
+        event fires.  Closes the active consumer so a blocked ``poll()``
+        unblocks immediately instead of waiting out the poll timeout; the read
+        loop then observes the stop flag and exits without reconnecting.
+        """
+        self._stop_event.set()
+        consumer = self._consumer
+        if consumer is not None:
+            try:
+                consumer.close()
+            except Exception:
+                pass
+
+    def _sleep_interruptible(self, seconds: float) -> bool:
+        """Sleep in slices so stop() interrupts the delay. Returns True if stopped."""
+        deadline = time.monotonic() + seconds
+        while not self._stop_event.is_set():
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                return False
+            self._stop_event.wait(timeout=min(0.25, remaining))
+        return True
 
     def _build_consumer(self):
         try:
@@ -80,7 +129,6 @@ class KafkaSource(BaseSource):
         return KafkaConsumer(*self.topics, **kwargs)
 
     def test_connection(self) -> dict:
-        import time
         t0 = time.monotonic()
         try:
             from kafka import KafkaAdminClient
@@ -102,17 +150,41 @@ class KafkaSource(BaseSource):
         return {"ok": True, "latency_ms": latency,
                 "detail": f"Connected to {len(brokers)} broker(s), {len(topics)} topics"}
 
+    def _update_lag(self, consumer) -> None:
+        """Best-effort lag metric, sampled once per poll batch.
+
+        The previous implementation called the synchronous ``end_offsets``
+        broker round-trip once per message, destroying throughput on busy
+        topics (code review B4); per-batch sampling bounds that cost.
+        """
+        try:
+            from tram.metrics.registry import KAFKA_LAG
+
+            partitions = consumer.assignment()
+            end_offsets = consumer.end_offsets(list(partitions))
+            for tp, end in end_offsets.items():
+                pos = consumer.position(tp)
+                lag = max(0, end - pos)
+                KAFKA_LAG.labels(
+                    pipeline=self.group_id,
+                    topic=tp.topic,
+                    partition=str(tp.partition),
+                ).set(lag)
+        except Exception:
+            pass  # Lag metric is best-effort
+
     def read(self) -> Iterator[tuple[bytes, dict]]:
         logger.info(
             "Kafka consumer starting",
             extra={"brokers": self.brokers, "topics": self.topics, "group": self.group_id},
         )
-        from tram.metrics.registry import KAFKA_LAG
 
         attempt = 0
         max_attempts = self.max_reconnect_attempts  # 0 = infinite
 
         while True:
+            if self._stop_event.is_set():
+                return
             consumer = None
             try:
                 try:
@@ -123,39 +195,41 @@ class KafkaSource(BaseSource):
                     raise SourceError(f"Kafka consumer init failed: {exc}") from exc
 
                 attempt = 0  # Reset on successful connect
-                for msg in consumer:
-                    value = msg.value
-                    if value is None:
+                self._consumer = consumer
+                while True:
+                    if self._stop_event.is_set():
+                        return
+                    batch = consumer.poll(timeout_ms=1000)
+                    if not batch:
                         continue
+                    self._update_lag(consumer)
+                    for _tp, msgs in batch.items():
+                        for msg in msgs:
+                            value = msg.value
+                            if value is None:
+                                continue
 
-                    # Update lag metric
-                    try:
-                        partitions = consumer.assignment()
-                        end_offsets = consumer.end_offsets(list(partitions))
-                        for tp, end in end_offsets.items():
-                            pos = consumer.position(tp)
-                            lag = max(0, end - pos)
-                            KAFKA_LAG.labels(
-                                pipeline=self.group_id,
-                                topic=tp.topic,
-                                partition=str(tp.partition),
-                            ).set(lag)
-                    except Exception:
-                        pass  # Lag metric is best-effort
-
-                    yield value, {
-                        "kafka_topic": msg.topic,
-                        "kafka_partition": msg.partition,
-                        "kafka_offset": msg.offset,
-                        "kafka_key": msg.key.decode("utf-8") if msg.key else None,
-                    }
-
-                # Consumer exhausted normally — exit
-                break
+                            yield value, {
+                                "kafka_topic": msg.topic,
+                                "kafka_partition": msg.partition,
+                                "kafka_offset": msg.offset,
+                                "kafka_key": msg.key.decode("utf-8") if msg.key else None,
+                            }
+                    if not self.enable_auto_commit:
+                        # Explicit per-batch commit. Reached only when the
+                        # caller has resumed the generator past the last message
+                        # of this poll batch (i.e. it fully consumed the batch),
+                        # so a mid-batch abort never commits. With auto-commit
+                        # enabled the consumer handles commits on its own timer.
+                        consumer.commit()
 
             except SourceError:
                 raise
             except Exception as exc:
+                if self._stop_event.is_set():
+                    # stop() closed the consumer mid-poll; exit instead of
+                    # treating the closure as a connection loss to retry.
+                    return
                 attempt += 1
                 if max_attempts > 0 and attempt >= max_attempts:
                     raise SourceError(
@@ -170,16 +244,19 @@ class KafkaSource(BaseSource):
                         "error": str(exc),
                     },
                 )
-                import time
-                time.sleep(self.reconnect_delay_seconds)
+                if self._sleep_interruptible(self.reconnect_delay_seconds):
+                    return
             finally:
                 if consumer is not None:
-                    try:
-                        consumer.commit()   # best-effort commit before close
-                    except Exception:
-                        pass
+                    # Deliberately NO commit() here: a finally-commit would
+                    # persist offsets for a partially consumed batch when the
+                    # caller aborts mid-batch (sink error / run stop), silently
+                    # losing those messages. At-least-once means the uncommitted
+                    # tail is re-polled instead.
                     try:
                         consumer.close()
                         logger.info("Kafka consumer closed", extra={"topics": self.topics})
                     except Exception:
                         pass
+                    finally:
+                        self._consumer = None

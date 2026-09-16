@@ -5,6 +5,8 @@ from __future__ import annotations
 import logging
 
 from fastapi import APIRouter, HTTPException, Query, Request, Response, status
+from fastapi.concurrency import run_in_threadpool
+from fastapi.responses import JSONResponse
 from pydantic import BaseModel
 
 from tram.api.routers._stream_views import build_placement_view
@@ -60,9 +62,32 @@ async def dry_run_pipeline(request: Request) -> dict:
 @router.get("")
 async def list_pipelines(request: Request) -> list[dict]:
     """List all registered pipelines with their current status."""
-    manager = request.app.state.manager
-    states = manager.list_all()
-    return [state.to_dict() for state in states]
+    controller = request.app.state.controller
+    states = controller.list_all()
+    rows = [state.to_dict() for state in states]
+    # E.2 (§8.1): each pipeline gains a `queued_run` field when a non-terminal
+    # queued run exists. One join against get_queued_run_view — never a
+    # per-pipeline DB hit.
+    db = getattr(request.app.state, "db", None)
+    if db is not None:
+        queued_by_pipeline: dict[str, dict] = {}
+        for run in db.get_queued_run_view():
+            queued_by_pipeline.setdefault(run["pipeline_name"], run)
+        for row in rows:
+            queued = queued_by_pipeline.get(row["name"])
+            row["queued_run"] = (
+                {
+                    "run_id": queued["run_id"],
+                    "requested_at": queued["requested_at"].isoformat(),
+                    "expires_at": queued["expires_at"].isoformat(),
+                }
+                if queued is not None
+                else None
+            )
+    else:
+        for row in rows:
+            row["queued_run"] = None
+    return rows
 
 
 @router.post("", status_code=status.HTTP_201_CREATED)
@@ -98,12 +123,28 @@ async def register_pipeline(request: Request) -> dict:
 
 @router.get("/{name}")
 async def get_pipeline(name: str, request: Request) -> dict:
-    manager = request.app.state.manager
+    controller = request.app.state.controller
     try:
-        state = manager.get(name)
+        state = controller.get(name)
     except PipelineNotFoundError as exc:
         raise HTTPException(status_code=404, detail=str(exc))
-    return state.to_detail_dict()
+    row = state.to_detail_dict()
+    # E.2 (§8.1): detail view carries the queued run (if any).
+    db = getattr(request.app.state, "db", None)
+    if db is not None:
+        queued = db.get_active_queued_run_for_pipeline(name)
+        row["queued_run"] = (
+            {
+                "run_id": queued["run_id"],
+                "requested_at": queued["requested_at"].isoformat(),
+                "expires_at": queued["expires_at"].isoformat(),
+            }
+            if queued is not None
+            else None
+        )
+    else:
+        row["queued_run"] = None
+    return row
 
 
 @router.get("/{name}/placement")
@@ -124,19 +165,24 @@ async def get_pipeline_placement(name: str, request: Request) -> dict:
     if placement is not None:
         live_items = None
         if worker_pool is not None:
+            # Blocking per-worker /agent/status fan-out — off the event loop
+            # (plan D.6).
+            all_live = await run_in_threadpool(worker_pool.live_streams)
             live_items = [
                 item
-                for item in worker_pool.live_streams()
+                for item in all_live
                 if item.get("pipeline_name") == name
             ]
         return build_placement_view(placement, stats_store, live_items)
 
-    # Standalone synthetic view: active stream pipeline with a live stats entry
-    if (
-        stats_store is not None
-        and state.config.schedule.type == "stream"
-        and controller._worker_pool is None
-    ):
+    # Stream pipeline without a durable placement row: single-slot synthetic
+    # view from the live stats entry whenever one exists. Placement rows are
+    # the source of truth after D.2 (count=1 streams included), so this path
+    # mainly serves standalone mode (no worker pool ⇒ no placements) and the
+    # feature-flag-off / pre-D.2 count=1 stream still running on a worker.
+    # The `worker_pool is None` gate is gone — a manager-mode stream without a
+    # placement row renders instead of 404ing (RCA #17, plan D.3).
+    if stats_store is not None and state.config.schedule.type == "stream":
         entries = stats_store.for_pipeline(name)
         if entries:
             from tram.api.routers._stream_views import _stats_view_from_entry
@@ -322,7 +368,11 @@ async def restart_pipeline(name: str, request: Request) -> dict:
 
 
 @router.post("/{name}/run")
-async def trigger_run(name: str, request: Request) -> dict:
+async def trigger_run(
+    name: str,
+    request: Request,
+    flush: bool = Query(False, description="Flush run (F.1 §5): stateful transforms emit open windows as partials and clear them from state"),
+) -> dict:
     controller = request.app.state.controller
 
     try:
@@ -331,13 +381,36 @@ async def trigger_run(name: str, request: Request) -> dict:
         raise HTTPException(status_code=404, detail=str(exc))
 
     try:
-        run_id = controller.trigger_run(name)
+        result = controller.trigger_run(name, flush=flush)
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc))
     except Exception as exc:
         raise HTTPException(status_code=500, detail=str(exc))
 
-    return {"name": name, "status": "triggered", "run_id": run_id}
+    if isinstance(result, str):
+        # Legacy/mocked path: a plain run_id means the run was submitted.
+        return {"name": name, "status": "triggered", "run_id": result}
+
+    if result.disposition == "queued":
+        # E.2 (§8.1): 202 — the run is durably queued (or a dedupe-hit returning
+        # the existing run_id). expires_at is the absolute TTL deadline.
+        expires_at = None
+        db = getattr(request.app.state, "db", None)
+        if db is not None:
+            row = db.get_active_queued_run_for_pipeline(name)
+            if row is not None:
+                expires_at = row["expires_at"].isoformat()
+        return JSONResponse(
+            status_code=status.HTTP_202_ACCEPTED,
+            content={
+                "name": name,
+                "status": "queued",
+                "run_id": result.run_id,
+                "expires_at": expires_at,
+            },
+        )
+
+    return {"name": name, "status": "triggered", "run_id": result.run_id}
 
 
 # ── Reload ─────────────────────────────────────────────────────────────────
@@ -373,13 +446,13 @@ async def reload_pipelines(request: Request) -> dict:
 @router.get("/{name}/versions")
 async def list_versions(name: str, request: Request) -> list[dict]:
     """List saved versions for a pipeline."""
-    manager = request.app.state.manager
+    controller = request.app.state.controller
     try:
-        manager.get(name)
+        controller.get(name)
     except PipelineNotFoundError as exc:
         raise HTTPException(status_code=404, detail=str(exc))
 
-    versions = manager.get_versions(name)
+    versions = controller.get_versions(name)
     return versions
 
 
@@ -387,13 +460,13 @@ async def list_versions(name: str, request: Request) -> list[dict]:
 async def get_version_yaml(name: str, version: int, request: Request):
     """Return raw YAML for a specific pipeline version."""
     from fastapi.responses import PlainTextResponse
-    manager = request.app.state.manager
+    controller = request.app.state.controller
     try:
-        manager.get(name)
+        controller.get(name)
     except PipelineNotFoundError as exc:
         raise HTTPException(status_code=404, detail=str(exc))
     try:
-        yaml_text = manager.get_version_yaml(name, version)
+        yaml_text = controller.get_version_yaml(name, version)
     except (KeyError, RuntimeError) as exc:
         raise HTTPException(status_code=404, detail=str(exc))
     return PlainTextResponse(yaml_text, media_type="text/plain")
@@ -402,11 +475,11 @@ async def get_version_yaml(name: str, version: int, request: Request):
 # ── Alert rules ────────────────────────────────────────────────────────────
 
 
-def _read_alerts_data(manager, name):
+def _read_alerts_data(controller, name):
     """Return (yaml_dict, state) or raise HTTPException."""
     import yaml as _yaml
     try:
-        state = manager.get(name)
+        state = controller.get(name)
     except PipelineNotFoundError as exc:
         raise HTTPException(status_code=404, detail=str(exc))
     yaml_text = getattr(state, "yaml_text", None) or ""
@@ -415,32 +488,30 @@ def _read_alerts_data(manager, name):
     return _yaml.safe_load(yaml_text) or {}, state
 
 
-def _save_alerts_data(manager, scheduler, name, data, was_running: bool):
+def _save_alerts_data(controller, name, data):
+    """Persist alert rules by routing through ``controller.update()``.
+
+    ``update()`` writes the new YAML into the pipeline registry via
+    ``db.save_pipeline`` (which boot-load reads back on restart) and performs
+    the proper stop/restart of the live pipeline when it was active. The old
+    path re-implemented deregister/register, which only saved a *version* —
+    alert edits vanished on controller restart. Alerts live inside the
+    pipeline YAML, so a real edit always produces a different document and
+    never hits ``update()``'s identical-YAML short-circuit.
+    """
     import yaml as _yaml
     new_yaml = _yaml.dump(data, default_flow_style=False, allow_unicode=True, sort_keys=False)
     try:
-        config = load_pipeline_from_yaml(new_yaml)
+        load_pipeline_from_yaml(new_yaml)
     except Exception as exc:
         raise HTTPException(status_code=400, detail=str(exc))
-    if was_running:
-        try:
-            scheduler.stop_pipeline(name)
-        except Exception:
-            pass
-    manager.deregister(name)
-    new_state = manager.register(config, yaml_text=new_yaml)
-    if was_running and config.enabled and config.schedule.type != "manual":
-        try:
-            scheduler.start_pipeline(name)
-        except Exception:
-            pass
-    return new_state
+    return controller.update(name, new_yaml)
 
 
 @router.get("/{name}/alerts")
 async def list_alerts(name: str, request: Request) -> list[dict]:
     """List alert rules for a pipeline."""
-    data, _ = _read_alerts_data(request.app.state.manager, name)
+    data, _ = _read_alerts_data(request.app.state.controller, name)
     alerts = data.get("alerts") or []
     return [{"index": i, **a} for i, a in enumerate(alerts)]
 
@@ -451,13 +522,12 @@ async def create_alert(name: str, request: Request) -> dict:
     body = await request.json()
     if not body.get("condition") or not body.get("action"):
         raise HTTPException(status_code=400, detail="condition and action are required")
-    data, state = _read_alerts_data(request.app.state.manager, name)
+    data, _ = _read_alerts_data(request.app.state.controller, name)
     alerts = list(data.get("alerts") or [])
     rule = {k: v for k, v in body.items() if v is not None}
     alerts.append(rule)
     data["alerts"] = alerts
-    _save_alerts_data(request.app.state.manager, request.app.state.scheduler,
-                      name, data, state.status == "running")
+    _save_alerts_data(request.app.state.controller, name, data)
     return {"index": len(alerts) - 1, **rule}
 
 
@@ -467,29 +537,27 @@ async def update_alert(name: str, idx: int, request: Request) -> dict:
     body = await request.json()
     if not body.get("condition") or not body.get("action"):
         raise HTTPException(status_code=400, detail="condition and action are required")
-    data, state = _read_alerts_data(request.app.state.manager, name)
+    data, _ = _read_alerts_data(request.app.state.controller, name)
     alerts = list(data.get("alerts") or [])
     if idx < 0 or idx >= len(alerts):
         raise HTTPException(status_code=404, detail=f"Alert index {idx} not found")
     rule = {k: v for k, v in body.items() if v is not None}
     alerts[idx] = rule
     data["alerts"] = alerts
-    _save_alerts_data(request.app.state.manager, request.app.state.scheduler,
-                      name, data, state.status == "running")
+    _save_alerts_data(request.app.state.controller, name, data)
     return {"index": idx, **rule}
 
 
 @router.delete("/{name}/alerts/{idx}", status_code=status.HTTP_204_NO_CONTENT)
 async def delete_alert(name: str, idx: int, request: Request) -> Response:
     """Remove an alert rule by index."""
-    data, state = _read_alerts_data(request.app.state.manager, name)
+    data, _ = _read_alerts_data(request.app.state.controller, name)
     alerts = list(data.get("alerts") or [])
     if idx < 0 or idx >= len(alerts):
         raise HTTPException(status_code=404, detail=f"Alert index {idx} not found")
     alerts.pop(idx)
     data["alerts"] = alerts
-    _save_alerts_data(request.app.state.manager, request.app.state.scheduler,
-                      name, data, state.status == "running")
+    _save_alerts_data(request.app.state.controller, name, data)
     return Response(status_code=204)
 
 

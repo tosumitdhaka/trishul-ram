@@ -29,3 +29,13 @@ class BaseSink(ABC):
         no-op for sinks without source-finalization semantics.
         """
         return None
+
+    def close(self) -> None:
+        """Release run-scoped resources (timers, buffers, connections).
+
+        Called by the executor after a run finishes. The default is a no-op for
+        sinks without persistent resources; sinks that hold resources override
+        it. Implementations must be idempotent — close() may be called more
+        than once.
+        """
+        return None

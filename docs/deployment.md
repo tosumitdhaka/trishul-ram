@@ -36,7 +36,9 @@ All configuration is via environment variables (12-factor).
 | `TRAM_SMTP_PASS` | _(none)_ | SMTP password (optional) |
 | `TRAM_SMTP_TLS` | `true` | Use STARTTLS (`false` for plain SMTP) |
 | `TRAM_SMTP_FROM` | `tram@localhost` | Sender address for alert emails |
-| `TRAM_API_KEY` | _(empty)_ | API key for request authentication; empty = auth disabled |
+| `TRAM_API_KEY` | _(empty)_ | API key for request authentication via the `X-API-Key` header (empty = auth disabled; the legacy `?api_key=` query param was removed) |
+| `TRAM_INTERNAL_AUTH_MODE` | `warn` | How internal machine-to-machine surfaces (`/api/internal/*` on the manager, `/agent/*` on workers) treat requests with a missing/invalid key: `off` (pass through, no log), `warn` (log at WARNING, still serve), `enforce` (reject with 401). Default `warn` — flipping to `enforce` in a later phase requires no code changes |
+| `TRAM_WEBHOOK_MAX_BODY_BYTES` | `10485760` | Maximum accepted webhook request body size in bytes; oversized payloads are rejected with 413 (v1.4.0) |
 | `TRAM_AUTH_USERS` | _(empty)_ | Comma-separated `user:password` pairs for browser UI login (v1.0.8); issues 8-hour HMAC session tokens; coexists with `TRAM_API_KEY` |
 | `TRAM_AUTH_SECRET` | _(random)_ | Shared HMAC signing secret for session tokens (v1.0.8); **required in cluster mode** — without a shared secret each pod signs tokens independently and cross-pod requests return 401 |
 | `TRAM_RATE_LIMIT` | `0` | Max requests per minute per IP for `/api/*`; 0 = disabled |
@@ -69,6 +71,11 @@ All configuration is via environment variables (12-factor).
 | `TRAM_MANAGER_URL` | _(empty)_ | Manager base URL used by worker pods for run-complete callbacks (v1.2.0) |
 | `TRAM_DATA_DIR` | `/data` | Base directory for worker-synced schemas and custom MIBs in worker mode; if overridden, keep `TRAM_SCHEMA_DIR` and `TRAM_MIB_DIR` under the same root |
 | `TRAM_STATS_INTERVAL` | `30` | Seconds between worker periodic stats reports; also controls `PlacementReconciler` tick interval (`min(TRAM_STATS_INTERVAL, 10)s`) and stale-slot threshold (`3 × interval`) (v1.3.0) |
+| `TRAM_STREAM_SINGLE_PLACEMENT` | `1` | Durable placement for count=1 streams (v1.4.0, GH #17). `1` (default) routes count=1 stream dispatch through the broadcast-placement machinery: every dispatch produces a persisted 1-slot placement row, so manager-restart adoption, worker-death recovery, and stale-config detection are reconciler-driven. `0` keeps the legacy count=1 single-dispatch path (stream tracked in manager memory only). Rollback is `0` + manager restart; placement rows already created keep working under either value because the placement machinery is flag-independent |
+| `TRAM_QUEUE_MANUAL_RUNS` | `1` | Queue manual runs on no-capacity (v1.4.0, GH #21). `1` (default): a manual run triggered when no healthy worker exists is durably queued (survives manager restarts) and dispatched automatically when capacity returns; `POST /api/pipelines/{name}/run` returns **202** `{"status":"queued","run_id","expires_at"}` and the pipeline shows status `queued`. `0` keeps the legacy fail-fast (`No healthy workers available for dispatch` → `error`). An unrecognized value is logged at WARNING and fails open (feature ON). Rollback is `0` + manager restart; residual `queued_runs` rows are inert while the flag is off |
+| `TRAM_QUEUE_TTL_SECONDS` | `900` | How long a queued manual run waits for capacity before it expires to a `FAILED` run-history row (`no worker capacity within N minutes — queued run expired`) and the pipeline flips to `error` (v1.4.0, GH #21). The absolute `expires_at` clock keeps running across manager restarts, so a request queued before a long manager downtime expires truthfully at the first drain pass instead of silently running stale YAML |
+| `TRAM_STATEFUL_TRANSFORMS` | `1` | Stateful transforms (v1.4.0, F.1 — `counter_delta` and `window_aggregate`). `1` (default) enables the `counter_delta` and `window_aggregate` transforms, their durable per-pipeline state blob (the `transform_state` table in standalone mode, the internal `/api/internal/transform-state/{pipeline}` endpoints in worker mode), and the `state_persist_interval_s` stream persistence knob. `0` disables stateful transforms: pipelines using them fail validation with "stateful transforms disabled", the internal endpoints 404, and the manager-side dispatch guard is inert. An unrecognized value is logged at WARNING and fails open (feature ON). Rollback is `0` (immediate — no worker restart needed; the endpoints and guard vanish and offending pipelines go to `error` with a truthful message); `DROP TABLE transform_state` is optional cleanup. The SNMP source's `_snmp_widths` record field is additive and ignored by older stacks |
+| `TRAM_STATE_MAX_BYTES` | `20971520` | Maximum accepted transform-state blob size in bytes for the internal `PUT /api/internal/transform-state/{pipeline}` (F.1 §3.2b); oversized blobs are rejected with 413. Default 20 MiB ≈ 8× the design's ~2.5 MB / 50k-key `counter_delta` bound, leaving headroom for `window_aggregate` group/window state without letting a runaway blob inflate the `transform_state` DB row unbounded |
 
 ### Database backends (v0.7.0)
 
@@ -160,7 +167,7 @@ If you are upgrading from the older manager `Deployment`, set `manager.persisten
 
 ```dockerfile
 # Build with Dockerfile.worker (no UI assets, no manager deps)
-docker build -f Dockerfile.worker -t trishul-ram-worker:1.3.3 .
+docker build -f Dockerfile.worker -t trishul-ram-worker:1.4.0 .
 ```
 
 The worker image exposes port `8766` for the internal agent API and port `8767` for ingress-only webhook traffic. Kubernetes liveness/readiness probes stay on `/agent/health` over port `8766`.
@@ -180,19 +187,43 @@ The worker image exposes port `8766` for the internal agent API and port `8767` 
 ## API Key Authentication (v1.0.0)
 
 Set `TRAM_API_KEY` to a secret string to require authentication on all `/api/*` endpoints.
-Clients must pass the key via:
+Clients must pass the key via the `X-API-Key` header:
 
 ```bash
-# Header (recommended)
 curl -H "X-API-Key: $TRAM_API_KEY" http://localhost:8765/api/pipelines
-
-# Query parameter (useful for webhooks)
-curl "http://localhost:8765/api/pipelines?api_key=$TRAM_API_KEY"
 ```
 
-Exempt paths (no key needed): `/api/health`, `/api/ready`, `/metrics`, `/webhooks/*`, `/ui/*`, `/`
+Exempt paths (no key needed): `/api/health`, `/api/ready`, `/agent/health`, `/metrics`, `/webhooks/*`, `/ui/*`, `/`
 
 When `TRAM_API_KEY` is empty (default), all requests pass through without authentication.
+
+### Internal machine-to-machine surfaces (`/api/internal/*`, `/agent/*`)
+
+The manager's `/api/internal/*` endpoints (worker run-complete/stats callbacks) and the
+worker agent `/agent/*` endpoints are authenticated with the **same** `TRAM_API_KEY`.
+K8s probe paths (`/api/health`, `/api/ready`, `/agent/health`) are always exempt and never
+need a key, regardless of the mode below.
+
+`TRAM_INTERNAL_AUTH_MODE` controls how those internal surfaces treat a missing/invalid key:
+
+| Mode | Behavior |
+|------|----------|
+| `off` (no key) | Pass through with no check and no log |
+| `warn` (default) | Log a WARNING (path + client) and still serve the request |
+| `enforce` | Reject with 401 — requires `TRAM_API_KEY` to be set on the server |
+
+**Rollout order (non-breaking):** deploy workers first (workers now send `X-API-Key` on
+every run-complete/stats callback automatically when `TRAM_API_KEY` is set on the worker),
+then set `TRAM_INTERNAL_AUTH_MODE=warn` and watch the WARNING logs for clients that still
+miss the key, then flip to `enforce`. The default is `warn`, so nothing 401s a working
+deployment at any point in this sequence.
+
+**Fail-closed guidance:** if `TRAM_API_KEY` is unset, authentication is entirely disabled —
+anyone with network reach can call `/api/*`, `/api/internal/*`, and `/agent/*`. Production
+deployments must set a real secret (not the old committed `tram-internal-2026` default) via
+the `apiKey` Helm value or `envSecret.TRAM_API_KEY`, and set `TRAM_INTERNAL_AUTH_MODE=enforce`
+after the rollout window. Workers automatically receive the same key from the chart
+(`worker-statefulset.yaml` injects `.Values.apiKey` as `TRAM_API_KEY`).
 
 ## TLS / HTTPS (v1.0.0)
 
@@ -244,7 +275,13 @@ These fields are set per-pipeline in the pipeline YAML (not environment variable
 | `on_error` | `continue` | Error policy: `continue` \| `abort` \| `retry` \| `dlq` |
 | `skip_processed` | `false` | On file/object sources: skip files already processed |
 | `parallel_sinks` | `false` | Fan out to all sinks concurrently via thread pool |
-| `post_batch_cleanup` | `false` | After batch completion, optionally run `gc.collect()` plus best-effort heap trim; useful for memory-heavy one-shot file pipelines on shared workers |
+| `post_batch_cleanup` | `true` | After batch completion, run `gc.collect()` plus best-effort heap trim; releases transient batch heap on shared workers. Defaults to **on** since the GH #16 allocator fix — set `post_batch_cleanup: false` to opt out |
+
+### Allocator mitigation (GH #16)
+
+The worker image sets `MALLOC_ARENA_MAX=2` (`Dockerfile.worker`), capping the number of glibc per-thread malloc arenas. C-extension-heavy batches (ASN.1, Kafka, SNMP) allocate across many arenas under worker threads, and each arena retains freed pages — a ~560 MiB transient peak can leave fragmented arenas pinned in the worker's RSS long after the run. With the arena cap, thread allocations fall back to the shared main heap, where the executor's post-batch `malloc_trim` can actually return pages to the OS. This is an image-level setting, so rollback means rolling back the worker image; it is not a `TRAM_*` runtime knob and does not appear in `.env.example`.
+
+**Behavioral change:** `post_batch_cleanup` now defaults to `true` (previously `false`). Existing pipelines that do not set the field will now run `gc.collect()` plus a best-effort heap trim after every batch run — a small per-batch latency cost in exchange for lower retained RSS on shared workers. Pipelines that explicitly set `post_batch_cleanup: true` or `false` are unaffected.
 
 ### Per-sink reliability fields (v1.0.0)
 
@@ -302,7 +339,7 @@ Supported upload/compile source filenames are extensionless names plus `.mib`, `
 **Air-gapped environments** — copy pre-compiled MIB `.py` files into the image and optionally seed raw source files for future local dependency resolution:
 
 ```dockerfile
-FROM ghcr.io/tosumitdhaka/trishul-ram:1.3.3
+FROM ghcr.io/tosumitdhaka/trishul-ram:1.4.0
 COPY vendor-mib-sources/ /mib-sources/
 COPY compiled-mibs/*.py /mibs/
 ```
@@ -348,7 +385,7 @@ curl -X DELETE http://localhost:8765/api/schemas/cisco/GenericRecord.proto
 **Mount host directory** for development (read-write):
 
 ```bash
-docker run -v ./schemas:/schemas tram:1.3.3
+docker run -v ./schemas:/schemas tram:1.4.0
 ```
 
 ## Schema Registry Integration (v1.0.4)
@@ -487,7 +524,7 @@ To deploy a published standalone image directly from GHCR in one command:
 
 ```bash
 ./scripts/deploy-docker-standalone.sh up --ghcr
-./scripts/deploy-docker-standalone.sh up --ghcr --tag 1.3.3
+./scripts/deploy-docker-standalone.sh up --ghcr --tag 1.4.0
 ```
 
 For a no-clone bootstrap from GitHub:
@@ -523,7 +560,7 @@ host bind override (`--data-dir`) when you explicitly do not want a Docker-manag
 
 ### Installed extras in the default image
 
-The default `tram:1.3.3` image installs (`clickhouse` added in v1.0.4):
+The default `tram:1.4.0` image installs (`clickhouse` added in v1.0.4):
 
 `kafka`, `opensearch`, `snmp`, `avro`, `protobuf_ser`, `msgpack_ser`, `mqtt`, `amqp`, `nats`,
 `gnmi`, `jmespath`, `sql`, `influxdb`, `redis`, `websocket`, `elasticsearch`, `metrics`,
@@ -543,7 +580,7 @@ The following extras are **excluded by default** to keep the image lean. Extend 
 | `otel` | only needed when `TRAM_OTEL_ENDPOINT` is set; no-op fallback when absent | ~15 MB |
 
 ```dockerfile
-FROM ghcr.io/tosumitdhaka/trishul-ram:1.3.3
+FROM ghcr.io/tosumitdhaka/trishul-ram:1.4.0
 RUN pip install "tram[parquet,s3,gcs,azure,otel]"
 ```
 
@@ -561,7 +598,7 @@ TRAM ships a production-ready Helm chart in `helm/`. The release workflow publis
 
 ### Install
 
-Quick-start examples below use `latest`. For production, pin `image.tag` and worker image tags to a specific release such as `1.3.3`.
+Quick-start examples below use `latest`. For production, pin `image.tag` and worker image tags to a specific release such as `1.4.0`.
 
 ```bash
 # Add chart from OCI registry
@@ -584,7 +621,7 @@ helm upgrade tram oci://ghcr.io/tosumitdhaka/charts/trishul-ram \
 | Value | Default | Description |
 |-------|---------|-------------|
 | `image.repository` | `ghcr.io/tosumitdhaka/trishul-ram` | Docker image repository |
-| `image.tag | "1.3.3"` | Image tag |
+| `image.tag` | `"1.4.0"` | Image tag |
 | `replicaCount` | `1` | Replicas for the standalone StatefulSet; not used when `manager.enabled=true` |
 | `manager.enabled` | `false` | `true` = manager+worker mode (manager StatefulSet + worker StatefulSet); `false` = standalone StatefulSet |
 | `worker.replicas` | `3` | Number of worker StatefulSet replicas (only when `manager.enabled=true`) |
@@ -607,8 +644,8 @@ helm upgrade tram oci://ghcr.io/tosumitdhaka/charts/trishul-ram \
 | `schemaRegistry.password` | `""` | Registry basic-auth password; prefer `envSecret` in production |
 | `service.snmpTrapPorts` | `[]` | List of UDP ports to expose for `snmp_trap` sources (e.g. `[1162, 1163]`); each entry creates one Service port + containerPort; requires `helm upgrade` to add/remove |
 | `ui.enabled` | `true` | Serve tram-ui static assets at `/ui`; set to `false` to disable without rebuilding the image (injects `TRAM_UI_DIR=""`) |
-| `apiKey` | `""` | API key (X-API-Key header / `api_key` query param) for machine clients; empty = disabled |
-| `authUsers` | `""` | Comma-separated `user:password` pairs for browser login bootstrap; with `TRAM_DB_URL`, changed passwords are stored as scrypt hashes in `user_passwords` and override the env value |
+| `apiKey` | `""` | API key (`X-API-Key` header) for machine clients; empty = auth disabled. There is **no committed plaintext default** — set explicitly or via `envSecret.TRAM_API_KEY` for any shared cluster; dev/kind deployments may leave it empty |
+| `authUsers` | `""` | Comma-separated `user:password` pairs for browser login bootstrap; with `TRAM_DB_URL`, changed passwords are stored as scrypt hashes in `user_passwords` and override the env value. No committed plaintext default — set explicitly or via `envSecret.TRAM_AUTH_USERS` |
 | `postgresql.enabled` | `false` | Deploy Bitnami PostgreSQL subchart and auto-wire `TRAM_DB_URL` (v1.0.8) |
 | `postgresql.auth.username` | `tram` | PostgreSQL username |
 | `postgresql.auth.password` | `tram` | PostgreSQL password (use external secret for production) |
@@ -625,7 +662,7 @@ helm upgrade tram oci://ghcr.io/tosumitdhaka/charts/trishul-ram \
 ```bash
 helm install tram oci://ghcr.io/tosumitdhaka/charts/trishul-ram \
   --namespace tram --create-namespace \
-  --set image.tag=1.3.3
+  --set image.tag=1.4.0
 ```
 
 A single-replica `StatefulSet` with pod name `tram-0` runs the full daemon. A `PersistentVolumeClaim` (`data-tram-0`) is auto-provisioned via `volumeClaimTemplates` and mounted at `/data`. SQLite run history, API-uploaded schemas (`/data/schemas`), and runtime MIBs (`/data/mibs`) all share this single PVC and survive pod restarts. Standard MIBs baked into the image at `/mibs` remain available alongside any runtime-downloaded ones.
@@ -639,11 +676,11 @@ SQLite on a `ReadWriteOnce` PVC is sufficient — only one manager pod ever writ
 ```bash
 helm install tram oci://ghcr.io/tosumitdhaka/charts/trishul-ram \
   --namespace tram --create-namespace \
-  --set image.tag=1.3.3 \
+  --set image.tag=1.4.0 \
   --set manager.enabled=true \
   --set worker.replicas=3 \
   --set worker.image.repository=trishul-ram-worker \
-  --set worker.image.tag=1.3.3 \
+  --set worker.image.tag=1.4.0 \
   --set apiKey=mysecret
 ```
 
@@ -677,7 +714,7 @@ PostgreSQL is **optional** in manager+worker mode — SQLite on the manager's RW
 ```bash
 helm install tram oci://ghcr.io/tosumitdhaka/charts/trishul-ram \
   --namespace tram --create-namespace \
-  --set image.tag=1.3.3 \
+  --set image.tag=1.4.0 \
   --set manager.enabled=true \
   --set worker.replicas=3 \
   --set postgresql.enabled=true
@@ -710,7 +747,7 @@ Then install/upgrade TRAM with shared storage enabled:
 ```bash
 helm upgrade trishul-ram helm/ \
   --namespace trishul-ram \
-  --set image.tag=1.3.3 \
+  --set image.tag=1.4.0 \
   --set manager.enabled=true \
   --set worker.replicas=3 \
   --set manager.persistence.enabled=true \
@@ -803,7 +840,7 @@ spec:
     spec:
       containers:
       - name: tram
-        image: ghcr.io/tosumitdhaka/trishul-ram:1.3.3
+        image: ghcr.io/tosumitdhaka/trishul-ram:1.4.0
         command: ["tram", "daemon"]
         ports:
         - containerPort: 8765
@@ -889,6 +926,26 @@ Available metrics (all labeled by `pipeline`):
 | `tram_chunk_duration_seconds` | Histogram | Chunk processing time |
 | `tram_kafka_consumer_lag` | Gauge | Kafka consumer lag per topic+partition (v1.0.0) |
 | `tram_stream_queue_depth` | Gauge | Internal stream queue depth per pipeline (v1.0.0) |
+| `tram_mgr_dispatch_total` | Counter | Manager dispatch attempts, `result` = `accepted` / `no_capacity` / `no_workers` / `dispatch_failed` (v1.4.0 labels) |
+| `tram_mgr_redispatch_total` | Counter | Reconciler-triggered re-dispatches per pipeline |
+| `tram_mgr_reconcile_action_total` | Counter | Reconciler per-slot actions (`action` = recover, config-drift redispatch, adopt, …) |
+| `tram_mgr_placement_status` | Gauge | 1 when the placement is in the given status |
+| `tram_mgr_worker_healthy` | Gauge | Currently healthy worker count |
+| `tram_mgr_worker_total` | Gauge | Total configured worker count |
+| `tram_mgr_run_complete_received_total` | Counter | Run-complete callbacks received at the manager |
+| `tram_mgr_pipeline_stats_received_total` | Counter | Pipeline-stats callbacks received at the manager |
+| `tram_mgr_stats_missed_total` | Counter | Missed stats heartbeats per worker (v1.4.0) |
+| `tram_mgr_queue_depth` | Gauge | Durably queued manual runs (v1.4.0) |
+| `tram_mgr_queue_enqueued_total` | Counter | Runs enqueued on no-capacity (v1.4.0) |
+| `tram_mgr_queue_dispatched_total` | Counter | Queued runs dispatched when capacity returned (v1.4.0) |
+| `tram_mgr_queue_expired_total` | Counter | Queued runs expired at TTL (v1.4.0) |
+| `tram_mgr_queue_wait_seconds` | Histogram | Request→dispatch wait for queued runs (v1.4.0) |
+| `tram_mgr_queue_drain_result_total` | Counter | Drain pass outcomes (`dispatched` / `reverted` / …) (v1.4.0) |
+| `tram_transform_counter_wraps_total` | Counter | Counter32/64 wrap corrections in `counter_delta` (v1.4.0) |
+| `tram_transform_counter_resets_total` | Counter | Counter reset/reboot detections (v1.4.0) |
+| `tram_transform_state_io_total` | Counter | Transform-state load/save round-trips (v1.4.0) |
+| `tram_transform_window_late_dropped_total` | Counter | Records dropped after window finalization (v1.4.0) |
+| `tram_transform_windows_emitted_total` | Counter | Windows emitted, complete and partial (v1.4.0) |
 
 ## Webhook Integration
 

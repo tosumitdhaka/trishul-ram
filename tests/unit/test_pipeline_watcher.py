@@ -1,11 +1,48 @@
 """Tests for PipelineWatcher — file-system event handling."""
 from __future__ import annotations
 
+import logging
 import sys
+from datetime import UTC, datetime
 from types import ModuleType
 from unittest.mock import MagicMock, patch
 
 import pytest
+
+from tram.pipeline.loader import load_pipeline_from_yaml
+
+# ── YAML fixtures ──────────────────────────────────────────────────────────
+
+
+_MANUAL_YAML = """\
+name: {name}
+schedule:
+  type: manual
+source:
+  type: local
+  path: /tmp/in
+serializer_in:
+  type: json
+sinks:
+  - type: local
+    path: /tmp/out
+"""
+
+_INTERVAL_YAML = """\
+name: my-interval
+schedule:
+  type: interval
+  interval_seconds: 3600
+source:
+  type: local
+  path: /dev/null
+  file_pattern: "*.noop"
+serializer_in:
+  type: json
+sinks:
+  - type: local
+    path: /tmp/out
+"""
 
 # ── watchdog mock setup ────────────────────────────────────────────────────
 
@@ -46,10 +83,12 @@ def watchdog_mocks():
 # ── Helpers ────────────────────────────────────────────────────────────────
 
 
-def _make_watcher(pipeline_dir="/tmp/pipes"):
+def _make_watcher(pipeline_dir="/tmp/pipes", controller=None):
     from tram.watcher.pipeline_watcher import PipelineWatcher
-    manager = MagicMock()
-    return PipelineWatcher(pipeline_dir=pipeline_dir, manager=manager), manager
+    if controller is None:
+        controller = MagicMock()
+    watcher = PipelineWatcher(pipeline_dir=pipeline_dir, controller=controller)
+    return watcher, controller
 
 
 def _make_event(src_path: str, is_directory: bool = False):
@@ -57,6 +96,12 @@ def _make_event(src_path: str, is_directory: bool = False):
     ev.src_path = src_path
     ev.is_directory = is_directory
     return ev
+
+
+def _write_file(tmp_path, filename: str, content: str):
+    path = tmp_path / filename
+    path.write_text(content)
+    return path
 
 
 def _start_and_get_handler(watcher, observer_cls):
@@ -134,128 +179,164 @@ class TestPipelineWatcherLifecycle:
 class TestHandlerEvents:
     def _handler(self, tmp_path, watchdog_mocks):
         """Get the real _Handler instance from the real watcher.start() code."""
-        watcher, manager = _make_watcher(str(tmp_path))
+        watcher, controller = _make_watcher(str(tmp_path))
         handler = _start_and_get_handler(watcher, watchdog_mocks)
-        return handler, manager
+        return handler, controller
 
-    def test_modified_yaml_calls_reload(self, tmp_path, watchdog_mocks):
-        handler, mgr = self._handler(tmp_path, watchdog_mocks)
-        yaml_file = tmp_path / "my-pipe.yaml"
-        yaml_file.write_text("""\
-name: my-pipe
-schedule:
-  type: manual
-source:
-  type: local
-  path: /tmp/in
-serializer_in:
-  type: json
-sinks:
-  - type: local
-    path: /tmp/out
-""")
+    def test_modified_yaml_reloads_existing_pipeline(self, tmp_path, watchdog_mocks):
+        handler, controller = self._handler(tmp_path, watchdog_mocks)
+        yaml_file = _write_file(tmp_path, "my-pipe.yaml", _MANUAL_YAML.format(name="my-pipe"))
+        controller.exists.return_value = True
         ev = _make_event(str(yaml_file))
         handler.on_modified(ev)
-        mgr.register.assert_called_once()
-        call_kwargs = mgr.register.call_args
-        assert call_kwargs.kwargs.get("replace") is True
+        controller.update.assert_called_once()
+        name, yaml_text = controller.update.call_args.args
+        assert name == "my-pipe"
+        assert yaml_text == yaml_file.read_text()
 
-    def test_created_yaml_calls_reload(self, tmp_path, watchdog_mocks):
-        handler, mgr = self._handler(tmp_path, watchdog_mocks)
-        yaml_file = tmp_path / "new-pipe.yaml"
-        yaml_file.write_text("""\
-name: new-pipe
-schedule:
-  type: manual
-source:
-  type: local
-  path: /tmp/in
-serializer_in:
-  type: json
-sinks:
-  - type: local
-    path: /tmp/out
-""")
+    def test_created_yaml_registers_new_pipeline(self, tmp_path, watchdog_mocks):
+        handler, controller = self._handler(tmp_path, watchdog_mocks)
+        yaml_file = _write_file(tmp_path, "new-pipe.yaml", _MANUAL_YAML.format(name="new-pipe"))
+        controller.exists.return_value = False
         ev = _make_event(str(yaml_file))
         handler.on_created(ev)
-        mgr.register.assert_called_once()
+        controller.register.assert_called_once()
+        call = controller.register.call_args
+        assert call.args[0].name == "new-pipe"
+        assert call.kwargs["yaml_text"] == yaml_file.read_text()
+        assert call.kwargs["source"] == "disk"
 
-    def test_deleted_yaml_deregisters_pipeline(self, tmp_path, watchdog_mocks):
-        handler, mgr = self._handler(tmp_path, watchdog_mocks)
-        mgr.exists.return_value = True
+    def test_deleted_yaml_stops_and_removes_pipeline(self, tmp_path, watchdog_mocks):
+        handler, controller = self._handler(tmp_path, watchdog_mocks)
+        controller.exists.return_value = True
         ev = _make_event(str(tmp_path / "my-pipe.yaml"))
         handler.on_deleted(ev)
-        mgr.deregister.assert_called_once_with("my-pipe")
+        controller.delete.assert_called_once_with("my-pipe")
+        controller.deregister.assert_not_called()
 
     def test_deleted_yaml_unknown_pipeline(self, tmp_path, watchdog_mocks):
-        handler, mgr = self._handler(tmp_path, watchdog_mocks)
-        mgr.exists.return_value = False
+        handler, controller = self._handler(tmp_path, watchdog_mocks)
+        controller.exists.return_value = False
         ev = _make_event(str(tmp_path / "unknown.yaml"))
         handler.on_deleted(ev)
-        mgr.deregister.assert_not_called()
+        controller.delete.assert_not_called()
+
+    def test_deleted_remove_failure_is_logged_not_swallowed(self, tmp_path, watchdog_mocks, caplog):
+        handler, controller = self._handler(tmp_path, watchdog_mocks)
+        controller.exists.return_value = True
+        controller.delete.side_effect = RuntimeError("stop failed")
+        ev = _make_event(str(tmp_path / "my-pipe.yaml"))
+        with caplog.at_level(logging.ERROR):
+            handler.on_deleted(ev)  # must surface, not silently pass
+        assert "Failed to stop and remove pipeline my-pipe" in caplog.text
 
     def test_non_yaml_file_ignored_on_modified(self, tmp_path, watchdog_mocks):
-        handler, mgr = self._handler(tmp_path, watchdog_mocks)
+        handler, controller = self._handler(tmp_path, watchdog_mocks)
         ev = _make_event(str(tmp_path / "readme.txt"))
         handler.on_modified(ev)
-        mgr.register.assert_not_called()
+        controller.update.assert_not_called()
+        controller.register.assert_not_called()
 
     def test_directory_event_ignored(self, tmp_path, watchdog_mocks):
-        handler, mgr = self._handler(tmp_path, watchdog_mocks)
+        handler, controller = self._handler(tmp_path, watchdog_mocks)
         ev = _make_event(str(tmp_path / "subdir"), is_directory=True)
         handler.on_modified(ev)
-        mgr.register.assert_not_called()
+        controller.update.assert_not_called()
+        controller.register.assert_not_called()
 
-    def test_reload_config_error_is_swallowed(self, tmp_path, watchdog_mocks):
-        handler, mgr = self._handler(tmp_path, watchdog_mocks)
+    def test_reload_config_error_is_logged_not_raised(self, tmp_path, watchdog_mocks, caplog):
+        handler, controller = self._handler(tmp_path, watchdog_mocks)
         bad_file = tmp_path / "bad.yaml"
         bad_file.write_text("not: valid: {{{")
-        handler._reload(str(bad_file))  # should not raise
-        mgr.register.assert_not_called()
+        with caplog.at_level(logging.WARNING):
+            handler._reload(str(bad_file))  # should not raise
+        controller.update.assert_not_called()
+        controller.register.assert_not_called()
+        assert "Pipeline reload failed" in caplog.text
 
-    def test_reload_general_exception_is_swallowed(self, tmp_path, watchdog_mocks):
-        handler, mgr = self._handler(tmp_path, watchdog_mocks)
-        yaml_file = tmp_path / "pipe.yaml"
-        yaml_file.write_text("""\
-name: my-pipe
-schedule:
-  type: manual
-source:
-  type: local
-  path: /tmp/in
-serializer_in:
-  type: json
-sinks:
-  - type: local
-    path: /tmp/out
-""")
-        mgr.register.side_effect = RuntimeError("unexpected failure")
-        handler._reload(str(yaml_file))  # should not raise
-
-    def test_deleted_stop_exception_swallowed(self, tmp_path, watchdog_mocks):
-        handler, mgr = self._handler(tmp_path, watchdog_mocks)
-        mgr.exists.return_value = True
-        mgr.stop_pipeline.side_effect = RuntimeError("already stopped")
-        ev = _make_event(str(tmp_path / "my-pipe.yaml"))
-        handler.on_deleted(ev)
-        mgr.deregister.assert_called_once_with("my-pipe")
+    def test_reload_unexpected_error_is_logged_not_swallowed(self, tmp_path, watchdog_mocks, caplog):
+        handler, controller = self._handler(tmp_path, watchdog_mocks)
+        yaml_file = _write_file(tmp_path, "my-pipe.yaml", _MANUAL_YAML.format(name="my-pipe"))
+        controller.exists.return_value = True
+        controller.update.side_effect = RuntimeError("unexpected failure")
+        with caplog.at_level(logging.ERROR):
+            handler._reload(str(yaml_file))  # should not raise
+        assert "Pipeline reload failed" in caplog.text
+        assert "unexpected failure" in caplog.text
 
     def test_yml_extension_is_also_handled(self, tmp_path, watchdog_mocks):
-        handler, mgr = self._handler(tmp_path, watchdog_mocks)
-        yaml_file = tmp_path / "pipe.yml"
-        yaml_file.write_text("""\
-name: yml-pipe
-schedule:
-  type: manual
-source:
-  type: local
-  path: /tmp/in
-serializer_in:
-  type: json
-sinks:
-  - type: local
-    path: /tmp/out
-""")
+        handler, controller = self._handler(tmp_path, watchdog_mocks)
+        yaml_file = _write_file(tmp_path, "pipe.yml", _MANUAL_YAML.format(name="yml-pipe"))
+        controller.exists.return_value = False
         ev = _make_event(str(yaml_file))
         handler.on_created(ev)
-        mgr.register.assert_called_once()
+        controller.register.assert_called_once()
+
+
+# ── Real-controller integration (B.2 lifecycle fix) ────────────────────────
+
+
+class TestWatcherControllerIntegration:
+    """The watcher drives a real PipelineController: deleted files stop pipelines."""
+
+    def test_deleted_yaml_stops_and_removes_pipeline(self, tmp_path, watchdog_mocks):
+        from tram.pipeline.controller import PipelineController
+
+        recent_run = MagicMock()
+        recent_run.finished_at = datetime.now(UTC)
+        recent_run.status.value = "success"
+        db = MagicMock()
+        db.get_runs.return_value = [recent_run]
+        db.is_pipeline_stopped.return_value = False
+        db.get_stopped_pipeline_names.return_value = []
+        db.get_all_pipelines.return_value = []
+        db.get_active_broadcast_placements.return_value = []
+
+        ctrl = PipelineController(db=db, node_id="test-node")
+        ctrl.start()
+        try:
+            yaml_file = _write_file(tmp_path, "my-interval.yaml", _INTERVAL_YAML)
+            config = load_pipeline_from_yaml(_INTERVAL_YAML)
+            ctrl.register(config, yaml_text=_INTERVAL_YAML, source="disk")
+            assert ctrl._scheduler.get_job("batch-my-interval") is not None
+
+            watcher, _ = _make_watcher(str(tmp_path), controller=ctrl)
+            handler = _start_and_get_handler(watcher, watchdog_mocks)
+            handler.on_deleted(_make_event(str(yaml_file)))
+
+            # The pipeline is deregistered, its DB record removed, and its
+            # APScheduler job is gone — i.e. deleting the file actually stops it.
+            assert ctrl.manager.exists("my-interval") is False
+            assert ctrl.exists("my-interval") is False
+            assert ctrl._scheduler.get_job("batch-my-interval") is None
+            db.delete_pipeline.assert_called_once_with("my-interval")
+        finally:
+            ctrl.stop()
+
+    def test_modified_yaml_persists_reload_to_db(self, tmp_path, watchdog_mocks):
+        from tram.persistence.db import TramDB
+        from tram.pipeline.controller import PipelineController
+
+        db = TramDB(url="sqlite:///:memory:", node_id="test-node")
+        ctrl = PipelineController(db=db, node_id="test-node")
+        try:
+            original = _MANUAL_YAML.format(name="my-pipe")
+            config = load_pipeline_from_yaml(original)
+            ctrl.register(config, yaml_text=original, source="disk")
+
+            # Edit the watched file, then simulate the watcher seeing the change.
+            edited = original + "description: edited-by-watcher\n"
+            yaml_file = _write_file(tmp_path, "my-pipe.yaml", edited)
+
+            watcher, _ = _make_watcher(str(tmp_path), controller=ctrl)
+            handler = _start_and_get_handler(watcher, watchdog_mocks)
+            handler.on_modified(_make_event(str(yaml_file)))
+
+            # Reload is persisted via db.save_pipeline (+ version save pattern).
+            persisted = dict(db.get_all_pipelines())
+            assert persisted["my-pipe"] == edited
+            assert db.get_pipeline_versions("my-pipe")
+            assert ctrl.manager.get("my-pipe").yaml_text == edited
+        finally:
+            ctrl.stop()
+            db.close()

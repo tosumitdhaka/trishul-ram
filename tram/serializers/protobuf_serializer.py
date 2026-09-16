@@ -2,19 +2,45 @@
 from __future__ import annotations
 
 import atexit
+import hashlib
 import io
 import os
 import shutil
 import struct
 import sys
 import tempfile
+from collections import OrderedDict
 
 from tram.core.exceptions import SerializerError
 from tram.interfaces.base_serializer import BaseSerializer
 from tram.registry.registry import register_serializer
 
-# Cache: (schema_file_abs, mtime) -> compiled module
-_MODULE_CACHE: dict[tuple[str, float], object] = {}
+# Cache: content hash (sha256 over all .proto files in the schema dir) -> compiled module.
+# Keyed by content hash (not mtime) so asset-sync mtime churn does not grow the
+# cache unboundedly; bounded LRU caps memory in long-lived worker processes.
+_MODULE_CACHE: OrderedDict[str, object] = OrderedDict()
+_MODULE_CACHE_MAX = 32
+
+
+def _proto_content_hash(schema_abs: str) -> str:
+    """Content hash (sha256) of the schema file plus sibling .proto files.
+
+    Compilation in _compile_proto processes every .proto in the directory, so
+    the key covers all of them; identical content — even at a different path or
+    mtime — maps to the same key and skips recompilation.
+    """
+    proto_dir = os.path.dirname(schema_abs)
+    import glob as _glob
+    all_protos = _glob.glob(os.path.join(proto_dir, "*.proto"))
+    if not all_protos:
+        all_protos = [schema_abs]
+    hasher = hashlib.sha256()
+    for path in sorted(all_protos):
+        hasher.update(os.path.basename(path).encode("utf-8"))
+        hasher.update(b"\x00")
+        with open(path, "rb") as fh:
+            hasher.update(fh.read())
+    return hasher.hexdigest()
 
 @register_serializer("protobuf")
 class ProtobufSerializer(BaseSerializer):
@@ -71,9 +97,12 @@ class ProtobufSerializer(BaseSerializer):
         if not os.path.isfile(schema_abs):
             raise SerializerError(f"Proto schema file not found: {schema_abs}")
 
-        mtime = os.path.getmtime(schema_abs)
-        cache_key = (schema_abs, mtime)
-        if cache_key in _MODULE_CACHE:
+        cache_key = _proto_content_hash(schema_abs)
+        try:
+            _MODULE_CACHE.move_to_end(cache_key)
+        except KeyError:
+            pass  # evicted concurrently — fall through to the compile path
+        else:
             return _MODULE_CACHE[cache_key]
 
         proto_dir = os.path.dirname(schema_abs)
@@ -104,12 +133,19 @@ class ProtobufSerializer(BaseSerializer):
 
         module_name = proto_filename.replace(".proto", "_pb2")
         import importlib
+        # A prior compile may have imported the same module name from an older
+        # tmpdir (stale schema content). Drop it so the fresh compile wins;
+        # otherwise importlib would return the outdated module from sys.modules.
+        if module_name in sys.modules:
+            del sys.modules[module_name]
         try:
             module = importlib.import_module(module_name)
         except ImportError as exc:
             raise SerializerError(f"Failed to import compiled proto module '{module_name}': {exc}") from exc
 
         _MODULE_CACHE[cache_key] = module
+        if len(_MODULE_CACHE) > _MODULE_CACHE_MAX:
+            _MODULE_CACHE.popitem(last=False)
         return module
 
     def _get_message_class(self):

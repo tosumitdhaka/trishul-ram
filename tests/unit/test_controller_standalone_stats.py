@@ -58,7 +58,7 @@ def test_stream_worker_registers_local_run():
     stop_event = threading.Event()
     registered: list[str] = []
 
-    def fake_stream_run(cfg, stop_ev, stats=None):
+    def fake_stream_run(cfg, stop_ev, stats=None, config_sha256=""):
         with ctrl._local_stats_lock:
             registered.extend(ctrl._local_active_stats.keys())
         stop_event.set()
@@ -102,7 +102,7 @@ def test_stream_worker_removes_from_stats_store_on_exit():
     stop_event = threading.Event()
     seen_run_id: list[str] = []
 
-    def fake_stream_run(cfg, stop_ev, stats=None):
+    def fake_stream_run(cfg, stop_ev, stats=None, config_sha256=""):
         if stats is not None:
             seen_run_id.append(stats.run_id)
             # Manually pre-populate the store to confirm remove() is called
@@ -268,3 +268,105 @@ def test_stats_loop_not_started_in_manager_mode():
 
     threads_after = {t.name for t in threading.enumerate()}
     assert "tram-local-stats" not in (threads_after - threads_before)
+
+
+# ── D.5: standalone batch runs get _LocalRun + PipelineStats wiring ────────
+
+def _batch_controller(stats_store, config):
+    ctrl = _make_controller(stats_store=stats_store)
+    ctrl.manager.exists.return_value = True
+    state = MagicMock()
+    state.status = "stopped"
+    state.config = config
+    state.yaml_text = "yaml"
+    ctrl.manager.get.return_value = state
+    return ctrl
+
+
+def test_run_batch_local_path_registers_and_removes_local_run():
+    """D.5: the local _run_batch path creates PipelineStats, registers a
+    _LocalRun, passes stats into executor.batch_run, and removes both from
+    the dict and the StatsStore on exit — exactly like _stream_worker."""
+    store = StatsStore(interval=30)
+    config = load_pipeline_from_yaml(_BATCH_YAML)
+    ctrl = _batch_controller(store, config)
+
+    captured = {}
+
+    def fake_batch_run(cfg, run_id=None, stats=None, config_sha256="", flush=False):
+        captured["stats"] = stats
+        captured["run_id"] = run_id
+        return MagicMock(status="success", run_id=run_id)
+
+    ctrl.executor.batch_run.side_effect = fake_batch_run
+
+    ctrl._run_batch("my-batch", run_id="batch-1")
+
+    assert captured["stats"] is not None
+    assert captured["stats"].pipeline_name == "my-batch"
+    assert captured["stats"].schedule_type == "interval"
+    assert captured["run_id"] == "batch-1"
+    with ctrl._local_stats_lock:
+        assert "batch-1" not in ctrl._local_active_stats
+    assert store.get_by_run_id("batch-1") is None
+
+
+def test_run_batch_emits_live_stats_and_lands_in_run_history():
+    """D.5: mid-run _emit_local_stats_once posts the batch run to the
+    StatsStore; on completion the run is finalized into run history."""
+    store = StatsStore(interval=30)
+    config = load_pipeline_from_yaml(_BATCH_YAML)
+    ctrl = _batch_controller(store, config)
+
+    mid_run = {}
+    captured = {}
+
+    def fake_batch_run(cfg, run_id=None, stats=None, config_sha256="", flush=False):
+        captured["stats"] = stats
+        stats.increment(records_in=25, records_out=24)
+        ctrl._emit_local_stats_once()  # simulate a loop tick mid-run
+        entry = store.get_by_run_id(run_id)
+        mid_run["present"] = entry is not None
+        mid_run["records_in"] = entry.records_in if entry else None
+        mid_run["records_out"] = entry.records_out if entry else None
+        return MagicMock(status="success", run_id=run_id)
+
+    ctrl.executor.batch_run.side_effect = fake_batch_run
+
+    ctrl._run_batch("my-batch", run_id="batch-1")
+
+    # Live entry was present mid-run with the cumulative counters...
+    assert mid_run["present"] is True
+    assert mid_run["records_in"] == 25
+    assert mid_run["records_out"] == 24
+    # ...and gone at completion.
+    with ctrl._local_stats_lock:
+        assert "batch-1" not in ctrl._local_active_stats
+    assert store.get_by_run_id("batch-1") is None
+    # Final counters landed in run history.
+    ctrl.manager.record_run.assert_called_once()
+
+
+def test_run_batch_exception_still_removes_local_run():
+    """D.5: even when the local batch run raises, the _LocalRun entry and the
+    StatsStore entry are removed (no phantom live entry after a crash)."""
+    store = StatsStore(interval=30)
+    config = load_pipeline_from_yaml(_BATCH_YAML)
+    ctrl = _batch_controller(store, config)
+
+    def fake_batch_run(cfg, run_id=None, stats=None, config_sha256="", flush=False):
+        # Pre-populate the store as if a loop tick already wrote it.
+        from tram.api.routers.internal import PipelineStatsPayload
+        store.update(PipelineStatsPayload(
+            worker_id="test-node", pipeline_name="my-batch", run_id=run_id,
+            schedule_type="interval", uptime_seconds=1.0, timestamp=datetime.now(UTC),
+        ))
+        raise RuntimeError("boom")
+
+    ctrl.executor.batch_run.side_effect = fake_batch_run
+
+    ctrl._run_batch("my-batch", run_id="batch-1")
+
+    with ctrl._local_stats_lock:
+        assert "batch-1" not in ctrl._local_active_stats
+    assert store.get_by_run_id("batch-1") is None

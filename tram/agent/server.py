@@ -11,6 +11,7 @@ On completion the worker POSTs to the manager's run-complete callback URL.
 
 from __future__ import annotations
 
+import hashlib
 import logging
 import os
 import socket
@@ -27,6 +28,11 @@ from tram.agent.metrics import PipelineStats
 
 logger = logging.getLogger(__name__)
 
+# Consecutive stats-POST failures per worker_id, surfaced in the WARNING log
+# so an operator can tell a one-off blip from a persistent manager outage.
+_STATS_MISS_LOCK = threading.Lock()
+_CONSECUTIVE_STATS_MISSES: dict[str, int] = {}
+
 
 # ── Request / response models ──────────────────────────────────────────────
 
@@ -37,6 +43,8 @@ class RunRequest(BaseModel):
     run_id: str
     schedule_type: str = "batch"   # "batch" | "stream"
     callback_url: str = ""         # manager endpoint for run-complete; may be empty
+    flush: bool = False            # F.1 §5: manual flush run — close(flush=True) emits
+                                   # open windows as partials and clears them from state
 
 
 class StopRequest(BaseModel):
@@ -54,6 +62,9 @@ class ActiveRun:
     schedule_type: str
     started_at: str
     started_at_dt: datetime | None = None
+    # sha256(req.yaml_text)[:16] captured at dispatch time (D.2 §6.1). Lets the
+    # manager detect stale-config adoption; empty string means "not computed".
+    config_sha256: str = ""
     stats_url: str = ""
     stats: PipelineStats | None = None
     stop_event: threading.Event = field(default_factory=threading.Event)
@@ -67,9 +78,10 @@ class ActiveRun:
 class WorkerState:
     """Thread-safe store of currently-active pipeline runs."""
 
-    def __init__(self, worker_id: str, manager_url: str) -> None:
+    def __init__(self, worker_id: str, manager_url: str, api_key: str = "") -> None:
         self.worker_id = worker_id
         self.manager_url = manager_url
+        self.api_key = api_key
         self._runs: dict[str, ActiveRun] = {}
         self._lock = threading.Lock()
         self.stats_stop = threading.Event()
@@ -109,6 +121,7 @@ def _post_run_complete(
     errors: list[str] | None = None,
     started_at: str | None = None,
     finished_at: str | None = None,
+    api_key: str = "",
 ) -> None:
     """POST run-complete to the manager. Errors are logged and swallowed."""
     if not callback_url:
@@ -128,9 +141,10 @@ def _post_run_complete(
         "started_at": started_at,
         "finished_at": finished_at,
     }
+    headers = {"X-API-Key": api_key} if api_key else None
     try:
         with httpx.Client(timeout=10) as client:
-            resp = client.post(callback_url, json=payload)
+            resp = client.post(callback_url, json=payload, headers=headers)
             resp.raise_for_status()
         logger.debug(
             "run-complete callback sent",
@@ -143,18 +157,36 @@ def _post_run_complete(
         )
 
 
-def _post_stats(stats_url: str, payload: dict) -> None:
+def _post_stats(stats_url: str, payload: dict, api_key: str = "") -> None:
     if not stats_url:
         return
+    headers = {"X-API-Key": api_key} if api_key else None
     try:
         with httpx.Client(timeout=10) as client:
-            resp = client.post(stats_url, json=payload)
+            resp = client.post(stats_url, json=payload, headers=headers)
             resp.raise_for_status()
     except Exception as exc:
-        logger.debug(
+        from tram.metrics.registry import MGR_STATS_MISSED_TOTAL
+        worker_id = str(payload.get("worker_id", "") or "")
+        with _STATS_MISS_LOCK:
+            consecutive = _CONSECUTIVE_STATS_MISSES.get(worker_id, 0) + 1
+            _CONSECUTIVE_STATS_MISSES[worker_id] = consecutive
+        MGR_STATS_MISSED_TOTAL.labels(worker_id=worker_id).inc()
+        logger.warning(
             "pipeline-stats callback failed",
-            extra={"stats_url": stats_url, "run_id": payload.get("run_id"), "error": str(exc)},
+            extra={
+                "stats_url": stats_url,
+                "pipeline": payload.get("pipeline_name"),
+                "run_id": payload.get("run_id"),
+                "worker_id": worker_id,
+                "consecutive_misses": consecutive,
+                "error": str(exc),
+            },
         )
+        return
+    worker_id = str(payload.get("worker_id", "") or "")
+    with _STATS_MISS_LOCK:
+        _CONSECUTIVE_STATS_MISSES.pop(worker_id, None)
 
 
 def _derive_stats_url(callback_url: str, manager_url: str) -> str:
@@ -181,7 +213,7 @@ def _emit_stats_once(state: WorkerState) -> None:
             "is_final": False,
             **run.stats.snapshot_and_reset_window(),
         }
-        _post_stats(run.stats_url, payload)
+        _post_stats(run.stats_url, payload, api_key=state.api_key)
 
 
 def _final_stats_snapshot(run: ActiveRun) -> dict[str, int | list[str]]:
@@ -220,6 +252,7 @@ def _active_run_status(run: ActiveRun, worker_id: str, now: datetime) -> dict[st
         "schedule_type": run.schedule_type,
         "worker_id": worker_id,
         "uptime_seconds": uptime_seconds,
+        "config_sha256": run.config_sha256,
         "stats": stats,
     }
 
@@ -240,8 +273,9 @@ def create_worker_app(worker_id: str = "", manager_url: str = "", stats_interval
         manager_url = os.environ.get("TRAM_MANAGER_URL", "")
     if stats_interval is None:
         stats_interval = int(os.environ.get("TRAM_STATS_INTERVAL", "30"))
+    api_key = os.environ.get("TRAM_API_KEY", "")
 
-    state = WorkerState(worker_id=worker_id, manager_url=manager_url)
+    state = WorkerState(worker_id=worker_id, manager_url=manager_url, api_key=api_key)
 
     @asynccontextmanager
     async def lifespan(app: FastAPI):
@@ -276,6 +310,13 @@ def create_worker_app(worker_id: str = "", manager_url: str = "", stats_interval
         lifespan=lifespan,
     )
     app.state.worker = state
+
+    # Internal agent API: same API-key middleware as the manager ingress, with
+    # the /agent/* routes as the protected internal surface. /agent/health is
+    # always exempt so K8s probes never need a key. TRAM_INTERNAL_AUTH_MODE
+    # defaults to warn — Phase 2 flips to enforce without code changes.
+    from tram.api.middleware import APIKeyMiddleware
+    app.add_middleware(APIKeyMiddleware, internal_prefixes=("/agent/",))
 
     # ── GET /agent/health ──────────────────────────────────────────────────
 
@@ -329,6 +370,10 @@ def create_worker_app(worker_id: str = "", manager_url: str = "", stats_interval
         from tram.pipeline.executor import PipelineExecutor
         from tram.pipeline.loader import load_pipeline_from_yaml
 
+        # D.2 §6.1: fingerprint the dispatched YAML before loading so the
+        # manager can detect stale-config adoption after a restart.
+        config_sha256 = hashlib.sha256(req.yaml_text.encode()).hexdigest()[:16]
+
         try:
             config = load_pipeline_from_yaml(req.yaml_text)
         except Exception as exc:
@@ -344,6 +389,7 @@ def create_worker_app(worker_id: str = "", manager_url: str = "", stats_interval
             pipeline_name=req.pipeline_name,
             schedule_type=req.schedule_type,
             started_at=datetime.now(UTC).isoformat(),
+            config_sha256=config_sha256,
             stats_url=_derive_stats_url(callback_url, state.manager_url),
             stats=PipelineStats(
                 run_id=req.run_id,
@@ -351,7 +397,18 @@ def create_worker_app(worker_id: str = "", manager_url: str = "", stats_interval
                 schedule_type=req.schedule_type,
             ),
         )
-        executor = PipelineExecutor()
+        # F.1 (§3.2b): worker-mode runs reach the transform-state blob through
+        # the manager's internal API (the same availability envelope as the
+        # dispatch that created this run). No manager URL → no store, so
+        # stateful transforms stay in-memory (correct for a single run).
+        from tram.pipeline.state_store import HttpTransformStateStore
+
+        state_store = (
+            HttpTransformStateStore(state.manager_url, state.api_key)
+            if state.manager_url
+            else None
+        )
+        executor = PipelineExecutor(state_store=state_store)
 
         data_dir = os.environ.get("TRAM_DATA_DIR", "/data")
         api_key  = os.environ.get("TRAM_API_KEY", "")
@@ -361,7 +418,10 @@ def create_worker_app(worker_id: str = "", manager_url: str = "", stats_interval
                 try:
                     from tram.agent.assets import sync_assets
                     sync_assets(config, state.manager_url, data_dir, api_key)
-                    executor.stream_run(config, active_run.stop_event, stats=active_run.stats)
+                    executor.stream_run(
+                        config, active_run.stop_event, stats=active_run.stats,
+                        config_sha256=config_sha256,
+                    )
                     stats_snapshot = _final_stats_snapshot(active_run)
                     _post_run_complete(
                         callback_url, req.run_id, req.pipeline_name, state.worker_id,
@@ -375,6 +435,7 @@ def create_worker_app(worker_id: str = "", manager_url: str = "", stats_interval
                         list(stats_snapshot["errors_last_window"]),
                         started_at=active_run.started_at,
                         finished_at=datetime.now(UTC).isoformat(),
+                        api_key=state.api_key,
                     )
                 except Exception as exc:
                     logger.error(
@@ -390,6 +451,7 @@ def create_worker_app(worker_id: str = "", manager_url: str = "", stats_interval
                         "error", 0, 0, 0, 0, str(exc),
                         started_at=active_run.started_at,
                         finished_at=datetime.now(UTC).isoformat(),
+                        api_key=state.api_key,
                     )
                 finally:
                     state.remove(req.run_id)
@@ -404,7 +466,11 @@ def create_worker_app(worker_id: str = "", manager_url: str = "", stats_interval
                 try:
                     from tram.agent.assets import sync_assets
                     sync_assets(config, state.manager_url, data_dir, api_key)
-                    result = executor.batch_run(config, run_id=req.run_id, stats=active_run.stats)
+                    result = executor.batch_run(
+                        config, run_id=req.run_id, stats=active_run.stats,
+                        config_sha256=config_sha256,
+                        flush=req.flush,
+                    )
                     if active_run.stats is not None:
                         payload = {
                             "worker_id": state.worker_id,
@@ -421,7 +487,7 @@ def create_worker_app(worker_id: str = "", manager_url: str = "", stats_interval
                         }
                         # If stats_url is empty, run-complete still executes below and
                         # manager-side on_worker_run_complete removes the store entry.
-                        _post_stats(active_run.stats_url, payload)
+                        _post_stats(active_run.stats_url, payload, api_key=state.api_key)
                     _post_run_complete(
                         callback_url, req.run_id, req.pipeline_name, state.worker_id,
                         result.status.value,
@@ -434,6 +500,7 @@ def create_worker_app(worker_id: str = "", manager_url: str = "", stats_interval
                         result.errors,
                         result.started_at.isoformat(),
                         result.finished_at.isoformat(),
+                        api_key=state.api_key,
                     )
                 except Exception as exc:
                     logger.error(
@@ -449,6 +516,7 @@ def create_worker_app(worker_id: str = "", manager_url: str = "", stats_interval
                         "error", 0, 0, 0, 0, str(exc),
                         started_at=active_run.started_at,
                         finished_at=datetime.now(UTC).isoformat(),
+                        api_key=state.api_key,
                     )
                 finally:
                     state.remove(req.run_id)

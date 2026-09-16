@@ -75,6 +75,28 @@ class TestWebhooks:
             )
         assert resp.status_code == 202
 
+    async def test_secret_required_non_ascii_auth_header_returns_401_not_500(self):
+        """A raw-socket client can send latin-1 bytes in the Authorization
+        header; the constant-time secret compare must yield a clean 401, not a
+        TypeError/500 (header values arrive latin-1 decoded)."""
+        import httpx
+
+        q = queue.Queue()
+        app = _make_webhook_app()
+        registry = {"secure-hook": q}
+        secrets = {"secure-hook": "mysecret"}
+        transport = httpx.ASGITransport(app=app, raise_app_exceptions=False)
+        async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
+            with patch("tram.connectors.webhook.source._WEBHOOK_REGISTRY", registry), \
+                 patch("tram.connectors.webhook._WEBHOOK_SECRETS", secrets):
+                resp = await client.post(
+                    "/webhooks/secure-hook",
+                    content=b"data",
+                    headers=[(b"authorization", b"Bearer k\xff")],
+                )
+        assert resp.status_code == 401
+        assert q.empty()
+
     def test_full_queue_returns_503(self):
         q = queue.Queue(maxsize=1)
         q.put_nowait((b"existing", {}))  # fill the queue
@@ -86,6 +108,50 @@ class TestWebhooks:
              patch("tram.connectors.webhook._WEBHOOK_SECRETS", secrets):
             resp = client.post("/webhooks/my-hook", content=b"overflow")
         assert resp.status_code == 503
+
+    def test_oversized_body_rejected_with_413(self):
+        q = queue.Queue()
+        app = _make_webhook_app()
+        client = TestClient(app, raise_server_exceptions=False)
+        registry = {"my-hook": q}
+        secrets = {}
+        with patch("tram.connectors.webhook.source._WEBHOOK_REGISTRY", registry), \
+             patch("tram.connectors.webhook._WEBHOOK_SECRETS", secrets), \
+             patch.dict(os.environ, {"TRAM_WEBHOOK_MAX_BODY_BYTES": "4"}):
+            resp = client.post("/webhooks/my-hook", content=b"12345")
+        assert resp.status_code == 413
+        assert q.empty()
+
+    def test_body_at_limit_accepted(self):
+        q = queue.Queue()
+        app = _make_webhook_app()
+        client = TestClient(app, raise_server_exceptions=False)
+        registry = {"my-hook": q}
+        secrets = {}
+        with patch("tram.connectors.webhook.source._WEBHOOK_REGISTRY", registry), \
+             patch("tram.connectors.webhook._WEBHOOK_SECRETS", secrets), \
+             patch.dict(os.environ, {"TRAM_WEBHOOK_MAX_BODY_BYTES": "4"}):
+            resp = client.post("/webhooks/my-hook", content=b"1234")
+        assert resp.status_code == 202
+        assert not q.empty()
+
+    def test_oversized_content_length_rejected(self):
+        """Content-Length header is checked before the body is buffered."""
+        q = queue.Queue()
+        app = _make_webhook_app()
+        client = TestClient(app, raise_server_exceptions=False)
+        registry = {"my-hook": q}
+        secrets = {}
+        with patch("tram.connectors.webhook.source._WEBHOOK_REGISTRY", registry), \
+             patch("tram.connectors.webhook._WEBHOOK_SECRETS", secrets), \
+             patch.dict(os.environ, {"TRAM_WEBHOOK_MAX_BODY_BYTES": "10"}):
+            resp = client.post(
+                "/webhooks/my-hook",
+                content=b"small",
+                headers={"Content-Length": "99999"},
+            )
+        assert resp.status_code == 413
+        assert q.empty()
 
 
 # ── Templates ─────────────────────────────────────────────────────────────────

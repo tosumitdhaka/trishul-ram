@@ -81,6 +81,69 @@ try:
         "tram_mgr_pipeline_stats_received_total",
         "Pipeline-stats callbacks received at manager",
     )
+    MGR_STATS_MISSED_TOTAL = Counter(
+        "tram_mgr_stats_missed_total",
+        "Worker stats-heartbeat POSTs that failed to reach the manager",
+        ["worker_id"],
+    )
+    # ── Queued manual runs (E.2 / GH #21) ─────────────────────────────────
+    MGR_QUEUE_DEPTH = Gauge(
+        "tram_mgr_queue_depth",
+        "Manual runs currently queued (non-terminal queued_runs rows)",
+        ["pipeline"],
+    )
+    MGR_QUEUE_ENQUEUED_TOTAL = Counter(
+        "tram_mgr_queue_enqueued_total",
+        "Manual runs enqueued on no-capacity",
+        ["pipeline"],
+    )
+    MGR_QUEUE_DISPATCHED_TOTAL = Counter(
+        "tram_mgr_queue_dispatched_total",
+        "Queued manual runs dispatched after capacity returned",
+        ["pipeline"],
+    )
+    MGR_QUEUE_EXPIRED_TOTAL = Counter(
+        "tram_mgr_queue_expired_total",
+        "Queued manual runs expired at TTL without capacity",
+        ["pipeline"],
+    )
+    MGR_QUEUE_WAIT_SECONDS = Histogram(
+        "tram_mgr_queue_wait_seconds",
+        "Wait from request to dispatch for queued manual runs",
+        ["pipeline"],
+        buckets=(1, 5, 15, 30, 60, 120, 300, 600, 900, 1800),
+    )
+    MGR_QUEUE_DRAIN_RESULT_TOTAL = Counter(
+        "tram_mgr_queue_drain_result_total",
+        "Drain attempt outcomes",
+        ["pipeline", "result"],
+    )
+    # ── Stateful transforms (F.1) ────────────────────────────────────────
+    TRANSFORM_COUNTER_WRAPS_TOTAL = Counter(
+        "tram_transform_counter_wraps_total",
+        "Counter wraps classified by the counter_delta transform",
+        ["pipeline", "field"],
+    )
+    TRANSFORM_COUNTER_RESETS_TOTAL = Counter(
+        "tram_transform_counter_resets_total",
+        "Counter resets classified by the counter_delta transform",
+        ["pipeline", "field"],
+    )
+    TRANSFORM_STATE_IO_TOTAL = Counter(
+        "tram_transform_state_io_total",
+        "Transform state store I/O operations (standalone/worker side)",
+        ["op", "result"],
+    )
+    TRANSFORM_WINDOW_LATE_DROPPED_TOTAL = Counter(
+        "tram_transform_window_late_dropped_total",
+        "Records dropped by window_aggregate for already-finalized windows",
+        ["pipeline"],
+    )
+    TRANSFORM_WINDOWS_EMITTED_TOTAL = Counter(
+        "tram_transform_windows_emitted_total",
+        "Windows emitted by window_aggregate (label complete=complete|partial)",
+        ["pipeline", "complete"],
+    )
 
     RECORDS_IN = Counter(
         "tram_records_in_total",
@@ -134,6 +197,18 @@ except ImportError:
     MGR_WORKER_TOTAL = _NoOpGauge()  # type: ignore[assignment]
     MGR_RUN_COMPLETE_RECEIVED_TOTAL = _NoOpCounter()  # type: ignore[assignment]
     MGR_PIPELINE_STATS_RECEIVED_TOTAL = _NoOpCounter()  # type: ignore[assignment]
+    MGR_STATS_MISSED_TOTAL = _NoOpCounter()  # type: ignore[assignment]
+    MGR_QUEUE_DEPTH = _NoOpGauge()  # type: ignore[assignment]
+    MGR_QUEUE_ENQUEUED_TOTAL = _NoOpCounter()  # type: ignore[assignment]
+    MGR_QUEUE_DISPATCHED_TOTAL = _NoOpCounter()  # type: ignore[assignment]
+    MGR_QUEUE_EXPIRED_TOTAL = _NoOpCounter()  # type: ignore[assignment]
+    MGR_QUEUE_WAIT_SECONDS = _NoOpHistogram()  # type: ignore[assignment]
+    MGR_QUEUE_DRAIN_RESULT_TOTAL = _NoOpCounter()  # type: ignore[assignment]
+    TRANSFORM_COUNTER_WRAPS_TOTAL = _NoOpCounter()  # type: ignore[assignment]
+    TRANSFORM_COUNTER_RESETS_TOTAL = _NoOpCounter()  # type: ignore[assignment]
+    TRANSFORM_STATE_IO_TOTAL = _NoOpCounter()  # type: ignore[assignment]
+    TRANSFORM_WINDOW_LATE_DROPPED_TOTAL = _NoOpCounter()  # type: ignore[assignment]
+    TRANSFORM_WINDOWS_EMITTED_TOTAL = _NoOpCounter()  # type: ignore[assignment]
     RECORDS_IN = _NoOpCounter()  # type: ignore[assignment]
     RECORDS_OUT = _NoOpCounter()  # type: ignore[assignment]
     RECORDS_SKIP = _NoOpCounter()  # type: ignore[assignment]

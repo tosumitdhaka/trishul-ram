@@ -92,9 +92,11 @@ class JsonFlattenTransform(BaseTransform):
                 if not isinstance(value, list):
                     raise TransformError(f"json_flatten: explode path '{path}' is not a list")
 
+                base_row = deepcopy(row)
+                _delete_path_pruned(base_row, path)
+
                 for element in value:
-                    new_row = deepcopy(row)
-                    _delete_path_pruned(new_row, path)
+                    new_row = deepcopy(base_row)
                     if isinstance(element, dict):
                         new_row.update(deepcopy(element))
                     else:

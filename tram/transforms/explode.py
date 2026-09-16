@@ -36,9 +36,9 @@ class ExplodeTransform(BaseTransform):
                 if self.drop_source:
                     delete_path(new_record, self.field)
                 if isinstance(element, dict):
-                    new_record.update(element)
+                    new_record.update(deepcopy(element))
                 else:
-                    set_path(new_record, self.field, element, create_missing=True)
+                    set_path(new_record, self.field, deepcopy(element), create_missing=True)
                 if self.include_index:
                     new_record[self.index_field] = i
                 result.append(new_record)

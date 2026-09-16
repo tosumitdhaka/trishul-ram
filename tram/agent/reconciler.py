@@ -21,6 +21,10 @@ class PlacementReconciler:
         self._interval = min(stats_interval, 10)
         self._stop = threading.Event()
         self._thread: threading.Thread | None = None
+        # Consecutive passes with no liveness signal for an unplaced running
+        # stream (D.2 §5.3). Reset on any sighting, on fresh stats, or when the
+        # pipeline leaves the candidate set; recovery fires at 2 misses.
+        self._unplaced_misses: dict[str, int] = {}
 
     def _slot_dispatch_time(self, placement: dict, slot: dict) -> datetime:
         raw = slot.get("dispatched_at") or placement.get("started_at") or datetime.now(UTC)
@@ -140,6 +144,7 @@ class PlacementReconciler:
         for placement in self._controller.get_active_broadcast_placements():
             placement_group_id = placement["placement_group_id"]
             placement_changed = False
+            placement_drifted = False
 
             for slot in placement["slots"]:
                 live_item = self._find_live_slot(
@@ -149,18 +154,38 @@ class PlacementReconciler:
                     live_by_pipeline_worker,
                 )
                 if live_item is not None:
+                    # §6.2 stale-config policy: a live run whose config hash
+                    # differs from the manager's current config is stopped and
+                    # redispatched with the new YAML. Missing/empty/unknown hash
+                    # (older agent during a rolling upgrade) fails open — adopt.
+                    live_sha = live_item.get("config_sha256")
+                    if live_sha not in ("", None, "unknown"):
+                        expected = self._controller.pipeline_config_sha(placement["pipeline_name"])
+                        if expected and live_sha != expected:
+                            self._controller.reconcile_placement_config_drift(placement_group_id)
+                            # The swap re-dispatches every slot of this placement;
+                            # this copy is now stale — skip status recomputation.
+                            placement_drifted = True
+                            break
                     live_run_id = str(live_item.get("run_id", "") or "")
+                    updates = {}
                     if live_run_id and slot.get("current_run_id") != live_run_id:
-                        slot["current_run_id"] = live_run_id
-                        placement_changed = True
+                        updates["current_run_id"] = live_run_id
                     if live_item.get("worker_url") and slot.get("worker_url") != live_item.get("worker_url"):
-                        slot["worker_url"] = live_item.get("worker_url")
-                        placement_changed = True
+                        updates["worker_url"] = live_item.get("worker_url")
                     if live_item.get("worker_id") and slot.get("worker_id") != live_item.get("worker_id"):
-                        slot["worker_id"] = live_item.get("worker_id")
-                        placement_changed = True
+                        updates["worker_id"] = live_item.get("worker_id")
                     if slot.get("status") != "running":
-                        slot["status"] = "running"
+                        updates["status"] = "running"
+                    # Commit through the controller so the mutation is applied
+                    # to the authoritative placement under the lifecycle lock
+                    # (B.6 — the reconciler holds copies, never live dicts).
+                    if updates and self._controller.update_placement_slot(
+                        placement_group_id,
+                        int(slot["worker_index"]),
+                        **updates,
+                    ):
+                        slot.update(updates)
                         placement_changed = True
                     continue
 
@@ -171,12 +196,17 @@ class PlacementReconciler:
                 is_stale = stats is None or self._stats_store.is_stale(stats)
                 if is_stale:
                     if slot.get("status") != "stale":
-                        slot["status"] = "stale"
-                        placement_changed = True
-                        from tram.metrics.registry import MGR_RECONCILE_ACTION_TOTAL
-                        MGR_RECONCILE_ACTION_TOTAL.labels(
-                            pipeline=placement["pipeline_name"], action="mark_stale"
-                        ).inc()
+                        if self._controller.update_placement_slot(
+                            placement_group_id,
+                            int(slot["worker_index"]),
+                            status="stale",
+                        ):
+                            slot["status"] = "stale"
+                            placement_changed = True
+                            from tram.metrics.registry import MGR_RECONCILE_ACTION_TOTAL
+                            MGR_RECONCILE_ACTION_TOTAL.labels(
+                                pipeline=placement["pipeline_name"], action="mark_stale"
+                            ).inc()
                     replacement_worker_url = self._select_replacement_worker(placement, slot)
                     if replacement_worker_url and self._controller.redispatch_broadcast_slot(
                         placement_group_id,
@@ -194,12 +224,17 @@ class PlacementReconciler:
                             pipeline=placement["pipeline_name"], action="redispatch"
                         ).inc()
                 elif slot.get("status") != "running":
-                    slot["status"] = "running"
-                    placement_changed = True
-                    from tram.metrics.registry import MGR_RECONCILE_ACTION_TOTAL
-                    MGR_RECONCILE_ACTION_TOTAL.labels(
-                        pipeline=placement["pipeline_name"], action="resolve_running"
-                    ).inc()
+                    if self._controller.update_placement_slot(
+                        placement_group_id,
+                        int(slot["worker_index"]),
+                        status="running",
+                    ):
+                        slot["status"] = "running"
+                        placement_changed = True
+                        from tram.metrics.registry import MGR_RECONCILE_ACTION_TOTAL
+                        MGR_RECONCILE_ACTION_TOTAL.labels(
+                            pipeline=placement["pipeline_name"], action="resolve_running"
+                        ).inc()
 
             next_status = placement["status"]
             target_count = self._target_count(placement)
@@ -207,6 +242,11 @@ class PlacementReconciler:
                 slot.get("status") == "running" and slot.get("current_run_id")
                 for slot in placement["slots"]
             )
+            if placement_drifted:
+                # The drift swap already mutated the authoritative placement and
+                # redispatched every slot; never recompute status from this
+                # stale copy (it could clobber the post-swap state).
+                continue
             if placement["status"] == "reconciling":
                 age_seconds = (now - placement["started_at"]).total_seconds()
                 if age_seconds > self._stats_interval * 2:
@@ -223,30 +263,118 @@ class PlacementReconciler:
                 if running_slots < int(target_count):
                     next_status = "degraded"
 
-            if placement_changed and self._db is not None:
-                self._db.update_broadcast_placement_status(
-                    placement_group_id,
-                    placement["status"],
-                    slots=placement["slots"],
-                )
+            # Slot persistence happens inside update_placement_slot() /
+            # redispatch_broadcast_slot() (both under the controller lock), so
+            # a stale snapshot computed here can never be persisted over a
+            # concurrent controller update.
             if placement_changed:
                 self._controller.reconcile_kubernetes_service(placement["pipeline_name"])
             if next_status != placement["status"]:
-                self._controller._update_broadcast_placement_status(placement_group_id, next_status)
+                self._controller.update_broadcast_placement_status(placement_group_id, next_status)
+
+        self._reconcile_unplaced_streams(live_streams)
+
+    def _reconcile_unplaced_streams(self, live_streams: list[dict]) -> None:
+        """Streams with manager status 'running' but no placement group (D.2 §5.3).
+
+        Flag-off adoption, failed placement persistence, or drift leave a
+        running count=1 stream without a placement row. This pass reuses the
+        live snapshot already fetched by run_once (zero additional worker
+        probes) and the StatsStore for a second, independent liveness signal:
+
+        - Live (snapshot sighting OR non-stale stats) → self-heal bookkeeping;
+          stop all but the earliest of multiple live runs for one pipeline.
+        - Not live → 2-consecutive-miss hysteresis, then recover_unplaced_stream
+          (redispatch, or mark stopped when it may not run).
+        """
+        candidates = self._controller.stream_liveness_candidates()
+        if not candidates:
+            self._unplaced_misses.clear()
+            return
+        candidate_names = {c["name"] for c in candidates}
+        for name in list(self._unplaced_misses):
+            if name not in candidate_names:
+                del self._unplaced_misses[name]
+
+        for candidate in candidates:
+            name = candidate["name"]
+            if candidate.get("has_placement"):
+                self._unplaced_misses.pop(name, None)
+                continue
+            sightings = [
+                item for item in live_streams
+                if str(item.get("pipeline_name", "") or "") == name
+            ]
+            fresh_stats = self._stats_store.for_pipeline(name)
+            if sightings or fresh_stats:
+                self._unplaced_misses.pop(name, None)
+                if not sightings:
+                    continue  # live via stats only — nothing to bookkeep
+                ordered = sorted(
+                    sightings,
+                    key=lambda item: str(item.get("started_at") or ""),
+                )
+                earliest = ordered[0]
+                self._controller.adopt_unplaced_stream_bookkeeping(
+                    name,
+                    str(earliest.get("run_id") or ""),
+                    str(earliest.get("worker_url") or ""),
+                    started_at=earliest.get("started_at"),
+                )
+                # Pre-D.2 double-dispatch residue: a count=1 pipeline must have
+                # at most one live run. The reconciler is the only component
+                # with a global view — stop every run but the earliest.
+                for extra in ordered[1:]:
+                    extra_run = str(extra.get("run_id") or "")
+                    if extra_run:
+                        self._worker_pool.stop_run(extra_run, name)
+                        logger.warning(
+                            "Stopped duplicate live stream run",
+                            extra={"pipeline": name, "run_id": extra_run},
+                        )
+                continue
+
+            # Not alive on either signal. Hysteresis: 2 consecutive misses
+            # (matching worker_pool's health_failures_to_down) before acting.
+            self._unplaced_misses[name] = self._unplaced_misses.get(name, 0) + 1
+            if self._unplaced_misses[name] >= 2:
+                self._controller.recover_unplaced_stream(name)
+                # Reset so a just-recovered run (not yet visible in the live
+                # snapshot) is not immediately re-dispatched on the next pass.
+                self._unplaced_misses[name] = 0
 
 
 class BatchReconciler:
-    """Reconcile worker-owned batch runs after worker or manager failure."""
+    """Reconcile worker-owned batch runs after worker or manager failure.
+
+    E.2 (GH #21): the reconciler is also the single drain authority for queued
+    manual runs — it re-evaluates capacity, pipeline state, and TTL every pass.
+    Worker-restored health signals only *nudge* the loop early (§6.5); they
+    never dispatch.
+    """
 
     def __init__(self, controller, worker_pool, interval: int = 10) -> None:
         self._controller = controller
         self._worker_pool = worker_pool
         self._interval = interval
         self._stop = threading.Event()
+        # E.2 (§6.5): set by nudge() (wired to the WorkerPool on_health_restored
+        # hook in the app) to wake the loop before the next interval tick.
+        self._drain_nudge = threading.Event()
         self._thread: threading.Thread | None = None
+
+    def nudge(self) -> None:
+        """Wake the drain loop early — a worker's health was restored.
+
+        The nudge only wakes the loop; run_once re-evaluates everything and
+        never dispatches on the nudge itself. Worst case the wake is redundant
+        with the next interval tick.
+        """
+        self._drain_nudge.set()
 
     def start(self) -> None:
         self._stop.clear()
+        self._drain_nudge.clear()
         self._thread = threading.Thread(
             target=self._loop,
             daemon=True,
@@ -256,11 +384,18 @@ class BatchReconciler:
 
     def stop(self) -> None:
         self._stop.set()
+        # Wake a loop blocked in _drain_nudge.wait() — it re-checks the stop
+        # event right after clearing the nudge.
+        self._drain_nudge.set()
         if self._thread and self._thread.is_alive():
             self._thread.join(timeout=self._interval + 1)
 
     def _loop(self) -> None:
-        while not self._stop.wait(self._interval):
+        while not self._stop.is_set():
+            self._drain_nudge.wait(self._interval)
+            self._drain_nudge.clear()
+            if self._stop.is_set():
+                return
             try:
                 self.run_once()
             except Exception as exc:
@@ -333,3 +468,45 @@ class BatchReconciler:
     def run_once(self) -> None:
         cleared = self._reconcile_tracked_runs()
         self._reconcile_untracked_running_pipelines(skip=cleared)
+        self._drain_queued_runs()
+
+    def _drain_queued_runs(self) -> None:
+        """Drain queued manual runs (E.2 §6.2).
+
+        The drain is authoritative: it re-evaluates capacity, pipeline state,
+        and TTL every pass. TTL expiry runs first and unconditionally — a row
+        past ``expires_at`` must fail even through a full worker outage (the
+        202's deadline is enforced when it matters); expiry is pure DB +
+        ``_finalize_batch_result`` and needs no workers. The debounced health
+        pre-check is flap-safe (a single failed probe cannot cause a drain
+        attempt) and gates dispatch attempts only. Dispatch HTTP runs with
+        the controller's lifecycle lock released (the claim/commit/revert
+        transitions are each under the RLock per §6.4).
+        """
+        from tram.agent.worker_pool import DISPATCH_ACCEPTED, DISPATCH_NO_CAPACITY
+
+        for run in self._controller.drainable_queued_runs():
+            if run["expires_at"] <= datetime.now(UTC):
+                self._controller.expire_queued_run(run["run_id"])
+
+        if not self._worker_pool.healthy_workers():
+            return  # debounced state — flap-safe pre-check (dispatch attempts only)
+        for run in self._controller.drainable_queued_runs():
+            claimed = self._controller.claim_queued_run(run["run_id"])
+            if claimed is None:
+                continue  # lost the claim (delete/stop raced us)
+            # ── network I/O with the lock released (redispatch_broadcast_slot pattern) ──
+            outcome = self._worker_pool.dispatch_with_result(
+                run_id=claimed["run_id"],
+                pipeline_name=claimed["pipeline_name"],
+                yaml_text=claimed["yaml_snapshot"],  # the auditable snapshot (Decision 5)
+                schedule_type=claimed["schedule_type"],
+                callback_url=claimed["callback_url"],
+            )
+            if outcome.outcome == DISPATCH_ACCEPTED:
+                self._controller.commit_queued_dispatch(claimed["run_id"], outcome.worker_url)
+            else:  # DISPATCH_FAILED, or DISPATCH_NO_CAPACITY (capacity vanished mid-pass)
+                result_label = (
+                    "no_capacity" if outcome.outcome == DISPATCH_NO_CAPACITY else "failed"
+                )
+                self._controller.revert_queued_claim(claimed["run_id"], result=result_label)

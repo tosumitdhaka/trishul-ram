@@ -19,6 +19,12 @@ from unittest.mock import MagicMock
 
 import pytest
 
+from tram.agent.worker_pool import (
+    DISPATCH_ACCEPTED,
+    DISPATCH_FAILED,
+    DISPATCH_NO_CAPACITY,
+    DispatchOutcome,
+)
 from tram.core.context import RunResult, RunStatus
 from tram.pipeline.controller import PipelineController
 from tram.pipeline.loader import load_pipeline_from_yaml
@@ -170,6 +176,7 @@ def _make_controller(
     worker_pool=None,
     manager_url="",
     kubernetes_service_manager=None,
+    single_stream_placements=True,
 ) -> PipelineController:
     """Build a controller with a patched BackgroundScheduler that doesn't start."""
     ctrl = PipelineController(
@@ -178,6 +185,7 @@ def _make_controller(
         worker_pool=worker_pool,
         manager_url=manager_url,
         kubernetes_service_manager=kubernetes_service_manager,
+        single_stream_placements=single_stream_placements,
     )
     return ctrl
 
@@ -225,7 +233,9 @@ class TestInstantiation:
 class TestKubernetesServiceLifecycle:
     def test_manager_stream_activation_creates_pipeline_service(self):
         wp = MagicMock()
-        wp.dispatch.return_value = "http://worker-0:8766"
+        wp.dispatch_with_result.return_value = DispatchOutcome(
+            worker_url="http://worker-0:8766", outcome=DISPATCH_ACCEPTED,
+        )
         k8s = MagicMock()
         ctrl = _make_controller(
             worker_pool=wp,
@@ -458,7 +468,7 @@ class TestLocalStreamExecution:
 
         done = threading.Event()
 
-        def _fake_stream_run(cfg, stop_event, stats=None):
+        def _fake_stream_run(cfg, stop_event, stats=None, config_sha256=""):
             done.wait(timeout=2)
 
         ctrl.executor = MagicMock()
@@ -481,7 +491,7 @@ class TestLocalStreamExecution:
         received_stop = threading.Event()
         test_done = threading.Event()
 
-        def _fake_stream_run(cfg, stop_event, stats=None):
+        def _fake_stream_run(cfg, stop_event, stats=None, config_sha256=""):
             stop_event.wait(timeout=5)
             received_stop.set()
             test_done.wait(timeout=2)
@@ -504,7 +514,7 @@ class TestLocalStreamExecution:
         ctrl.manager.register(config, yaml_text=_STREAM_YAML)
 
         # First thread exits quickly when its stop_event fires
-        def _fake_stream_run(cfg, stop_event, stats=None):
+        def _fake_stream_run(cfg, stop_event, stats=None, config_sha256=""):
             stop_event.wait(timeout=5)
 
         ctrl.executor = MagicMock()
@@ -595,7 +605,9 @@ class TestLifecycle:
         ctrl.executor = MagicMock()
         ctrl.executor.batch_run.return_value = result
 
-        run_id = ctrl.trigger_run("my-interval")
+        trigger = ctrl.trigger_run("my-interval")
+        assert trigger.disposition == "dispatched"
+        run_id = trigger.run_id
         assert str(uuid.UUID(run_id)) == run_id
 
         # Give the thread pool a moment to run
@@ -709,6 +721,104 @@ class TestBootLoad:
         db.heartbeat.assert_not_called()
         db.get_live_nodes.assert_not_called()
         db.expire_nodes.assert_not_called()
+
+    # ── B.6: adopt-or-skip guard for count=1 streams on manager restart ─────
+
+    def test_boot_load_adopts_live_count1_stream_without_redispatch(self):
+        """A count=1 stream still live on a worker after a manager restart is
+        adopted (lease recorded, no re-dispatch) — exactly zero dispatches, so
+        no second concurrent instance and no duplicate sink writes."""
+        wp = MagicMock()
+        wp.find_pipeline_runs.return_value = [{
+            "worker_url": "http://worker-0:8766",
+            "run_id": "live-run-1",
+            "pipeline_name": "my-stream",
+            "started_at": "2026-09-01T10:00:00+00:00",
+            "schedule_type": "stream",
+        }]
+        db = self._make_db(pipelines=[("my-stream", _STREAM_YAML)])
+        db.get_active_broadcast_placements.return_value = []
+        ctrl = _make_controller(db=db, worker_pool=wp, manager_url="http://manager:8765")
+        ctrl.start()
+
+        try:
+            assert wp.dispatch_with_result.call_count == 0, (
+                "boot must not re-dispatch an adopted live stream"
+            )
+            assert wp.find_pipeline_runs.call_count == 1
+            wp.adopt_stream_assignment.assert_called_once_with(
+                pipeline_name="my-stream",
+                run_id="live-run-1",
+                worker_url="http://worker-0:8766",
+            )
+            # Status and placement views reflect the adopted run.
+            assert ctrl._stream_run_ids["my-stream"] == ["live-run-1"]
+            assert ctrl.manager.get("my-stream").status == "running"
+        finally:
+            ctrl.stop()
+
+    def test_boot_load_redispatches_count1_stream_when_no_live_run(self):
+        """Legacy flag-off regression (D.2): no worker reports the stream as
+        live → normal re-dispatch (the pre-restart instance is gone, so a fresh
+        dispatch is safe)."""
+        wp = MagicMock()
+        wp.find_pipeline_runs.return_value = []
+        wp.dispatch_with_result.return_value = DispatchOutcome(
+            worker_url="http://worker-0:8766", outcome=DISPATCH_ACCEPTED,
+        )
+        db = self._make_db(pipelines=[("my-stream", _STREAM_YAML)])
+        db.get_active_broadcast_placements.return_value = []
+        ctrl = _make_controller(
+            db=db, worker_pool=wp, manager_url="http://manager:8765",
+            single_stream_placements=False,
+        )
+        ctrl.start()
+
+        try:
+            assert wp.dispatch_with_result.call_count == 1
+            wp.adopt_stream_assignment.assert_not_called()
+            assert ctrl.manager.get("my-stream").status == "running"
+            assert len(ctrl._stream_run_ids["my-stream"]) == 1
+        finally:
+            ctrl.stop()
+
+    def test_boot_load_does_not_adopt_broadcast_stream(self):
+        """The adopt guard is scoped to count=1 streams: broadcast placements
+        are restored from durable records (D.2), never adopted from live probes."""
+        wp = MagicMock()
+        wp.find_pipeline_runs.return_value = [{
+            "worker_url": "http://worker-0:8766",
+            "run_id": "live-run-1",
+            "pipeline_name": "my-count-n-stream",
+            "started_at": "2026-09-01T10:00:00+00:00",
+            "schedule_type": "stream",
+        }]
+        result = MagicMock()
+        result.accepted = ["http://worker-0:8766"]
+        result.run_ids = ["pg-x-w0"]
+        result.status = "running"
+        result.slots = [{
+            "worker_index": 0,
+            "worker_url": "http://worker-0:8766",
+            "worker_id": "tram-worker-0",
+            "pinned_worker_id": None,
+            "run_id_prefix": "pg-x-w0",
+            "current_run_id": "pg-x-w0",
+            "status": "running",
+            "restart_count": 0,
+        }]
+        wp.multi_dispatch.return_value = result
+        db = self._make_db(pipelines=[("my-count-n-stream", _COUNT_N_STREAM_YAML)])
+        db.get_active_broadcast_placements.return_value = []
+        ctrl = _make_controller(db=db, worker_pool=wp, manager_url="http://manager:8765")
+        ctrl.start()
+
+        try:
+            assert wp.find_pipeline_runs.call_count == 0
+            wp.multi_dispatch.assert_called_once()
+            wp.adopt_stream_assignment.assert_not_called()
+        finally:
+            ctrl.stop()
 
 
 # ── on_worker_run_complete (local reflection of worker callbacks) ──────────
@@ -833,7 +943,9 @@ class TestOnWorkerRunComplete:
     def test_worker_pool_notified_on_complete(self):
         """WorkerPool.on_run_complete() must be called when worker_pool is set."""
         worker_pool = MagicMock()
-        worker_pool.dispatch.return_value = "http://worker-0:8766"
+        worker_pool.dispatch_with_result.return_value = DispatchOutcome(
+            worker_url="http://worker-0:8766", outcome=DISPATCH_ACCEPTED,
+        )
         ctrl = _started_controller(worker_pool=worker_pool)
         config = load_pipeline_from_yaml(_MANUAL_YAML)
         ctrl.register(config, yaml_text=_MANUAL_YAML)
@@ -851,7 +963,9 @@ class TestOnWorkerRunComplete:
 
     def test_worker_batch_completion_clears_active_batch_lease(self):
         worker_pool = MagicMock()
-        worker_pool.dispatch.return_value = "http://worker-0:8766"
+        worker_pool.dispatch_with_result.return_value = DispatchOutcome(
+            worker_url="http://worker-0:8766", outcome=DISPATCH_ACCEPTED,
+        )
         ctrl = _started_controller(worker_pool=worker_pool, manager_url="http://manager:8765")
         config = load_pipeline_from_yaml(_MANUAL_YAML)
         ctrl.register(config, yaml_text=_MANUAL_YAML)
@@ -896,9 +1010,22 @@ class TestOnWorkerRunComplete:
 
 
 class TestWorkerDispatch:
-    def _worker_pool(self, dispatch_return="http://worker-0:8766"):
+    def _worker_pool(self, dispatch_return="http://worker-0:8766", dispatch_error=None):
         wp = MagicMock()
-        wp.dispatch.return_value = dispatch_return
+        if dispatch_error is not None:
+            wp.dispatch_with_result.return_value = DispatchOutcome(
+                worker_url=None, outcome=DISPATCH_FAILED, error=dispatch_error,
+            )
+        elif dispatch_return is None:
+            wp.dispatch_with_result.return_value = DispatchOutcome(
+                worker_url=None,
+                outcome=DISPATCH_NO_CAPACITY,
+                error="No healthy workers available for dispatch",
+            )
+        else:
+            wp.dispatch_with_result.return_value = DispatchOutcome(
+                worker_url=dispatch_return, outcome=DISPATCH_ACCEPTED,
+            )
         wp.multi_dispatch.return_value = MagicMock(
             accepted=["http://worker-0:8766"],
             run_ids=["pg1-w0"],
@@ -921,13 +1048,13 @@ class TestWorkerDispatch:
         ctrl = _started_controller(worker_pool=wp, manager_url="http://manager:8765")
         config = load_pipeline_from_yaml(_INTERVAL_YAML)
         ctrl.register(config, yaml_text=_INTERVAL_YAML)
-        wp.dispatch.reset_mock()
+        wp.dispatch_with_result.reset_mock()
         ctrl.manager.set_status("my-interval", "scheduled")
 
         ctrl._run_batch("my-interval", run_id="r1")
 
-        wp.dispatch.assert_called_once()
-        call_kwargs = wp.dispatch.call_args.kwargs
+        wp.dispatch_with_result.assert_called_once()
+        call_kwargs = wp.dispatch_with_result.call_args.kwargs
         assert call_kwargs["pipeline_name"] == "my-interval"
         assert "r1" in call_kwargs["run_id"] or call_kwargs["run_id"]
         ctrl.stop()
@@ -1037,7 +1164,7 @@ class TestWorkerDispatch:
 
         ctrl._run_batch("my-interval")
 
-        generated_run_id = wp.dispatch.call_args.kwargs["run_id"]
+        generated_run_id = wp.dispatch_with_result.call_args.kwargs["run_id"]
         assert str(uuid.UUID(generated_run_id)) == generated_run_id
         ctrl.stop()
 
@@ -1056,16 +1183,34 @@ class TestWorkerDispatch:
         assert state.run_history[0].error == "No healthy workers available for dispatch"
         ctrl.stop()
 
-    def test_start_stream_dispatches_to_worker(self):
-        wp = self._worker_pool()
+    def test_run_batch_dispatch_failure_records_real_error(self):
+        wp = self._worker_pool(dispatch_error="HTTP 503 from http://worker-0:8766")
         ctrl = _started_controller(worker_pool=wp)
+        config = load_pipeline_from_yaml(_INTERVAL_YAML)
+        ctrl.register(config, yaml_text=_INTERVAL_YAML)
+        ctrl.manager.set_status("my-interval", "scheduled")
+
+        ctrl._run_batch("my-interval")
+        state = ctrl.manager.get("my-interval")
+        assert state.status == "error"
+        assert len(state.run_history) == 1
+        assert state.run_history[0].status == RunStatus.FAILED
+        assert state.run_history[0].error == (
+            "Worker dispatch failed: HTTP 503 from http://worker-0:8766"
+        )
+        ctrl.stop()
+
+    def test_start_stream_dispatches_to_worker(self):
+        """Legacy flag-off regression (D.2): count=1 uses dispatch_with_result."""
+        wp = self._worker_pool()
+        ctrl = _started_controller(worker_pool=wp, single_stream_placements=False)
         config = load_pipeline_from_yaml(_STREAM_YAML)
         ctrl.register(config, yaml_text=_STREAM_YAML)
 
         ctrl._start_stream(config)
 
-        wp.dispatch.assert_called_once()
-        generated_run_id = wp.dispatch.call_args.kwargs["run_id"]
+        wp.dispatch_with_result.assert_called_once()
+        generated_run_id = wp.dispatch_with_result.call_args.kwargs["run_id"]
         assert str(uuid.UUID(generated_run_id)) == generated_run_id
         assert ctrl.manager.get("my-stream").status == "running"
         ctrl.stop()
@@ -1090,7 +1235,7 @@ class TestWorkerDispatch:
         ctrl._start_stream(config)
 
         wp.multi_dispatch.assert_called_once()
-        assert wp.dispatch.call_count == 0
+        assert wp.dispatch_with_result.call_count == 0
         call_kwargs = wp.multi_dispatch.call_args.kwargs
         assert call_kwargs["workers_cfg"].count == "all"
         assert ctrl._stream_run_ids["my-webhook-stream"] == ["pg1-w0", "pg1-w1"]
@@ -1300,8 +1445,9 @@ class TestWorkerDispatch:
         db.close()
 
     def test_start_stream_no_healthy_workers_sets_error(self):
+        """Legacy flag-off regression (D.2): no-capacity → status error."""
         wp = self._worker_pool(dispatch_return=None)
-        ctrl = _started_controller(worker_pool=wp)
+        ctrl = _started_controller(worker_pool=wp, single_stream_placements=False)
         config = load_pipeline_from_yaml(_STREAM_YAML)
         ctrl.register(config, yaml_text=_STREAM_YAML)
 
@@ -1310,16 +1456,17 @@ class TestWorkerDispatch:
         ctrl.stop()
 
     def test_start_stream_second_call_is_no_op(self):
-        """When stream already dispatched, second call is skipped."""
+        """Legacy flag-off regression (D.2): when stream already dispatched,
+        second call is skipped."""
         wp = self._worker_pool()
-        ctrl = _started_controller(worker_pool=wp)
+        ctrl = _started_controller(worker_pool=wp, single_stream_placements=False)
         config = load_pipeline_from_yaml(_STREAM_YAML)
         ctrl.register(config, yaml_text=_STREAM_YAML)
 
         ctrl._start_stream(config)
         ctrl._stream_run_ids["my-stream"] = ["existing-run-id"]
         ctrl._start_stream(config)
-        assert wp.dispatch.call_count == 1  # only called once
+        assert wp.dispatch_with_result.call_count == 1  # only called once
         ctrl.stop()
 
     def test_stop_stream_calls_worker_stop(self):
@@ -1417,6 +1564,9 @@ class TestWorkerDispatch:
 class TestUpdateDeleteRestart:
     def test_update_identical_yaml_is_noop(self):
         ctrl = _started_controller()
+        # Pause the scheduler so register()'s immediate first batch run
+        # cannot set status "running" and race the assertions below.
+        ctrl._scheduler.pause()
         config = load_pipeline_from_yaml(_INTERVAL_YAML)
         ctrl.register(config, yaml_text=_INTERVAL_YAML)
         original_state = ctrl.manager.get("my-interval")
@@ -1570,4 +1720,209 @@ class TestGetSchedulerStatus:
         ctrl = _started_controller(worker_pool=wp)
         status = ctrl.get_scheduler_status()
         assert status["workers"] == {"workers": []}
+        ctrl.stop()
+
+
+# ── D.2 (GH #17): TRAM_STREAM_SINGLE_PLACEMENT flag plumbing (§9.1) ─────────
+
+
+class TestSingleStreamPlacementFlag:
+    def test_flag_defaults_on_from_env(self, monkeypatch):
+        monkeypatch.delenv("TRAM_STREAM_SINGLE_PLACEMENT", raising=False)
+        assert PipelineController()._single_stream_placements is True
+
+    def test_flag_off_from_env(self, monkeypatch):
+        monkeypatch.setenv("TRAM_STREAM_SINGLE_PLACEMENT", "0")
+        assert PipelineController()._single_stream_placements is False
+
+    def test_constructor_arg_wins_over_env(self, monkeypatch):
+        monkeypatch.setenv("TRAM_STREAM_SINGLE_PLACEMENT", "0")
+        assert PipelineController(single_stream_placements=True)._single_stream_placements is True
+
+    def test_app_config_exposes_flag(self, monkeypatch):
+        from tram.core.config import AppConfig
+
+        monkeypatch.delenv("TRAM_STREAM_SINGLE_PLACEMENT", raising=False)
+        assert AppConfig.from_env().stream_single_placement is True
+        monkeypatch.setenv("TRAM_STREAM_SINGLE_PLACEMENT", "0")
+        assert AppConfig.from_env().stream_single_placement is False
+
+
+# ── F.1 §6: broadcast-stream guard for stateful transforms ──────────────────
+
+
+_STATEFUL_STREAM_YAML = """\
+name: my-stateful-stream
+schedule:
+  type: stream
+source:
+  type: kafka
+  topic: events
+  brokers:
+    - localhost:9092
+  group_id: test-group
+serializer_in:
+  type: json
+workers:
+  count: 2
+transforms:
+  - type: window_aggregate
+    window_seconds: 900
+    operations:
+      mean_rate: "avg:rate"
+sinks:
+  - type: local
+    path: /tmp/out
+"""
+
+_COUNT_N_INTERVAL_YAML = """\
+name: my-count-n-interval
+schedule:
+  type: interval
+  interval_seconds: 60
+source:
+  type: local
+  path: /tmp/in
+  file_pattern: "*.noop"
+serializer_in:
+  type: json
+workers:
+  count: 2
+sinks:
+  - type: local
+    path: /tmp/out
+"""
+
+
+class TestStatefulBroadcastGuard:
+    def _worker_pool(self):
+        wp = MagicMock()
+        wp.multi_dispatch.return_value = MagicMock(
+            accepted=["http://worker-0:8766"],
+            run_ids=["pg1-w0"],
+            rejected=[],
+            status="running",
+            placement_group_id="pg1",
+            slots=[{
+                "worker_index": 0,
+                "worker_url": "http://worker-0:8766",
+                "run_id_prefix": "pg1-w0",
+                "current_run_id": "pg1-w0",
+                "status": "running",
+                "restart_count": 0,
+            }],
+        )
+        wp.dispatch_with_result.return_value = DispatchOutcome(
+            worker_url="http://worker-0:8766", outcome=DISPATCH_ACCEPTED,
+        )
+        return wp
+
+    def test_start_stream_guard_rejects_broadcast_with_stateful(self):
+        """Manager mode + count=2 stream + stateful transform → pipeline error."""
+        wp = self._worker_pool()
+        ctrl = _started_controller(worker_pool=wp, manager_url="http://manager:8765")
+        config = load_pipeline_from_yaml(_STATEFUL_STREAM_YAML)
+        ctrl.register(config, yaml_text=_STATEFUL_STREAM_YAML)
+
+        assert ctrl.manager.get("my-stateful-stream").status == "error"
+        wp.multi_dispatch.assert_not_called()
+        wp.dispatch_with_result.assert_not_called()
+        ctrl.stop()
+
+    def test_start_stream_guard_standalone_fine(self):
+        """Standalone (no worker pool) starts the stateful stream normally."""
+        ctrl = _started_controller()
+        config = load_pipeline_from_yaml(_STATEFUL_STREAM_YAML)
+        done = threading.Event()
+
+        def _fake_stream_run(cfg, stop_event, stats=None, config_sha256=""):
+            done.wait(timeout=2)
+
+        ctrl.executor = MagicMock()
+        ctrl.executor.stream_run.side_effect = _fake_stream_run
+
+        ctrl.register(config, yaml_text=_STATEFUL_STREAM_YAML)
+
+        assert ctrl.manager.get("my-stateful-stream").status == "running"
+        assert "my-stateful-stream" in ctrl._stream_threads
+        done.set()
+        ctrl.stop()
+
+    def test_start_stream_guard_flag_off_inert(self):
+        """TRAM_STATEFUL_TRANSFORMS off → the guard is inert; dispatch proceeds."""
+        wp = self._worker_pool()
+        ctrl = PipelineController(
+            worker_pool=wp,
+            manager_url="http://manager:8765",
+            stateful_transforms=False,
+        )
+        ctrl.start()
+        config = load_pipeline_from_yaml(_STATEFUL_STREAM_YAML)
+        ctrl.register(config, yaml_text=_STATEFUL_STREAM_YAML)
+
+        wp.multi_dispatch.assert_called_once()
+        assert ctrl.manager.get("my-stateful-stream").status == "running"
+        ctrl.stop()
+
+    def test_start_stream_guard_count1_stream_starts(self):
+        """count=1 stream + stateful transform is allowed (single slot)."""
+        yaml = _STATEFUL_STREAM_YAML.replace("  count: 2", "  count: 1")
+        wp = self._worker_pool()
+        ctrl = _started_controller(worker_pool=wp, manager_url="http://manager:8765")
+        config = load_pipeline_from_yaml(yaml)
+        ctrl.register(config, yaml_text=yaml)
+
+        assert ctrl.manager.get("my-stateful-stream").status == "running"
+        wp.multi_dispatch.assert_called_once()
+        ctrl.stop()
+
+    def test_batch_dispatch_ignores_broadcast(self):
+        """count=N interval pipelines still dispatch single-slot (pre-existing
+        behavior, now asserted — F.1 §3.4/§10)."""
+        wp = self._worker_pool()
+        ctrl = _started_controller(worker_pool=wp, manager_url="http://manager:8765")
+        config = load_pipeline_from_yaml(_COUNT_N_INTERVAL_YAML)
+        ctrl.register(config, yaml_text=_COUNT_N_INTERVAL_YAML)
+        wp.dispatch_with_result.reset_mock()
+        wp.multi_dispatch.reset_mock()
+        ctrl.manager.set_status("my-count-n-interval", "scheduled")
+
+        ctrl._run_batch("my-count-n-interval", run_id="r-broadcast")
+
+        wp.dispatch_with_result.assert_called_once()
+        wp.multi_dispatch.assert_not_called()
+        ctrl.stop()
+
+    def test_trigger_run_flush_reaches_local_executor(self):
+        """A standalone flush run forwards the flag to executor.batch_run."""
+        ctrl = _started_controller()
+        config = load_pipeline_from_yaml(_MANUAL_YAML)
+        ctrl.register(config, yaml_text=_MANUAL_YAML)
+        ctrl.manager.set_status("my-manual", "stopped")
+
+        result = _make_result("my-manual", RunStatus.SUCCESS)
+        ctrl.executor = MagicMock()
+        ctrl.executor.batch_run.return_value = result
+
+        trigger = ctrl.trigger_run("my-manual", flush=True)
+        assert trigger.disposition == "dispatched"
+        time.sleep(0.1)
+        ctrl.executor.batch_run.assert_called_once()
+        assert ctrl.executor.batch_run.call_args.kwargs["flush"] is True
+        ctrl.stop()
+
+    def test_trigger_run_flush_false_by_default(self):
+        """trigger_run without flush keeps the executor's default (False)."""
+        ctrl = _started_controller()
+        config = load_pipeline_from_yaml(_MANUAL_YAML)
+        ctrl.register(config, yaml_text=_MANUAL_YAML)
+        ctrl.manager.set_status("my-manual", "stopped")
+
+        result = _make_result("my-manual", RunStatus.SUCCESS)
+        ctrl.executor = MagicMock()
+        ctrl.executor.batch_run.return_value = result
+
+        ctrl.trigger_run("my-manual")
+        time.sleep(0.1)
+        assert ctrl.executor.batch_run.call_args.kwargs["flush"] is False
         ctrl.stop()

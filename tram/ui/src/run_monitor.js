@@ -14,16 +14,25 @@ export async function monitorTriggeredRun(
     timeoutMs = 120_000,
   } = {},
 ) {
-  const startedAt = Date.now()
+  // A queued run's liveness budget restarts while it waits — see below.
+  let deadline = Date.now() + timeoutMs
 
   while (isActive()) {
-    if ((Date.now() - startedAt) > timeoutMs) return null
+    if (Date.now() > deadline) return null
     await wait(pollMs)
 
     try {
       const run = await api.runs.get(runId)
       if (TERMINAL_RUN_STATUSES.has(run?.status)) {
         return run
+      }
+      if (run?.status === 'queued') {
+        // E.2 (GH #21): a queued manual run can wait out its whole TTL before
+        // capacity returns. The queued phase doesn't consume the monitor's
+        // timeout — push the deadline so the "Queued…" button and info row
+        // keep being watched (and the page re-renders on terminal status)
+        // instead of going stale after timeoutMs.
+        deadline = Date.now() + timeoutMs
       }
     } catch (e) {
       if (e.status !== 404) throw e

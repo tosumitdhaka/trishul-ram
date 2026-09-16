@@ -4,7 +4,7 @@
 > Define your data flows in YAML. TRAM runs them — on a schedule, continuously, or on demand.
 
 [![License](https://img.shields.io/github/license/tosumitdhaka/trishul-ram?style=flat-square)](LICENSE)
-[![Python](https://img.shields.io/badge/Python-3.11%2B-blue?style=flat-square)](https://www.python.org/)
+[![Python](https://img.shields.io/badge/Python-3.13%2B-blue?style=flat-square)](https://www.python.org/)
 [![GHCR](https://img.shields.io/badge/Container-GHCR-blue?style=flat-square&logo=github)](https://github.com/tosumitdhaka?tab=packages&repo_name=trishul-ram)
 [![CI](https://img.shields.io/github/actions/workflow/status/tosumitdhaka/trishul-ram/ci.yml?style=flat-square&label=CI)](https://github.com/tosumitdhaka/trishul-ram/actions)
 
@@ -248,7 +248,7 @@ For a single standalone container without Compose:
 ./scripts/deploy-docker-standalone.sh up
 ./scripts/deploy-docker-standalone.sh up --tag local-test
 ./scripts/deploy-docker-standalone.sh up --ghcr
-./scripts/deploy-docker-standalone.sh up --ghcr --tag 1.3.3
+./scripts/deploy-docker-standalone.sh up --ghcr --tag 1.4.0
 ./scripts/deploy-docker-standalone.sh up --ghcr --env 'TRAM_AUTH_USERS=admin:changeme123'
 ./scripts/deploy-docker-standalone.sh status
 ```
@@ -310,7 +310,7 @@ Quick-start examples use `latest`. For production deployments, pin a specific re
 | **Sources** | 24 | `sftp` `kafka` `rest` `snmp_trap` `snmp_poll` `syslog` `gnmi` `corba` `nats` `mqtt` `amqp` `websocket` `sql` `clickhouse` `influxdb` `redis` `s3` `gcs` `azure_blob` `elasticsearch` `prometheus_rw` `webhook` `local` `ftp` |
 | **Sinks** | 20 | `sftp` `kafka` `rest` `opensearch` `snmp_trap` `mqtt` `amqp` `nats` `sql` `clickhouse` `influxdb` `redis` `s3` `gcs` `azure_blob` `websocket` `elasticsearch` `ves` `local` `ftp` |
 | **Serializers** | 12 | `json` `ndjson` `csv` `xml` `avro` `parquet` `protobuf` `msgpack` `bytes` `text` `asn1` `pm_xml` |
-| **Transforms** | 27 | `rename` `cast` `add_field` `drop` `filter` `value_map` `flatten` `json_flatten` `explode` `unnest` `select_from_list` `coalesce_fields` `project` `inject_meta` `aggregate` `enrich` `deduplicate` `regex_extract` `template` `mask` `validate` `sort` `limit` `jmespath` `melt` `timestamp_normalize` `hex_decode` |
+| **Transforms** | 29 | `rename` `cast` `add_field` `drop` `filter` `value_map` `flatten` `json_flatten` `explode` `unnest` `select_from_list` `coalesce_fields` `project` `inject_meta` `aggregate` `enrich` `deduplicate` `regex_extract` `template` `mask` `validate` `sort` `limit` `jmespath` `melt` `timestamp_normalize` `hex_decode` `counter_delta` `window_aggregate` |
 
 Install only what you need:
 
@@ -326,12 +326,15 @@ pip install tram[all]                      # everything (except corba — system
 
 - **Hot-reload** — update pipeline YAML via API or file watcher; no restart needed
 - **Broadcast push streams** — `webhook` and `prometheus_rw` scale across all healthy workers in manager mode
+- **Durable stream placement** — count=1 streams survive manager restarts (adopted, never double-dispatched) and worker deaths (recovered within ~60s)
+- **Stateful transforms** — `counter_delta` (Counter32/64 wrap correction, rates) and `window_aggregate` (epoch-aligned tumbling windows with watermark finalization) with durable per-pipeline state
+- **Queued manual runs** — a manual run with no healthy workers is durably queued and auto-dispatched when capacity returns
 - **Pipeline versioning** — every update saved; one-command rollback to any previous version
-- **AI-assisted authoring** — `POST /api/ai/suggest` generates or explains pipeline YAML (Anthropic / OpenAI / local LLM)
+- **AI-assisted authoring** — `POST /api/ai/suggest` generates or explains pipeline YAML (Anthropic / OpenAI / Bedrock / local LLM)
 - **Dead Letter Queue** — failed records wrapped in a JSON envelope and routed to a configurable DLQ sink
 - **Per-sink routing** — condition expressions, independent retry/circuit-breaker, and separate serializer per sink
 - **Observability** — Prometheus metrics, OpenTelemetry tracing, live web dashboard, per-run history
-- **Security** — API key auth, browser session auth (HMAC tokens), TLS, rate limiting per IP
+- **Security** — API key auth, internal-surface auth modes, browser session auth (HMAC tokens), TLS, rate limiting per IP
 - **Schema management** — upload `.proto`, `.avsc`, `.xsd` files at runtime; Confluent/Apicurio schema registry integration
 
 ---
@@ -342,7 +345,7 @@ pip install tram[all]                      # everything (except corba — system
 |-----|----------|
 | [Architecture](docs/architecture.md) | System design, execution modes, manager+worker internals |
 | [Connectors](docs/connectors.md) | All sources and sinks — config reference, SNMPv3, retry/circuit-breaker |
-| [Transforms](docs/transforms.md) | All 27 transforms and condition expression syntax |
+| [Transforms](docs/transforms.md) | All 29 transforms and condition expression syntax |
 | [API Reference](docs/api.md) | REST API endpoints, authentication, rate limiting |
 | [Deployment](docs/deployment.md) | Docker, Kubernetes/Helm, TLS, environment variables |
 | [Roadmap](docs/roadmap.md) | Planned features and known issues |
@@ -354,7 +357,7 @@ pip install tram[all]                      # everything (except corba — system
 
 ```bash
 pip install -e ".[dev]"
-pytest tests/unit/        # 1,250 unit tests — no network required
+pytest tests/unit/        # unit tests — no network required
 pytest tests/integration/ # integration tests (SFTP, Kafka, schema registry)
 ruff check .              # lint
 ```

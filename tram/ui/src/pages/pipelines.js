@@ -328,13 +328,15 @@ function renderTemplateList() {
       <td class="mono table-cell-compact">${esc(templateFlowText(template))}</td>
       <td><span class="tram-badge ${templateScheduleClass(template.schedule_type)}">${esc(template.schedule_type)}</span></td>
       <td class="text-secondary table-cell-compact table-cell-truncate" title="${esc(template.description || '')}">${esc(template.description || '—')}</td>
-      <td class="text-end table-actions-nowrap">
-        <button class="btn btn-sm btn-outline-secondary detail-action-btn" type="button" title="View YAML" data-action="view" data-template-id="${esc(template.id)}">
-          <i class="bi bi-eye"></i><span>View</span>
-        </button>
-        <button class="btn btn-sm btn-primary detail-action-btn" type="button" data-action="deploy" data-template-id="${esc(template.id)}">
-          <i class="bi bi-rocket-takeoff"></i><span>Deploy</span>
-        </button>
+      <td class="table-actions-nowrap">
+        <div class="shared-action-row">
+          <button class="btn btn-sm btn-outline-secondary detail-action-btn" type="button" title="View YAML" data-action="view" data-template-id="${esc(template.id)}">
+            <i class="bi bi-eye"></i><span>View</span>
+          </button>
+          <button class="btn btn-sm btn-primary detail-action-btn" type="button" title="Deploy this template" data-action="deploy" data-template-id="${esc(template.id)}">
+            <i class="bi bi-rocket-takeoff"></i><span>Deploy</span>
+          </button>
+        </div>
       </td>
     </tr>
   `).join('')
@@ -343,15 +345,23 @@ function renderTemplateList() {
 function showTemplateYamlView(id) {
   const template = _templates.find(entry => entry.id === id)
   if (!template) return
-  document.getElementById('pl-tpl-yaml-name').textContent = template.name
+  const nameEl = document.getElementById('pl-tpl-yaml-name')
+  if (nameEl) {
+    nameEl.textContent = template.name
+    nameEl.title = template.name
+  }
   document.getElementById('pl-tpl-yaml-body').textContent = template.yaml || ''
   const deployBtn = document.getElementById('pl-tpl-deploy-view-btn')
   if (deployBtn) deployBtn.dataset.templateId = id
+  document.getElementById('pl-tpl-list-header')?.classList.add('d-none')
+  document.getElementById('pl-tpl-yaml-header')?.classList.remove('d-none')
   document.getElementById('pl-tpl-list-view')?.classList.add('d-none')
   document.getElementById('pl-tpl-yaml-view')?.classList.remove('d-none')
 }
 
 function showTemplateListView() {
+  document.getElementById('pl-tpl-list-header')?.classList.remove('d-none')
+  document.getElementById('pl-tpl-yaml-header')?.classList.add('d-none')
   document.getElementById('pl-tpl-list-view')?.classList.remove('d-none')
   document.getElementById('pl-tpl-yaml-view')?.classList.add('d-none')
 }

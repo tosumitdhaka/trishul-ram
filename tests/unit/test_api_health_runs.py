@@ -2,6 +2,8 @@
 from __future__ import annotations
 
 import sys
+import threading
+import time
 from datetime import UTC, datetime
 from unittest.mock import MagicMock, patch
 
@@ -9,6 +11,7 @@ from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
 from tram.agent.stats_store import StatsStore
+from tram.agent.worker_pool import WorkerPool
 from tram.api.routers.health import router as health_router
 from tram.api.routers.internal import PipelineStatsPayload
 from tram.api.routers.metrics_router import router as metrics_router
@@ -22,7 +25,6 @@ def _make_health_app(scheduler_running: bool = True, db=None,
     app = FastAPI()
     app.include_router(health_router)
     app.state.manager = MagicMock()
-    app.state.manager.list_all.return_value = [MagicMock(), MagicMock()]
     mock_scheduler = MagicMock()
     mock_scheduler._running = scheduler_running
     app.state.scheduler = mock_scheduler
@@ -35,6 +37,7 @@ def _make_health_app(scheduler_running: bool = True, db=None,
     if config is not None:
         app.state.config = config
     app.state.controller = MagicMock()
+    app.state.controller.list_all.return_value = [MagicMock(), MagicMock()]
     app.state.controller.get_active_broadcast_placements.return_value = []
     app.state.stats_store = StatsStore(interval=30)
     return app
@@ -44,7 +47,8 @@ def _make_runs_app():
     app = FastAPI()
     app.include_router(runs_router)
     app.state.manager = MagicMock()
-    app.state.manager.get_runs.return_value = []
+    app.state.controller = MagicMock()
+    app.state.controller.get_runs.return_value = []
     mock_scheduler = MagicMock()
     mock_scheduler.get_status.return_value = {"jobs": [], "streams": []}
     app.state.scheduler = mock_scheduler
@@ -213,6 +217,64 @@ class TestClusterNodes:
         assert r.status_code == 200
         assert r.json()["workers"][0]["assigned_pipelines"] == ["batch-b", "stream-a"]
 
+    def test_cluster_nodes_keeps_worker_online_on_single_failed_probe(self):
+        """D.3 (RCA #17): a single failed poll must not blank a worker's row —
+        the ok flag comes from the hysteresis-backed health state
+        (healthy_workers), not the one-shot probe result embedded in status().
+        The status row below simulates that one-shot probe failing (ok=False,
+        no live content) while the hysteresis state still reports the worker
+        healthy (only 1 of the 2 consecutive failures required to mark it
+        down)."""
+        wp = MagicMock()
+        wp.status.return_value = [{
+            "url": "http://w1:8766",
+            "worker_id": "w1",
+            "ok": False,
+            "active_runs": 0,
+            "active_streams": 0,
+            "running_pipelines": [],
+            "running": [],
+            "streams": [],
+            "assigned_pipelines": [],
+        }]
+        wp.healthy_workers.return_value = ["http://w1:8766"]
+        config = MagicMock()
+        config.tram_mode = "manager"
+        app = _make_health_app(worker_pool=wp, config=config)
+        client = TestClient(app)
+
+        r = client.get("/api/cluster/nodes")
+
+        assert r.status_code == 200
+        assert r.json()["workers"][0]["ok"] is True
+
+    def test_cluster_nodes_marks_worker_offline_when_hysteresis_says_down(self):
+        """Inverse gate: the hysteresis state (2+ consecutive failed health
+        polls) marks the worker down even if a one-shot probe happens to
+        report it ok — the table reflects the debounced state."""
+        wp = MagicMock()
+        wp.status.return_value = [{
+            "url": "http://w1:8766",
+            "worker_id": "w1",
+            "ok": True,
+            "active_runs": 1,
+            "active_streams": 0,
+            "running_pipelines": ["pipe-a"],
+            "running": [],
+            "streams": [],
+            "assigned_pipelines": [],
+        }]
+        wp.healthy_workers.return_value = []  # debounced down
+        config = MagicMock()
+        config.tram_mode = "manager"
+        app = _make_health_app(worker_pool=wp, config=config)
+        client = TestClient(app)
+
+        r = client.get("/api/cluster/nodes")
+
+        assert r.status_code == 200
+        assert r.json()["workers"][0]["ok"] is False
+
 
 class TestClusterStreams:
     def test_returns_broadcast_streams_with_aggregate_counters(self):
@@ -345,6 +407,67 @@ class TestClusterStreams:
         assert data["streams"][0]["records_out_per_sec"] == 2.0
 
 
+class TestClusterStreamsNonBlocking:
+    """Plan D.6 — the live_streams() fan-out must run off the event loop.
+
+    A worker whose /agent/status probe is gated (blocked indefinitely) must
+    not stall a concurrent fast request: the route offloads the blocking
+    fan-out with run_in_threadpool, so the event loop stays responsive.
+    """
+
+    def test_gated_slow_worker_does_not_block_concurrent_fast_request(self):
+        gate = threading.Event()
+        slow_probe_entered = threading.Event()
+
+        def _get(url, **kwargs):
+            if url == "http://slow:8766/agent/status":
+                slow_probe_entered.set()
+                assert gate.wait(5), "gate was not released"
+            resp = MagicMock()
+            resp.status_code = 200
+            resp.raise_for_status = MagicMock()
+            resp.json.return_value = {
+                "worker_id": "w0",
+                "active_runs": 0,
+                "running_pipelines": [],
+                "running": [],
+                "streams": [],
+            }
+            return resp
+
+        mock_client = MagicMock()
+        mock_client.__enter__ = lambda s: mock_client
+        mock_client.__exit__ = MagicMock(return_value=False)
+        mock_client.get.side_effect = _get
+
+        pool = WorkerPool(workers=["http://slow:8766", "http://fast:8766"], poll_interval=60)
+        config = MagicMock()
+        config.tram_mode = "manager"
+        app = _make_health_app(worker_pool=pool, config=config)
+        client = TestClient(app)
+
+        with patch("tram.agent.worker_pool.httpx.Client", return_value=mock_client):
+            slow_result: dict[str, object] = {}
+            slow_thread = threading.Thread(
+                target=lambda: slow_result.setdefault(
+                    "resp", client.get("/api/cluster/streams")
+                ),
+            )
+            slow_thread.start()
+            try:
+                assert slow_probe_entered.wait(2), "slow worker probe never entered flight"
+                started = time.monotonic()
+                fast = client.get("/api/health")
+                elapsed = time.monotonic() - started
+            finally:
+                gate.set()
+                slow_thread.join(5)
+
+        assert fast.status_code == 200
+        assert elapsed < 1.0, "fast request was stalled by the slow worker probe"
+        assert slow_result["resp"].status_code == 200
+
+
 # ── Runs router ────────────────────────────────────────────────────────────
 
 
@@ -359,7 +482,7 @@ class TestListRuns:
     def test_with_runs_returns_list(self):
         app = _make_runs_app()
         mock_run = _run_result_mock()
-        app.state.manager.get_runs.return_value = [mock_run]
+        app.state.controller.get_runs.return_value = [mock_run]
         client = TestClient(app)
         r = client.get("/api/runs")
         assert r.status_code == 200
@@ -370,7 +493,7 @@ class TestListRuns:
         client = TestClient(app)
         r = client.get("/api/runs?pipeline=my-pipe")
         assert r.status_code == 200
-        call_kwargs = app.state.manager.get_runs.call_args.kwargs
+        call_kwargs = app.state.controller.get_runs.call_args.kwargs
         assert call_kwargs["pipeline_name"] == "my-pipe"
 
     def test_status_filter_passed_to_manager(self):
@@ -378,7 +501,7 @@ class TestListRuns:
         client = TestClient(app)
         r = client.get("/api/runs?status=failed")
         assert r.status_code == 200
-        call_kwargs = app.state.manager.get_runs.call_args.kwargs
+        call_kwargs = app.state.controller.get_runs.call_args.kwargs
         assert call_kwargs["status"] == "failed"
 
     def test_limit_and_offset(self):
@@ -386,7 +509,7 @@ class TestListRuns:
         client = TestClient(app)
         r = client.get("/api/runs?limit=5&offset=10")
         assert r.status_code == 200
-        call_kwargs = app.state.manager.get_runs.call_args.kwargs
+        call_kwargs = app.state.controller.get_runs.call_args.kwargs
         assert call_kwargs["limit"] == 5
         assert call_kwargs["offset"] == 10
 
@@ -400,7 +523,7 @@ class TestListRuns:
     def test_csv_format_with_data(self):
         app = _make_runs_app()
         mock_run = _run_result_mock()
-        app.state.manager.get_runs.return_value = [mock_run]
+        app.state.controller.get_runs.return_value = [mock_run]
         client = TestClient(app)
         r = client.get("/api/runs?format=csv")
         assert r.status_code == 200
@@ -411,7 +534,7 @@ class TestGetRun:
     def test_existing_run_returns_200(self):
         app = _make_runs_app()
         mock_run = _run_result_mock(run_id="xyz789")
-        app.state.manager.get_run.return_value = mock_run
+        app.state.controller.get_run.return_value = mock_run
         client = TestClient(app)
         r = client.get("/api/runs/xyz789")
         assert r.status_code == 200
@@ -419,7 +542,7 @@ class TestGetRun:
 
     def test_missing_run_returns_404(self):
         app = _make_runs_app()
-        app.state.manager.get_run.return_value = None
+        app.state.controller.get_run.return_value = None
         client = TestClient(app, raise_server_exceptions=False)
         r = client.get("/api/runs/nonexistent")
         assert r.status_code == 404

@@ -126,11 +126,11 @@ class TestAPIKeyAuthIntegration:
             response = client.post("/webhooks/my-hook")
         assert response.status_code == 200
 
-    def test_key_via_query_param(self):
-        """?api_key=... query param is accepted as authentication."""
+    def test_key_via_query_param_rejected(self):
+        """The ?api_key= query param was removed — X-API-Key header is required."""
         app, mock_config = _make_app(api_key="my-secret")
 
         with patch("tram.api.middleware.AppConfig.from_env", return_value=mock_config):
             client = TestClient(app, raise_server_exceptions=True)
             response = client.get("/api/pipelines?api_key=my-secret")
-        assert response.status_code == 200
+        assert response.status_code == 401

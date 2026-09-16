@@ -4,6 +4,7 @@ from tram.transforms.add_field import AddFieldTransform  # noqa: F401
 from tram.transforms.aggregate import AggregateTransform  # noqa: F401
 from tram.transforms.cast import CastTransform  # noqa: F401
 from tram.transforms.coalesce_fields import CoalesceFieldsTransform  # noqa: F401
+from tram.transforms.counter_delta import CounterDeltaTransform  # noqa: F401
 from tram.transforms.deduplicate import DeduplicateTransform  # noqa: F401
 from tram.transforms.drop import DropTransform  # noqa: F401
 from tram.transforms.enrich import EnrichTransform  # noqa: F401
@@ -27,3 +28,4 @@ from tram.transforms.timestamp_normalize import TimestampNormalizeTransform  # n
 from tram.transforms.unnest import UnnestTransform  # noqa: F401
 from tram.transforms.validate import ValidateTransform  # noqa: F401
 from tram.transforms.value_map import ValueMapTransform  # noqa: F401
+from tram.transforms.window_aggregate import WindowAggregateTransform  # noqa: F401

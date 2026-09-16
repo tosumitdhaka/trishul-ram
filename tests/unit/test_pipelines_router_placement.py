@@ -153,12 +153,16 @@ def test_placement_pipeline_not_found_returns_404():
     assert resp.status_code == 404
 
 
-# ── manager mode with no placement → 404 (no synthetic view) ─────────────
+# ── manager mode without a placement row → synthetic view when stats exist ─
 
 
-def test_placement_manager_mode_no_placement_returns_404():
+def test_placement_manager_mode_no_placement_with_stats_returns_synthetic_view():
+    """The `worker_pool is None` gate is dropped (RCA #17 / plan D.3): a
+    manager-mode stream with live stats but no durable placement row (pre-D.2
+    dispatch, or the feature flag off) renders the single-slot synthetic view
+    instead of 404ing."""
     store = StatsStore(interval=30)
-    entry = _make_stats_entry("my-stream", "run-xyz")
+    entry = _make_stats_entry("my-stream", "run-xyz", records_in=7)
     store.update(entry)
 
     ctrl = MagicMock()
@@ -169,4 +173,77 @@ def test_placement_manager_mode_no_placement_returns_404():
     client = TestClient(_make_app(ctrl, stats_store=store), raise_server_exceptions=False)
     resp = client.get("/api/pipelines/my-stream/placement")
 
+    assert resp.status_code == 200
+    data = resp.json()
+    assert data["placement_group_id"] is None
+    assert data["status"] == "running"
+    assert data["target_count"] == 1
+    assert data["slot_count"] == 1
+    assert data["active_slots"] == 1
+    assert data["records_in"] == 7
+    assert len(data["slots"]) == 1
+
+
+def test_placement_manager_mode_no_placement_no_stats_returns_404():
+    """Manager mode, no placement row and no live stats entry: clean 404 (the
+    UI treats a 404 as "no active placement" and hides the card)."""
+    store = StatsStore(interval=30)
+
+    ctrl = MagicMock()
+    ctrl.get.return_value = _make_pipeline_state(_STREAM_YAML)
+    ctrl.get_active_broadcast_placements.return_value = []
+    ctrl._worker_pool = MagicMock()
+
+    client = TestClient(_make_app(ctrl, stats_store=store), raise_server_exceptions=False)
+    resp = client.get("/api/pipelines/my-stream/placement")
+
     assert resp.status_code == 404
+
+
+# ── manager mode with a D.2 count=1 placement row → placement view ─────────
+
+
+def test_placement_manager_mode_count1_placement_row_served():
+    """D.2 (GH #17): a count=1 stream now has a durable 1-slot placement row
+    (target_count="1"); the endpoint serves it as the placement view."""
+    store = StatsStore(interval=30)
+    entry = _make_stats_entry("my-stream", "pg1", records_in=12)
+    store.update(entry)
+
+    ctrl = MagicMock()
+    ctrl.get.return_value = _make_pipeline_state(_STREAM_YAML)
+    ctrl.get_active_broadcast_placements.return_value = [{
+        "placement_group_id": "pg1",
+        "pipeline_name": "my-stream",
+        "status": "running",
+        "target_count": "1",
+        "started_at": datetime.now(UTC),
+        "slots": [{
+            "worker_index": 0,
+            "worker_id": "w0",
+            "worker_url": "http://w0:8766",
+            "run_id_prefix": "pg1",
+            "current_run_id": "pg1",
+            "status": "running",
+            "restart_count": 0,
+        }],
+    }]
+    ctrl._worker_pool = MagicMock()
+    ctrl._worker_pool.live_streams.return_value = []
+
+    client = TestClient(_make_app(ctrl, stats_store=store), raise_server_exceptions=False)
+    resp = client.get("/api/pipelines/my-stream/placement")
+
+    assert resp.status_code == 200
+    data = resp.json()
+    assert data["placement_group_id"] == "pg1"
+    assert data["status"] == "running"
+    assert data["target_count"] == "1"
+    assert data["slot_count"] == 1
+    assert data["active_slots"] == 1
+    assert data["records_in"] == 12
+    slot = data["slots"][0]
+    assert slot["worker_index"] == 0
+    assert slot["worker_url"] == "http://w0:8766"
+    assert slot["current_run_id"] == "pg1"
+    assert slot["stats"]["stale"] is False

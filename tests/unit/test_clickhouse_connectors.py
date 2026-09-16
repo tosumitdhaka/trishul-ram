@@ -171,6 +171,46 @@ class TestClickHouseSink:
         assert sink.password == ""
         assert sink.table == "events"
 
+    @pytest.mark.parametrize(
+        "bad_table",
+        ["events; DROP TABLE x", "1events", "bad-name", "events(x) VALUES", "tbl name", "`tbl`"],
+    )
+    def test_invalid_table_name_rejected(self, bad_table):
+        """Table names are validated as identifiers — no SQL injection surface."""
+        with pytest.raises(SinkError, match="not a valid identifier"):
+            ClickHouseSink({"table": bad_table, "batch_timeout_seconds": 0})
+
+    @pytest.mark.parametrize("good_table", ["events", "pm_events", "_tmp", "Table2", "EVENTS"])
+    def test_valid_table_names_accepted(self, good_table):
+        sink = ClickHouseSink({"table": good_table, "batch_timeout_seconds": 0})
+        assert sink.table == good_table
+        sink.close()
+
+    @pytest.mark.parametrize("good_table", ["analytics.events", "db.table", "default.events_2026", "_db.events"])
+    def test_qualified_table_names_accepted(self, good_table):
+        """Two-part `db.table` identifiers were previously rejected — keep them working."""
+        sink = ClickHouseSink({"table": good_table, "batch_timeout_seconds": 0})
+        assert sink.table == good_table
+        sink.close()
+
+    @pytest.mark.parametrize(
+        "bad_table",
+        [
+            "db.table.col",  # only two parts allowed
+            "db.`evil`",  # backticked identifier still rejected
+            'db."evil"',  # quoted identifier still rejected
+            "db.table; DROP TABLE x",  # injection attempt on the qualified form
+            "db..table",
+            "db.1table",
+            ".hidden",
+            "table.",
+        ],
+    )
+    def test_invalid_qualified_table_names_rejected(self, bad_table):
+        """Qualified names stay injection-safe: no quotes, dots run, or extra parts."""
+        with pytest.raises(SinkError, match="not a valid identifier"):
+            ClickHouseSink({"table": bad_table, "batch_timeout_seconds": 0})
+
     def test_write_inserts_records(self):
         mock_module, mock_client = self._mock_module()
         records = [{"id": 1, "val": "a"}, {"id": 2, "val": "b"}]

@@ -181,6 +181,7 @@ body {
 .tram-badge.scheduled::before  { background:var(--badge-yellow-fg); }
 .tram-badge.stopped::before    { background:var(--fg-2); }
 .tram-badge.paused::before     { background:#39c5cf; }
+.tram-badge.queued::before     { background:var(--badge-yellow-fg); animation: pulse 2s infinite; }
 .tram-badge.error::before    { background:#f85149; }
 .tram-badge.success::before  { background:#3fb950; }
 .tram-badge.failed::before   { background:#f85149; }
@@ -195,6 +196,7 @@ body {
 .badge-failed   { background: var(--badge-red-bg);    color: var(--badge-red-fg); }
 .badge-partial  { background: var(--badge-yellow-bg); color: var(--badge-yellow-fg); }
 .badge-paused   { background: var(--badge-cyan-bg);   color: var(--badge-cyan-fg); }
+.badge-queued   { background: var(--badge-yellow-bg); color: var(--badge-yellow-fg); }
 .badge-disabled { background: var(--badge-off-bg);    color: var(--badge-off-fg); }
 .badge-stream   { background: var(--badge-cyan-bg);   color: var(--badge-cyan-fg); }
 .badge-interval { background: var(--badge-muted-bg);  color: var(--badge-muted-fg); }
@@ -532,6 +534,15 @@ body {
   font-size: 12px;
   color: var(--fg-muted);
 }
+.detail-queued-info {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  margin-top: 10px;
+  font-size: 12px;
+  color: var(--badge-yellow-fg);
+}
+.detail-queued-info i { font-size: 13px; flex-shrink: 0; }
 .detail-badges {
   display: flex;
   align-items: center;
@@ -1170,12 +1181,6 @@ body {
 .artifact-text {
   font-size: 12px;
 }
-.template-preview-dialog .modal-content {
-  max-height: calc(100vh - 2rem);
-}
-.template-preview-dialog .modal-body {
-  overflow: auto;
-}
 .pipeline-template-dialog .modal-content {
   max-height: calc(100vh - 2rem);
 }
@@ -1192,44 +1197,17 @@ body {
   font-size: 12px;
   white-space: nowrap;
 }
-.pipeline-template-preview {
-  max-height: 55vh;
-}
-.template-preview-dialog .pipeline-template-preview {
-  max-height: none;
-}
-.pipeline-template-dialog .pipeline-template-preview {
-  max-height: calc(100vh - 12rem);
+#pl-tpl-yaml-name {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 .pipeline-modal-note {
   font-size: 13px;
 }
 .pipeline-modal-label {
   font-size: 12px;
-}
-.template-card {
-  height: 100%;
-  display: flex;
-  flex-direction: column;
-  gap: 10px;
-}
-.template-card-title {
-  font-size: 14px;
-}
-.template-card-badge {
-  white-space: nowrap;
-}
-.template-card-description {
-  font-size: 12px;
-  color: var(--fg-muted);
-  flex: 1;
-}
-.template-card-flow {
-  font-size: 12px;
-  color: var(--fg-2);
-}
-.template-flow-arrow {
-  font-size: 11px;
 }
 .plugins-stat-value {
   font-size: 24px;

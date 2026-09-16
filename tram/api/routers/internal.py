@@ -9,7 +9,7 @@ from __future__ import annotations
 import logging
 from datetime import datetime
 
-from fastapi import APIRouter, Request
+from fastapi import APIRouter, HTTPException, Request
 from pydantic import BaseModel, Field
 
 logger = logging.getLogger(__name__)
@@ -104,4 +104,100 @@ async def pipeline_stats(payload: PipelineStatsPayload, request: Request) -> dic
     else:
         store.update(payload)
         controller.on_pipeline_stats(payload)
+    return {"ok": True}
+
+
+class TransformStatePayload(BaseModel):
+    """PUT body for /api/internal/transform-state/{pipeline} (design F.1 §3.2b)."""
+
+    state: dict = Field(default_factory=dict)   # {state_key: transform-specific blob}
+    config_sha256: str = ""                     # D.2 §6.1 convention
+    run_id: str = ""                            # audit — stored as updated_by
+
+
+def _stateful_transforms_enabled(request: Request) -> bool:
+    """Feature flag (F.1 §9): the internal endpoints 404 while the flag is off.
+
+    Reads ``app.state.config`` when present (the real app), falling back to the
+    env parse so bare-router test apps behave consistently.
+    """
+    config = getattr(request.app.state, "config", None)
+    if config is not None and hasattr(config, "stateful_transforms"):
+        return bool(config.stateful_transforms)
+    from tram.core.config import stateful_transforms_enabled as _flag
+    return _flag()
+
+
+def _state_max_bytes(request: Request) -> int:
+    """Body-size cap for the transform-state PUT (``TRAM_STATE_MAX_BYTES``).
+
+    Reads ``app.state.config`` when present (the real app), falling back to
+    the env parse so bare-router test apps behave consistently (the same
+    convention as ``_stateful_transforms_enabled``).
+    """
+    config = getattr(request.app.state, "config", None)
+    if config is not None and hasattr(config, "state_max_bytes"):
+        return int(config.state_max_bytes)
+    from tram.core.config import state_max_bytes as _cap
+    return _cap()
+
+
+@router.get("/api/internal/transform-state/{pipeline}")
+async def get_transform_state(pipeline: str, request: Request) -> dict:
+    """Worker → manager: fetch a pipeline's transform-state blob.
+
+    Auth rides the existing internal middleware (same as run-complete /
+    pipeline-stats). Flag-gated 404 when ``TRAM_STATEFUL_TRANSFORMS`` is off.
+    """
+    if not _stateful_transforms_enabled(request):
+        raise HTTPException(
+            status_code=404,
+            detail="stateful transforms disabled (TRAM_STATEFUL_TRANSFORMS=0)",
+        )
+    db = request.app.state.db
+    if db is None:
+        raise HTTPException(status_code=404, detail="no transform state")
+    row = db.load_transform_state(pipeline)
+    if row is None:
+        raise HTTPException(status_code=404, detail="no transform state")
+    return {
+        "pipeline": pipeline,
+        "state": row["state"],
+        "config_sha256": row["config_sha256"],
+    }
+
+
+@router.put("/api/internal/transform-state/{pipeline}")
+async def put_transform_state(
+    pipeline: str, payload: TransformStatePayload, request: Request
+) -> dict:
+    """Worker → manager: overwrite a pipeline's transform-state blob.
+
+    Single-writer by construction (one active run per pipeline, design §3.3):
+    the PUT overwrites the row; last writer wins. Returns 413 when the body
+    exceeds ``TRAM_STATE_MAX_BYTES`` (the webhook body-cap pattern: a
+    Content-Length fast-path, then a post-parse byte check) so an unbounded
+    ``state`` dict can never inflate the ``transform_state`` DB row.
+    """
+    if not _stateful_transforms_enabled(request):
+        raise HTTPException(
+            status_code=404,
+            detail="stateful transforms disabled (TRAM_STATEFUL_TRANSFORMS=0)",
+        )
+    db = request.app.state.db
+    if db is None:
+        raise HTTPException(status_code=503, detail="database unavailable")
+
+    max_bytes = _state_max_bytes(request)
+    # Fast-path rejection from the Content-Length header (the body is already
+    # buffered by FastAPI's JSON parse; this is the cheap rejection).
+    content_length = request.headers.get("content-length")
+    if content_length and content_length.isdigit() and int(content_length) > max_bytes:
+        raise HTTPException(status_code=413, detail="Transform state too large")
+    if len(await request.body()) > max_bytes:
+        raise HTTPException(status_code=413, detail="Transform state too large")
+
+    db.save_transform_state(
+        pipeline, payload.state, payload.config_sha256, updated_by=payload.run_id
+    )
     return {"ok": True}

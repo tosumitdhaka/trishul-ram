@@ -55,6 +55,7 @@ def lint(
     findings.extend(_l010_count_exceeds_pool(config, resolved_mode, resolved_pool_size))
     findings.extend(_l011_risky_filename_partition_fields(config))
     findings.extend(_l012_udp_push_requires_kubernetes(config, resolved_mode))
+    findings.extend(_l013_stateful_transform_with_broadcast_stream(config))
 
     return findings
 
@@ -252,6 +253,40 @@ def _l012_udp_push_requires_kubernetes(config: PipelineConfig, tram_mode: str) -
             f"Pipeline '{config.name}': source '{config.source.type}' requires "
             "kubernetes.enabled=true in manager mode — there is no shared UDP ingress in the "
             "worker chart. Add a kubernetes block to provision a per-pipeline NodePort Service."
+        ),
+    )]
+
+
+def _l013_stateful_transform_with_broadcast_stream(config: PipelineConfig) -> list[LintResult]:
+    """L013 — a stateful transform on a broadcast stream placement is rejected at runtime.
+
+    Design F.1 §6: ``multi_dispatch`` sends whole pipelines to N workers with
+    no record-level key affinity, so each worker sees a partial (Kafka/syslog)
+    or duplicated (gNMI) stream — per-worker state computes silently wrong or
+    duplicated values. Validation cannot know the deployment mode, so this is a
+    warning here; the manager-mode controller guard makes it an error at
+    ``_start_stream``.
+    """
+    if config.schedule.type != "stream":
+        return []
+    if not _is_multi_worker_spec(config):
+        return []
+    from tram.models.pipeline import _STATEFUL_TRANSFORM_TYPES
+    stateful = sorted(
+        {t.type for t in config.transforms if t.type in _STATEFUL_TRANSFORM_TYPES}
+    )
+    if not stateful:
+        return []
+    return [LintResult(
+        rule_id="L013",
+        severity="warning",
+        message=(
+            f"Pipeline '{config.name}': stateful transform(s) "
+            f"{', '.join(stateful)} with broadcast stream placement "
+            "(workers count>1/all/list) — each worker sees a partial or "
+            "duplicated stream with no key affinity, so per-worker state "
+            "computes silently wrong or duplicated values. Use workers "
+            "count=1 or remove the stateful transform."
         ),
     )]
 

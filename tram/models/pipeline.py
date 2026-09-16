@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from typing import Annotated, Any, Literal
+from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from pydantic import AliasChoices, Field, field_validator, model_validator
 from pydantic import BaseModel as PydanticBaseModel
@@ -44,6 +45,12 @@ class SFTPSourceConfig(BaseModel):
     delete_after_read: bool = False
     skip_processed: bool = False   # track processed files in DB; skip on re-run
     read_chunk_bytes: int = 0      # 0 = read all at once; >0 = stream in chunks
+    # File-done semantics (F.2 part 1). Defaults are all "off" so existing
+    # pipelines behave exactly as before; enable per source where the upstream
+    # transfer writes files in place (telecom PM dumps).
+    file_stability_seconds: int = 0    # >0: read only when size+mtime unchanged across two scans this far apart
+    file_min_age_seconds: int = 0      # >0: skip files whose mtime is younger than this (cheap write-in-progress gate)
+    file_done_suffix: str | None = None  # e.g. ".done": collect only files ending with this; stripped from filename tokens
 
     @model_validator(mode="after")
     def check_auth(self) -> SFTPSourceConfig:
@@ -60,6 +67,12 @@ class LocalSourceConfig(BaseModel):
     delete_after_read: bool = False
     recursive: bool = False
     skip_processed: bool = False
+    # File-done semantics (F.2 part 1). Defaults are all "off" so existing
+    # pipelines behave exactly as before; enable per source where the upstream
+    # transfer writes files in place (telecom PM dumps).
+    file_stability_seconds: int = 0    # >0: read only when size+mtime unchanged across two scans this far apart
+    file_min_age_seconds: int = 0      # >0: skip files whose mtime is younger than this (cheap write-in-progress gate)
+    file_done_suffix: str | None = None  # e.g. ".done": collect only files ending with this; stripped from filename tokens
 
 
 class RestSourceConfig(BaseModel):
@@ -90,7 +103,14 @@ class KafkaSourceConfig(BaseModel):
     topic: str | list[str]
     group_id: str | None = None   # None → use pipeline name at runtime
     auto_offset_reset: Literal["latest", "earliest"] = "latest"
-    enable_auto_commit: bool = True
+    # Default False: the connector commits offsets explicitly, once per poll
+    # batch, only after the batch has been handed to / written by the sink —
+    # a crash before that commit re-polls the batch (at-least-once). The old
+    # default (auto-commit on a ~5s timer) committed offsets for messages that
+    # were polled but not yet sink-written, silently losing them on a crash.
+    # Opting back into enable_auto_commit: true restores that at-most-once
+    # behavior.
+    enable_auto_commit: bool = False
     max_poll_records: int = 500
     session_timeout_ms: int = 30000
     security_protocol: str = "PLAINTEXT"
@@ -138,6 +158,10 @@ class SyslogSourceConfig(BaseModel):
     protocol: str = "udp"
     buffer_size: int = 65535
     encoding: str = "utf-8"
+    # RFC 6587 framing guards (Wave B): TCP messages over max_message_size are
+    # truncated/rejected; max_connections caps concurrent TCP clients.
+    max_message_size: int = Field(65535, ge=1024)
+    max_connections: int = Field(64, ge=1)
 
 
 class SnmpTrapSourceConfig(BaseModel):
@@ -222,6 +246,10 @@ class GnmiSourceConfig(BaseModel):
     tls: bool = True
     tls_ca: str | None = None
     subscriptions: list[dict[str, Any]] = Field(default_factory=list)
+    subscription_mode: Literal["once", "poll", "stream"] = "stream"
+    poll_interval_seconds: int = 60
+    reconnect_delay_seconds: float = 5.0
+    max_reconnect_attempts: int = 0
 
 
 class SqlSourceConfig(BaseModel):
@@ -347,6 +375,10 @@ class CorbaSourceConfig(BaseModel):
         args             (list, default [])  Positional arguments (simple Python scalars)
         timeout_seconds  (int, default 30)  ORB request timeout
         skip_processed   (bool, default False)  Skip invocations already recorded in DB
+        dedupe_window_seconds (int, default 300)  Time-bucket width for the skip_processed
+                                             key, so the same operation+args is deduped
+                                             within a window but the next scheduled run
+                                             (fresh bucket) runs again
     """
     type: Literal["corba"]
     ior: str | None = None
@@ -356,6 +388,7 @@ class CorbaSourceConfig(BaseModel):
     args: list = Field(default_factory=list)
     timeout_seconds: int = 30
     skip_processed: bool = False
+    dedupe_window_seconds: int = Field(300, ge=1)
 
     @model_validator(mode="after")
     def check_endpoint(self) -> CorbaSourceConfig:
@@ -430,12 +463,109 @@ class TimestampNormalizeTransformConfig(BaseModel):
     input_format: str | None = None
     output_format: str = "iso"
     on_error: Literal["raise", "null", "keep"] = "raise"
+    source_timezone: str | None = None
+
+    @field_validator("source_timezone")
+    @classmethod
+    def validate_source_timezone(cls, value: str | None) -> str | None:
+        if value is not None:
+            try:
+                ZoneInfo(value)
+            except (ZoneInfoNotFoundError, ValueError) as exc:
+                raise ValueError(
+                    f"source_timezone must be a valid IANA timezone name, got {value!r}"
+                ) from exc
+        return value
 
 
 class AggregateTransformConfig(BaseModel):
     type: Literal["aggregate"]
     group_by: list[str] = Field(default_factory=list)
     operations: dict[str, Any]
+
+
+# Stateful transform types (design F.1 §6). The registry drives the §6
+# mode-gating validators, the controller's _start_stream broadcast guard, and
+# the linter's stateful+broadcast warning.
+_STATEFUL_TRANSFORM_TYPES = ("counter_delta", "window_aggregate")
+
+
+class CounterDeltaTransformConfig(BaseModel):
+    """Per-key counter deltas with Counter32/64 wrap correction and rates (F.1 §4/§7).
+
+    ``fields`` are dotted paths to cumulative counter values; per configured
+    field ``f`` the transform emits ``f_delta`` and/or ``f_rate`` alongside the
+    original (``keep_raw: false`` drops the raw value). Counter identity is
+    (source identity from the chunk's ``source_host`` meta, ``key_fields``
+    values, field path). Requires the ``TRAM_STATEFUL_TRANSFORMS`` flag (on by
+    default) and is rejected in sink-level transforms or with
+    ``thread_workers > 1`` (§6).
+    """
+
+    type: Literal["counter_delta"]
+    fields: list[str]
+    key_fields: list[str] = Field(default_factory=lambda: ["_index"])
+    timestamp_field: str | list[str] = ["_polled_at", "timestamp"]
+    width: Literal["auto", 32, 64] = "auto"
+    output: Literal["delta", "rate", "both"] = "both"
+    keep_raw: bool = True
+    first_sample: Literal["pass", "drop"] = "pass"
+    reset_threshold: float = 0.5
+    max_gap_seconds: float | None = None
+    on_error: Literal["raise", "null", "keep"] = "raise"
+
+    @field_validator("fields")
+    @classmethod
+    def validate_fields(cls, value: list[str]) -> list[str]:
+        if not value:
+            raise ValueError("fields must not be empty")
+        return value
+
+    @field_validator("reset_threshold")
+    @classmethod
+    def validate_reset_threshold(cls, value: float) -> float:
+        if not 0 < value < 1:
+            raise ValueError("reset_threshold must be between 0 and 1 (exclusive)")
+        return value
+
+    @field_validator("max_gap_seconds")
+    @classmethod
+    def validate_max_gap(cls, value: float | None) -> float | None:
+        if value is not None and value <= 0:
+            raise ValueError("max_gap_seconds must be > 0")
+        return value
+
+
+class WindowAggregateTransformConfig(BaseModel):
+    """Tumbling epoch-aligned UTC window aggregation (design F.1 §5/§7).
+
+    Accumulates op-relevant running values (not raw samples) per group+window
+    in the pipeline's durable state blob; a window finalizes (emits with
+    ``window_complete: true``) when the watermark — max event time observed
+    minus ``allowed_lateness_seconds`` — passes its end. Records for an
+    already-finalized window are dropped and counted in
+    ``TRANSFORM_WINDOW_LATE_DROPPED_TOTAL``. ``close(flush=True)`` (a manual
+    flush run, or a graceful stream stop honoring ``flush_on_close``) emits
+    open windows with ``window_complete: false`` and clears them from the
+    saved state; a crashed stream keeps its open windows in state so a
+    redispatch continues them. Stateful: same mode gating as
+    ``counter_delta`` (§6).
+    """
+
+    type: Literal["window_aggregate"]
+    window_seconds: int = Field(900, ge=1)
+    allowed_lateness_seconds: int = Field(60, ge=0)
+    timestamp_field: str | list[str] = ["_polled_at", "timestamp"]
+    group_by: list[str] = Field(default_factory=list)
+    operations: dict[str, Any]
+    flush_on_close: bool = False
+
+    @field_validator("operations")
+    @classmethod
+    def validate_operations(cls, value: dict[str, Any]) -> dict[str, Any]:
+        if not value:
+            raise ValueError("operations must not be empty")
+        return value
 
 
 class EnrichTransformConfig(BaseModel):
@@ -656,7 +786,7 @@ class HexDecodeTransformConfig(BaseModel):
 
 
 TransformConfig = Annotated[
-    RenameTransformConfig | CastTransformConfig | AddFieldTransformConfig | DropTransformConfig | ValueMapTransformConfig | FilterTransformConfig | FlattenTransformConfig | TimestampNormalizeTransformConfig | AggregateTransformConfig | EnrichTransformConfig | ExplodeTransformConfig | DeduplicateTransformConfig | RegexExtractTransformConfig | InjectMetaTransformConfig | TemplateTransformConfig | MaskTransformConfig | ValidateTransformConfig | SortTransformConfig | LimitTransformConfig | JmesPathExtractTransformConfig | UnnestTransformConfig | CoalesceFieldsTransformConfig | SelectFromListTransformConfig | ProjectTransformConfig | JsonFlattenTransformConfig | HexDecodeTransformConfig,
+    RenameTransformConfig | CastTransformConfig | AddFieldTransformConfig | DropTransformConfig | ValueMapTransformConfig | FilterTransformConfig | FlattenTransformConfig | TimestampNormalizeTransformConfig | AggregateTransformConfig | CounterDeltaTransformConfig | WindowAggregateTransformConfig | EnrichTransformConfig | ExplodeTransformConfig | DeduplicateTransformConfig | RegexExtractTransformConfig | InjectMetaTransformConfig | TemplateTransformConfig | MaskTransformConfig | ValidateTransformConfig | SortTransformConfig | LimitTransformConfig | JmesPathExtractTransformConfig | UnnestTransformConfig | CoalesceFieldsTransformConfig | SelectFromListTransformConfig | ProjectTransformConfig | JsonFlattenTransformConfig | HexDecodeTransformConfig,
     Field(discriminator="type"),
 ]
 
@@ -1160,6 +1290,11 @@ class Asn1SerializerConfig(BaseModel):
     message_classes: list[str] | None = None
     encoding: Literal["ber", "der", "per", "uper", "xer", "jer"] = "ber"
     split_records: bool = False
+    # Dot-notation path to the record list inside a decoded single-frame
+    # document (GH #19). record_chunk_size then chunks the fan-out lazily.
+    split_path: str | None = None
+    # Dict of sibling values copied (deep) into every emitted split record.
+    split_path_context: dict[str, Any] | None = None
 
     @model_validator(mode="after")
     def check_message_fields(self) -> Asn1SerializerConfig:
@@ -1169,6 +1304,14 @@ class Asn1SerializerConfig(BaseModel):
             )
         if self.split_records and self.encoding != "ber":
             raise ValueError("split_records is only supported when encoding='ber'")
+        if self.split_records and self.split_path:
+            raise ValueError(
+                "split_records and split_path are mutually exclusive — split_path "
+                "splits records inside a single decoded document, split_records "
+                "splits at the BER frame boundary"
+            )
+        if self.split_path is None and self.split_path_context is not None:
+            raise ValueError("split_path_context requires split_path to be configured")
         return self
 
 
@@ -1319,7 +1462,19 @@ class PipelineConfig(BaseModel):
     # Batch size cap (max records to process per batch run; None = unlimited)
     batch_size: int | None = None
     record_chunk_size: int | None = Field(default=None, gt=0)
-    post_batch_cleanup: bool = False
+
+    # Run gc.collect() plus best-effort heap trim after each batch run. Defaults
+    # to True so batch runs reclaim transient heap on shared workers (GH #16);
+    # opt out explicitly with `post_batch_cleanup: false`.
+    post_batch_cleanup: bool = True
+
+    # Stateful transform state persistence (F.1 §3.2c): in stream mode, PUT the
+    # pipeline's transform-state blob at most every N seconds, timed with the
+    # chunk loop (no extra thread). 0 (default) = off — streams then persist
+    # state only at run end (graceful stop). Bounds a D.2 redispatch's loss to
+    # one persist interval. Only meaningful for pipelines with stateful
+    # transforms; ignored otherwise.
+    state_persist_interval_s: float = Field(0, ge=0)
 
     # Error handling
     on_error: Literal["continue", "abort", "retry", "dlq"] = "continue"
@@ -1347,12 +1502,73 @@ class PipelineConfig(BaseModel):
         return self
 
     @model_validator(mode="after")
+    def check_asn1_split_path_chunking(self) -> PipelineConfig:
+        """asn1 serializer_in.split_path without record_chunk_size silently
+        no-ops: the sequential batch loop only calls parse_chunks when
+        record_chunk_size is set, so require chunking explicitly (RCA #19)."""
+        ser = self.serializer_in
+        if ser.type == "asn1" and getattr(ser, "split_path", None) and not self.record_chunk_size:
+            raise ValueError(
+                "serializer_in.split_path requires record_chunk_size > 0 "
+                "to chunk the record fan-out (note: chunking bounds memory "
+                "only on sequential runs — thread_workers > 1 applies the "
+                "split eagerly)"
+            )
+        return self
+
+    @model_validator(mode="after")
     def apply_workers_default(self) -> PipelineConfig:
         if self.workers is None:
             if self.source.type in ("webhook", "prometheus_rw", "syslog", "snmp_trap"):
                 self.workers = WorkersConfig(count="all")
             else:
                 self.workers = WorkersConfig(count=1)
+        return self
+
+    @model_validator(mode="after")
+    def check_stateful_transforms(self) -> PipelineConfig:
+        """Mode gating for stateful transforms (design F.1 §6).
+
+        Rejects: (a) stateful transforms while ``TRAM_STATEFUL_TRANSFORMS`` is
+        off, (b) stateful transforms in sink-level ``transforms`` (they would
+        fork state per sink), and (c) ``thread_workers > 1`` with stateful
+        transforms (chunks process concurrently and possibly out of order, so
+        ``v_now`` could pair with an older ``v_prev``). The broadcast-stream
+        runtime guard is a later step (controller ``_start_stream``).
+        """
+        from tram.core.config import stateful_transforms_enabled
+
+        def _sink_stateful() -> list[str]:
+            found = []
+            for sink in self.sinks:
+                for t_cfg in getattr(sink, "transforms", []):
+                    if t_cfg.type in _STATEFUL_TRANSFORM_TYPES:
+                        found.append(t_cfg.type)
+            return found
+
+        top_level_stateful = [t.type for t in self.transforms if t.type in _STATEFUL_TRANSFORM_TYPES]
+
+        if not stateful_transforms_enabled():
+            offenders = top_level_stateful + _sink_stateful()
+            if offenders:
+                raise ValueError(
+                    "stateful transforms disabled (TRAM_STATEFUL_TRANSFORMS=0): "
+                    f"{', '.join(sorted(set(offenders)))}"
+                )
+        if top_level_stateful:
+            if self.thread_workers > 1:
+                raise ValueError(
+                    "stateful transforms cannot be used with thread_workers > 1: "
+                    "chunks process concurrently and possibly out of order, so a "
+                    "counter sample can pair with an older previous value "
+                    f"({', '.join(top_level_stateful)})"
+                )
+        if _sink_stateful():
+            raise ValueError(
+                "stateful transforms are not allowed in sink-level transforms: "
+                "per-sink transforms would fork state per sink "
+                f"({', '.join(sorted(set(_sink_stateful())))})"
+            )
         return self
 
     @field_validator("name")

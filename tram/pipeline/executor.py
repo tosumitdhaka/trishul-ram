@@ -10,8 +10,8 @@ import queue as _queue
 import random
 import threading
 import time
-from collections import OrderedDict
-from concurrent.futures import ThreadPoolExecutor, as_completed
+from collections import OrderedDict, deque
+from concurrent.futures import Future, ThreadPoolExecutor
 from datetime import UTC, datetime
 from typing import TYPE_CHECKING
 
@@ -19,11 +19,13 @@ from tram.connectors.file_sink_common import extract_field_paths, validate_templ
 from tram.core.context import PipelineRunContext, RunResult, RunStatus
 from tram.core.exceptions import TramError
 from tram.registry.registry import get_serializer, get_sink, get_source, get_transform
+from tram.transforms.stateful import StatefulTransform
 
 if TYPE_CHECKING:
     from tram.agent.metrics import PipelineStats
     from tram.models.pipeline import PipelineConfig
     from tram.persistence.file_tracker import ProcessedFileTracker
+    from tram.pipeline.state_store import TransformStateStore
 
 logger = logging.getLogger(__name__)
 
@@ -183,14 +185,34 @@ def _try_trim_process_heap() -> bool:
         return False
 
 
+def _batch_inflight_cap(thread_workers: int) -> int:
+    """Bounded in-flight window for the threaded batch path (~2x workers).
+
+    The producer never submits more than this many chunks ahead of completion.
+    With ``thread_workers`` worker threads that keeps queued-but-unprocessed
+    payloads bounded instead of buffering the entire source (RCA #16: an
+    unbounded ``ThreadPoolExecutor`` queue doubles the peak heap at
+    ``thread_workers=2`` and OOMKills the worker pod).
+    """
+    return max(1, thread_workers * 2)
+
+
 class PipelineExecutor:
     """Executes pipeline configurations in batch or stream mode."""
 
-    def __init__(self, file_tracker: ProcessedFileTracker | None = None) -> None:
+    def __init__(
+        self,
+        file_tracker: ProcessedFileTracker | None = None,
+        state_store: TransformStateStore | None = None,
+    ) -> None:
         self._last_refill: float = 0.0
         self._tokens: float = 0.0
         self._rate_lock = threading.Lock()  # guards _tokens and _last_refill
         self._file_tracker = file_tracker
+        # Durable transform-state store (design F.1 §3.2b) — None disables
+        # persistence entirely (stateful transforms then stay in-memory only,
+        # which is correct for single-run manual execution).
+        self._state_store = state_store
         # Circuit breaker state: {sink_key: (failure_count, open_until_monotonic)}
         self._cb_state: dict[str, tuple[int, float]] = {}
         self._cb_lock = threading.Lock()
@@ -272,12 +294,170 @@ class PipelineExecutor:
     def _build_transforms(self, config: PipelineConfig) -> list:
         pipeline_ctx = {"name": config.name, "source": config.source.model_dump()}
         transforms = []
-        for t_cfg in config.transforms:
+        for idx, t_cfg in enumerate(config.transforms):
             t_cls = get_transform(t_cfg.type)
             d = t_cfg.model_dump()
             d["_pipeline"] = pipeline_ctx
-            transforms.append(t_cls(d))
+            transform = t_cls(d)
+            if isinstance(transform, StatefulTransform):
+                # Stable state blob key: transform type + position in the
+                # transforms list (design F.1 §3.2a).
+                transform.state_key = f"{t_cfg.type}:{idx}"
+            transforms.append(transform)
         return transforms
+
+    # ── Stateful transform state (design F.1 §3.2c) ────────────────────────
+
+    @staticmethod
+    def _stateful_transforms(transforms: list) -> list:
+        return [t for t in transforms if isinstance(t, StatefulTransform)]
+
+    @staticmethod
+    def _apply_state(transforms: list, blob: dict) -> None:
+        """Hydrate stateful transforms from a blob (best-effort per transform)."""
+        for transform in transforms:
+            if not isinstance(transform, StatefulTransform):
+                continue
+            try:
+                transform.set_state(blob.get(transform.state_key, {}))
+            except Exception as exc:
+                logger.warning(
+                    "Transform state hydration failed",
+                    extra={"state_key": transform.state_key, "error": str(exc)},
+                )
+
+    def _hydrate_state_from_store(
+        self, config: PipelineConfig, transforms: list, config_sha256: str
+    ) -> dict:
+        """Load the pipeline's durable state and hydrate stateful transforms.
+
+        Returns the *in-run snapshot* (the state as loaded) so a retry rebuild
+        can re-hydrate from the same snapshot — a failed attempt's partial
+        writes are discarded (design §3.2c). Discards the blob on config-sha
+        mismatch (D.2 §6.1 pattern → one first-sight interval).
+        """
+        if self._state_store is None or not self._stateful_transforms(transforms):
+            return {}
+        try:
+            loaded = self._state_store.get(config.name)
+        except Exception as exc:
+            logger.warning(
+                "Transform state load failed — continuing unhydrated",
+                extra={"pipeline": config.name, "error": str(exc)},
+            )
+            return {}
+        if loaded is None:
+            return {}
+        if config_sha256 and loaded.config_sha256 != config_sha256:
+            logger.info(
+                "Transform state discarded — config_sha256 mismatch",
+                extra={"pipeline": config.name},
+            )
+            return {}
+        self._apply_state(transforms, loaded.state)
+        return loaded.state
+
+    def _save_state_to_store(
+        self, config: PipelineConfig, transforms: list, config_sha256: str, run_id: str
+    ) -> None:
+        """Collect stateful transforms' blobs and persist them (best-effort)."""
+        if self._state_store is None:
+            return
+        stateful = self._stateful_transforms(transforms)
+        if not stateful:
+            return
+        blob: dict = {}
+        for transform in stateful:
+            try:
+                blob[transform.state_key] = transform.get_state() or {}
+            except Exception as exc:
+                blob[transform.state_key] = {}
+                logger.warning(
+                    "Transform state collection failed",
+                    extra={"state_key": transform.state_key, "error": str(exc)},
+                )
+        try:
+            self._state_store.put(config.name, blob, config_sha256, run_id=run_id)
+        except Exception as exc:
+            logger.warning(
+                "Transform state save failed — counters self-heal over the "
+                "longer interval",
+                extra={"pipeline": config.name, "error": str(exc)},
+            )
+
+    @staticmethod
+    def _close_stateful_transforms(
+        transforms: list,
+        flush: bool = False,
+        flush_resolver=None,
+    ) -> list:
+        """Best-effort ``close(flush)`` on stateful transforms at run end.
+
+        Returns the partial-output records a transform emitted during close
+        (``window_aggregate`` returns its flushed open windows on ``flush=True``;
+        transforms whose ``close`` is a no-op return ``None``). Batch runs pass
+        ``flush=False`` per tick — flushing per tick would emit a partial window
+        record and then re-emit the same window after state rehydration (double
+        counting); a manual flush run passes ``flush=True`` (authoritative over
+        each transform's ``flush_on_close`` field). The stream ``finally``
+        passes a ``flush_resolver`` — a callable(transform) → bool consulted
+        per transform — so each stateful transform's ``flush_on_close`` field
+        gates its graceful-stop flush, and a crash path resolves to ``False``
+        (windows stay in state for a redispatch to continue).
+        """
+        emitted: list = []
+        for transform in transforms:
+            if not isinstance(transform, StatefulTransform):
+                continue
+            try:
+                effective = flush if flush_resolver is None else flush_resolver(transform)
+                out = transform.close(flush=effective)
+            except Exception as exc:
+                logger.warning(
+                    "Stateful transform close failed",
+                    extra={"state_key": transform.state_key, "error": str(exc)},
+                )
+                continue
+            if isinstance(out, (list, tuple)):
+                emitted.extend(out)
+        return emitted
+
+    def _route_stateful_flush_records(
+        self,
+        config: PipelineConfig,
+        flush_records: list,
+        serializer_out,
+        sinks: list[tuple],
+        ctx: PipelineRunContext,
+        dlq_sink=None,
+        sink_cb_keys: list[str] | None = None,
+    ) -> None:
+        """Write partial-window records from ``close(flush=True)`` to the sinks.
+
+        Runs after the chunk loop (in the flush path / stream finally) so a
+        stopped or flushed pipeline does not silently lose its open windows.
+        Failures are logged, never raised (the run result is already decided).
+        """
+        if not flush_records:
+            return
+        try:
+            self._process_records(
+                flush_records,
+                {},
+                [],
+                serializer_out,
+                sinks,
+                ctx,
+                config.on_error,
+                dlq_sink=dlq_sink,
+                parallel_sinks=getattr(config, "parallel_sinks", False),
+                sink_cb_keys=sink_cb_keys,
+            )
+        except Exception as exc:
+            logger.warning(
+                "Stateful flush records not delivered to sinks",
+                extra={"pipeline": config.name, "error": str(exc)},
+            )
 
     @staticmethod
     def _post_batch_cleanup(config: PipelineConfig) -> None:
@@ -314,6 +494,48 @@ class PipelineExecutor:
             finalize = getattr(sink_instance, "finalize_source", None)
             if callable(finalize):
                 finalize(meta, success)
+
+    @staticmethod
+    def _close_sinks(sinks: list[tuple], dlq_sink=None) -> None:
+        """Best-effort, idempotent close of sink instances after a batch run.
+
+        Releases run-scoped resources (timers, buffers, connections) that sinks
+        otherwise pin for the process lifetime (e.g. the ClickHouse flush
+        timer/buffer). close() failures are logged but never mask the run result.
+        """
+        instances = [sink_tuple[0] for sink_tuple in sinks]
+        if dlq_sink is not None:
+            instances.append(dlq_sink)
+        for sink_instance in instances:
+            close = getattr(sink_instance, "close", None)
+            if not callable(close):
+                continue
+            try:
+                close()
+            except Exception as exc:
+                logger.warning(
+                    "Sink close failed",
+                    extra={"sink_type": type(sink_instance).__name__, "error": str(exc)},
+                )
+
+    @staticmethod
+    def _close_source(source) -> None:
+        """Best-effort close of a batch-run source instance.
+
+        File sources keep their connection open across read()/finalize() and
+        release it here. close() failures are logged but never mask the run
+        result.
+        """
+        close = getattr(source, "close", None)
+        if not callable(close):
+            return
+        try:
+            close()
+        except Exception as exc:
+            logger.warning(
+                "Source close failed",
+                extra={"source_type": type(source).__name__, "error": str(exc)},
+            )
 
     def _process_records(
         self,
@@ -375,11 +597,10 @@ class PipelineExecutor:
             records = surviving_records
 
             # ── Multi-sink routing with per-sink transforms ───────────────────
-            # Use threading.Event so parallel sink threads can set it atomically.
-            wrote_any_event = threading.Event()
 
             def _write_one_sink(sink_tuple, records_in, sink_index):
-                """Process one sink entry. Returns True if write succeeded."""
+                """Process one sink entry. Returns the number of records the
+                sink actually wrote (0 if nothing was written)."""
                 # Accept 3-tuple (legacy/test), 4-tuple, or 5-tuple (current with per-sink ser)
                 if len(sink_tuple) == 5:
                     sink_instance, condition, sink_transforms, sink_cfg, per_sink_ser = sink_tuple
@@ -397,7 +618,7 @@ class PipelineExecutor:
                     filtered = list(records_in)
 
                 if not filtered:
-                    return False
+                    return 0
 
                 # Apply per-sink transforms
                 sink_records = filtered
@@ -426,7 +647,7 @@ class PipelineExecutor:
                         break
 
                 if sink_transform_failed or not sink_records:
-                    return False
+                    return 0
 
                 active_ser = per_sink_ser if per_sink_ser is not None else serializer_out
 
@@ -451,12 +672,12 @@ class PipelineExecutor:
                         ctx.record_error("Circuit breaker open")
                         if stats is not None:
                             stats.increment(skipped=1, errors=["Circuit breaker open"])
-                        return False
+                        return 0
 
                 # Per-sink retry loop
                 retry_count = getattr(sink_cfg, "retry_count", 0)
                 retry_delay = getattr(sink_cfg, "retry_delay_seconds", 1.0)
-                wrote_partition = False
+                written = 0
                 partitions = _partition_records_for_template(
                     sink_records,
                     _sink_filename_template(sink_cfg, sink_instance),
@@ -486,8 +707,7 @@ class PipelineExecutor:
                             if cb_threshold > 0:
                                 with self._cb_lock:
                                     self._cb_state[sink_key] = (0, 0.0)
-                            wrote_any_event.set()
-                            wrote_partition = True
+                            written += len(partition_records)
                             partition_succeeded = True
                             break
                         except Exception as exc:
@@ -539,9 +759,11 @@ class PipelineExecutor:
                             dlq=1 if dlq_sink is not None else 0,
                             errors=[str(last_exc)],
                         )
-                    return False
+                    # A partition failure stops this sink; earlier partitions
+                    # that already wrote still count toward records_out.
+                    return written
 
-                return wrote_partition
+                return written
 
             if parallel_sinks and len(sinks) > 1:
                 with ThreadPoolExecutor(max_workers=len(sinks)) as pool:
@@ -549,20 +771,31 @@ class PipelineExecutor:
                         pool.submit(_write_one_sink, s, records, i)
                         for i, s in enumerate(sinks)
                     ]
+                    written_counts = []
                     for f in futures:
                         try:
-                            f.result()
+                            written_counts.append(f.result())
                         except TramError:
                             raise
             else:
-                for i, sink_tuple in enumerate(sinks):
+                written_counts = [
                     _write_one_sink(sink_tuple, records, i)
+                    for i, sink_tuple in enumerate(sinks)
+                ]
 
-            if wrote_any_event.is_set():
-                ctx.inc_records_out(len(records))
-                RECORDS_OUT.labels(pipeline=ctx.pipeline_name).inc(len(records))
+            # records_out counts records delivered to at least one sink (per
+            # record, not per sink-fanout — multi-sink pipelines must not
+            # inflate it). Each sink reports how many records it actually
+            # wrote; the largest single-sink count is the delivered set when
+            # sinks overlap (the common case) and a conservative lower bound
+            # otherwise. Condition-filtered or failed sinks no longer bump the
+            # count for records they never wrote (review D4).
+            records_written = max(written_counts) if written_counts else 0
+            if records_written > 0:
+                ctx.inc_records_out(records_written)
+                RECORDS_OUT.labels(pipeline=ctx.pipeline_name).inc(records_written)
                 if stats is not None:
-                    stats.increment(records_out=len(records))
+                    stats.increment(records_out=records_written)
             else:
                 ctx.inc_records_skipped(len(records))
                 RECORDS_SKIP.labels(pipeline=ctx.pipeline_name).inc(len(records))
@@ -736,8 +969,19 @@ class PipelineExecutor:
         config: PipelineConfig,
         run_id: str | None = None,
         stats: PipelineStats | None = None,
+        config_sha256: str = "",
+        flush: bool = False,
     ) -> RunResult:
-        """Execute one discrete batch run."""
+        """Execute one discrete batch run.
+
+        *config_sha256* is the D.2 §6.1 YAML fingerprint used to discard stale
+        transform state on config change (design F.1 §3.2d).
+
+        *flush* is the manual flush-run flag (design §5): ``close(flush=True)``
+        then emits any open windows as partials (``window_complete: false``)
+        and clears them from state before the final PUT — the saved blob
+        reflects the cleared windows, so the partials are never re-emitted.
+        """
         import contextlib
         try:
             from tram.telemetry.tracing import get_tracer
@@ -747,13 +991,18 @@ class PipelineExecutor:
             span_ctx = contextlib.nullcontext()
 
         with span_ctx:
-            return self._batch_run_inner(config, run_id=run_id, stats=stats)
+            return self._batch_run_inner(
+                config, run_id=run_id, stats=stats, config_sha256=config_sha256,
+                flush=flush,
+            )
 
     def _batch_run_inner(
         self,
         config: PipelineConfig,
         run_id: str | None = None,
         stats: PipelineStats | None = None,
+        config_sha256: str = "",
+        flush: bool = False,
     ) -> RunResult:
         kw = {"run_id": run_id} if run_id else {}
         ctx = PipelineRunContext(pipeline_name=config.name, **kw)
@@ -770,6 +1019,9 @@ class PipelineExecutor:
         dlq_sink = self._build_dlq_sink(config)
         # Pre-compute stable circuit-breaker keys for all sinks.
         sink_cb_keys = [self._make_sink_cb_key(config, i) for i in range(len(sinks))]
+        # Load the durable state once at run start and hydrate; retries re-hydrate
+        # from this same in-run snapshot (failed attempts persist nothing).
+        in_run_snapshot = self._hydrate_state_from_store(config, transforms, config_sha256)
 
         retry_count = config.retry_count if config.on_error == "retry" else 0
         retry_delay = config.retry_delay_seconds
@@ -783,7 +1035,29 @@ class PipelineExecutor:
                         transforms, dlq_sink, ctx, sink_cb_keys=sink_cb_keys, stats=stats,
                     )
 
+                    if flush:
+                        # Manual flush run (design §5): emit open windows as
+                        # partials (window_complete: false) and clear them from
+                        # state BEFORE the save, so the persisted blob reflects
+                        # the cleared windows — a later run rehydrates empty
+                        # windows and never re-emits the partials (no double
+                        # counting).
+                        flush_records = self._close_stateful_transforms(
+                            transforms, flush=True
+                        )
+                        if flush_records:
+                            self._route_stateful_flush_records(
+                                config, flush_records, serializer_out, sinks,
+                                ctx, dlq_sink=dlq_sink, sink_cb_keys=sink_cb_keys,
+                            )
+
                     result = RunResult.from_context(ctx, RunStatus.SUCCESS)
+                    # Persist transform state only on the success path: a failed
+                    # run keeps the previous snapshot intact (counters are
+                    # cumulative, so a lost update spans the gap correctly).
+                    self._save_state_to_store(
+                        config, transforms, config_sha256, ctx.run_id
+                    )
                     logger.info(
                         "Batch run completed",
                         extra={
@@ -808,10 +1082,24 @@ class PipelineExecutor:
                             },
                         )
                         time.sleep(retry_delay)
+                        # Close per-attempt resources from the failed attempt
+                        # before rebuilding, so sinks from failed attempts
+                        # (e.g. ClickHouse flush timers) and source connections
+                        # do not leak across retries.
+                        self._close_sinks(sinks, dlq_sink)
+                        self._close_source(source)
                         # Reset counters and rebuild ALL components for a clean retry.
                         # Rebuilding only the source on retry would reuse a potentially
                         # broken sink connection that caused the original failure.
                         ctx = PipelineRunContext(pipeline_name=config.name)
+                        if stats is not None:
+                            # Retry parity: the context is rebuilt for the new
+                            # attempt, so the stats accumulator must be reset
+                            # alongside it — otherwise live totals accumulate
+                            # across attempts and can exceed the final
+                            # run-history numbers (which come from the last
+                            # attempt's context).
+                            stats.reset()
                         source = self._build_source(config)
                         sinks = self._build_sinks(config)
                         serializer_in = self._build_serializer_in(config)
@@ -819,6 +1107,10 @@ class PipelineExecutor:
                         transforms = self._build_transforms(config)
                         dlq_sink = self._build_dlq_sink(config)
                         sink_cb_keys = [self._make_sink_cb_key(config, i) for i in range(len(sinks))]
+                        # Re-hydrate the rebuilt transforms from the in-run
+                        # snapshot — never from a fresh GET — so a failed
+                        # attempt's partial writes are discarded.
+                        self._apply_state(transforms, in_run_snapshot)
                         continue
 
                     result = RunResult.from_context(ctx, RunStatus.FAILED, error=str(exc))
@@ -829,6 +1121,9 @@ class PipelineExecutor:
                     return result
             return result
         finally:
+            self._close_stateful_transforms(transforms)
+            self._close_sinks(sinks, dlq_sink)
+            self._close_source(source)
             if getattr(config, "post_batch_cleanup", False):
                 self._post_batch_cleanup(config)
 
@@ -846,90 +1141,193 @@ class PipelineExecutor:
         stats: PipelineStats | None = None,
     ) -> None:
         """Inner loop: read source chunks and process with optional thread pool."""
+        if config.thread_workers > 1:
+            self._run_batch_chunks_threaded(
+                config, source, sinks, serializer_in, serializer_out,
+                transforms, dlq_sink, ctx, sink_cb_keys=sink_cb_keys, stats=stats,
+            )
+            return
+        self._run_batch_chunks_sequential(
+            config, source, sinks, serializer_in, serializer_out,
+            transforms, dlq_sink, ctx, sink_cb_keys=sink_cb_keys, stats=stats,
+        )
+
+    def _run_batch_chunks_sequential(
+        self,
+        config: PipelineConfig,
+        source,
+        sinks,
+        serializer_in,
+        serializer_out,
+        transforms,
+        dlq_sink,
+        ctx: PipelineRunContext,
+        sink_cb_keys: list[str] | None = None,
+        stats: PipelineStats | None = None,
+    ) -> None:
+        """Single-threaded batch loop. Each chunk is fully processed before the
+        next one is pulled, so source finalize runs strictly after the chunk
+        writes complete."""
         batch_size = config.batch_size
         record_chunk_size = getattr(config, "record_chunk_size", None)
         on_error = config.on_error
         rate_limit_rps = config.rate_limit_rps
-
         parallel_sinks = getattr(config, "parallel_sinks", False)
 
-        if config.thread_workers > 1:
-            # Multi-threaded: submit chunks to a thread pool
-            with ThreadPoolExecutor(max_workers=config.thread_workers) as pool:
-                futures = []
-                for raw, meta in source.read():
-                    fut = pool.submit(
-                        self._process_chunk,
+        current_source_key: tuple[str, str] | None = None
+        current_source_meta: dict | None = None
+        stopped_early = False
+        try:
+            for raw, meta in source.read():
+                meta = _augment_chunk_meta(meta, ctx)
+                source_key = _source_unit_key(meta)
+                if source_key is not None:
+                    meta["enable_safe_finalize"] = True
+                    if current_source_key is not None and source_key != current_source_key:
+                        self._finalize_source_for_sinks(sinks, current_source_meta, success=True)
+                        source.finalize(current_source_meta, success=True)
+                        current_source_key = None
+                        current_source_meta = None
+                    if current_source_key is None:
+                        current_source_key = source_key
+                    current_source_meta = dict(meta)
+
+                if record_chunk_size:
+                    self._process_chunk_incrementally(
+                        raw, meta, serializer_in, transforms,
+                        serializer_out, sinks, ctx, on_error, record_chunk_size,
+                        batch_size, rate_limit_rps, dlq_sink,
+                        parallel_sinks, sink_cb_keys, stats,
+                    )
+                else:
+                    self._process_chunk(
                         raw, meta, serializer_in, transforms,
                         serializer_out, sinks, ctx, on_error,
                         rate_limit_rps, dlq_sink, parallel_sinks, sink_cb_keys, stats,
                     )
-                    futures.append(fut)
-                    # batch_size is checked after ctx.records_in is updated by workers
-                    # slight over-submission is acceptable
-                    if batch_size and ctx.records_in >= batch_size:
-                        logger.info(
-                            "batch_size limit reached, stopping source read",
-                            extra={"pipeline": config.name, "batch_size": batch_size},
-                        )
-                        break
-
-                for f in as_completed(futures):
-                    try:
-                        f.result()
-                    except TramError as exc:
-                        if on_error == "abort":
-                            # Cancel remaining futures (best-effort)
-                            for remaining in futures:
-                                remaining.cancel()
-                            raise
-                        ctx.record_error(str(exc))
-                        if stats is not None:
-                            stats.increment(skipped=1, errors=[str(exc)])
+                if batch_size and ctx.records_in >= batch_size:
+                    logger.info(
+                        "batch_size limit reached, stopping source read",
+                        extra={"pipeline": config.name, "batch_size": batch_size},
+                    )
+                    stopped_early = True
+                    break
+        except Exception:
+            if current_source_meta is not None:
+                self._finalize_source_for_sinks(sinks, current_source_meta, success=False)
+                source.finalize(current_source_meta, success=False)
+            raise
         else:
-            # Single-threaded
-            current_source_key: tuple[str, str] | None = None
-            current_source_meta: dict | None = None
-            try:
-                for raw, meta in source.read():
-                    meta = _augment_chunk_meta(meta, ctx)
-                    source_key = _source_unit_key(meta)
-                    if source_key is not None:
-                        meta["enable_safe_finalize"] = True
-                        if current_source_key is not None and source_key != current_source_key:
-                            self._finalize_source_for_sinks(sinks, current_source_meta, success=True)
-                            current_source_key = None
-                            current_source_meta = None
-                        if current_source_key is None:
-                            current_source_key = source_key
-                        current_source_meta = dict(meta)
+            if current_source_meta is not None:
+                self._finalize_source_for_sinks(sinks, current_source_meta, success=True)
+                if not stopped_early:
+                    # On a batch_size stop the source generator was abandoned
+                    # mid-file; the current file must stay unmarked so the next
+                    # run reprocesses it (matches the pre-hook behavior).
+                    source.finalize(current_source_meta, success=True)
 
-                    if record_chunk_size:
-                        self._process_chunk_incrementally(
-                            raw, meta, serializer_in, transforms,
-                            serializer_out, sinks, ctx, on_error, record_chunk_size,
-                            batch_size, rate_limit_rps, dlq_sink,
-                            parallel_sinks, sink_cb_keys, stats,
-                        )
-                    else:
-                        self._process_chunk(
-                            raw, meta, serializer_in, transforms,
-                            serializer_out, sinks, ctx, on_error,
-                            rate_limit_rps, dlq_sink, parallel_sinks, sink_cb_keys, stats,
-                        )
+    def _run_batch_chunks_threaded(
+        self,
+        config: PipelineConfig,
+        source,
+        sinks,
+        serializer_in,
+        serializer_out,
+        transforms,
+        dlq_sink,
+        ctx: PipelineRunContext,
+        sink_cb_keys: list[str] | None = None,
+        stats: PipelineStats | None = None,
+    ) -> None:
+        """Multi-threaded batch loop: bounded in-flight chunks + deferred finalize.
+
+        Chunks are submitted in read order, but once ``_batch_inflight_cap``
+        futures are outstanding the oldest one is drained (blocking) before the
+        source generator is advanced again. This bounds queued-but-unprocessed
+        payloads (~2x thread_workers) instead of buffering the entire source
+        (RCA #16).
+
+        Source units (files) are finalized only after every chunk they yielded
+        has been drained — never while writes are still pending — so
+        move/delete/mark happen strictly after the chunks were actually written
+        (code review A2). On abort the in-flight unit is left untouched so a
+        retry can reprocess it.
+        """
+        batch_size = config.batch_size
+        on_error = config.on_error
+        cap = _batch_inflight_cap(config.thread_workers)
+        parallel_sinks = getattr(config, "parallel_sinks", False)
+
+        in_flight: deque[tuple[Future, tuple | None, dict]] = deque()
+        # Source units in submission order; each entry:
+        # [source_key, first_chunk_meta, remaining_chunks, fully_submitted]
+        units: deque[list] = deque()
+
+        def _submit(raw: bytes, meta: dict) -> None:
+            fut = pool.submit(
+                self._process_chunk,
+                raw, meta, serializer_in, transforms,
+                serializer_out, sinks, ctx, on_error,
+                config.rate_limit_rps, dlq_sink, parallel_sinks, sink_cb_keys, stats,
+            )
+            key = _source_unit_key(meta)
+            if key is not None:
+                if units and units[-1][0] == key:
+                    units[-1][2] += 1
+                else:
+                    if units:
+                        units[-1][3] = True  # previous unit fully submitted
+                    units.append([key, dict(meta), 1, False])
+            in_flight.append((fut, key, meta))
+
+        def _drain_one() -> None:
+            fut, key, _meta = in_flight.popleft()
+            try:
+                fut.result()
+            except TramError as exc:
+                if on_error == "abort":
+                    raise
+                ctx.record_error(str(exc))
+                if stats is not None:
+                    stats.increment(skipped=1, errors=[str(exc)])
+            if key is not None and units and units[0][0] == key:
+                units[0][2] -= 1
+                if units[0][2] == 0 and units[0][3]:
+                    finished = units.popleft()
+                    source.finalize(finished[1], success=True)
+
+        with ThreadPoolExecutor(max_workers=config.thread_workers) as pool:
+            try:
+                stopped_early = False
+                for raw, meta in source.read():
+                    _submit(raw, meta)
+                    while len(in_flight) >= cap:
+                        _drain_one()
+                    # batch_size is checked after ctx.records_in is updated by
+                    # workers; slight over-submission is acceptable.
                     if batch_size and ctx.records_in >= batch_size:
                         logger.info(
                             "batch_size limit reached, stopping source read",
                             extra={"pipeline": config.name, "batch_size": batch_size},
                         )
+                        stopped_early = True
                         break
+                if units and not stopped_early:
+                    # Natural end of the source: the last unit is fully
+                    # submitted, so it may be finalized once its chunks drain.
+                    # On a batch_size stop the generator was abandoned mid-file
+                    # and the current unit must stay unmarked.
+                    units[-1][3] = True
+                while in_flight:
+                    _drain_one()
             except Exception:
-                if current_source_meta is not None:
-                    self._finalize_source_for_sinks(sinks, current_source_meta, success=False)
+                # Abort or source error: never finalize units whose chunks were
+                # not all drained — their files stay unmarked/unmoved so a retry
+                # can reprocess them. Cancel what can be cancelled; the pool
+                # shutdown in the with-block waits for any running futures.
+                for fut, _key, _meta in in_flight:
+                    fut.cancel()
                 raise
-            else:
-                if current_source_meta is not None:
-                    self._finalize_source_for_sinks(sinks, current_source_meta, success=True)
 
     # ── Stream run ────────────────────────────────────────────────────────────
 
@@ -938,8 +1336,16 @@ class PipelineExecutor:
         config: PipelineConfig,
         stop_event: threading.Event,
         stats: PipelineStats | None = None,
+        config_sha256: str = "",
     ) -> None:
-        """Run indefinitely until stop_event is set."""
+        """Run indefinitely until stop_event is set.
+
+        *config_sha256* is the D.2 §6.1 YAML fingerprint used to discard stale
+        transform state on config change (design F.1 §3.2d). When the pipeline
+        sets ``state_persist_interval_s``, the durable state blob is PUT
+        periodically (timed with the chunk loop, not a new thread) so a D.2
+        redispatch that hydrates recovers the state up to the last snapshot.
+        """
         logger.info("Stream run started", extra={"pipeline": config.name})
 
         source = self._build_source(config)
@@ -951,6 +1357,21 @@ class PipelineExecutor:
         sink_cb_keys = [self._make_sink_cb_key(config, i) for i in range(len(sinks))]
 
         ctx = PipelineRunContext(pipeline_name=config.name)
+
+        # Hydrate stateful transforms at run start; a D.2 redispatch then
+        # recovers state up to the last persisted snapshot.
+        self._hydrate_state_from_store(config, transforms, config_sha256)
+
+        persist_interval = float(getattr(config, "state_persist_interval_s", 0) or 0)
+        last_persist = time.monotonic()
+
+        def _maybe_persist_state() -> None:
+            nonlocal last_persist
+            if persist_interval <= 0:
+                return
+            if time.monotonic() - last_persist >= persist_interval:
+                self._save_state_to_store(config, transforms, config_sha256, ctx.run_id)
+                last_persist = time.monotonic()
 
         # Watcher: when the APScheduler stop_event fires, also call source.stop()
         # so that blocking sources (e.g. WebhookSource.read()) unblock immediately.
@@ -965,18 +1386,33 @@ class PipelineExecutor:
         watcher = threading.Thread(target=_stop_watcher, daemon=True, name="tram-stop-watcher")
         watcher.start()
 
+        graceful_stop = False
         try:
             if config.thread_workers > 1:
                 self._stream_run_threaded(
                     config, source, sinks, serializer_in, serializer_out,
                     transforms, dlq_sink, ctx, stop_event, stats,
                     sink_cb_keys=sink_cb_keys,
+                    on_persist=_maybe_persist_state,
                 )
             else:
+                current_source_key: tuple[str, str] | None = None
+                current_source_meta: dict | None = None
+                stopped = False
                 for raw, meta in source.read():
                     if stop_event.is_set():
                         logger.info("Stream stop requested", extra={"pipeline": config.name})
+                        stopped = True
                         break
+                    source_key = _source_unit_key(meta)
+                    if source_key is not None:
+                        if current_source_key is not None and source_key != current_source_key:
+                            source.finalize(current_source_meta, success=True)
+                            current_source_key = None
+                            current_source_meta = None
+                        if current_source_key is None:
+                            current_source_key = source_key
+                        current_source_meta = dict(meta)
                     self._process_chunk(
                         raw, meta, serializer_in, transforms,
                         serializer_out, sinks, ctx, config.on_error,
@@ -985,6 +1421,14 @@ class PipelineExecutor:
                         sink_cb_keys,
                         stats,
                     )
+                    _maybe_persist_state()
+                # On a stop the generator was abandoned mid-file; the current
+                # file stays unmarked (matches the pre-hook behavior).
+                if current_source_meta is not None and not stopped:
+                    source.finalize(current_source_meta, success=True)
+            # The chunk loop drained (or was stopped) without an exception:
+            # this is a graceful stop.
+            graceful_stop = True
         except Exception as exc:
             logger.error(
                 "Stream run error",
@@ -993,6 +1437,31 @@ class PipelineExecutor:
             )
             raise
         finally:
+            # Graceful stop: close hooks honoring each stateful transform's
+            # flush_on_close field (window_aggregate emits its open windows as
+            # partials, then the final state blob reflects the cleared windows
+            # — no double emission after a redispatch). An exception/crash
+            # path never flushes: partials are not emitted and the open
+            # windows stay in the saved state so a redispatch continues them
+            # (the D.2 snapshot-recovery story).
+            if graceful_stop:
+                flush_records = self._close_stateful_transforms(
+                    transforms,
+                    flush_resolver=lambda t: bool(
+                        getattr(t, "flush_on_close", False)
+                    ),
+                )
+            else:
+                flush_records = self._close_stateful_transforms(
+                    transforms, flush=False
+                )
+            if flush_records:
+                self._route_stateful_flush_records(
+                    config, flush_records, serializer_out, sinks, ctx,
+                    dlq_sink=dlq_sink, sink_cb_keys=sink_cb_keys,
+                )
+            self._save_state_to_store(config, transforms, config_sha256, ctx.run_id)
+            self._close_source(source)
             logger.info(
                 "Stream run ended",
                 extra={
@@ -1016,6 +1485,7 @@ class PipelineExecutor:
         stop_event: threading.Event,
         stats: PipelineStats | None = None,
         sink_cb_keys: list[str] | None = None,
+        on_persist=None,
     ) -> None:
         """Stream mode with N worker threads. Producer reads; workers process."""
         # Bounded queue gives backpressure: producer blocks if workers are slow
@@ -1058,16 +1528,33 @@ class PipelineExecutor:
             STREAM_QUEUE_DEPTH = None
 
         try:
+            current_source_key: tuple[str, str] | None = None
+            current_source_meta: dict | None = None
+            stopped = False
             for raw, meta in source.read():
                 if stop_event.is_set():
                     logger.info("Stream stop requested", extra={"pipeline": config.name})
+                    stopped = True
                     break
+                source_key = _source_unit_key(meta)
+                if source_key is not None:
+                    if current_source_key is not None and source_key != current_source_key:
+                        source.finalize(current_source_meta, success=True)
+                        current_source_key = None
+                        current_source_meta = None
+                    if current_source_key is None:
+                        current_source_key = source_key
+                    current_source_meta = dict(meta)
                 chunk_q.put((raw, meta))  # blocks if queue full (backpressure)
+                if on_persist is not None:
+                    on_persist()
                 if STREAM_QUEUE_DEPTH is not None:
                     try:
                         STREAM_QUEUE_DEPTH.labels(pipeline=config.name).set(chunk_q.qsize())
                     except Exception:
                         pass
+            if current_source_meta is not None and not stopped:
+                source.finalize(current_source_meta, success=True)
         finally:
             # Signal all workers to stop
             for _ in threads:

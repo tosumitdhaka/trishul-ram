@@ -138,6 +138,67 @@ class TestTimestampNormalizeTransform:
         with pytest.raises(TransformError):
             TimestampNormalizeTransform({"fields": []})
 
+    # ── source_timezone ─────────────────────────────────────────────────────
+
+    def test_no_source_timezone_keeps_utc_assumption(self):
+        t = TimestampNormalizeTransform({"fields": ["ts"]})
+        result = t.apply([{"ts": "2024-01-15T10:30:00"}])
+        # naive + no source_timezone = today's behavior: assumed UTC
+        assert result[0]["ts"] == "2024-01-15T10:30:00.000Z"
+
+    def test_source_timezone_naive_iso_converted(self):
+        t = TimestampNormalizeTransform({"fields": ["ts"], "source_timezone": "Asia/Tokyo"})
+        result = t.apply([{"ts": "2024-01-15T10:30:00"}])
+        # Asia/Tokyo is UTC+9 (no DST) → 10:30 local = 01:30 UTC
+        assert result[0]["ts"] == "2024-01-15T01:30:00.000Z"
+
+    def test_source_timezone_dst_spring_forward(self):
+        t = TimestampNormalizeTransform({"fields": ["ts"], "source_timezone": "Europe/Berlin"})
+        # 2024-03-31 02:00 CET → 03:00 CEST (UTC+2)
+        result = t.apply([
+            {"ts": "2024-03-31T01:30:00"},  # before transition, CET = UTC+1
+            {"ts": "2024-03-31T03:30:00"},  # after transition, CEST = UTC+2
+        ])
+        assert result[0]["ts"] == "2024-03-31T00:30:00.000Z"
+        assert result[1]["ts"] == "2024-03-31T01:30:00.000Z"
+
+    def test_source_timezone_dst_gap_uses_pre_transition_offset(self):
+        t = TimestampNormalizeTransform({"fields": ["ts"], "source_timezone": "Europe/Berlin"})
+        # 2024-03-31 02:30 falls in the spring-forward gap (02:00 → 03:00 CEST);
+        # zoneinfo's default fold=0 pins it to the pre-transition offset
+        # (CET, UTC+1) → 01:30 UTC.
+        result = t.apply([{"ts": "2024-03-31T02:30:00"}])
+        assert result[0]["ts"] == "2024-03-31T01:30:00.000Z"
+
+    def test_source_timezone_aware_input_passthrough(self):
+        t = TimestampNormalizeTransform({"fields": ["ts"], "source_timezone": "Asia/Tokyo"})
+        result = t.apply([{"ts": "2024-01-15T12:30:00+02:00"}])
+        # explicit offset wins over source_timezone → +02:00 = 10:30 UTC
+        assert result[0]["ts"] == "2024-01-15T10:30:00.000Z"
+
+    def test_source_timezone_with_input_format(self):
+        t = TimestampNormalizeTransform({
+            "fields": ["ts"],
+            "source_timezone": "Asia/Tokyo",
+            "input_format": "%Y/%m/%d %H:%M:%S",
+        })
+        result = t.apply([{"ts": "2024/01/15 10:30:00"}])
+        assert result[0]["ts"] == "2024-01-15T01:30:00.000Z"
+
+    def test_source_timezone_naive_datetime_object(self):
+        t = TimestampNormalizeTransform({"fields": ["ts"], "source_timezone": "Asia/Tokyo"})
+        result = t.apply([{"ts": datetime(2024, 1, 15, 10, 30)}])
+        assert result[0]["ts"] == "2024-01-15T01:30:00.000Z"
+
+    def test_source_timezone_unix_epoch_unaffected(self):
+        t = TimestampNormalizeTransform({"fields": ["ts"], "source_timezone": "Asia/Tokyo"})
+        result = t.apply([{"ts": 1705312200}])  # absolute instant → 2024-01-15T09:50:00Z
+        assert result[0]["ts"] == "2024-01-15T09:50:00.000Z"
+
+    def test_source_timezone_invalid_name_raises_at_init(self):
+        with pytest.raises(TransformError, match="source_timezone"):
+            TimestampNormalizeTransform({"fields": ["ts"], "source_timezone": "Mars/Olympus"})
+
 
 # ── AggregateTransform ─────────────────────────────────────────────────────
 

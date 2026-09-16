@@ -596,3 +596,171 @@ class TestWorkersDefaultsAndManagerLint:
         """)
         findings = lint(config, tram_mode="standalone")
         assert not any(f.rule_id in {"L006", "L007", "L009", "L010", "L012"} for f in findings)
+
+
+class TestL013StatefulBroadcastStream:
+    def test_l013_fires_for_stateful_transform_on_broadcast_stream(self):
+        config = _load("""
+            pipeline:
+              name: stateful-broadcast
+              schedule:
+                type: stream
+              source:
+                type: kafka
+                brokers: ["localhost:9092"]
+                topic: events
+                group_id: g1
+              workers:
+                count: 2
+              transforms:
+                - type: window_aggregate
+                  window_seconds: 900
+                  operations:
+                    mean_rate: "avg:rate"
+              serializer_in:
+                type: json
+              serializer_out:
+                type: json
+              sink:
+                type: local
+                path: /out
+        """)
+        findings = lint(config)
+        l013 = [f for f in findings if f.rule_id == "L013"]
+        assert len(l013) == 1
+        assert l013[0].severity == "warning"
+        assert "window_aggregate" in l013[0].message
+        assert "count=1" in l013[0].message
+
+    def test_l013_fires_for_counter_delta_on_broadcast_stream(self):
+        config = _load("""
+            pipeline:
+              name: stateful-broadcast-cd
+              schedule:
+                type: stream
+              source:
+                type: kafka
+                brokers: ["localhost:9092"]
+                topic: events
+                group_id: g1
+              workers:
+                count: all
+              transforms:
+                - type: counter_delta
+                  fields: [x]
+              serializer_in:
+                type: json
+              serializer_out:
+                type: json
+              sink:
+                type: local
+                path: /out
+        """)
+        findings = lint(config)
+        assert any(f.rule_id == "L013" for f in findings)
+
+    def test_l013_fires_for_workers_list(self):
+        config = _load("""
+            pipeline:
+              name: stateful-broadcast-list
+              schedule:
+                type: stream
+              source:
+                type: kafka
+                brokers: ["localhost:9092"]
+                topic: events
+                group_id: g1
+              workers:
+                list: [tram-worker-0, tram-worker-1]
+              transforms:
+                - type: window_aggregate
+                  window_seconds: 900
+                  operations:
+                    mean_rate: "avg:rate"
+              serializer_in:
+                type: json
+              serializer_out:
+                type: json
+              sink:
+                type: local
+                path: /out
+        """)
+        findings = lint(config)
+        assert any(f.rule_id == "L013" for f in findings)
+
+    def test_l013_not_fired_for_batch_schedule(self):
+        config = _load("""
+            pipeline:
+              name: stateful-batch
+              schedule:
+                type: interval
+                interval_seconds: 60
+              source:
+                type: local
+                path: /tmp
+              workers:
+                count: 2
+              transforms:
+                - type: counter_delta
+                  fields: [x]
+              serializer_in:
+                type: json
+              serializer_out:
+                type: json
+              sink:
+                type: local
+                path: /out
+        """)
+        findings = lint(config)
+        assert not any(f.rule_id == "L013" for f in findings)
+
+    def test_l013_not_fired_for_count1_stream(self):
+        config = _load("""
+            pipeline:
+              name: stateful-count1
+              schedule:
+                type: stream
+              source:
+                type: kafka
+                brokers: ["localhost:9092"]
+                topic: events
+                group_id: g1
+              workers:
+                count: 1
+              transforms:
+                - type: counter_delta
+                  fields: [x]
+              serializer_in:
+                type: json
+              serializer_out:
+                type: json
+              sink:
+                type: local
+                path: /out
+        """)
+        findings = lint(config)
+        assert not any(f.rule_id == "L013" for f in findings)
+
+    def test_l013_not_fired_without_stateful_transform(self):
+        config = _load("""
+            pipeline:
+              name: nonstateful-broadcast
+              schedule:
+                type: stream
+              source:
+                type: kafka
+                brokers: ["localhost:9092"]
+                topic: events
+                group_id: g1
+              workers:
+                count: 2
+              serializer_in:
+                type: json
+              serializer_out:
+                type: json
+              sink:
+                type: local
+                path: /out
+        """)
+        findings = lint(config)
+        assert not any(f.rule_id == "L013" for f in findings)

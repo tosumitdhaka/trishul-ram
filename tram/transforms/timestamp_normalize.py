@@ -4,8 +4,9 @@ from __future__ import annotations
 
 import logging
 import re
-from datetime import UTC, datetime
+from datetime import UTC, datetime, tzinfo
 from typing import Any
+from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from tram.core.exceptions import TransformError
 from tram.interfaces.base_transform import BaseTransform
@@ -20,12 +21,18 @@ _US_MAX = 9_999_999_999_999_999 # microseconds
 # above _US_MAX → nanoseconds
 
 
-def _parse_timestamp(val: Any, input_format: str | None) -> datetime:
-    """Parse a value into a UTC-aware datetime."""
+def _parse_timestamp(
+    val: Any, input_format: str | None, source_tz: tzinfo | None = None
+) -> datetime:
+    """Parse a value into a UTC-aware datetime.
+
+    Naive datetimes are interpreted in ``source_tz`` when provided (DST-aware via
+    zoneinfo), otherwise assumed UTC. Aware datetimes always pass through unchanged.
+    """
     # Already a datetime
     if isinstance(val, datetime):
         if val.tzinfo is None:
-            return val.replace(tzinfo=UTC)
+            return val.replace(tzinfo=source_tz or UTC).astimezone(UTC)
         return val.astimezone(UTC)
 
     # Numeric — unix epoch (sec / ms / us / ns auto-detect)
@@ -43,7 +50,7 @@ def _parse_timestamp(val: Any, input_format: str | None) -> datetime:
         try:
             dt = datetime.strptime(s, input_format)
             if dt.tzinfo is None:
-                dt = dt.replace(tzinfo=UTC)
+                dt = dt.replace(tzinfo=source_tz or UTC)
             return dt.astimezone(UTC)
         except ValueError as exc:
             raise TransformError(f"Cannot parse {s!r} with format {input_format!r}: {exc}") from exc
@@ -61,7 +68,7 @@ def _parse_timestamp(val: Any, input_format: str | None) -> datetime:
         try:
             dt = datetime.strptime(s, fmt)
             if dt.tzinfo is None:
-                dt = dt.replace(tzinfo=UTC)
+                dt = dt.replace(tzinfo=source_tz or UTC)
             return dt.astimezone(UTC)
         except ValueError:
             continue
@@ -70,7 +77,7 @@ def _parse_timestamp(val: Any, input_format: str | None) -> datetime:
     try:
         dt = datetime.fromisoformat(s)
         if dt.tzinfo is None:
-            dt = dt.replace(tzinfo=UTC)
+            dt = dt.replace(tzinfo=source_tz or UTC)
         return dt.astimezone(UTC)
     except ValueError:
         pass
@@ -109,6 +116,12 @@ class TimestampNormalizeTransform(BaseTransform):
                                               "epoch_us"  → int microseconds since Unix epoch
                                               "epoch_ns"  → int nanoseconds since Unix epoch
         on_error      (str, default "raise")  "raise" | "null" | "keep"
+        source_timezone (str, optional)       IANA timezone name (e.g. "Asia/Tokyo",
+                                              "Europe/Berlin"). Naive input timestamps are
+                                              interpreted in this timezone (DST-aware via
+                                              zoneinfo) and converted to UTC. Default None
+                                              keeps today's behavior: naive timestamps are
+                                              assumed UTC. Aware inputs always pass through.
     """
 
     def __init__(self, config: dict) -> None:
@@ -119,6 +132,15 @@ class TimestampNormalizeTransform(BaseTransform):
         self.input_format: str | None = config.get("input_format")
         self.output_format: str = config.get("output_format", "iso")
         self.on_error: str = config.get("on_error", "raise")
+        self.source_timezone: str | None = config.get("source_timezone")
+        self._source_tz: tzinfo | None = None
+        if self.source_timezone is not None:
+            try:
+                self._source_tz = ZoneInfo(self.source_timezone)
+            except (ZoneInfoNotFoundError, ValueError) as exc:
+                raise TransformError(
+                    f"timestamp_normalize: invalid source_timezone {self.source_timezone!r}: {exc}"
+                ) from exc
 
     def _format(self, dt: datetime) -> Any:
         if self.output_format == "epoch_s":
@@ -143,7 +165,7 @@ class TimestampNormalizeTransform(BaseTransform):
                 if field not in new_record:
                     continue
                 try:
-                    dt = _parse_timestamp(new_record[field], self.input_format)
+                    dt = _parse_timestamp(new_record[field], self.input_format, self._source_tz)
                     new_record[field] = self._format(dt)
                 except TransformError as exc:
                     if self.on_error == "raise":

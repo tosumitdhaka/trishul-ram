@@ -100,6 +100,20 @@ class TestCorbaSourceConfigValidation:
         with pytest.raises(ValidationError, match="Either 'ior' or 'naming_service'"):
             CorbaSourceConfig(type="corba", operation="getData")
 
+    def test_dedupe_window_zero_or_negative_rejected(self):
+        from pydantic import ValidationError
+
+        from tram.models.pipeline import CorbaSourceConfig
+
+        with pytest.raises(ValidationError, match="dedupe_window_seconds"):
+            CorbaSourceConfig(
+                type="corba", ior="IOR:abc123", operation="getData", dedupe_window_seconds=0
+            )
+        with pytest.raises(ValidationError, match="dedupe_window_seconds"):
+            CorbaSourceConfig(
+                type="corba", ior="IOR:abc123", operation="getData", dedupe_window_seconds=-5
+            )
+
 
 # ── CorbaSource init ──────────────────────────────────────────────────────
 
@@ -392,3 +406,105 @@ class TestCorbaSourceRead:
             list(src.read())
 
         mock_orb.destroy.assert_called_once()
+
+
+# ── Time-window dedupe (telecom review: scheduled runs un-bricked) ────────
+
+
+class TestCorbaTimeWindowDedupe:
+    """The skip_processed key is ``operation:args:<bucket>`` with
+    ``bucket = floor(now / dedupe_window_seconds)``, so the same operation+args
+    is deduped within a window but the next scheduled run lands in a fresh
+    bucket and runs again."""
+
+    def test_dedupe_key_includes_time_bucket(self):
+        mock_tracker = MagicMock()
+        mock_tracker.is_processed.return_value = False
+        src = CorbaSource({
+            "ior": "IOR:test",
+            "operation": "getData",
+            "args": ["ne-01"],
+            "_pipeline_name": "my-pipe",
+            "skip_processed": True,
+            "dedupe_window_seconds": 300,
+            "_file_tracker": mock_tracker,
+        })
+        mock_orb = MagicMock()
+
+        with (
+            patch("tram.connectors.corba.source.logger"),
+            patch("tram.connectors.corba.source.time.time", return_value=1000.0),
+            patch.object(src, "_get_orb_and_object", return_value=(mock_orb, MagicMock())),
+            patch.object(src, "_invoke", return_value=None),
+            patch("tram.connectors.corba.source._corba_to_python", return_value=[]),
+        ):
+            list(src.read())
+
+        # floor(1000 / 300) == 3
+        track_fp = mock_tracker.mark_processed.call_args[0][2]
+        assert track_fp == 'getData:["ne-01"]:3'
+
+    def test_same_window_skips_after_window_runs(self):
+        """Within the same window the invocation is deduped; once the window
+        rolls over the same operation+args runs again."""
+        seen = []
+        mock_tracker = MagicMock()
+
+        def _is_processed(_pipeline, _source_key, filepath):
+            seen.append(filepath)
+            return filepath.endswith(":3")  # only bucket 3 counts as processed
+
+        mock_tracker.is_processed.side_effect = _is_processed
+        src = CorbaSource({
+            "ior": "IOR:test",
+            "operation": "getData",
+            "args": ["ne-01"],
+            "_pipeline_name": "my-pipe",
+            "skip_processed": True,
+            "dedupe_window_seconds": 300,
+            "_file_tracker": mock_tracker,
+        })
+        mock_orb = MagicMock()
+
+        # First invocation, t=1000 → bucket 3 → already processed → skipped.
+        with (
+            patch("tram.connectors.corba.source.logger"),
+            patch("tram.connectors.corba.source.time.time", return_value=1000.0),
+            patch.object(src, "_get_orb_and_object", return_value=(mock_orb, MagicMock())),
+            patch.object(src, "_invoke", return_value=None),
+            patch("tram.connectors.corba.source._corba_to_python", return_value=[{"a": 1}]),
+        ):
+            results = list(src.read())
+
+        assert results == []
+        assert seen == ['getData:["ne-01"]:3']
+
+        # Next scheduled run, t=1400 → bucket 4 → not processed → runs again.
+        with (
+            patch("tram.connectors.corba.source.logger"),
+            patch("tram.connectors.corba.source.time.time", return_value=1400.0),
+            patch.object(src, "_get_orb_and_object", return_value=(mock_orb, MagicMock())),
+            patch.object(src, "_invoke", return_value=None),
+            patch("tram.connectors.corba.source._corba_to_python", return_value=[{"a": 1}]),
+        ):
+            results = list(src.read())
+
+        assert len(results) == 1
+        assert seen == ['getData:["ne-01"]:3', 'getData:["ne-01"]:4']
+        assert mock_tracker.mark_processed.call_args[0][2] == 'getData:["ne-01"]:4'
+
+    def test_default_window_is_300_seconds(self):
+        src = CorbaSource({"ior": "IOR:test", "operation": "getData"})
+        assert src.dedupe_window_seconds == 300
+
+    def test_config_model_accepts_dedupe_window(self):
+        from tram.models.pipeline import CorbaSourceConfig
+
+        cfg = CorbaSourceConfig(
+            type="corba",
+            ior="IOR:abc123",
+            operation="getData",
+            dedupe_window_seconds=600,
+        )
+        assert cfg.dedupe_window_seconds == 600
+        assert cfg.model_dump()["dedupe_window_seconds"] == 600
