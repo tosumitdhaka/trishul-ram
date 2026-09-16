@@ -158,6 +158,10 @@ class SyslogSourceConfig(BaseModel):
     protocol: str = "udp"
     buffer_size: int = 65535
     encoding: str = "utf-8"
+    # RFC 6587 framing guards (Wave B): TCP messages over max_message_size are
+    # truncated/rejected; max_connections caps concurrent TCP clients.
+    max_message_size: int = Field(65535, ge=1024)
+    max_connections: int = Field(64, ge=1)
 
 
 class SnmpTrapSourceConfig(BaseModel):

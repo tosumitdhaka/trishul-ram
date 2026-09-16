@@ -465,3 +465,73 @@ class TestTcpConcurrency:
             time.sleep(0.01)
             leftover = [t for t in threading.enumerate() if t.name.startswith("syslog-tcp-")]
         assert leftover == []
+
+
+# ── Config validation (Wave B TCP knobs reachable from YAML — audit E7) ────
+
+
+class TestConfigValidation:
+    """SyslogSourceConfig must declare the TCP framing knobs the source reads.
+
+    The connector reads ``max_message_size``/``max_connections`` from its
+    config dict, but the model's ``extra="forbid"`` rejected them from
+    pipeline YAML until they were declared — making the documented knobs
+    unreachable.
+    """
+
+    @staticmethod
+    def _yaml(extra: str) -> str:
+        return (
+            "version: \"1\"\n"
+            "pipeline:\n"
+            "  name: syslog-cfg-test\n"
+            "  enabled: true\n"
+            "  schedule:\n"
+            "    type: stream\n"
+            "  source:\n"
+            "    type: syslog\n"
+            "    host: 127.0.0.1\n"
+            "    port: 5514\n"
+            "    protocol: tcp\n"
+            f"{extra}"
+            "  serializer_in:\n"
+            "    type: json\n"
+            "  sink:\n"
+            "    type: local\n"
+            "    path: /tmp/syslog-cfg-test-out\n"
+        )
+
+    def test_tcp_knobs_are_accepted_from_yaml(self):
+        from tram.models.pipeline import SyslogSourceConfig
+        from tram.pipeline.loader import load_pipeline_from_yaml
+
+        config = load_pipeline_from_yaml(
+            self._yaml("    max_message_size: 2048\n    max_connections: 2\n")
+        )
+        assert isinstance(config.source, SyslogSourceConfig)
+        assert config.source.max_message_size == 2048
+        assert config.source.max_connections == 2
+
+    def test_tcp_knob_defaults(self):
+        from tram.models.pipeline import SyslogSourceConfig
+        from tram.pipeline.loader import load_pipeline_from_yaml
+
+        source = load_pipeline_from_yaml(self._yaml("")).source
+        assert isinstance(source, SyslogSourceConfig)
+        assert source.max_message_size == 65535
+        assert source.max_connections == 64
+
+    def test_invalid_max_message_size_rejected(self):
+        from tram.core.exceptions import ConfigError
+        from tram.pipeline.loader import load_pipeline_from_yaml
+
+        with pytest.raises(ConfigError):
+            load_pipeline_from_yaml(self._yaml("    max_message_size: 10\n"))
+
+    def test_source_reads_knobs_from_config(self):
+        src = SyslogSource(
+            {"host": "127.0.0.1", "port": 5514, "protocol": "tcp",
+             "max_message_size": 2048, "max_connections": 2}
+        )
+        assert src.max_message_size == 2048
+        assert src.max_connections == 2
