@@ -1,4 +1,5 @@
 // ── TRAM REST API client ─────────────────────────────────────────────────────
+import { isAuthPending } from './auth_state.js'
 
 export function getConfig() {
   return {
@@ -35,7 +36,7 @@ function errorFromResponse(text, fallback) {
 // to the login overlay once (main.js listens) instead of letting every page
 // toast the same auth error on its next poll.
 function handleUnauthorized() {
-  if (window._tramAuthPending) return
+  if (isAuthPending()) return
   window.dispatchEvent(new CustomEvent('tram:unauthorized'))
 }
 

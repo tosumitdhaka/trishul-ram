@@ -1,4 +1,5 @@
 import { api } from '../api.js'
+import { router } from '../router.js'
 import { bindDataActions, confirmAction, downloadText, relTime, fmtNum, renderTableState, schedBadge, statusBadge, esc, toast, pipelineStartFeedback } from '../utils.js'
 import { monitorTriggeredRun, runOutcomeToast } from '../run_monitor.js'
 import {
@@ -17,12 +18,11 @@ let _versions = []
 const _versionYamlCache = new Map()
 
 export async function init() {
-  _name = window._detailPipeline
+  const { params, query } = router.route()
+  _name = params[0] || null
   if (!_name) { navigate('pipelines'); return }
+  _activeTab = ['runs', 'config', 'versions', 'alerts'].includes(query.tab) ? query.tab : 'runs'
   _versionYamlCache.clear()
-
-  const sub = document.getElementById('tb-sub')
-  if (sub) sub.textContent = _name
 
   try {
     const [pipeline, placement, versions] = await Promise.all([
@@ -57,6 +57,7 @@ function wireTabs() {
 
 function showTab(tabName) {
   _activeTab = tabName || 'runs'
+  if (router.route().params[0]) router.setSearchParams({ tab: _activeTab })
   document.querySelectorAll('#detail-tabs .nav-link').forEach(tab => {
     tab.classList.toggle('active', tab.dataset.tab === _activeTab)
   })
@@ -199,13 +200,10 @@ function renderPlacement(placement) {
 function wireActions(pipeline) {
   document.getElementById('detail-back-btn').onclick = () => navigate('pipelines')
   document.getElementById('detail-edit-btn').onclick = () => {
-    window._editorReturn = 'detail'
-    window._editorPipeline = _name
-    navigate('editor')
+    navigate(`editor/${encodeURIComponent(_name)}?return=detail`)
   }
   document.getElementById('detail-open-runs-btn').onclick = () => {
-    window._runsFilters = { pipeline: _name }
-    navigate('runs')
+    navigate(`runs?pipeline=${encodeURIComponent(_name)}`)
   }
   document.getElementById('detail-refresh-btn').onclick = () => { void _detailRefresh() }
   document.getElementById('detail-restart-btn').onclick = () => { void _detailRestart() }
@@ -378,13 +376,12 @@ async function loadDetailRuns() {
   tbody.innerHTML = '<tr><td colspan="12" class="text-secondary text-center py-4">Loading run history…</td></tr>'
   try {
     const runs = await api.runs.list({ pipeline: _name, limit: 100 })
-    renderRunsTable({
-      tbody,
-      runs,
-      rowIdPrefix: 'detail-runs',
-      toggleHandlerName: '_detailRunsToggleLog',
-      emptyMessage: 'No runs recorded for this pipeline',
-    })
+      renderRunsTable({
+        tbody,
+        runs,
+        rowIdPrefix: 'detail-runs',
+        emptyMessage: 'No runs recorded yet',
+      })
     if (count) count.textContent = runs.length
   } catch (e) {
     if (count) count.textContent = ''

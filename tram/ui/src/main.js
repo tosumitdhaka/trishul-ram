@@ -6,9 +6,8 @@ import './style.css'
 import { router } from './router.js'
 import { startHealthPoller } from './health.js'
 import { api } from './api.js'
+import { isAuthPending, setAuthPending } from './auth_state.js'
 import loginHtml from './pages/login.html?raw'
-
-window._tramAuthPending = true
 
 // Expose globally so page modules can navigate without importing the router.
 window.navigate = (page, params) => router.navigate(page, params)
@@ -36,7 +35,7 @@ function logout() {
 }
 
 function showLogin() {
-  window._tramAuthPending = true
+  setAuthPending(true)
   const overlay = document.getElementById('login-overlay')
   const shell   = document.getElementById('app-shell')
   const logoutBtn = document.getElementById('logout-btn')
@@ -55,7 +54,7 @@ window.addEventListener('tram:unauthorized', () => {
 })
 
 function resumeRequestedRoute({ showLogout = false } = {}) {
-  window._tramAuthPending = false
+  setAuthPending(false)
   const overlay = document.getElementById('login-overlay')
   const shell = document.getElementById('app-shell')
   const logoutBtn = document.getElementById('logout-btn')

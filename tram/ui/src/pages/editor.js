@@ -1,4 +1,5 @@
 import { api } from '../api.js'
+import { router } from '../router.js'
 import { bindDataActions, esc, setStatusMessage, toast } from '../utils.js'
 import {
   renderCodeOnlyDiffLine,
@@ -31,6 +32,7 @@ let _lastDryRunErrors = []
 let _aiUndoSnapshot = null  // pre-AI text for one-level undo of the last AI write
 let _baselineYaml = null   // value considered "saved" — unsaved changes are relative to this
 let _draftSaveTimer = null
+let _returnTo = 'pipelines'
 
 const DRAFT_STORAGE_KEY = 'tram_editor_draft'
 const DRAFT_SAVE_DEBOUNCE_MS = 500
@@ -115,33 +117,35 @@ function _discardDraft() {
   _hideDraftBar()
 }
 
+// Leaving via a sidebar link or browser Back doesn't go through Cancel —
+// the router's page-leave event is the last chance to flush the draft.
+window.addEventListener('tram:page-leave', (event) => {
+  if (event.detail?.from !== 'editor') return
+  clearTimeout(_draftSaveTimer)
+  _saveDraftNow()
+})
+
 function _leaveEditor(pipelineName = null) {
   _aiUndoSnapshot = null
   clearTimeout(_draftSaveTimer)
   // Keep the draft on cancel/navigation (it is the recovery copy); on a
   // successful save _editorSave clears it explicitly first.
   _saveDraftNow()
-  const returnTo = window._editorReturn
-  window._editorReturn = null
-  window._editorYaml = null
-  window._editorPipeline = null
-  if (returnTo === 'detail' && pipelineName) {
-    window._detailPipeline = pipelineName
-    navigate('detail')
+  if (_returnTo === 'detail' && pipelineName) {
+    navigate(`detail/${encodeURIComponent(pipelineName)}`)
     return
   }
-  if (returnTo && returnTo !== 'detail') {
-    navigate(returnTo)
-    return
-  }
-  navigate('pipelines')
+  navigate(_returnTo === 'dashboard' ? 'dashboard' : 'pipelines')
 }
 
 export async function init() {
   const ta       = document.getElementById('editor-textarea')
   const titleEl  = document.getElementById('editor-title')
-  const editName = window._editorPipeline
+  // Route state: #editor/:name?return=detail (edit) or #editor?template=x (new).
+  const { params, query } = router.route()
+  const editName = params[0] || null
   const isEdit   = Boolean(editName)
+  _returnTo = ['detail', 'dashboard', 'pipelines'].includes(query.return) ? query.return : 'pipelines'
   _textarea = ta
   _editName = editName
   _originalYaml = null
@@ -171,13 +175,23 @@ export async function init() {
     }
   } else {
     document.getElementById('editor-diff-btn')?.setAttribute('hidden', '')
-    const preloaded = window._editorYaml
-    window._editorYaml = null
     if (titleEl) titleEl.textContent = 'New Pipeline'
-    if (preloaded) {
-      if (ta) ta.value = preloaded
-    } else {
-      if (ta) ta.value = TEMPLATE
+    if (ta) ta.value = TEMPLATE
+    // New-from-template: #editor?template=<name> — the template is fetched
+    // by name so a refresh recovers it without in-memory handoffs.
+    if (query.template) {
+      try {
+        const templates = await api.templates.list()
+        const template = (templates || []).find(t => t.name === query.template)
+        if (template?.yaml) {
+          if (ta) ta.value = template.yaml
+          toast(`Template "${template.name}" loaded — edit name and connection details, then save`)
+        } else {
+          toast(`Template "${query.template}" not found — started from the default template`, 'warning')
+        }
+      } catch (e) {
+        toast(`Could not load template: ${e.message}`, 'error')
+      }
     }
   }
 

@@ -1,5 +1,6 @@
 import { api } from '../api.js'
-import { bindDataActions, bindKeyboardActivation, confirmAction, downloadText, getSavedPollIntervalMs, relTime, renderTableState, schedBadge, setOfflineBanner, statusBadge, esc, toast, pipelineStartFeedback } from '../utils.js'
+import { router } from '../router.js'
+import { bindDataActions, confirmAction, downloadText, getSavedPollIntervalMs, relTime, renderTableState, schedBadge, setOfflineBanner, statusBadge, esc, toast, pipelineStartFeedback } from '../utils.js'
 import { monitorTriggeredRun, runOutcomeToast } from '../run_monitor.js'
 import { filterTemplates, normalizeTemplates, populateTemplateFilters, templateFlowText, templateScheduleClass } from './template_helpers.js'
 import { renderDiffStats, renderNumberedDiffLine, renderSideBySideYamlDiff } from '../yaml_diff.js'
@@ -33,7 +34,7 @@ async function loadInitial() {
     _all = await api.pipelines.list()
     setOfflineBanner(false)
     renderTable(filteredPipelines())
-    _maybeOpenTemplatesFromRouteAlias()
+    _maybeOpenTemplatesFromRoute()
   } catch (e) {
     renderTableState(document.getElementById('pl-body'), 'error', e.message, {
       onRetry: () => { void loadInitial() },
@@ -93,14 +94,13 @@ function wireTableActions() {
     tbody.removeEventListener('click', tbody._tramRowClickListener)
   }
   const rowClickListener = (event) => {
-    if (event.target.closest('[data-action]')) return
+    if (event.target.closest('[data-action], a')) return
     const row = event.target.closest('tr[data-pipeline-name]')
     if (!row || !tbody.contains(row)) return
     openPipelineDetail(row.dataset.pipelineName)
   }
   tbody.addEventListener('click', rowClickListener)
   tbody._tramRowClickListener = rowClickListener
-  bindKeyboardActivation(tbody, (row) => openPipelineDetail(row.dataset.pipelineName))
 }
 
 function wireImportFlow() {
@@ -210,21 +210,15 @@ async function reloadPipelines() {
 }
 
 function openNewPipeline() {
-  window._editorReturn = 'pipelines'
-  window._editorPipeline = null
-  window._editorYaml = null
-  navigate('editor')
+  navigate('editor?return=pipelines')
 }
 
 function openPipelineDetail(name) {
-  window._detailPipeline = name
-  navigate('detail')
+  navigate(`detail/${encodeURIComponent(name)}`)
 }
 
 function editPipeline(name) {
-  window._editorReturn = 'pipelines'
-  window._editorPipeline = name
-  navigate('editor')
+  navigate(`editor/${encodeURIComponent(name)}?return=pipelines`)
 }
 
 async function startPipeline(name) {
@@ -430,18 +424,19 @@ function doTemplateDeploy(template) {
   document.body.classList.remove('modal-open')
   document.body.style.removeProperty('overflow')
   document.body.style.removeProperty('padding-right')
-  window._editorReturn = 'pipelines'
-  window._editorYaml = template.yaml
-  window._editorPipeline = null
-  navigate('editor')
-  toast(`Template "${template.name}" loaded — edit name and connection details, then save`)
+  navigate(`editor?template=${encodeURIComponent(template.name)}&return=pipelines`)
 }
 
-function _maybeOpenTemplatesFromRouteAlias() {
+// #pipelines/templates deep link — open the templates modal after load.
+function _maybeOpenTemplatesFromRoute() {
   const modalEl = document.getElementById('pl-templates-modal')
-  if (!modalEl || !window._openPipelinesTemplatesModal) return
-  window._openPipelinesTemplatesModal = false
+  if (!modalEl) return
+  if (router.route().params[0] !== 'templates') return
   bootstrap.Modal.getOrCreateInstance(modalEl).show()
+  modalEl.addEventListener('hidden.bs.modal', () => {
+    // Clean the URL so a later refresh/Back doesn't reopen the modal.
+    router.replaceRoute('pipelines')
+  }, { once: true })
 }
 
 function filteredPipelines() {
@@ -500,8 +495,8 @@ function renderTable(pipelines) {
         ? `<button class="btn-flat-primary" type="button" title="Run now" aria-label="Run ${esc(p.name)} now" data-action="run" data-name="${esc(p.name)}"><i class="bi bi-play-fill"></i></button>`
         : `<button class="btn-flat-primary" type="button" title="Start" aria-label="Start ${esc(p.name)}" data-action="start" data-name="${esc(p.name)}"><i class="bi bi-play-fill"></i></button>`
     const sinks = Array.isArray(p.sinks) ? p.sinks.map(s => esc(s.type || s)).join(', ') : '—'
-    return `<tr class="table-row-link" tabindex="0" role="link" aria-label="Open pipeline ${esc(p.name)}" data-pipeline-name="${esc(p.name)}">
-      <td class="fw-semibold">${esc(p.name)}</td>
+    return `<tr class="table-row-link" data-pipeline-name="${esc(p.name)}">
+      <td class="fw-semibold"><a class="table-row-name-link" href="#detail/${encodeURIComponent(p.name)}">${esc(p.name)}</a></td>
       <td class="text-secondary">${esc(p.source?.type || '—')}</td>
       <td class="text-secondary">${sinks}</td>
       <td>${schedBadge(p)}</td>

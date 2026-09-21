@@ -1,4 +1,5 @@
 import { api } from '../api.js'
+import { router } from '../router.js'
 import { downloadBlob, getSavedPollIntervalMs, renderTableState, setOfflineBanner, toast } from '../utils.js'
 import { renderRunsTable } from './runs_table.js'
 
@@ -9,6 +10,8 @@ let _runs = []
 let _hasMore = false
 let _autoRefresh = true
 let _pollTimer = null
+let _focusRunId = null
+let _focusedOnce = false
 
 export async function init() {
   _runs = []
@@ -17,7 +20,15 @@ export async function init() {
   updateAutoRefreshBtn()
   if (_pollTimer) { clearInterval(_pollTimer); _pollTimer = null }
 
-  const onFilterChange = () => { void loadFiltered().catch(e => toast(e.message, 'error')) }
+  const onFilterChange = () => {
+    // Changing filters invalidates a deep-linked run focus.
+    if (_focusRunId) {
+      _focusRunId = null
+      router.replaceRoute('runs')
+    }
+    syncRouteFilters()
+    void loadFiltered().catch(e => toast(e.message, 'error'))
+  }
   document.getElementById('runs-pipeline')?.addEventListener('change', onFilterChange)
   document.getElementById('runs-status')?.addEventListener('change',   onFilterChange)
   document.getElementById('runs-from')?.addEventListener('change',     onFilterChange)
@@ -40,7 +51,7 @@ async function loadInitial() {
   try {
     const pipelines = await api.pipelines.list()
     populatePipelineSelect(pipelines)
-    applyPresetFilters()
+    applyRouteFilters()
     await loadFiltered()
   } catch (e) {
     renderTableState(document.getElementById('runs-body'), 'error', e.message, {
@@ -83,7 +94,9 @@ async function loadMore() {
     updateCount()
     if (_autoRefresh) {
       _autoRefresh = false
-      updateAutoRefreshBtn()
+  _focusRunId = null
+  _focusedOnce = false
+  updateAutoRefreshBtn()
     }
   } catch (e) {
     toast(e.message, 'error')
@@ -114,19 +127,26 @@ function updateAutoRefreshBtn() {
   if (icon) icon.className = _autoRefresh ? 'bi bi-pause-circle-fill' : 'bi bi-play-circle-fill'
 }
 
-function applyPresetFilters() {
-  const preset = window._runsFilters || null
-  window._runsFilters = null
-  if (!preset) return
+// Deep link state: #runs/:runId?pipeline=x&status=failed&from=2026-09-01.
+// Filters initialize from the route; every change is written back with
+// replaceState so the URL stays shareable without spamming Back.
+function applyRouteFilters() {
+  const { params, query } = router.route()
+  _focusRunId = params[0] ? String(params[0]) : null
   const pipeline = document.getElementById('runs-pipeline')
   const status = document.getElementById('runs-status')
   const from = document.getElementById('runs-from')
-  if (pipeline && preset.pipeline) pipeline.value = preset.pipeline
-  if (status && preset.status) status.value = preset.status
-  if (from && preset.from_dt) {
-    const dt = new Date(preset.from_dt)
-    if (!Number.isNaN(dt.getTime())) from.value = dt.toISOString().slice(0, 10)
-  }
+  if (pipeline && query.pipeline) pipeline.value = query.pipeline
+  if (status && query.status) status.value = query.status
+  if (from && query.from && !Number.isNaN(new Date(query.from).getTime())) from.value = query.from
+}
+
+function syncRouteFilters() {
+  router.setSearchParams({
+    pipeline: document.getElementById('runs-pipeline')?.value || '',
+    status:   document.getElementById('runs-status')?.value   || '',
+    from:     document.getElementById('runs-from')?.value     || '',
+  })
 }
 
 async function exportCsv() {
@@ -191,9 +211,21 @@ function renderRuns(runs) {
     tbody,
     runs,
     rowIdPrefix: 'runs',
-    toggleHandlerName: '_runsToggleLog',
     emptyMessage: 'No runs found',
   })
+  if (_focusRunId) _highlightFocusedRun()
+}
+
+// Deep link (#runs/:runId) — scroll to the run and keep it highlighted
+// across polls until the operator changes filters.
+function _highlightFocusedRun() {
+  const row = document.querySelector(`tr[data-run-id="${CSS.escape(_focusRunId)}"]`)
+  if (!row) return
+  row.classList.add('run-row-focused')
+  if (!_focusedOnce) {
+    row.scrollIntoView({ block: 'center', behavior: 'smooth' })
+    _focusedOnce = true
+  }
 }
 
 function updateCount() {

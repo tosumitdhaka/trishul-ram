@@ -1377,6 +1377,12 @@ body {
 .table-row-link {
   cursor: pointer;
 }
+.table-row-name-link { color: var(--fg); font-weight: 600; text-decoration: none; }
+.table-row-name-link:hover, .table-row-name-link:focus-visible { color: var(--accent-blue); text-decoration: underline; }
+.run-row-focused > td {
+  background: rgba(56,139,253,.08);
+  box-shadow: inset 3px 0 0 var(--accent-blue);
+}
 
 /* ── Misc ────────────────────────────────────────────────────────────────── */
 .mono      { font-family: monospace; font-size: 11px; }

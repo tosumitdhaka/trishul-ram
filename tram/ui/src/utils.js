@@ -115,20 +115,6 @@ export function bindDataActions(root, handlers = {}) {
   root._tramActionListener = listener
 }
 
-// Keyboard activation for clickable table rows (Enter/Space on rows marked
-// tabindex="0" role="link" — a temporary measure until rows become real links).
-export function bindKeyboardActivation(root, handler) {
-  if (!root) return
-  const listener = (event) => {
-    if (event.key !== 'Enter' && event.key !== ' ') return
-    const row = event.target.closest?.('tr[data-pipeline-name]')
-    if (!row || !root.contains(row)) return
-    event.preventDefault()
-    handler(row)
-  }
-  root.addEventListener('keydown', listener)
-}
-
 export function downloadBlob(filename, blob) {
   const url = URL.createObjectURL(blob)
   const a = document.createElement('a')

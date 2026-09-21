@@ -1,7 +1,7 @@
 import { api } from '../api.js'
+import { router } from '../router.js'
 import {
   bindDataActions,
-  bindKeyboardActivation,
   confirmAction,
   downloadText,
   fmtBytes,
@@ -30,6 +30,8 @@ let _runMonitorToken = 0
 export async function init() {
   if (_pollTimer) { clearInterval(_pollTimer); _pollTimer = null }
   _hideSparklineTooltip()
+  // Route params (deep links) win over the remembered defaults.
+  _statsParams = loadStatsParams(router.route().query)
   _wireControls()
   _wireActions()
   _pollMs = getSavedPollIntervalMs()
@@ -202,8 +204,8 @@ function _renderPipelines(perPipeline) {
         : `<button class="btn-flat-primary" type="button" title="Start" aria-label="Start ${esc(p.name)}" data-action="start" data-name="${esc(p.name)}"><i class="bi bi-play-fill"></i></button>`
     const dlBtn    = `<button class="btn-flat" type="button" title="Download YAML" aria-label="Download YAML for ${esc(p.name)}" data-action="download" data-name="${esc(p.name)}"><i class="bi bi-download"></i></button>`
     const errCls = p.errors > 0 ? ' dashboard-error-cell has-errors' : ' dashboard-error-cell'
-    return `<tr class="dashboard-row-link" tabindex="0" role="link" aria-label="Open pipeline ${esc(p.name)}" data-pipeline-name="${esc(p.name)}">
-      <td class="fw-semibold">${esc(p.name)}</td>
+    return `<tr class="dashboard-row-link" data-pipeline-name="${esc(p.name)}">
+      <td class="fw-semibold"><a class="table-row-name-link" href="#detail/${encodeURIComponent(p.name)}">${esc(p.name)}</a></td>
       <td>${statusBadge(p.status)}</td>
       <td class="text-secondary dashboard-metric-cell">${fmtNum(p.records_out)}</td>
       <td class="text-secondary dashboard-metric-cell">${p.runs_last_hour}</td>
@@ -298,8 +300,7 @@ async function runPipeline(name) {
 }
 
 function openDetail(name) {
-  window._detailPipeline = name
-  navigate('detail')
+  navigate(`detail/${encodeURIComponent(name)}`)
 }
 
 async function downloadPipelineYaml(name) {
@@ -338,11 +339,13 @@ function _wireControls() {
   periodEl.onchange = async () => {
     _statsParams = { ..._statsParams, period: periodEl.value }
     saveStatsParams()
+    router.setSearchParams({ period: periodEl.value })
     await _refreshStats()
   }
   granularityEl.onchange = async () => {
     _statsParams = { ..._statsParams, granularity: granularityEl.value }
     saveStatsParams()
+    router.setSearchParams({ granularity: granularityEl.value })
     await _refreshStats()
   }
 }
@@ -372,14 +375,13 @@ function _wireActions() {
       pipelineBody.removeEventListener('click', pipelineBody._tramRowClickListener)
     }
     const rowClickListener = (event) => {
-      if (event.target.closest('[data-action]')) return
+      if (event.target.closest('[data-action], a')) return
       const row = event.target.closest('tr[data-pipeline-name]')
       if (!row || !pipelineBody.contains(row)) return
       openDetail(row.dataset.pipelineName)
     }
     pipelineBody.addEventListener('click', rowClickListener)
     pipelineBody._tramRowClickListener = rowClickListener
-    bindKeyboardActivation(pipelineBody, (row) => openDetail(row.dataset.pipelineName))
   }
 
   document.getElementById('dash-refresh-btn')?.addEventListener('click', async () => {
@@ -396,17 +398,14 @@ function _wireActions() {
   })
   document.getElementById('dash-manage-btn')?.addEventListener('click', () => navigate('pipelines'))
   document.getElementById('dash-new-btn')?.addEventListener('click', () => {
-    window._editorReturn = 'dashboard'
-    window._editorPipeline = null
-    window._editorYaml = null
-    navigate('editor')
+    navigate('editor?return=dashboard')
   })
   document.getElementById('dash-view-runs-btn')?.addEventListener('click', () => navigate('runs'))
 }
 
-function loadStatsParams() {
-  const period = localStorage.getItem('tram_dash_period') || DEFAULT_STATS_PARAMS.period
-  const granularity = localStorage.getItem('tram_dash_granularity') || DEFAULT_STATS_PARAMS.granularity
+function loadStatsParams(routeQuery = {}) {
+  const period = routeQuery.period || localStorage.getItem('tram_dash_period') || DEFAULT_STATS_PARAMS.period
+  const granularity = routeQuery.granularity || localStorage.getItem('tram_dash_granularity') || DEFAULT_STATS_PARAMS.granularity
   return {
     period: ['1h', '6h', '24h'].includes(period) ? period : DEFAULT_STATS_PARAMS.period,
     granularity: ['5m', '15m', '1h'].includes(granularity) ? granularity : DEFAULT_STATS_PARAMS.granularity,

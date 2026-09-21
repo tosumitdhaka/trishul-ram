@@ -4,7 +4,6 @@ export function renderRunsTable({
   tbody,
   runs,
   rowIdPrefix = 'runs',
-  toggleHandlerName = '_runsToggleLog',
   emptyMessage = 'No runs found',
   colspan = 12,
 }) {
@@ -25,7 +24,7 @@ export function renderRunsTable({
     const toggle = hasDetail
       ? `<button class="btn-flat runs-expand-btn" type="button" data-run-toggle="${i}"><i class="bi bi-chevron-right runs-chevron" id="${rowIdPrefix}-chev-${i}"></i></button>`
       : ''
-    rows.push(`<tr id="${rowIdPrefix}-row-${i}">
+    rows.push(`<tr id="${rowIdPrefix}-row-${i}" data-run-id="${esc(String(r.run_id || r.id || ''))}">
       <td class="mono-sm">${esc(String(r.run_id || r.id || '').slice(0, 8))}</td>
       <td class="fw-semibold">${esc(r.pipeline)}</td>
       <td class="text-secondary">${esc(r.node || '—')}</td>

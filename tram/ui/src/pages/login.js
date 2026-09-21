@@ -1,4 +1,5 @@
 import { api } from '../api.js'
+import { setAuthPending } from '../auth_state.js'
 import { setStatusMessage } from '../utils.js'
 
 export async function init() {
@@ -21,8 +22,8 @@ export async function init() {
       const data = await api.auth.login(username, password)
       localStorage.setItem('tram_auth_token', data.token)
       localStorage.setItem('tram_auth_user', data.username)
-      // Show the main shell and navigate to dashboard
-      window._tramAuthPending = false
+      // Show the main shell and navigate to the requested route
+      setAuthPending(false)
       document.getElementById('app-shell').hidden = false
       document.getElementById('login-overlay').hidden = true
       document.getElementById('logout-btn').hidden = false
