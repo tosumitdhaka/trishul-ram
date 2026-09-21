@@ -9,10 +9,8 @@
 #                                              (the CI gate runs on the release tag itself)
 #   scripts/release-gate.sh --deploy-kind     after a green gate: deploy the current
 #                                              tree to the kind dev cluster for manual
-#                                              smoke testing (combines with --fast)
-#   scripts/release-gate.sh --deploy-kind --deploy-port N
-#                                              host port for the UI port-forward
-#                                              (default 8766; env TRAM_GATE_DEPLOY_PORT)
+#                                              smoke testing (combines with --fast);
+#                                              prints the NodePort UI URL when done
 #
 # Exits 0 only when every check passes.
 
@@ -24,21 +22,14 @@ cd "$ROOT"
 FAST=0
 CI=0
 DEPLOY_KIND=0
-DEPLOY_PORT="${TRAM_GATE_DEPLOY_PORT:-8766}"
 while [ $# -gt 0 ]; do
   case "$1" in
     --fast) FAST=1; shift ;;
     --ci) CI=1; shift ;;
     --deploy-kind) DEPLOY_KIND=1; shift ;;
-    --deploy-port) DEPLOY_PORT="${2:?--deploy-port needs a value}"; shift 2 ;;
-    --deploy-port=*) DEPLOY_PORT="${1#*=}"; shift ;;
-    *) echo "unknown option: $1 (supported: --fast, --ci, --deploy-kind, --deploy-port N)"; exit 2 ;;
+    *) echo "unknown option: $1 (supported: --fast, --ci, --deploy-kind)"; exit 2 ;;
   esac
 done
-if ! [[ "$DEPLOY_PORT" =~ ^[0-9]+$ ]]; then
-  echo "--deploy-port must be numeric (got: $DEPLOY_PORT)" >&2
-  exit 2
-fi
 
 PASS=0
 FAIL=0
@@ -206,10 +197,9 @@ echo "GATE GREEN — ready to tag v$VERSION."
 
 # --- optional: deploy the current tree to kind for manual smoke testing --------
 # Builds the images from the working tree, loads them into the kind dev
-# cluster, upgrades the Helm release, then port-forwards the manager UI to
-# localhost:$DEPLOY_PORT (default 8766 — TRAM's own default port 8765 is
-# commonly squatted on dev hosts). Ctrl-C stops the port-forward; the
-# deployment itself stays.
+# cluster, upgrades the Helm release, then prints the manager UI's NodePort
+# URL (the kind cluster maps NodePorts directly to host ports — no
+# port-forward needed).
 if [ "$DEPLOY_KIND" -eq 1 ]; then
   echo
   echo "== manual validation deploy (--deploy-kind) =="
@@ -221,15 +211,21 @@ if [ "$DEPLOY_KIND" -eq 1 ]; then
   done
   echo "Deploying the current tree to kind (build, load, helm upgrade)…"
   "$ROOT/scripts/deploy-kind-tram-dev.sh"
+  NS="${NAMESPACE:-trishul-ram}"
+  REL="${RELEASE_NAME:-trishul-ram}"
+  NODE_PORT="$(kubectl -n "$NS" get svc "$REL" -o jsonpath='{.spec.ports[0].nodePort}' 2>/dev/null || true)"
   echo
-  echo "UI:            http://localhost:${DEPLOY_PORT}"
-  echo "Port-forward:  Ctrl-C stops it (the deployment stays)"
+  if [ -n "$NODE_PORT" ]; then
+    echo "UI (NodePort):  http://localhost:${NODE_PORT}"
+  else
+    echo "UI:             http://localhost:30001 (NodePort not found — check: kubectl -n $NS get svc $REL)"
+  fi
+  echo "Note:           hard-refresh (Ctrl-Shift-R) — a cached SPA from an older"
+  echo "                deployment shows a stale version and empty pages."
   echo
   echo "Manual smoke checklist (docs/release-gate.md §Manual validation):"
   echo "  - every confirm modal executes its action (Stop, Reload, rollback,"
   echo "    delete pipeline/MIB/schema/alert)"
   echo "  - deep links survive refresh; Back/Forward work"
   echo "  - dashboard '+ New' opens a blank editor; Save never overwrites"
-  echo
-  exec kubectl -n "${NAMESPACE:-trishul-ram}" port-forward svc/"${RELEASE_NAME:-trishul-ram}" "${DEPLOY_PORT}:8765"
 fi
