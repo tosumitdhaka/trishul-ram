@@ -627,21 +627,28 @@ whether one is set, a masked hint, and its source (`db` or `env`).
 ```
 
 ### POST /api/ai/config
-Persist AI configuration to the DB (overrides env vars). All fields are
-optional; blank or absent values are treated as "no change" — in particular a
-blank `api_key` never clears a stored key.
+Persist AI configuration to the DB (overrides env vars). Each field is
+three-state: **absent or blank** = no change, **a value** = set, **explicit
+`null`** = clear (deletes the stored setting, reverting to the env-var /
+default). In particular a blank `api_key` never clears a stored key, while
+`"api_key": null` deliberately does.
 
 | Field | Description |
 |-------|-------------|
-| `provider` | `"anthropic"`, `"openai"`, or `"bedrock"` (rejected with 400 if unknown) |
-| `api_key` | API key for the provider |
-| `model` | Model name (blank = provider default) |
-| `base_url` | Optional endpoint override (required for `bedrock`) |
+| `provider` | `"anthropic"`, `"openai"`, or `"bedrock"` (rejected with 400 if unknown); `null` clears it |
+| `api_key` | API key for the provider; `null` clears it |
+| `model` | Model name (blank = provider default); `null` clears it |
+| `base_url` | Optional endpoint override (required for `bedrock`); `null` clears it |
 
 ```bash
 curl -X POST http://localhost:8765/api/ai/config \
   -H "Content-Type: application/json" \
   -d '{"provider": "openai", "api_key": "sk-…", "model": "gpt-4o-mini"}'
+
+# Deliberately clear the stored API key:
+curl -X POST http://localhost:8765/api/ai/config \
+  -H "Content-Type: application/json" \
+  -d '{"api_key": null}'
 ```
 
 Response:
@@ -649,7 +656,8 @@ Response:
 {"ok": true}
 ```
 
-Errors: `503` when no database is available, `400` for an unknown `provider`.
+Errors: `503` when no database is available, `400` for an unknown `provider`,
+an invalid `base_url` scheme, or an allowlist violation.
 
 ### POST /api/ai/test
 Send a minimal probe prompt to verify the provider configuration.

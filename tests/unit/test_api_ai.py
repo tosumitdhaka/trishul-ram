@@ -3,7 +3,7 @@ from __future__ import annotations
 
 import logging
 import sys
-from unittest.mock import MagicMock, patch
+from unittest.mock import MagicMock, call, patch
 
 import pytest
 from fastapi import FastAPI
@@ -418,6 +418,46 @@ class TestAiSaveConfig:
         db.delete_setting.assert_not_called()
         assert db.get_setting("ai.api_key") == "stored-key"
 
+    # ── P2-1: explicit null means clear ──────────────────────────────────
+
+    def test_null_api_key_clears_stored_key(self):
+        # Deliberate clearing without re-opening the key-wipe hole: only an
+        # explicit JSON null deletes; blank/absent still keep.
+        db = _make_db({"ai.api_key": "stored-key"})
+        app = _make_app(db=db)
+        client = TestClient(app)
+        r = client.post("/api/ai/config", json={"api_key": None})
+        assert r.status_code == 200
+        db.delete_setting.assert_called_once_with("ai.api_key")
+        assert all(call.args[0] != "ai.api_key" for call in db.set_setting.call_args_list)
+
+    def test_null_clears_provider_model_base_url(self):
+        db = _make_db({"ai.provider": "openai", "ai.model": "gpt-4", "ai.base_url": "https://x"})
+        app = _make_app(db=db)
+        client = TestClient(app)
+        r = client.post("/api/ai/config", json={"provider": None, "model": None, "base_url": None})
+        assert r.status_code == 200
+        assert db.delete_setting.call_args_list == [
+            call("ai.provider"), call("ai.model"), call("ai.base_url"),
+        ]
+
+    def test_null_on_nonexistent_key_is_noop_success(self):
+        db = _make_db()  # nothing stored
+        app = _make_app(db=db)
+        client = TestClient(app)
+        r = client.post("/api/ai/config", json={"base_url": None})
+        assert r.status_code == 200
+        db.delete_setting.assert_called_once_with("ai.base_url")
+
+    def test_null_one_field_sets_another(self):
+        db = _make_db({"ai.api_key": "old-key"})
+        app = _make_app(db=db)
+        client = TestClient(app)
+        r = client.post("/api/ai/config", json={"api_key": None, "model": "gpt-4o"})
+        assert r.status_code == 200
+        db.delete_setting.assert_called_once_with("ai.api_key")
+        db.set_setting.assert_called_once_with("ai.model", "gpt-4o")
+
     def test_unknown_provider_rejected_with_400(self):
         # A8: reject bad provider strings at save time instead of a later 502.
         db = _make_db()
@@ -782,6 +822,83 @@ class TestRedactYaml:
         assert "mail.example.com" in redacted
         assert "username: op" in redacted
 
+    # ── P2-2: dict-valued headers + alert webhook URLs ───────────────────
+
+    def test_masks_all_header_dict_values(self):
+        # headers/extra_headers values are masked wholesale (keys kept —
+        # they are structural); ${VAR} env refs stay intact.
+        yaml_text = (
+            "name: pipe\n"
+            "schedule:\n  type: manual\n"
+            "source:\n  type: rest\n  url: http://x\n"
+            "  headers:\n    Authorization: Bearer tok123\n    X-Api-Key: kkk\n    X-Env: ${MY_TOKEN}\n"
+            "  extra_headers:\n    Content-Type: application/json\n"
+            "serializer_in:\n  type: json\n"
+            "sinks:\n  - type: local\n    path: /tmp/out\n"
+        )
+        redacted = _redact_yaml(yaml_text)
+        assert "tok123" not in redacted
+        assert "kkk" not in redacted
+        assert "application/json" not in redacted
+        assert "Authorization" in redacted       # keys kept
+        assert "X-Api-Key" in redacted
+        assert "Content-Type" in redacted
+        assert "${MY_TOKEN}" in redacted         # env refs intact
+        assert "***redacted***" in redacted
+
+    def test_masks_alert_webhook_url(self):
+        # webhook URLs embed credentials in userinfo/query — the whole URL is
+        # the secret-bearing value, so it is masked entirely.
+        yaml_text = (
+            "name: pipe\n"
+            "schedule:\n  type: manual\n"
+            "source:\n  type: local\n  path: /tmp/in\n"
+            "serializer_in:\n  type: json\n"
+            "sinks:\n  - type: local\n    path: /tmp/out\n"
+            "alerts:\n"
+            "  - rule_name: r1\n"
+            "    webhook_url: https://hooks.example.com/xyz/tok123\n"
+            "    condition: records_out > 5\n"
+        )
+        redacted = _redact_yaml(yaml_text)
+        assert "tok123" not in redacted
+        assert "hooks.example.com" not in redacted
+        assert "rule_name: r1" in redacted
+        assert "condition" in redacted
+        assert "***redacted***" in redacted
+
+    def test_alert_webhook_env_ref_kept(self):
+        yaml_text = (
+            "name: pipe\n"
+            "schedule:\n  type: manual\n"
+            "source:\n  type: local\n  path: /tmp/in\n"
+            "serializer_in:\n  type: json\n"
+            "sinks:\n  - type: local\n    path: /tmp/out\n"
+            "alerts:\n"
+            "  - rule_name: r1\n"
+            "    webhook_url: ${ALERT_WEBHOOK_URL}\n"
+        )
+        redacted = _redact_yaml(yaml_text)
+        assert "${ALERT_WEBHOOK_URL}" in redacted
+        assert "***redacted***" not in redacted
+
+    def test_non_header_dict_fields_not_touched(self):
+        # No over-masking: arbitrary dict-valued fields are not header/secret
+        # carriers and must pass through untouched.
+        yaml_text = (
+            "name: pipe\n"
+            "schedule:\n  type: manual\n"
+            "source:\n  type: local\n  path: /tmp/in\n"
+            "serializer_in:\n  type: json\n"
+            "sinks:\n  - type: local\n    path: /tmp/out\n"
+            "    metadata:\n      team: ops\n      cost_center: 123\n"
+        )
+        redacted = _redact_yaml(yaml_text)
+        assert "metadata" in redacted
+        assert "team: ops" in redacted
+        assert "cost_center: 123" in redacted
+        assert "***redacted***" not in redacted
+
     def test_empty_yaml_returned_unchanged(self):
         assert _redact_yaml("") == ""
         assert _redact_yaml("   \n") == "   \n"
@@ -832,6 +949,27 @@ class TestAiPromptRedaction:
         assert "smtpsecret" not in captured["user"]
         assert "***redacted***" in captured["user"]
         assert "mail.example.com" in captured["user"]
+
+    def test_fix_mode_redacts_headers_and_alert_webhooks(self, monkeypatch):
+        monkeypatch.setenv("TRAM_AI_API_KEY", "sk-test")
+        client = TestClient(_make_app())
+        yaml_with_headers = (
+            "name: pipe\n"
+            "schedule:\n  type: manual\n"
+            "source:\n  type: rest\n  url: http://x\n"
+            "  headers:\n    Authorization: Bearer tok123\n"
+            "serializer_in:\n  type: json\n"
+            "sinks:\n  - type: local\n    path: /tmp/out\n"
+            "alerts:\n  - rule_name: r1\n    webhook_url: https://hooks.example.com/xyz/tok123\n"
+        )
+        r, captured = self._capture(monkeypatch, client, {
+            "mode": "fix", "yaml": yaml_with_headers, "error": "boom",
+        })
+        assert r.status_code == 200
+        assert "tok123" not in captured["user"]
+        assert "hooks.example.com" not in captured["user"]
+        assert "Authorization" in captured["user"]   # header key kept
+        assert "***redacted***" in captured["user"]
 
     def test_explain_mode_redacts_yaml_before_calling_ai(self, monkeypatch):
         monkeypatch.setenv("TRAM_AI_API_KEY", "sk-test")
