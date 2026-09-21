@@ -597,39 +597,137 @@ Response:
 
 ## AI Assist (v1.1.0)
 
+AI assist is configured either via `TRAM_AI_*` env vars or through the Settings
+page, which persists to the DB (DB values override env vars).
+
 ### GET /api/ai/status
-Returns AI configuration and availability.
+Returns whether AI assist is enabled (an API key is configured) and which
+provider/model would be used.
 
 ```json
-{"available": true, "provider": "anthropic", "model": "claude-sonnet-4-6"}
+{"enabled": true, "provider": "anthropic", "model": "claude-haiku-4-5-20251001"}
 ```
 
-Returns `{"available": false}` when `TRAM_AI_API_KEY` is not set.
+Returns `{"enabled": false, "provider": null, "model": null}` when no API key
+is configured.
 
-### POST /api/ai/suggest
-Generate or explain a pipeline YAML using AI.
+### GET /api/ai/config
+Returns the current AI configuration. The API key is never returned — only
+whether one is set, a masked hint, and its source (`db` or `env`).
+
+```json
+{
+  "provider": "anthropic",
+  "api_key_set": true,
+  "api_key_hint": "…abcd",
+  "model": "",
+  "base_url": "",
+  "source": "db"
+}
+```
+
+### POST /api/ai/config
+Persist AI configuration to the DB (overrides env vars). All fields are
+optional; blank or absent values are treated as "no change" — in particular a
+blank `api_key` never clears a stored key.
 
 | Field | Description |
 |-------|-------------|
-| `mode` | `"generate"` — create a new pipeline from a description; `"explain"` — explain existing YAML |
-| `prompt` | Natural language description (for `generate`) or question (for `explain`) |
-| `yaml` | Existing pipeline YAML (required for `explain` mode) |
+| `provider` | `"anthropic"`, `"openai"`, or `"bedrock"` (rejected with 400 if unknown) |
+| `api_key` | API key for the provider |
+| `model` | Model name (blank = provider default) |
+| `base_url` | Optional endpoint override (required for `bedrock`) |
 
 ```bash
-# Generate
-curl -X POST http://localhost:8765/api/ai/suggest \
+curl -X POST http://localhost:8765/api/ai/config \
   -H "Content-Type: application/json" \
-  -d '{"mode": "generate", "prompt": "Poll SNMP IF-MIB every 60s and write to InfluxDB"}'
-
-# Explain
-curl -X POST http://localhost:8765/api/ai/suggest \
-  -H "Content-Type: application/json" \
-  -d '{"mode": "explain", "prompt": "What does this do?", "yaml": "pipeline:\n  name: ..."}'
+  -d '{"provider": "openai", "api_key": "sk-…", "model": "gpt-4o-mini"}'
 ```
 
 Response:
 ```json
-{"result": "pipeline:\n  name: snmp-to-influxdb\n  ..."}
+{"ok": true}
+```
+
+Errors: `503` when no database is available, `400` for an unknown `provider`.
+
+### POST /api/ai/test
+Send a minimal probe prompt to verify the provider configuration.
+
+Response:
+```json
+{"ok": true, "reply": "OK", "provider": "openai", "model": "gpt-4o-mini"}
+```
+
+Errors: `503` when AI is not configured, `502` when the provider call fails
+(e.g. bad key, connection error).
+
+### POST /api/ai/suggest
+Generate, explain, fix, or modify pipeline YAML. Returns `503` when AI is not
+configured, `502` when the provider call fails, and `400` for an unknown mode.
+
+#### mode: `generate`
+Create a new pipeline from a description.
+
+| Field | Description |
+|-------|-------------|
+| `mode` | `"generate"` |
+| `prompt` | Natural-language description of the pipeline |
+| `plugins` | Optional `{sources, sinks, transforms, serializers}` type lists to scope the schema context |
+
+```bash
+curl -X POST http://localhost:8765/api/ai/suggest \
+  -H "Content-Type: application/json" \
+  -d '{"mode": "generate", "prompt": "Poll SNMP IF-MIB every 60s and write to InfluxDB"}'
+```
+
+Response:
+```json
+{"yaml": "name: snmp-to-influxdb\nschedule:\n  ..."}
+```
+
+#### mode: `explain`
+Explain a dry-run error for existing YAML.
+
+| Field | Description |
+|-------|-------------|
+| `mode` | `"explain"` |
+| `yaml` | The pipeline YAML that failed |
+| `error` | The dry-run error message |
+
+Response:
+```json
+{"explanation": "The source is missing a serializer_in ..."}
+```
+
+#### mode: `fix`
+Return corrected YAML for a pipeline that failed dry-run.
+
+| Field | Description |
+|-------|-------------|
+| `mode` | `"fix"` |
+| `yaml` | The pipeline YAML to fix |
+| `error` | The dry-run error to resolve |
+| `plugins` | Optional type lists (as in `generate`) |
+
+Response:
+```json
+{"yaml": "name: fixed-pipe\nschedule:\n  ..."}
+```
+
+#### mode: `modify`
+Modify existing YAML per an instruction.
+
+| Field | Description |
+|-------|-------------|
+| `mode` | `"modify"` |
+| `yaml` | The pipeline YAML to modify |
+| `instruction` | What to change |
+| `plugins` | Optional type lists (as in `generate`) |
+
+Response:
+```json
+{"yaml": "name: modified-pipe\nschedule:\n  ..."}
 ```
 
 Configure via env vars:
@@ -639,7 +737,7 @@ Configure via env vars:
 | `TRAM_AI_API_KEY` | API key for the AI provider |
 | `TRAM_AI_PROVIDER` | `anthropic`, `openai`, or `bedrock` (default: `anthropic`) |
 | `TRAM_AI_MODEL` | Model name (defaults: `claude-haiku-4-5-20251001` for Anthropic, `gpt-4o-mini` for OpenAI, `us.anthropic.claude-sonnet-4-6` for Bedrock) |
-| `TRAM_AI_BASE_URL` | Custom base URL (e.g. for Ollama or Azure OpenAI) |
+| `TRAM_AI_BASE_URL` | Custom base URL (honored for Anthropic/OpenAI, required for Bedrock) |
 
 ---
 

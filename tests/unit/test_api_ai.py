@@ -167,6 +167,16 @@ class TestCallAiAnthropic:
         call_kwargs = mock_ant.Anthropic.call_args.kwargs
         assert call_kwargs.get("base_url") == "http://proxy"
 
+    def test_timeout_passed_to_client(self):
+        # A1: explicit 60 s timeout on the client, matching the Bedrock path.
+        mock_ant = MagicMock()
+        mock_msg = MagicMock()
+        mock_msg.content = [MagicMock(text="ok")]
+        mock_ant.Anthropic.return_value.messages.create.return_value = mock_msg
+        with patch.dict(sys.modules, {"anthropic": mock_ant}):
+            _call_ai("sys", "usr", 100, self._cfg())
+        assert mock_ant.Anthropic.call_args.kwargs.get("timeout") == 60.0
+
 
 class TestCallAiOpenAI:
     def _cfg(self, **kw):
@@ -213,6 +223,16 @@ class TestCallAiOpenAI:
             _call_ai("sys", "usr", 100, self._cfg(base_url="http://my-proxy"))
         call_kwargs = mock_oai.OpenAI.call_args.kwargs
         assert call_kwargs.get("base_url") == "http://my-proxy"
+
+    def test_timeout_passed_to_client(self):
+        # A1: explicit 60 s timeout on the client, matching the Bedrock path.
+        mock_oai = MagicMock()
+        mock_resp = MagicMock()
+        mock_resp.choices = [MagicMock(message=MagicMock(content="ok"))]
+        mock_oai.OpenAI.return_value.chat.completions.create.return_value = mock_resp
+        with patch.dict(sys.modules, {"openai": mock_oai}):
+            _call_ai("sys", "usr", 100, self._cfg())
+        assert mock_oai.OpenAI.call_args.kwargs.get("timeout") == 60.0
 
 
 class TestCallAiBedrock:
@@ -349,13 +369,37 @@ class TestAiSaveConfig:
         assert r.json()["ok"] is True
         db.set_setting.assert_called()
 
-    def test_clears_empty_keys(self):
+    def test_absent_api_key_preserves_stored_key(self):
+        # A2: omitting api_key from the payload must not touch the stored key.
+        db = _make_db({"ai.api_key": "stored-key"})
+        app = _make_app(db=db)
+        client = TestClient(app)
+        r = client.post("/api/ai/config", json={"model": "gpt-4o"})
+        assert r.status_code == 200
+        assert all(call.args[0] != "ai.api_key" for call in db.set_setting.call_args_list)
+        db.delete_setting.assert_not_called()
+        assert db.get_setting("ai.api_key") == "stored-key"
+
+    def test_blank_api_key_keeps_existing(self):
+        # A2 chosen semantics: blank == absent == "no change". A blank api_key
+        # must NOT delete the stored key (older UIs always sent api_key: "").
+        db = _make_db({"ai.api_key": "stored-key"})
+        app = _make_app(db=db)
+        client = TestClient(app)
+        r = client.post("/api/ai/config", json={"api_key": ""})
+        assert r.status_code == 200
+        db.delete_setting.assert_not_called()
+        assert db.get_setting("ai.api_key") == "stored-key"
+
+    def test_unknown_provider_rejected_with_400(self):
+        # A8: reject bad provider strings at save time instead of a later 502.
         db = _make_db()
         app = _make_app(db=db)
         client = TestClient(app)
-        r = client.post("/api/ai/config", json={"provider": "", "api_key": ""})
-        assert r.status_code == 200
-        db.delete_setting.assert_called()
+        r = client.post("/api/ai/config", json={"provider": "anthrpic"})
+        assert r.status_code == 400
+        assert "provider" in r.json()["detail"].lower()
+        db.set_setting.assert_not_called()
 
 
 # ── /api/ai/test endpoint ──────────────────────────────────────────────────

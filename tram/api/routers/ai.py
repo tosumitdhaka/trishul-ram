@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import os
 
 from fastapi import APIRouter, HTTPException, Request
@@ -13,6 +14,14 @@ router = APIRouter()
 _ANTHROPIC_DEFAULT_MODEL = "claude-haiku-4-5-20251001"
 _OPENAI_DEFAULT_MODEL    = "gpt-4o-mini"
 _BEDROCK_DEFAULT_MODEL   = "us.anthropic.claude-sonnet-4-6"
+
+_AI_PROVIDERS = ("anthropic", "openai", "bedrock")
+
+# Outbound LLM timeout, seconds — matches the Bedrock path's 60 s
+# (urllib urlopen timeout at _call_ai). Bounds event-loop stalls: _call_ai
+# runs in a worker thread (asyncio.to_thread) but a hung call would still
+# occupy that thread, so cap the SDK default (minutes) here.
+_AI_CALL_TIMEOUT = 60.0
 
 _AI_KEYS = ("ai.provider", "ai.api_key", "ai.model", "ai.base_url")
 
@@ -74,7 +83,7 @@ def _call_ai(system: str, user: str, max_tokens: int, cfg: dict) -> str:
         except ImportError:
             raise RuntimeError("anthropic package not installed — pip install tram[ai-anthropic]")
         model = model or _ANTHROPIC_DEFAULT_MODEL
-        client_kwargs: dict = {"api_key": api_key or None}
+        client_kwargs: dict = {"api_key": api_key or None, "timeout": _AI_CALL_TIMEOUT}
         if base_url:
             # Anthropic SDK appends /v1/messages itself — strip trailing /v1 to avoid duplication
             client_kwargs["base_url"] = base_url.rstrip("/").removesuffix("/v1")
@@ -101,7 +110,7 @@ def _call_ai(system: str, user: str, max_tokens: int, cfg: dict) -> str:
         except ImportError:
             raise RuntimeError("openai package not installed — pip install tram[ai-openai]")
         model = model or _OPENAI_DEFAULT_MODEL
-        kwargs: dict = {"api_key": api_key or "none"}
+        kwargs: dict = {"api_key": api_key or "none", "timeout": _AI_CALL_TIMEOUT}
         if base_url:
             kwargs["base_url"] = base_url
         client = openai.OpenAI(**kwargs)
@@ -202,22 +211,35 @@ async def ai_get_config(request: Request) -> dict:
 
 @router.post("/api/ai/config", tags=["ai"])
 async def ai_save_config(request: Request) -> dict:
-    """Persist AI configuration to the DB (overrides env vars). Empty string clears a key."""
+    """Persist AI configuration to the DB (overrides env vars).
+
+    Chosen A2 semantics: absent AND blank values are both "no change" —
+    this endpoint can set a value but never clears one. In particular a blank
+    `api_key` (which older UIs sent whenever the password field was left
+    empty) no longer deletes a DB-stored key. Clearing a value is a manual
+    DB edit, which is the intended trade-off to protect stored keys.
+    """
     db = getattr(request.app.state, "db", None)
     if db is None:
         raise HTTPException(status_code=503, detail="Database not available")
     body = await request.json()
-    fields = {
-        "ai.provider": body.get("provider", ""),
-        "ai.api_key":  body.get("api_key", ""),
-        "ai.model":    body.get("model", ""),
-        "ai.base_url": body.get("base_url", ""),
-    }
-    for key, value in fields.items():
-        if value:
-            db.set_setting(key, value)
-        else:
-            db.delete_setting(key)
+    provider = (body.get("provider") or "").strip()
+    api_key  = (body.get("api_key")  or "").strip()
+    model    = (body.get("model")    or "").strip()
+    base_url = (body.get("base_url") or "").strip()
+    if provider:
+        if provider not in _AI_PROVIDERS:
+            raise HTTPException(
+                status_code=400,
+                detail=f"Unknown AI provider: {provider!r} — must be one of {', '.join(_AI_PROVIDERS)}",
+            )
+        db.set_setting("ai.provider", provider)
+    if api_key:
+        db.set_setting("ai.api_key", api_key)
+    if model:
+        db.set_setting("ai.model", model)
+    if base_url:
+        db.set_setting("ai.base_url", base_url)
     return {"ok": True}
 
 
@@ -229,7 +251,10 @@ async def ai_test(request: Request) -> dict:
     if not cfg["api_key"]:
         raise HTTPException(status_code=503, detail="AI assist not configured — set API key in Settings → AI")
     try:
-        reply = _call_ai(
+        # Run the blocking SDK/urllib call in a worker thread so the event
+        # loop stays responsive for all other API traffic (A1).
+        reply = await asyncio.to_thread(
+            _call_ai,
             "You are a helpful assistant.",
             "Reply with exactly: OK",
             max_tokens=10, cfg=cfg,
@@ -262,7 +287,7 @@ async def ai_suggest(request: Request) -> dict:
             connector_schema   = build_ai_context(prompt, plugins),
         )
         try:
-            yaml_text = _call_ai(system, prompt, max_tokens=1024, cfg=cfg)
+            yaml_text = await asyncio.to_thread(_call_ai, system, prompt, max_tokens=1024, cfg=cfg)
         except Exception as exc:
             raise HTTPException(status_code=502, detail=str(exc))
         return {"yaml": _strip_fences(yaml_text)}
@@ -274,7 +299,8 @@ async def ai_suggest(request: Request) -> dict:
             "Explain in 2-3 sentences what is wrong and how to fix it."
         )
         try:
-            explanation = _call_ai(
+            explanation = await asyncio.to_thread(
+                _call_ai,
                 "You are a helpful TRAM pipeline configuration assistant. "
                 "Be concise and actionable.",
                 user, max_tokens=300, cfg=cfg,
@@ -294,7 +320,7 @@ async def ai_suggest(request: Request) -> dict:
             f"Error to fix: {body.get('error', '')}"
         )
         try:
-            yaml_text = _call_ai(system, user, max_tokens=1024, cfg=cfg)
+            yaml_text = await asyncio.to_thread(_call_ai, system, user, max_tokens=1024, cfg=cfg)
         except Exception as exc:
             raise HTTPException(status_code=502, detail=str(exc))
         return {"yaml": _strip_fences(yaml_text)}
@@ -310,7 +336,7 @@ async def ai_suggest(request: Request) -> dict:
             f"Instruction: {body.get('instruction', '')}"
         )
         try:
-            yaml_text = _call_ai(system, user, max_tokens=1024, cfg=cfg)
+            yaml_text = await asyncio.to_thread(_call_ai, system, user, max_tokens=1024, cfg=cfg)
         except Exception as exc:
             raise HTTPException(status_code=502, detail=str(exc))
         return {"yaml": _strip_fences(yaml_text)}
