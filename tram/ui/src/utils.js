@@ -315,7 +315,7 @@ export function confirmAction({
 
     const modal = bootstrap.Modal.getOrCreateInstance(el)
     let settled = false
-    const onOk = () => { settled = true; modal.hide() }
+    const onOk = () => { settled = true; resolve(true); modal.hide() }
     const onHidden = () => {
       el.removeEventListener('hidden.bs.modal', onHidden)
       okBtn.removeEventListener('click', onOk)
