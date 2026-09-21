@@ -65,6 +65,26 @@ function wireShellActions() {
   document.getElementById('topbar-settings-btn')?.addEventListener('click', () => {
     navigate('settings')
   })
+
+  // Health card: hover/focus reveal it, click pins it open (touch and
+  // keyboard), Escape or clicking elsewhere unpins.
+  const healthBtn = document.getElementById('health-btn')
+  healthBtn?.addEventListener('click', () => {
+    const open = healthBtn.classList.toggle('open')
+    healthBtn.setAttribute('aria-expanded', String(open))
+  })
+  document.addEventListener('click', (event) => {
+    if (healthBtn && !healthBtn.contains(event.target) && healthBtn.classList.contains('open')) {
+      healthBtn.classList.remove('open')
+      healthBtn.setAttribute('aria-expanded', 'false')
+    }
+  })
+  document.addEventListener('keydown', (event) => {
+    if (event.key === 'Escape' && healthBtn?.classList.contains('open')) {
+      healthBtn.classList.remove('open')
+      healthBtn.setAttribute('aria-expanded', 'false')
+    }
+  })
   document.getElementById('theme-btn')?.addEventListener('click', toggleTheme)
   document.getElementById('logout-btn')?.addEventListener('click', logout)
 }

@@ -10,7 +10,7 @@
   --border-sub:  #21262d;
   --fg:          #e6edf3;
   --fg-2:        #8b949e;
-  --fg-muted:    #6e7681;
+  --fg-muted:    #8b949e;
 
   /* badge backgrounds */
   --badge-green-bg:  #1a3328;  --badge-green-fg:  #3fb950;
@@ -18,7 +18,7 @@
   --badge-yellow-bg: #2e2416;  --badge-yellow-fg: #d29922;
   --badge-cyan-bg:   #0f2b2e;  --badge-cyan-fg:   #39c5cf;
   --badge-muted-bg:  #21262d;  --badge-muted-fg:  #8b949e;
-  --badge-off-bg:    #1c2128;  --badge-off-fg:    #6e7681;
+  --badge-off-bg:    #1c2128;  --badge-off-fg:    #8b949e;
   --accent-blue:     #388bfd;
   --accent-blue-soft:#58a6ff;
   --accent-purple:   #9e6bde;
@@ -42,14 +42,14 @@
   --border-sub:  #eaeef2;
   --fg:          #1f2328;
   --fg-2:        #636c76;
-  --fg-muted:    #8c959f;
+  --fg-muted:    #57606a;
 
   --badge-green-bg:  #dafbe1;  --badge-green-fg:  #1a7f37;
   --badge-red-bg:    #ffebe9;  --badge-red-fg:    #cf222e;
   --badge-yellow-bg: #fff8c5;  --badge-yellow-fg: #9a6700;
-  --badge-cyan-bg:   #ddf4f8;  --badge-cyan-fg:   #0e7da8;
+  --badge-cyan-bg:   #ddf4f8;  --badge-cyan-fg:   #0a6a8c;
   --badge-muted-bg:  #eaeef2;  --badge-muted-fg:  #636c76;
-  --badge-off-bg:    #f6f8fa;  --badge-off-fg:    #8c959f;
+  --badge-off-bg:    #f6f8fa;  --badge-off-fg:    #636c76;
   --btn-close-filter: none;
 
   /* YAML highlight tokens (light) */
@@ -175,7 +175,9 @@ body {
   font-size: 12px; line-height: 1.8; white-space: nowrap;
   box-shadow: 0 8px 24px rgba(0,0,0,.2);
 }
-.health-btn:hover .health-card { display: block; }
+.health-btn:hover .health-card,
+.health-btn:focus-within .health-card,
+.health-btn.open .health-card { display: block; }
 .health-card .hrow   { display: flex; justify-content: space-between; gap: 16px; }
 .health-card .hlabel { color: var(--fg-muted); }
 

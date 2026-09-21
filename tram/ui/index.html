@@ -84,7 +84,8 @@
         <div class="page-sub"  id="tb-sub">Overview</div>
       </div>
       <div class="topbar-right ms-2">
-        <div class="topbar-icon health-btn">
+        <button class="topbar-icon health-btn" id="health-btn" type="button"
+                aria-haspopup="dialog" aria-expanded="false" title="Daemon health">
           <span id="health-icon" class="health-indicator health-indicator-md is-online"></span>
           <div class="health-card" id="health-card">
             <div class="hrow"><span class="hlabel">Status</span><span id="hc-status">—</span></div>
@@ -93,7 +94,7 @@
             <div class="hrow"><span class="hlabel">Pipelines</span><span id="hc-pipelines">—</span></div>
             <div class="hrow"><span class="hlabel">Version</span><span id="hc-version">—</span></div>
           </div>
-        </div>
+        </button>
         <button class="topbar-icon" id="topbar-settings-btn" title="Settings" type="button"><i class="bi bi-gear"></i></button>
         <button class="topbar-icon" id="theme-btn" title="Toggle theme" type="button"><i class="bi bi-moon-stars-fill"></i></button>
         <button class="topbar-icon" id="logout-btn" title="Sign out" type="button" hidden><i class="bi bi-box-arrow-right"></i></button>
