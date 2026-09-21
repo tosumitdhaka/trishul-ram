@@ -3,10 +3,16 @@
 # for the full release process this gate enforces.
 #
 # Usage:
-#   scripts/release-gate.sh           full gate (all checks)
-#   scripts/release-gate.sh --fast    skip the slow checks (pytest, UI build)
-#   scripts/release-gate.sh --ci      CI mode: skip the "already tagged" check
-#                                     (the CI gate runs on the release tag itself)
+#   scripts/release-gate.sh                    full gate (all checks)
+#   scripts/release-gate.sh --fast            skip the slow checks (pytest, UI build)
+#   scripts/release-gate.sh --ci               CI mode: skip the "already tagged" check
+#                                              (the CI gate runs on the release tag itself)
+#   scripts/release-gate.sh --deploy-kind     after a green gate: deploy the current
+#                                              tree to the kind dev cluster for manual
+#                                              smoke testing (combines with --fast)
+#   scripts/release-gate.sh --deploy-kind --deploy-port N
+#                                              host port for the UI port-forward
+#                                              (default 8766; env TRAM_GATE_DEPLOY_PORT)
 #
 # Exits 0 only when every check passes.
 
@@ -17,13 +23,22 @@ cd "$ROOT"
 
 FAST=0
 CI=0
-for arg in "$@"; do
-  case "$arg" in
-    --fast) FAST=1 ;;
-    --ci) CI=1 ;;
-    *) echo "unknown option: $arg (supported: --fast, --ci)"; exit 2 ;;
+DEPLOY_KIND=0
+DEPLOY_PORT="${TRAM_GATE_DEPLOY_PORT:-8766}"
+while [ $# -gt 0 ]; do
+  case "$1" in
+    --fast) FAST=1; shift ;;
+    --ci) CI=1; shift ;;
+    --deploy-kind) DEPLOY_KIND=1; shift ;;
+    --deploy-port) DEPLOY_PORT="${2:?--deploy-port needs a value}"; shift 2 ;;
+    --deploy-port=*) DEPLOY_PORT="${1#*=}"; shift ;;
+    *) echo "unknown option: $1 (supported: --fast, --ci, --deploy-kind, --deploy-port N)"; exit 2 ;;
   esac
 done
+if ! [[ "$DEPLOY_PORT" =~ ^[0-9]+$ ]]; then
+  echo "--deploy-port must be numeric (got: $DEPLOY_PORT)" >&2
+  exit 2
+fi
 
 PASS=0
 FAIL=0
@@ -184,6 +199,37 @@ echo "passed: $PASS   failed: $FAIL"
 
 if [ "$FAIL" -gt 0 ]; then
   echo "GATE RED — resolve every FAIL above before tagging. See docs/release-gate.md."
+  [ "$DEPLOY_KIND" -eq 1 ] && echo "--deploy-kind: skipping deploy (gate is red)."
   exit 1
 fi
 echo "GATE GREEN — ready to tag v$VERSION."
+
+# --- optional: deploy the current tree to kind for manual smoke testing --------
+# Builds the images from the working tree, loads them into the kind dev
+# cluster, upgrades the Helm release, then port-forwards the manager UI to
+# localhost:$DEPLOY_PORT (default 8766 — TRAM's own default port 8765 is
+# commonly squatted on dev hosts). Ctrl-C stops the port-forward; the
+# deployment itself stays.
+if [ "$DEPLOY_KIND" -eq 1 ]; then
+  echo
+  echo "== manual validation deploy (--deploy-kind) =="
+  for cmd in docker kind kubectl helm; do
+    if ! need "$cmd"; then
+      echo "--deploy-kind: missing required command: $cmd" >&2
+      exit 1
+    fi
+  done
+  echo "Deploying the current tree to kind (build, load, helm upgrade)…"
+  "$ROOT/scripts/deploy-kind-tram-dev.sh"
+  echo
+  echo "UI:            http://localhost:${DEPLOY_PORT}"
+  echo "Port-forward:  Ctrl-C stops it (the deployment stays)"
+  echo
+  echo "Manual smoke checklist (docs/release-gate.md §Manual validation):"
+  echo "  - every confirm modal executes its action (Stop, Reload, rollback,"
+  echo "    delete pipeline/MIB/schema/alert)"
+  echo "  - deep links survive refresh; Back/Forward work"
+  echo "  - dashboard '+ New' opens a blank editor; Save never overwrites"
+  echo
+  exec kubectl -n "${NAMESPACE:-trishul-ram}" port-forward svc/"${RELEASE_NAME:-trishul-ram}" "${DEPLOY_PORT}:8765"
+fi
