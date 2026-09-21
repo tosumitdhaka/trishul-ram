@@ -43,7 +43,7 @@ export function renderRunsTable({
       ? `<button class="btn-flat runs-expand-btn" type="button" data-run-toggle="${esc(runId)}" aria-label="Toggle run details"><i class="bi ${expanded.has(runId) ? 'bi-chevron-down' : 'bi-chevron-right'} runs-chevron"></i></button>`
       : ''
     rows.push(`<tr data-run-id="${esc(runId)}">
-      <td class="mono-sm">${esc(runId.slice(0, 8))}</td>
+      <td class="mono-sm"><a class="table-row-name-link" href="#runs/${encodeURIComponent(runId)}" title="Open run detail">${esc(runId.slice(0, 8))}</a></td>
       <td class="fw-semibold">${esc(r.pipeline)}</td>
       <td class="text-secondary">${esc(r.node || '—')}</td>
       <td class="text-secondary">${r.started_at ? relTime(r.started_at) : '—'}</td>
@@ -107,7 +107,9 @@ function _detailRow(r, colspan) {
   return logRow
 }
 
-function runDetailHtml(r) {
+// The shared issue-detail renderer — used by the expandable row here and by
+// the #runs/:id detail page (L4).
+export function runDetailHtml(r) {
   const failureReason = topLevelFailureReason(r)
   const reasonGroups = groupedIssueReasons(r, failureReason)
   const details = []

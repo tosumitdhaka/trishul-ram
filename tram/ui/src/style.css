@@ -1379,10 +1379,19 @@ body {
 }
 .table-row-name-link { color: var(--fg); font-weight: 600; text-decoration: none; }
 .table-row-name-link:hover, .table-row-name-link:focus-visible { color: var(--accent-blue); text-decoration: underline; }
-.run-row-focused > td {
-  background: rgba(56,139,253,.08);
-  box-shadow: inset 3px 0 0 var(--accent-blue);
+
+/* ── Run detail page (#runs/:id) ───────────────────────────────────────────── */
+.run-issues-page-body {
+  padding: 4px 0 0;
 }
+.run-issues-page-body .run-issue-block {
+  padding: 10px 12px;
+  margin-bottom: 10px;
+  border: 1px solid var(--border-sub);
+  border-radius: 8px;
+  background: var(--bg-surface2);
+}
+.run-issues-page-body .run-issue-block:last-child { margin-bottom: 0; }
 
 /* ── Misc ────────────────────────────────────────────────────────────────── */
 .mono      { font-family: monospace; font-size: 11px; }
