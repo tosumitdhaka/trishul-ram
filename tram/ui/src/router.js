@@ -13,6 +13,7 @@
 // Large payloads (YAML) are never carried in the hash — the editor fetches
 // them by name, so a refresh recovers without in-memory handoffs.
 
+import { isAuthPending } from './auth_state.js'
 import dashboardHtml from './pages/dashboard.html?raw'
 import pipelinesHtml from './pages/pipelines.html?raw'
 import detailHtml    from './pages/detail.html?raw'
