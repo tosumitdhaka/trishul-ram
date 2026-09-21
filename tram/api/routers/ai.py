@@ -124,7 +124,7 @@ def _base_url_problem(base_url: str) -> str | None:
 
 
 def _normalize_base_url(url: str) -> str:
-    """Normalize a base URL for allowlist prefix matching: strip whitespace
+    """Normalize a base URL for allowlist display/iteration: strip whitespace
     and trailing slashes, lowercase the scheme and host, drop userinfo,
     query, and fragment."""
     url = url.strip().rstrip("/")
@@ -150,10 +150,60 @@ def _allowed_base_urls() -> list[str]:
     ]
 
 
+def _origin_key(url: str) -> tuple[str, str, int | None] | None:
+    """Return the (scheme, hostname, port) origin of *url*, or None when it is
+    not a valid http(s) origin (no scheme/host, or a garbage port). Default
+    ports are normalized away (80 for http, 443 for https) so ``https://host``
+    and ``https://host:443`` compare equal."""
+    parts = urlsplit(url.strip())
+    scheme = (parts.scheme or "").lower()
+    host = parts.hostname or ""
+    if scheme not in ("http", "https") or not host:
+        return None
+    try:
+        port = parts.port
+    except ValueError:
+        return None
+    default_port = 443 if scheme == "https" else 80
+    if port is not None and port == default_port:
+        port = None
+    return (scheme, host, port)
+
+
+def _path_allowed(submitted_path: str, entry_path: str) -> bool:
+    """Directory-boundary path match: the submitted path must equal the entry
+    path or extend it one directory level deeper. ``/v1`` matches ``/v1`` and
+    ``/v1/foo`` but never ``/v1anything``. Trailing slashes are insignificant
+    and an empty/root entry path matches any path on the same origin."""
+    submitted = submitted_path.rstrip("/")
+    entry = entry_path.rstrip("/")
+    if entry in ("", "/"):
+        return True
+    return submitted == entry or submitted.startswith(entry + "/")
+
+
 def _base_url_allowed(base_url: str, allowed: list[str]) -> bool:
-    """Prefix match of the normalized *base_url* against the allowlist."""
-    normalized = _normalize_base_url(base_url)
-    return any(normalized.startswith(entry) for entry in allowed)
+    """Allowlist check — origin-exact + directory-boundary path match.
+
+    A submitted URL is allowed only when its (scheme, hostname, port) equals
+    an entry's, AND its path is an exact match or a directory-boundary prefix
+    of the entry path. Sibling domains (``https://llm.example.com.evil.io``)
+    and partial-path suffixes (``/v1anything``) never match, so the allowlist
+    cannot be widened by sharing a hostname prefix or path prefix."""
+    origin = _origin_key(base_url)
+    if origin is None:
+        return False
+    scheme, host, port = origin
+    submitted_path = urlsplit(base_url.strip()).path
+    for entry in allowed:
+        entry_origin = _origin_key(entry)
+        if entry_origin is None:
+            continue
+        if (scheme, host, port) != entry_origin:
+            continue
+        if _path_allowed(submitted_path, urlsplit(entry.strip()).path):
+            return True
+    return False
 
 
 def _get_ai_cfg(db) -> dict:
@@ -415,7 +465,13 @@ def _redact_yaml(yaml_text: str) -> str:
     """Return a copy of the pipeline YAML with secret field values masked, for
     use in outbound AI prompts. The operator's pipeline on disk is never
     touched. When the YAML cannot be parsed (e.g. mid-edit in the editor), the
-    input is returned unchanged so explain/fix still work."""
+    input is returned unchanged so explain/fix still work.
+
+    Known limitation: masking covers scalar secret fields (schema ``secret``
+    metadata + the password/token/secret name heuristic). Dict-valued fields
+    such as ``headers`` / ``extra_headers`` (which can carry Authorization
+    values) and tokens embedded in ``alerts[].webhook_url`` are NOT masked.
+    """
     if not yaml_text or not yaml_text.strip():
         return yaml_text
     try:
@@ -437,6 +493,7 @@ def _redact_yaml(yaml_text: str) -> str:
     changed |= mask("source", root.get("source"))
     changed |= mask("serializer", root.get("serializer_in"))
     changed |= mask("serializer", root.get("serializer_out"))
+    changed |= mask("sink", root.get("sink"))      # backward-compat singular sink
     changed |= mask("sink", root.get("dlq"))
     for sink in root.get("sinks") or []:
         if not isinstance(sink, dict):

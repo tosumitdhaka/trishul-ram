@@ -11,6 +11,7 @@ from fastapi.testclient import TestClient
 
 from tram.api.routers.ai import (
     _AiResult,
+    _base_url_allowed,
     _base_url_problem,
     _call_ai,
     _get_ai_cfg,
@@ -765,6 +766,22 @@ class TestRedactYaml:
         raw = "name: [unclosed\n  source:\n    type: sftp\n    password: keepme"
         assert _redact_yaml(raw) == raw
 
+    def test_masks_singular_sink_block(self):
+        # Backward-compat singular `sink:` (PipelineConfig.sink) carries the
+        # same secret fields as a `sinks[]` entry — smtp has a password field.
+        yaml_text = (
+            "name: pipe\n"
+            "schedule:\n  type: manual\n"
+            "source:\n  type: local\n  path: /tmp/in\n"
+            "serializer_in:\n  type: json\n"
+            "sink:\n  type: smtp\n  host: mail.example.com\n  username: op\n  password: smtpsecret\n"
+        )
+        redacted = _redact_yaml(yaml_text)
+        assert "smtpsecret" not in redacted
+        assert "***redacted***" in redacted
+        assert "mail.example.com" in redacted
+        assert "username: op" in redacted
+
     def test_empty_yaml_returned_unchanged(self):
         assert _redact_yaml("") == ""
         assert _redact_yaml("   \n") == "   \n"
@@ -797,6 +814,24 @@ class TestAiPromptRedaction:
         assert "***redacted***" in captured["user"]
         assert "example.com" in captured["user"]   # non-secret intact
         assert "username: op" in captured["user"]
+
+    def test_fix_mode_redacts_singular_sink_block(self, monkeypatch):
+        monkeypatch.setenv("TRAM_AI_API_KEY", "sk-test")
+        client = TestClient(_make_app())
+        yaml_with_singular_sink = (
+            "name: pipe\n"
+            "schedule:\n  type: manual\n"
+            "source:\n  type: local\n  path: /tmp/in\n"
+            "serializer_in:\n  type: json\n"
+            "sink:\n  type: smtp\n  host: mail.example.com\n  username: op\n  password: smtpsecret\n"
+        )
+        r, captured = self._capture(monkeypatch, client, {
+            "mode": "fix", "yaml": yaml_with_singular_sink, "error": "boom",
+        })
+        assert r.status_code == 200
+        assert "smtpsecret" not in captured["user"]
+        assert "***redacted***" in captured["user"]
+        assert "mail.example.com" in captured["user"]
 
     def test_explain_mode_redacts_yaml_before_calling_ai(self, monkeypatch):
         monkeypatch.setenv("TRAM_AI_API_KEY", "sk-test")
@@ -995,6 +1030,81 @@ class TestBaseUrlAllowlist:
         client = TestClient(app)
         r = client.post("/api/ai/config", json={"base_url": "https://llm.example.com/v1/"})
         assert r.status_code == 200
+
+    # ── Review fix: origin-exact + directory-boundary matching ────────────
+
+    def test_sibling_domain_rejected(self, monkeypatch):
+        # A sibling domain shares the hostname prefix but is a different origin.
+        monkeypatch.setenv("TRAM_AI_ALLOWED_BASE_URLS", "https://llm.example.com")
+        db = _make_db()
+        app = _make_app(db=db)
+        client = TestClient(app)
+        r = client.post("/api/ai/config", json={"base_url": "https://llm.example.com.evil.io"})
+        assert r.status_code == 400
+        assert "ALLOWED_BASE_URLS" in r.json()["detail"]
+        db.set_setting.assert_not_called()
+
+    def test_path_boundary_enforced(self, monkeypatch):
+        # /v1 must not match /v1anything — only exact or directory-boundary.
+        monkeypatch.setenv("TRAM_AI_ALLOWED_BASE_URLS", "https://llm.example.com/v1")
+        db = _make_db()
+        app = _make_app(db=db)
+        client = TestClient(app)
+        r = client.post("/api/ai/config", json={"base_url": "https://llm.example.com/v1anything"})
+        assert r.status_code == 400
+        db.set_setting.assert_not_called()
+
+    def test_default_port_normalized(self, monkeypatch):
+        # https://host:443 == https://host origin; http://host:80 == http://host.
+        monkeypatch.setenv("TRAM_AI_ALLOWED_BASE_URLS", "https://llm.example.com,http://localhost:80")
+        db = _make_db()
+        app = _make_app(db=db)
+        client = TestClient(app)
+        r = client.post("/api/ai/config", json={"base_url": "https://llm.example.com:443/v1"})
+        assert r.status_code == 200
+        r = client.post("/api/ai/config", json={"base_url": "http://localhost"})
+        assert r.status_code == 200
+
+    def test_explicit_non_default_port_not_normalized(self, monkeypatch):
+        # A non-default port is part of the origin — https://host:8443 differs.
+        monkeypatch.setenv("TRAM_AI_ALLOWED_BASE_URLS", "https://llm.example.com")
+        db = _make_db()
+        app = _make_app(db=db)
+        client = TestClient(app)
+        r = client.post("/api/ai/config", json={"base_url": "https://llm.example.com:8443"})
+        assert r.status_code == 400
+
+    def test_exact_origin_and_directory_path_match(self, monkeypatch):
+        monkeypatch.setenv("TRAM_AI_ALLOWED_BASE_URLS", "https://llm.example.com/v1")
+        db = _make_db()
+        app = _make_app(db=db)
+        client = TestClient(app)
+        r = client.post("/api/ai/config", json={"base_url": "https://llm.example.com/v1"})
+        assert r.status_code == 200
+        r = client.post("/api/ai/config", json={"base_url": "https://llm.example.com/v1/foo"})
+        assert r.status_code == 200
+
+    def test_shorter_submitted_path_cannot_narrow_entry(self, monkeypatch):
+        # Submitting a shorter path than the entry is not an exact/boundary match.
+        monkeypatch.setenv("TRAM_AI_ALLOWED_BASE_URLS", "https://llm.example.com/v1/deep")
+        db = _make_db()
+        app = _make_app(db=db)
+        client = TestClient(app)
+        r = client.post("/api/ai/config", json={"base_url": "https://llm.example.com/v1"})
+        assert r.status_code == 400
+
+    def test_base_url_allowed_unit(self):
+        # Direct unit coverage of the matcher semantics.
+        allowed = ["https://llm.example.com/v1", "http://localhost:11434"]
+        assert _base_url_allowed("https://llm.example.com/v1", allowed) is True
+        assert _base_url_allowed("https://llm.example.com/v1/foo", allowed) is True
+        assert _base_url_allowed("https://llm.example.com/v1anything", allowed) is False
+        assert _base_url_allowed("https://llm.example.com.evil.io/v1", allowed) is False
+        assert _base_url_allowed("https://llm.example.com/v2", allowed) is False
+        assert _base_url_allowed("http://localhost:11434/", allowed) is True
+        assert _base_url_allowed("http://localhost:11435", allowed) is False
+        assert _base_url_allowed("http://localhost", allowed) is False
+        assert _base_url_allowed("", allowed) is False
 
 
 # ── A10: per-call audit log ─────────────────────────────────────────────────

@@ -224,6 +224,11 @@ env:
   # TRAM_AI_MODEL: ""              # defaults: claude-haiku-4-5-20251001 (anthropic),
   #                                # gpt-4o-mini (openai), us.anthropic.claude-sonnet-4-6 (bedrock)
   # TRAM_AI_BASE_URL: ""           # optional provider endpoint override; required for bedrock
+  # TRAM_AI_ALLOWED_BASE_URLS: ""  # optional comma-separated allowlist of base_url prefixes
+  #                                # accepted by POST /api/ai/config; unset = no restriction.
+  #                                # https required by default; http only for loopback/private hosts
+  # TRAM_AI_AUDIT: "1"             # AI usage audit: "1" (default) appends ai_usage rows per AI
+  #                                # call; "0" disables the DB rows (log lines always emitted)
 
 ## Environment variables sourced from a Kubernetes Secret
 ## Use this for sensitive values (API keys, passwords) instead of plain env above.
