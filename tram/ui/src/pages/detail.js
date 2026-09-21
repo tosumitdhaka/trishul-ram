@@ -1,5 +1,5 @@
 import { api } from '../api.js'
-import { bindDataActions, downloadText, relTime, fmtNum, schedBadge, statusBadge, esc, toast, pipelineStartFeedback } from '../utils.js'
+import { bindDataActions, confirmAction, downloadText, relTime, fmtNum, renderTableState, schedBadge, statusBadge, esc, toast, pipelineStartFeedback } from '../utils.js'
 import { monitorTriggeredRun, runOutcomeToast } from '../run_monitor.js'
 import {
   renderDiffStats,
@@ -37,7 +37,9 @@ export async function init() {
     renderPlacement(placement)
     wireActions(pipeline)
   } catch (e) {
-    toast(`Detail error: ${e.message}`, 'error')
+    renderTableState(document.getElementById('detail-runs-body'), 'error', e.message, {
+      onRetry: () => { void init() },
+    })
   }
 
   wireTabs()
@@ -272,6 +274,13 @@ async function _detailTrigger() {
 }
 
 async function _detailStop() {
+  const ok = await confirmAction({
+    title: 'Stop pipeline',
+    body: `Stop "${_name}"? Active execution stops and the pipeline stays stopped until you start it again. Queued manual runs are cancelled.`,
+    confirmLabel: 'Stop',
+    danger: true,
+  })
+  if (!ok) return
   try {
     await api.pipelines.stop(_name)
     toast(`Stopped ${_name}`)
@@ -750,7 +759,13 @@ async function _compareVersion(version) {
 }
 
 async function _rollbackVersion(version) {
-  if (!confirm(`Rollback to version ${version}?`)) return
+  const ok = await confirmAction({
+    title: 'Rollback pipeline',
+    body: `Rollback "${_name}" to version ${version}? If the pipeline is active, it stops and restarts on the restored config. Older versions stay in the history, so you can switch back the same way.`,
+    confirmLabel: 'Rollback',
+    danger: true,
+  })
+  if (!ok) return
   try {
     await api.pipelines.rollback(_name, version)
     toast(`Rolled back to v${version}`)
@@ -762,7 +777,13 @@ async function _rollbackVersion(version) {
 
 async function _deleteAlert(index, rules) {
   const label = rules[index]?.name || `rule #${index}`
-  if (!confirm(`Delete alert rule '${label}'?`)) return
+  const ok = await confirmAction({
+    title: 'Delete alert rule',
+    body: `Delete alert rule '${label}' from "${_name}"?`,
+    confirmLabel: 'Delete',
+    danger: true,
+  })
+  if (!ok) return
   try {
     await api.alerts.delete(_name, index)
     toast(`Deleted ${label}`)

@@ -1,11 +1,13 @@
 import { api } from '../api.js'
 import {
   bindDataActions,
+  confirmAction,
   downloadText,
   fmtBytes,
   fmtDur,
   fmtNum,
   getSavedPollIntervalMs,
+  setOfflineBanner,
   statusBadge,
   esc,
   toast,
@@ -58,8 +60,9 @@ async function _refresh() {
     _renderPipelines(stats.per_pipeline || [])
     _renderRuns(runs)
     _setLiveDot(true)
-  } catch (e) {
-    toast(`Dashboard error: ${e.message}`, 'error')
+    setOfflineBanner(false)
+  } catch (_) {
+    setOfflineBanner(true)
     _setLiveDot(false)
   }
 }
@@ -76,7 +79,9 @@ async function _refreshStats() {
     _renderSparkline(stats)
     _renderPipelines(stats.per_pipeline || [])
     _setLiveDot(true)
+    setOfflineBanner(false)
   } catch (_) {
+    setOfflineBanner(true)
     _setLiveDot(false)
   }
 }
@@ -247,6 +252,13 @@ function _setLiveDot(ok) {
 }
 
 async function stopPipeline(name) {
+  const ok = await confirmAction({
+    title: 'Stop pipeline',
+    body: `Stop "${name}"? Active execution stops and the pipeline stays stopped until you start it again. Queued manual runs are cancelled.`,
+    confirmLabel: 'Stop',
+    danger: true,
+  })
+  if (!ok) return
   try { await api.pipelines.stop(name); toast(`Stopped ${name}`); await _refresh() }
   catch (e) { toast(e.message, 'error') }
 }

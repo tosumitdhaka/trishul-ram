@@ -43,12 +43,12 @@
 </div>
 
 <div class="row g-2 mb-3" id="detail-cards">
-  <div class="col-4"><div class="detail-card"><div class="detail-label">Source</div><div class="detail-val" id="detail-source">—</div></div></div>
-  <div class="col-4"><div class="detail-card"><div class="detail-label">Sinks</div><div class="detail-val" id="detail-sinks">—</div></div></div>
-  <div class="col-4"><div class="detail-card"><div class="detail-label">Schedule</div><div class="detail-val" id="detail-schedule">—</div></div></div>
-  <div class="col-4"><div class="detail-card"><div class="detail-label">Input Serializer</div><div class="detail-val" id="detail-serializers">—</div></div></div>
-  <div class="col-4"><div class="detail-card"><div class="detail-label">Transforms</div><div class="detail-val" id="detail-transforms">—</div></div></div>
-  <div class="col-4"><div class="detail-card"><div class="detail-label">Error Policy</div><div class="detail-val" id="detail-error">—</div></div></div>
+  <div class="col-12 col-md-4"><div class="detail-card"><div class="detail-label">Source</div><div class="detail-val" id="detail-source">—</div></div></div>
+  <div class="col-12 col-md-4"><div class="detail-card"><div class="detail-label">Sinks</div><div class="detail-val" id="detail-sinks">—</div></div></div>
+  <div class="col-12 col-md-4"><div class="detail-card"><div class="detail-label">Schedule</div><div class="detail-val" id="detail-schedule">—</div></div></div>
+  <div class="col-12 col-md-4"><div class="detail-card"><div class="detail-label">Input Serializer</div><div class="detail-val" id="detail-serializers">—</div></div></div>
+  <div class="col-12 col-md-4"><div class="detail-card"><div class="detail-label">Transforms</div><div class="detail-val" id="detail-transforms">—</div></div></div>
+  <div class="col-12 col-md-4"><div class="detail-card"><div class="detail-label">Error Policy</div><div class="detail-val" id="detail-error">—</div></div></div>
 </div>
 
 <div class="detail-card mb-3 d-none" id="detail-placement-card">
@@ -78,15 +78,17 @@
         <i class="bi bi-box-arrow-up-right"></i>
       </button>
     </div>
-    <table class="table mb-0">
-      <thead><tr>
-        <th>Run ID</th><th>Pipeline</th><th>Node</th>
-        <th>Started</th><th>Dur</th><th>In</th><th>Out</th><th>Skipped</th><th>DLQ</th><th>Status</th><th>Issues</th><th></th>
-      </tr></thead>
-      <tbody id="detail-runs-body">
-        <tr><td colspan="12" class="text-secondary text-center py-4">Open the Runs tab to load history</td></tr>
-      </tbody>
-    </table>
+    <div class="table-responsive">
+      <table class="table mb-0">
+        <thead><tr>
+          <th>Run ID</th><th>Pipeline</th><th>Node</th>
+          <th>Started</th><th>Dur</th><th>In</th><th>Out</th><th>Skipped</th><th>DLQ</th><th>Status</th><th>Issues</th><th></th>
+        </tr></thead>
+        <tbody id="detail-runs-body">
+          <tr><td colspan="12" class="text-secondary text-center py-4">Open the Runs tab to load history</td></tr>
+        </tbody>
+      </table>
+    </div>
   </div>
 </div>
 

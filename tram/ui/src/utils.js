@@ -1,4 +1,5 @@
 // ── Shared UI helpers ────────────────────────────────────────────────────────
+import * as bootstrap from 'bootstrap'
 
 export function relTime(iso) {
   if (!iso) return '—'
@@ -67,7 +68,6 @@ export function statusBadge(status) {
     success:   'badge-success has-dot success',
     failed:    'badge-failed has-dot failed',
     aborted:   'badge-failed has-dot failed',
-    partial:   'badge-partial has-dot',
     disabled:  'badge-disabled',
   }[status] || 'badge-stopped'
   return `<span class="tram-badge ${cls}">${status ?? '—'}</span>`
@@ -145,17 +145,187 @@ export function setStatusMessage(target, message = '', tone = 'muted') {
   el.classList.add(`ui-status-${STATUS_TONES.includes(tone) ? tone : 'muted'}`)
 }
 
+// ── Toasts ───────────────────────────────────────────────────────────────────
+// Single stacking container (aria-live) with a dismiss control per toast.
+// Repeating the same message inside the dedupe window refreshes the existing
+// toast and bumps its ×N counter instead of stacking a copy — a daemon outage
+// must not produce an unreadable toast pile.
+
+const TOAST_DEDUPE_MS = 8000
+const TOAST_TTL_MS = 4000
+const _activeToasts = new Map()
+
+function toastContainer() {
+  let el = document.getElementById('tram-toast-stack')
+  if (!el) {
+    el = document.createElement('div')
+    el.id = 'tram-toast-stack'
+    el.setAttribute('role', 'status')
+    el.setAttribute('aria-live', 'polite')
+    document.body.appendChild(el)
+  }
+  return el
+}
+
+function removeToast(key, el) {
+  const entry = _activeToasts.get(key)
+  if (entry) {
+    clearTimeout(entry.hideTimer)
+    _activeToasts.delete(key)
+  }
+  el.classList.remove('is-visible')
+  el.classList.add('is-leaving')
+  setTimeout(() => el.remove(), 300)
+}
+
 export function toast(msg, type = 'success') {
+  const container = toastContainer()
+  const key = `${type}||${msg}`
+  const existing = _activeToasts.get(key)
+
+  if (existing && container.contains(existing.el)) {
+    existing.count += 1
+    existing.el.querySelector('.tram-toast-count').textContent =
+      existing.count > 1 ? `×${existing.count}` : ''
+    clearTimeout(existing.hideTimer)
+    existing.hideTimer = setTimeout(() => removeToast(key, existing.el), TOAST_TTL_MS)
+    return
+  }
+
   const el = document.createElement('div')
   el.className = `tram-toast tram-toast-${type || 'success'}`
-  el.textContent = msg
-  document.body.appendChild(el)
+  const message = document.createElement('span')
+  message.className = 'tram-toast-msg'
+  message.textContent = msg
+  const count = document.createElement('span')
+  count.className = 'tram-toast-count'
+  const dismiss = document.createElement('button')
+  dismiss.className = 'tram-toast-dismiss'
+  dismiss.type = 'button'
+  dismiss.setAttribute('aria-label', 'Dismiss notification')
+  dismiss.textContent = '✕'
+  dismiss.addEventListener('click', () => removeToast(key, el))
+  el.append(message, count, dismiss)
+  container.appendChild(el)
   requestAnimationFrame(() => el.classList.add('is-visible'))
-  setTimeout(() => {
-    el.classList.remove('is-visible')
-    el.classList.add('is-leaving')
-    setTimeout(() => el.remove(), 300)
-  }, 4000)
+
+  const entry = { el, count: 1, hideTimer: null }
+  entry.hideTimer = setTimeout(() => removeToast(key, el), TOAST_TTL_MS)
+  _activeToasts.set(key, entry)
+}
+
+// ── Offline banner ───────────────────────────────────────────────────────────
+// Poll-driven failures degrade to one inline banner per page (the page keeps
+// showing its last known data) instead of re-toasting every poll cycle. The
+// banner lives inside #content, so navigating away clears it naturally.
+
+export function setOfflineBanner(shown, message = 'Daemon unreachable — showing last known data') {
+  if (!shown) {
+    document.getElementById('tram-offline-banner')?.classList.add('d-none')
+    return
+  }
+  let el = document.getElementById('tram-offline-banner')
+  if (!el) {
+    el = document.createElement('div')
+    el.id = 'tram-offline-banner'
+    el.className = 'tram-offline-banner'
+    el.setAttribute('role', 'status')
+    document.getElementById('content')?.prepend(el)
+  }
+  el.innerHTML = `<i class="bi bi-exclamation-triangle"></i><span>${esc(message)}</span>`
+  el.classList.remove('d-none')
+}
+
+// ── Table loading / empty / error states ─────────────────────────────────────
+// Replaces the "Loading…" skeleton that used to stay up forever when the
+// initial page fetch failed. Error state renders the message plus an optional
+// retry control wired to the page's own loader.
+
+export function renderTableState(tbody, state = 'loading', message = '', { onRetry } = {}) {
+  if (!tbody) return
+  const table = tbody.closest('table')
+  const columns = table ? table.querySelectorAll('thead th').length : 1
+  const text = message
+    || { loading: 'Loading…', empty: 'No data yet', error: 'Could not load data' }[state]
+    || 'Loading…'
+  let inner = esc(text)
+  if (state === 'error') {
+    inner = `
+      <div class="table-state-error"><i class="bi bi-exclamation-triangle me-1"></i>${esc(text)}</div>
+      ${onRetry ? '<div class="mt-2"><button class="btn btn-sm btn-outline-secondary" type="button"><i class="bi bi-arrow-clockwise me-1"></i>Retry</button></div>' : ''}`
+  }
+  tbody.innerHTML = `<tr><td colspan="${columns}" class="text-secondary text-center py-4">${inner}</td></tr>`
+  if (state === 'error' && onRetry) {
+    tbody.querySelector('button')?.addEventListener('click', () => {
+      renderTableState(tbody, 'loading')
+      onRetry()
+    })
+  }
+}
+
+// ── Styled confirmation dialog ──────────────────────────────────────────────
+// One shared Bootstrap modal for consequential actions (stop/reload/rollback/
+// delete), replacing the mix of native confirm() and no confirmation at all.
+
+let _confirmModalEl = null
+
+function buildConfirmModal() {
+  const el = document.createElement('div')
+  el.className = 'modal fade'
+  el.id = 'tram-confirm-modal'
+  el.tabIndex = -1
+  el.innerHTML = `
+    <div class="modal-dialog modal-dialog-centered modal-sm">
+      <div class="modal-content detail-modal-shell">
+        <div class="modal-header detail-modal-header">
+          <h6 class="modal-title detail-modal-title" id="tram-confirm-title"></h6>
+          <button type="button" class="btn-close btn-close-theme" data-bs-dismiss="modal" aria-label="Close"></button>
+        </div>
+        <div class="modal-body">
+          <p class="tram-confirm-body" id="tram-confirm-body"></p>
+        </div>
+        <div class="modal-footer detail-modal-footer">
+          <button type="button" class="btn btn-sm btn-secondary" data-bs-dismiss="modal" id="tram-confirm-cancel"></button>
+          <button type="button" class="btn btn-sm btn-primary" id="tram-confirm-ok"></button>
+        </div>
+      </div>
+    </div>`
+  document.body.appendChild(el)
+  return el
+}
+
+export function confirmAction({
+  title = 'Are you sure?',
+  body = '',
+  confirmLabel = 'Confirm',
+  cancelLabel = 'Cancel',
+  danger = false,
+} = {}) {
+  return new Promise((resolve) => {
+    const el = _confirmModalEl ?? (_confirmModalEl = buildConfirmModal())
+    const titleEl  = el.querySelector('#tram-confirm-title')
+    const bodyEl   = el.querySelector('#tram-confirm-body')
+    const okBtn    = el.querySelector('#tram-confirm-ok')
+    const cancelBtn = el.querySelector('#tram-confirm-cancel')
+    titleEl.textContent = title
+    bodyEl.textContent = body
+    okBtn.textContent = confirmLabel
+    cancelBtn.textContent = cancelLabel
+    okBtn.className = danger ? 'btn btn-sm btn-danger' : 'btn btn-sm btn-primary'
+
+    const modal = bootstrap.Modal.getOrCreateInstance(el)
+    let settled = false
+    const onOk = () => { settled = true; modal.hide() }
+    const onHidden = () => {
+      el.removeEventListener('hidden.bs.modal', onHidden)
+      okBtn.removeEventListener('click', onOk)
+      if (!settled) resolve(false)
+    }
+    el.addEventListener('hidden.bs.modal', onHidden)
+    okBtn.addEventListener('click', onOk)
+    el.addEventListener('shown.bs.modal', () => okBtn.focus(), { once: true })
+    modal.show()
+  })
 }
 
 export function pipelineStartFeedback(name, result = {}) {

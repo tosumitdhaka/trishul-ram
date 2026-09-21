@@ -1,5 +1,5 @@
 import { api } from '../api.js'
-import { bindDataActions, downloadText, esc, toast } from '../utils.js'
+import { bindDataActions, confirmAction, downloadText, esc, renderTableState, toast } from '../utils.js'
 
 let _allMibs = []
 
@@ -21,7 +21,9 @@ async function loadMibs() {
     _allMibs = await api.mibs.list()
     applyMibFilter()
   } catch (e) {
-    toast(`MIBs error: ${e.message}`, 'error')
+    renderTableState(document.getElementById('mibs-body'), 'error', e.message, {
+      onRetry: () => { void loadMibs() },
+    })
   }
 }
 
@@ -135,7 +137,13 @@ async function downloadRemoteMibs() {
 
 async function deleteMib(name) {
   if (!name) return
-  if (!confirm(`Delete MIB "${name}"?`)) return
+  const ok = await confirmAction({
+    title: 'Delete MIB module',
+    body: `Delete MIB "${name}"? Sources and sinks that reference this module may fail to resolve OIDs until it is uploaded again.`,
+    confirmLabel: 'Delete',
+    danger: true,
+  })
+  if (!ok) return
   try {
     await api.mibs.delete(name)
     toast('Deleted')

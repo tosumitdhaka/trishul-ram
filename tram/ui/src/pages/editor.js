@@ -93,6 +93,9 @@ export async function init() {
   // ── AI assist ──────────────────────────────────────────────────────────────
   await _checkAI(isEdit)
 
+  // ── Reference pills from the live plugin registry ─────────────────────────
+  void _renderPluginReference()
+
   // ── Tab key inserts spaces ────────────────────────────────────────────────
   ta?.addEventListener('keydown', e => {
     if (e.key === 'Tab') {
@@ -167,6 +170,26 @@ async function _getPlugins() {
   if (_editorPlugins) return _editorPlugins
   try { _editorPlugins = await api.plugins() } catch (_) { _editorPlugins = {} }
   return _editorPlugins
+}
+
+// Fill the sidebar reference pills from the live registry so they never drift
+// from what the daemon actually has registered (the Plugins page shows the
+// same source of truth in full detail).
+async function _renderPluginReference() {
+  try {
+    const plugins = await _getPlugins()
+    const groups = {
+      'ref-sources':      plugins.sources,
+      'ref-sinks':        plugins.sinks,
+      'ref-serializers':  plugins.serializers,
+      'ref-transforms':   plugins.transforms,
+    }
+    Object.entries(groups).forEach(([id, names]) => {
+      const el = document.getElementById(id)
+      if (!el || !Array.isArray(names) || !names.length) return
+      el.innerHTML = names.map(name => `<span class="ref-pill">${esc(name)}</span>`).join('')
+    })
+  } catch (_) { /* reference stays empty; full details live on the Plugins page */ }
 }
 
 // ── AI: Generate (new pipeline) ──────────────────────────────────────────────

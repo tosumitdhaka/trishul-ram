@@ -1,5 +1,5 @@
 import { api } from '../api.js'
-import { bindDataActions, downloadText, getSavedPollIntervalMs, relTime, statusBadge, schedBadge, esc, toast, pipelineStartFeedback } from '../utils.js'
+import { bindDataActions, confirmAction, downloadText, getSavedPollIntervalMs, relTime, renderTableState, schedBadge, setOfflineBanner, statusBadge, esc, toast, pipelineStartFeedback } from '../utils.js'
 import { monitorTriggeredRun, runOutcomeToast } from '../run_monitor.js'
 import { filterTemplates, normalizeTemplates, populateTemplateFilters, templateFlowText, templateScheduleClass } from './template_helpers.js'
 import * as bootstrap from 'bootstrap'
@@ -15,7 +15,7 @@ export async function init() {
   if (_pollTimer) { clearInterval(_pollTimer); _pollTimer = null }
   _pollTimer = setInterval(() => {
     if (!document.getElementById('pl-table')) { clearInterval(_pollTimer); _pollTimer = null; return }
-    refresh().catch((e) => toast(e.message, 'error'))
+    refresh().catch(() => setOfflineBanner(true))
   }, getSavedPollIntervalMs())
 
   wireToolbar()
@@ -23,17 +23,26 @@ export async function init() {
   wireImportFlow()
   wireTemplateFlow()
 
+  await loadInitial()
+}
+
+async function loadInitial() {
+  renderTableState(document.getElementById('pl-body'), 'loading')
   try {
     _all = await api.pipelines.list()
+    setOfflineBanner(false)
     renderTable(filteredPipelines())
     _maybeOpenTemplatesFromRouteAlias()
   } catch (e) {
-    toast(`Pipelines error: ${e.message}`, 'error')
+    renderTableState(document.getElementById('pl-body'), 'error', e.message, {
+      onRetry: () => { void loadInitial() },
+    })
   }
 }
 
 async function refresh() {
   _all = await api.pipelines.list()
+  setOfflineBanner(false)
   renderTable(filteredPipelines())
 }
 
@@ -176,6 +185,12 @@ async function refreshWithSpinner() {
 }
 
 async function reloadPipelines() {
+  const ok = await confirmAction({
+    title: 'Reload pipelines',
+    body: 'Re-scans the pipelines directory and re-syncs all pipelines from disk. Pipelines created or edited only in this UI are kept; running streams restart.',
+    confirmLabel: 'Reload',
+  })
+  if (!ok) return
   const btn = document.getElementById('pl-reload-btn')
   const icon = document.getElementById('pl-reload-icon')
   if (btn) btn.disabled = true
@@ -222,6 +237,13 @@ async function startPipeline(name) {
 }
 
 async function stopPipeline(name) {
+  const ok = await confirmAction({
+    title: 'Stop pipeline',
+    body: `Stop "${name}"? Active execution stops and the pipeline stays stopped until you start it again. Queued manual runs are cancelled.`,
+    confirmLabel: 'Stop',
+    danger: true,
+  })
+  if (!ok) return
   try {
     await api.pipelines.stop(name)
     toast(`Stopped ${name}`)
@@ -247,7 +269,13 @@ async function runPipeline(name) {
 }
 
 async function deletePipeline(name) {
-  if (!confirm(`Delete pipeline "${name}"?`)) return
+  const ok = await confirmAction({
+    title: 'Delete pipeline',
+    body: `Delete pipeline "${name}"? This cannot be undone.`,
+    confirmLabel: 'Delete',
+    danger: true,
+  })
+  if (!ok) return
   try {
     await api.pipelines.delete(name)
     toast(`Deleted ${name}`)

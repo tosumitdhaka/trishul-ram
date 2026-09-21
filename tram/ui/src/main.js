@@ -46,6 +46,14 @@ function showLogin() {
   import('./pages/login.js').then(m => m.init?.())
 }
 
+// Session expired mid-session (401 from any API call — see api.js): clear the
+// stale token and return to the login overlay.
+window.addEventListener('tram:unauthorized', () => {
+  localStorage.removeItem('tram_auth_token')
+  localStorage.removeItem('tram_auth_user')
+  showLogin()
+})
+
 function resumeRequestedRoute({ showLogout = false } = {}) {
   window._tramAuthPending = false
   const overlay = document.getElementById('login-overlay')

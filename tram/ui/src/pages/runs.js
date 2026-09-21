@@ -1,25 +1,32 @@
 import { api } from '../api.js'
-import { downloadBlob, toast } from '../utils.js'
+import { downloadBlob, renderTableState, toast } from '../utils.js'
 import { renderRunsTable } from './runs_table.js'
 
 const RUN_LIST_LIMIT = 200
 const RUN_EXPORT_LIMIT = 1000
 
 export async function init() {
+  document.getElementById('runs-pipeline')?.addEventListener('change', loadFiltered)
+  document.getElementById('runs-status')?.addEventListener('change',   loadFiltered)
+  document.getElementById('runs-from')?.addEventListener('change',     loadFiltered)
+  document.getElementById('runs-export-btn')?.addEventListener('click', exportCsv)
+  document.getElementById('runs-refresh-btn')?.addEventListener('click', refreshRuns)
+
+  await loadInitial()
+}
+
+async function loadInitial() {
+  renderTableState(document.getElementById('runs-body'), 'loading')
   try {
     const pipelines = await api.pipelines.list()
     populatePipelineSelect(pipelines)
     applyPresetFilters()
     await loadFiltered()
   } catch (e) {
-    toast(`Runs error: ${e.message}`, 'error')
+    renderTableState(document.getElementById('runs-body'), 'error', e.message, {
+      onRetry: () => { void loadInitial() },
+    })
   }
-
-  document.getElementById('runs-pipeline')?.addEventListener('change', loadFiltered)
-  document.getElementById('runs-status')?.addEventListener('change',   loadFiltered)
-  document.getElementById('runs-from')?.addEventListener('change',     loadFiltered)
-  document.getElementById('runs-export-btn')?.addEventListener('click', exportCsv)
-  document.getElementById('runs-refresh-btn')?.addEventListener('click', refreshRuns)
 }
 
 function buildRunParams(limit = RUN_LIST_LIMIT) {
@@ -40,7 +47,9 @@ async function loadFiltered() {
     renderRuns(runs)
     set('runs-count', runs.length)
   } catch (e) {
-    toast(e.message, 'error')
+    renderTableState(document.getElementById('runs-body'), 'error', e.message, {
+      onRetry: () => { void loadFiltered() },
+    })
   }
 }
 
@@ -83,6 +92,7 @@ async function refreshRuns() {
 function populatePipelineSelect(pipelines) {
   const sel = document.getElementById('runs-pipeline')
   if (!sel) return
+  sel.innerHTML = '<option value="">All pipelines</option>'
   pipelines.forEach(p => {
     const opt = document.createElement('option')
     opt.value = p.name
