@@ -16,6 +16,8 @@ from tram.api.routers.health import router as health_router
 from tram.api.routers.internal import PipelineStatsPayload
 from tram.api.routers.metrics_router import router as metrics_router
 from tram.api.routers.runs import router as runs_router
+from tram.core.context import RunResult, RunStatus
+from tram.persistence.db import TramDB
 
 # ── Helpers ────────────────────────────────────────────────────────────────
 
@@ -73,6 +75,20 @@ def _run_result_mock(run_id="abc123", pipeline="my-pipe", status="success"):
         "records_in": 10, "records_out": 10, "finished_at": "2026-04-01T00:00:00Z"
     }
     return r
+
+
+def _db_run(run_id, pipeline_name="my-pipe", status="success"):
+    """A real RunResult for TramDB persistence (MagicMocks cannot be saved)."""
+    return RunResult(
+        run_id=run_id,
+        pipeline_name=pipeline_name,
+        status=RunStatus(status),
+        started_at=datetime(2026, 4, 1, tzinfo=UTC),
+        finished_at=datetime(2026, 4, 1, 0, 1, tzinfo=UTC),
+        records_in=10,
+        records_out=10,
+        records_skipped=0,
+    )
 
 
 # ── Health router ──────────────────────────────────────────────────────────
@@ -533,6 +549,49 @@ class TestListRuns:
         r = client.get("/api/runs?format=csv")
         assert r.status_code == 200
         assert "run_id" in r.text  # CSV header
+
+
+class TestCountRuns:
+    def test_no_db_returns_null_total(self):
+        app = _make_runs_app()
+        client = TestClient(app)
+        r = client.get("/api/runs/count")
+        assert r.status_code == 200
+        assert r.json() == {"total": None}
+
+    def test_counts_all_runs(self, tmp_path):
+        app = _make_runs_app()
+        db = TramDB(url=f"sqlite:///{tmp_path}/runs-count.db")
+        db.save_run(_db_run("r1", pipeline_name="alpha", status="success"))
+        db.save_run(_db_run("r2", pipeline_name="alpha", status="failed"))
+        db.save_run(_db_run("r3", pipeline_name="beta", status="success"))
+        app.state.db = db
+        client = TestClient(app)
+        r = client.get("/api/runs/count")
+        assert r.status_code == 200
+        assert r.json() == {"total": 3}
+
+    def test_counts_with_pipeline_and_status_filters(self, tmp_path):
+        app = _make_runs_app()
+        db = TramDB(url=f"sqlite:///{tmp_path}/runs-count-filters.db")
+        db.save_run(_db_run("r1", pipeline_name="alpha", status="success"))
+        db.save_run(_db_run("r2", pipeline_name="alpha", status="failed"))
+        db.save_run(_db_run("r3", pipeline_name="beta", status="success"))
+        app.state.db = db
+        client = TestClient(app)
+        assert client.get("/api/runs/count?pipeline=alpha").json() == {"total": 2}
+        assert client.get("/api/runs/count?pipeline=alpha&status=failed").json() == {"total": 1}
+        assert client.get("/api/runs/count?status=queued").json() == {"total": 0}
+
+    def test_count_ignored_as_run_id(self, tmp_path):
+        """'count' must hit the count endpoint, not /runs/{run_id}."""
+        app = _make_runs_app()
+        db = TramDB(url=f"sqlite:///{tmp_path}/runs-count-route.db")
+        app.state.db = db
+        client = TestClient(app)
+        r = client.get("/api/runs/count")
+        assert r.status_code == 200
+        assert "total" in r.json()
 
 
 class TestGetRun:

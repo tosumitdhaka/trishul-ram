@@ -9,6 +9,7 @@ from typing import Literal
 
 from fastapi import APIRouter, HTTPException, Query, Request
 from fastapi.responses import StreamingResponse
+from sqlalchemy import text
 
 router = APIRouter(prefix="/api")
 
@@ -98,6 +99,51 @@ async def list_runs(
         )
 
     return rows
+
+
+@router.get("/runs/count")
+async def count_runs(
+    request: Request,
+    pipeline: str | None = Query(None, description="Filter by pipeline name"),
+    status: str | None = Query(None, description="Filter by status (success/failed/aborted/queued)"),
+    from_dt: datetime | None = Query(None, description="Count runs started at or after this ISO timestamp"),
+):
+    """Total run count for the current list filters (honest pagination UI).
+
+    Mirrors the /api/runs WHERE clause, plus the queued-run merge so the
+    count matches what the listing shows. Returns ``{"total": null}`` when
+    no persistence is configured — the UI falls back to its has-more
+    heuristic there. Registered before /runs/{run_id} so "count" is not
+    captured as a run id.
+    """
+    db = getattr(request.app.state, "db", None)
+    if db is None:
+        return {"total": None}
+
+    sql = "SELECT COUNT(*) FROM run_history WHERE 1=1"
+    params: dict = {}
+    if pipeline:
+        sql += " AND pipeline_name = :pipeline_name"
+        params["pipeline_name"] = pipeline
+    if status:
+        sql += " AND status = :status"
+        params["status"] = status
+    if from_dt:
+        sql += " AND started_at >= :from_dt"
+        params["from_dt"] = from_dt.isoformat()
+    # TramDB exposes no count API; the engine is the only handle (L4: minimal,
+    # router-confined addition).
+    with db._engine.connect() as conn:  # noqa: SLF001
+        total = conn.execute(text(sql), params).scalar_one()
+
+    # Queued runs are merged into the listing — count them the same way.
+    queued = [
+        run for run in db.get_queued_run_view()
+        if (pipeline is None or run["pipeline_name"] == pipeline)
+        and (status is None or status == "queued")
+        and (from_dt is None or run["requested_at"] >= from_dt)
+    ]
+    return {"total": total + len(queued)}
 
 
 @router.get("/runs/{run_id}")
