@@ -389,7 +389,7 @@ function _wireActions() {
   })
   document.getElementById('dash-manage-btn')?.addEventListener('click', () => router.navigate('pipelines'))
   document.getElementById('dash-new-btn')?.addEventListener('click', () => {
-    router.navigate('editor?return=dashboard')
+    router.navigate('create?return=dashboard')
   })
   document.getElementById('dash-view-runs-btn')?.addEventListener('click', () => router.navigate('runs'))
 }

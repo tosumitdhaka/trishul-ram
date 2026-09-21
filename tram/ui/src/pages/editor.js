@@ -177,6 +177,18 @@ export async function init() {
     document.getElementById('editor-diff-btn')?.setAttribute('hidden', '')
     if (titleEl) titleEl.textContent = 'New Pipeline'
     if (ta) ta.value = TEMPLATE
+    // Wizard hand-off: #editor?from=wizard — the unsaved YAML travels via
+    // sessionStorage (never a window global), tied to this explicit route
+    // flag. The key is dropped on first edit; after that the editor's own
+    // draft guard owns persistence, so a refresh recovers the user's work.
+    if (query.from === 'wizard') {
+      let prefill = null
+      try { prefill = sessionStorage.getItem('tram_wizard_prefill') } catch { /**/ }
+      if (prefill) {
+        if (ta) ta.value = prefill
+        toast('Wizard YAML loaded — dry-run, then save')
+      }
+    }
     // New-from-template: #editor?template=<name> — the template is fetched
     // by name so a refresh recovers it without in-memory handoffs.
     if (query.template) {
@@ -226,6 +238,10 @@ export async function init() {
 function _onEditorInput() {
   _discardAiUndo()
   _hideDraftBar()
+  // First edit consumes the wizard hand-off — from here the draft guard owns
+  // persistence, so the one-shot prefill can't overwrite user changes on a
+  // refresh.
+  try { sessionStorage.removeItem('tram_wizard_prefill') } catch { /**/ }
   _scheduleDraftSave()
 }
 

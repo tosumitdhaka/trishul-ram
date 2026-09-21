@@ -18,6 +18,7 @@ import { isAuthPending } from './auth_state.js'
 import { unmountPage } from './page.js'
 import dashboardHtml from './pages/dashboard.html?raw'
 import pipelinesHtml from './pages/pipelines.html?raw'
+import createHtml     from './pages/create.html?raw'
 import detailHtml    from './pages/detail.html?raw'
 import editorHtml    from './pages/editor.html?raw'
 import runsHtml      from './pages/runs.html?raw'
@@ -31,6 +32,7 @@ import settingsHtml   from './pages/settings.html?raw'
 const pages = {
   dashboard: dashboardHtml,
   pipelines: pipelinesHtml,
+  create:    createHtml,
   detail:    detailHtml,
   editor:    editorHtml,
   runs:      runsHtml,
@@ -45,6 +47,7 @@ const pages = {
 const meta = {
   dashboard: { title: 'Dashboard',         sub: 'Overview' },
   pipelines: { title: 'Pipelines',         sub: '' },
+  create:    { title: 'New Pipeline',      sub: 'Guided creation' },
   detail:    { title: 'Pipeline Detail',   sub: '' },
   editor:    { title: 'Pipeline Editor',   sub: '' },
   runs:      { title: 'Run History',      sub: '' },
@@ -60,6 +63,7 @@ const meta = {
 const inits = {
   dashboard: () => import('./pages/dashboard.js').then(m => m.init?.()),
   pipelines: () => import('./pages/pipelines.js').then(m => m.init?.()),
+  create:    () => import('./pages/create.js').then(m => m.init?.()),
   detail:    () => import('./pages/detail.js').then(m => m.init?.()),
   editor:    () => import('./pages/editor.js').then(m => m.init?.()),
   runs:      () => import('./pages/runs.js').then(m => m.init?.()),
@@ -153,6 +157,7 @@ export const router = {
       a.classList.toggle('active', a.dataset.page === page ||
         (page === 'detail' && a.dataset.page === 'pipelines') ||
         (page === 'editor' && a.dataset.page === 'pipelines') ||
+        (page === 'create' && a.dataset.page === 'pipelines') ||
         (page === 'runs_detail' && a.dataset.page === 'runs'))
     })
     this.current = page

@@ -194,7 +194,7 @@ async function reloadPipelines() {
 }
 
 function openNewPipeline() {
-  router.navigate('editor?return=pipelines')
+  router.navigate('create?return=pipelines')
 }
 
 function openPipelineDetail(name) {
