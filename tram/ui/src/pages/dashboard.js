@@ -1,5 +1,6 @@
 import { api } from '../api.js'
 import { router } from '../router.js'
+import { createPageController } from '../page.js'
 import {
   bindDataActions,
   confirmAction,
@@ -19,7 +20,6 @@ import { monitorTriggeredRun, runOutcomeToast } from '../run_monitor.js'
 const DEFAULT_STATS_PARAMS = { period: '1h', granularity: '5m' }
 const DEFAULT_CHART_METRIC = 'bytes_processed'
 
-let _pollTimer  = null
 let _statsParams = loadStatsParams()
 let _statsCache = null
 let _pollMs = getSavedPollIntervalMs()
@@ -27,35 +27,14 @@ let _chartMetric = loadChartMetric()
 const _pipelineMeta = new Map()
 let _runMonitorToken = 0
 
-export async function init() {
-  if (_pollTimer) { clearInterval(_pollTimer); _pollTimer = null }
-  _hideSparklineTooltip()
-  // Route params (deep links) win over the remembered defaults.
-  _statsParams = loadStatsParams(router.route().query)
-  _wireControls()
-  _wireActions()
-  _pollMs = getSavedPollIntervalMs()
-
-  await _refresh()
-
-  _pollTimer = setInterval(async () => {
-    if (!document.getElementById('dash-sparkline')) {
-      _hideSparklineTooltip()
-      clearInterval(_pollTimer)
-      _pollTimer = null
-      return
-    }
-    await _refresh()
-  }, _pollMs)
-}
-
-async function _refresh() {
-  try {
-    const [stats, runs, pipelines] = await Promise.all([
-      api.stats.get(_statsParams),
-      api.runs.list({ limit: 10 }),
-      api.pipelines.list().catch(() => []),
-    ])
+const controller = createPageController({
+  page: 'dashboard',
+  fetch: () => Promise.all([
+    api.stats.get(_statsParams),
+    api.runs.list({ limit: 10 }),
+    api.pipelines.list().catch(() => []),
+  ]),
+  render: ([stats, runs, pipelines]) => {
     _statsCache = stats
     _cachePipelineMeta(pipelines)
     _renderStatCards(stats)
@@ -63,11 +42,23 @@ async function _refresh() {
     _renderPipelines(stats.per_pipeline || [])
     _renderRuns(runs)
     _setLiveDot(true)
-    setOfflineBanner(false)
-  } catch (_) {
+  },
+  pollMs: () => _pollMs,
+  onError: () => {
     setOfflineBanner(true)
     _setLiveDot(false)
-  }
+  },
+  onLeave: () => _hideSparklineTooltip(),
+})
+
+export async function init() {
+  // Route params (deep links) win over the remembered defaults.
+  _statsParams = loadStatsParams(router.route().query)
+  _wireControls()
+  _wireActions()
+  _pollMs = getSavedPollIntervalMs()
+
+  await controller.mount()
 }
 
 async function _refreshStats() {
@@ -262,7 +253,7 @@ async function stopPipeline(name) {
     danger: true,
   })
   if (!ok) return
-  try { await api.pipelines.stop(name); toast(`Stopped ${name}`); await _refresh() }
+  try { await api.pipelines.stop(name); toast(`Stopped ${name}`); await controller.refresh() }
   catch (e) { toast(e.message, 'error') }
 }
 
@@ -271,7 +262,7 @@ async function startPipeline(name) {
     const result = await api.pipelines.start(name)
     const feedback = pipelineStartFeedback(name, result)
     toast(feedback.message, feedback.type)
-    setTimeout(_refresh, 800)
+    setTimeout(() => controller.refresh(), 800)
   }
   catch (e) { toast(e.message, 'error') }
 }
@@ -279,14 +270,14 @@ async function startPipeline(name) {
 async function runPipeline(name) {
   try {
     const result = await api.pipelines.run(name)
-    setTimeout(_refresh, 400)
+    setTimeout(() => controller.refresh(), 400)
     if (result?.run_id) {
       const token = ++_runMonitorToken
       void monitorTriggeredRun(result.run_id, {
         isActive: () => token === _runMonitorToken && Boolean(document.getElementById('dash-pipelines-body')),
       }).then(async (run) => {
         if (token !== _runMonitorToken || !document.getElementById('dash-pipelines-body')) return
-        await _refresh()
+        await controller.refresh()
         const feedback = runOutcomeToast(run, { name })
         if (feedback) {
           toast(feedback.message, feedback.type)
@@ -300,7 +291,7 @@ async function runPipeline(name) {
 }
 
 function openDetail(name) {
-  navigate(`detail/${encodeURIComponent(name)}`)
+  router.navigate(`detail/${encodeURIComponent(name)}`)
 }
 
 async function downloadPipelineYaml(name) {
@@ -390,17 +381,17 @@ function _wireActions() {
     if (btn) btn.disabled = true
     if (icon) icon.className = 'bi bi-arrow-clockwise spin'
     try {
-      await _refresh()
+      await controller.refresh()
     } finally {
       if (btn) btn.disabled = false
       if (icon) icon.className = 'bi bi-arrow-clockwise'
     }
   })
-  document.getElementById('dash-manage-btn')?.addEventListener('click', () => navigate('pipelines'))
+  document.getElementById('dash-manage-btn')?.addEventListener('click', () => router.navigate('pipelines'))
   document.getElementById('dash-new-btn')?.addEventListener('click', () => {
-    navigate('editor?return=dashboard')
+    router.navigate('editor?return=dashboard')
   })
-  document.getElementById('dash-view-runs-btn')?.addEventListener('click', () => navigate('runs'))
+  document.getElementById('dash-view-runs-btn')?.addEventListener('click', () => router.navigate('runs'))
 }
 
 function loadStatsParams(routeQuery = {}) {

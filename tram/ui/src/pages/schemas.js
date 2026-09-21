@@ -1,7 +1,18 @@
 import { api } from '../api.js'
-import { bindDataActions, confirmAction, downloadText, esc, renderTableState, toast } from '../utils.js'
+import { createPageController } from '../page.js'
+import { bindDataActions, confirmAction, downloadText, esc, toast } from '../utils.js'
 
 let _allSchemas = []
+
+const controller = createPageController({
+  page: 'schemas',
+  fetch: () => api.schemas.list(),
+  render: (schemas) => {
+    _allSchemas = schemas
+    applySchemaFilter()
+  },
+  tableBody: () => document.getElementById('schemas-body'),
+})
 
 export async function init() {
   wireDropZone()
@@ -11,18 +22,7 @@ export async function init() {
     download: async (button) => downloadSchema(button.dataset.filepath),
     delete: async (button) => deleteSchema(button.dataset.filepath),
   })
-  await loadSchemas()
-}
-
-async function loadSchemas() {
-  try {
-    _allSchemas = await api.schemas.list()
-    applySchemaFilter()
-  } catch (e) {
-    renderTableState(document.getElementById('schemas-body'), 'error', e.message, {
-      onRetry: () => { void loadSchemas() },
-    })
-  }
+  await controller.mount()
 }
 
 function applySchemaFilter() {
@@ -74,7 +74,7 @@ async function uploadSchemas() {
   }
   if (ok) toast(`Uploaded ${ok} file${ok > 1 ? 's' : ''}`)
   document.getElementById('schema-file-input').value = ''
-  await loadSchemas()
+  await controller.refresh()
 }
 
 async function deleteSchema(filepath) {
@@ -89,7 +89,7 @@ async function deleteSchema(filepath) {
   try {
     await api.schemas.delete(filepath)
     toast('Deleted')
-    await loadSchemas()
+    await controller.refresh()
   } catch (e) {
     toast(e.message, 'error')
   }

@@ -132,10 +132,10 @@ function _leaveEditor(pipelineName = null) {
   // successful save _editorSave clears it explicitly first.
   _saveDraftNow()
   if (_returnTo === 'detail' && pipelineName) {
-    navigate(`detail/${encodeURIComponent(pipelineName)}`)
+    router.navigate(`detail/${encodeURIComponent(pipelineName)}`)
     return
   }
-  navigate(_returnTo === 'dashboard' ? 'dashboard' : 'pipelines')
+  router.navigate(_returnTo === 'dashboard' ? 'dashboard' : 'pipelines')
 }
 
 export async function init() {
@@ -249,7 +249,7 @@ function _bindEditorActions() {
   document.getElementById('editor-ai-undo-btn')?.addEventListener('click', _undoAiChange)
   document.getElementById('editor-open-settings-link')?.addEventListener('click', (event) => {
     event.preventDefault()
-    navigate('settings')
+    router.navigate('settings')
   })
   document.getElementById('editor-draft-restore')?.addEventListener('click', _restoreDraft)
   document.getElementById('editor-draft-discard')?.addEventListener('click', _discardDraft)

@@ -14,6 +14,7 @@
 // them by name, so a refresh recovers without in-memory handoffs.
 
 import { isAuthPending } from './auth_state.js'
+import { unmountPage } from './page.js'
 import dashboardHtml from './pages/dashboard.html?raw'
 import pipelinesHtml from './pages/pipelines.html?raw'
 import detailHtml    from './pages/detail.html?raw'
@@ -117,6 +118,10 @@ export const router = {
 
     if (isAuthPending()) return
 
+    // Tear down the outgoing page's controller (poll timer, in-flight loads)
+    // before its DOM is replaced. Same-page re-renders keep the controller.
+    if (this.current && this.current !== page) unmountPage(this.current)
+
     // Let the outgoing page flush in-memory state (the editor saves its
     // recovery draft here when the operator leaves via a sidebar link).
     window.dispatchEvent(new CustomEvent('tram:page-leave', { detail: { from: this.current, page } }))
@@ -194,4 +199,10 @@ export const router = {
     // Initial page from hash or default
     this.navigate(window.location.hash || '#dashboard', { fromHashChange: true })
   },
+}
+
+// Named export so pages navigate via a module import instead of a
+// window global.
+export function navigate(routeString, options) {
+  router.navigate(routeString, options)
 }

@@ -1,6 +1,6 @@
 import { api } from '../api.js'
 import { router } from '../router.js'
-import { bindDataActions, confirmAction, downloadText, relTime, fmtNum, renderTableState, schedBadge, statusBadge, esc, toast, pipelineStartFeedback } from '../utils.js'
+import { bindDataActions, confirmAction, downloadText, relTime, fmtNum, schedBadge, statusBadge, esc, toast, pipelineStartFeedback } from '../utils.js'
 import { monitorTriggeredRun, runOutcomeToast } from '../run_monitor.js'
 import {
   renderDiffStats,
@@ -17,30 +17,32 @@ let _runMonitorToken = 0
 let _versions = []
 const _versionYamlCache = new Map()
 
-export async function init() {
-  const { params, query } = router.route()
-  _name = params[0] || null
-  if (!_name) { navigate('pipelines'); return }
-  _activeTab = ['runs', 'config', 'versions', 'alerts'].includes(query.tab) ? query.tab : 'runs'
-  _versionYamlCache.clear()
-
-  try {
-    const [pipeline, placement, versions] = await Promise.all([
-      api.pipelines.get(_name),
-      api.pipelines.placement(_name).catch((e) => (e.status === 404 ? null : Promise.reject(e))),
-      api.pipelines.versions(_name).catch(() => []),
-    ])
+const controller = createPageController({
+  page: 'detail',
+  fetch: () => Promise.all([
+    api.pipelines.get(_name),
+    api.pipelines.placement(_name).catch((e) => (e.status === 404 ? null : Promise.reject(e))),
+    api.pipelines.versions(_name).catch(() => []),
+  ]),
+  render: ([pipeline, placement, versions]) => {
     _versions = Array.isArray(versions) ? versions : []
     _activeYaml = pipeline.yaml || null
     renderHeader(pipeline)
     renderCards(pipeline)
     renderPlacement(placement)
     wireActions(pipeline)
-  } catch (e) {
-    renderTableState(document.getElementById('detail-runs-body'), 'error', e.message, {
-      onRetry: () => { void init() },
-    })
-  }
+  },
+  tableBody: () => document.getElementById('detail-runs-body'),
+})
+
+export async function init() {
+  const { params, query } = router.route()
+  _name = params[0] || null
+  if (!_name) { router.navigate('pipelines'); return }
+  _activeTab = ['runs', 'config', 'versions', 'alerts'].includes(query.tab) ? query.tab : 'runs'
+  _versionYamlCache.clear()
+
+  await controller.mount()
 
   wireTabs()
   showTab(_activeTab)
@@ -198,12 +200,12 @@ function renderPlacement(placement) {
 }
 
 function wireActions(pipeline) {
-  document.getElementById('detail-back-btn').onclick = () => navigate('pipelines')
+  document.getElementById('detail-back-btn').onclick = () => router.navigate('pipelines')
   document.getElementById('detail-edit-btn').onclick = () => {
-    navigate(`editor/${encodeURIComponent(_name)}?return=detail`)
+    router.navigate(`editor/${encodeURIComponent(_name)}?return=detail`)
   }
   document.getElementById('detail-open-runs-btn').onclick = () => {
-    navigate(`runs?pipeline=${encodeURIComponent(_name)}`)
+    router.navigate(`runs?pipeline=${encodeURIComponent(_name)}`)
   }
   document.getElementById('detail-refresh-btn').onclick = () => { void _detailRefresh() }
   document.getElementById('detail-restart-btn').onclick = () => { void _detailRestart() }
@@ -360,9 +362,10 @@ async function _detailRefresh() {
   if (btn) btn.disabled = true
   if (icon) icon.className = 'bi bi-arrow-clockwise spin'
   try {
-    await init()
-  } catch (e) {
-    toast(e.message, 'error')
+    await controller.refresh()
+    // Re-run the active tab's lazy load (runs/config/versions/alerts) —
+    // the controller only re-renders the header, cards and placement.
+    showTab(_activeTab)
   } finally {
     if (btn) btn.disabled = false
     if (icon) icon.className = 'bi bi-arrow-clockwise'

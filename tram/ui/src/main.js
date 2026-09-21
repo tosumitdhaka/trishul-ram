@@ -3,14 +3,11 @@ import 'bootstrap-icons/font/bootstrap-icons.css'
 import 'bootstrap/dist/js/bootstrap.bundle.min.js'
 import './style.css'
 
-import { router } from './router.js'
+import { router, navigate } from './router.js'
 import { startHealthPoller } from './health.js'
 import { api } from './api.js'
 import { isAuthPending, setAuthPending } from './auth_state.js'
 import loginHtml from './pages/login.html?raw'
-
-// Expose globally so page modules can navigate without importing the router.
-window.navigate = (page, params) => router.navigate(page, params)
 
 function applyTheme(theme) {
   document.documentElement.setAttribute('data-bs-theme', theme)
@@ -61,12 +58,12 @@ function resumeRequestedRoute({ showLogout = false } = {}) {
   if (overlay) overlay.hidden = true
   if (shell) shell.hidden = false
   if (logoutBtn) logoutBtn.hidden = !showLogout
-  window.navigate(window.location.hash.slice(1) || 'dashboard')
+  navigate(window.location.hash.slice(1) || 'dashboard')
 }
 
 function wireShellActions() {
   document.getElementById('topbar-settings-btn')?.addEventListener('click', () => {
-    window.navigate('settings')
+    navigate('settings')
   })
   document.getElementById('theme-btn')?.addEventListener('click', toggleTheme)
   document.getElementById('logout-btn')?.addEventListener('click', logout)

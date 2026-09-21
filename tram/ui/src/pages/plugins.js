@@ -1,4 +1,5 @@
 import { api } from '../api.js'
+import { createPageController } from '../page.js'
 import { bindDataActions, esc, toast } from '../utils.js'
 
 const CATEGORY_META = {
@@ -33,6 +34,31 @@ function _normalizeDetails(plugins) {
   return normalized
 }
 
+const controller = createPageController({
+  page: 'plugins',
+  fetch: async () => {
+    const plugins = await api.plugins()
+    // Field metadata is best-effort: the list view works without it.
+    let schema = null
+    try { schema = await api.configSchema.get() } catch { schema = null }
+    return { plugins, schema }
+  },
+  render: ({ plugins, schema }) => {
+    _pluginDetails = _normalizeDetails(plugins)
+    _fieldMeta = schema
+    _render()
+  },
+  onError: (e) => {
+    const body = document.getElementById('plugins-body')
+    if (body) {
+      body.innerHTML = document.getElementById('plugins-error-template')?.innerHTML || ''
+      const retry = document.getElementById('plugins-error-retry')
+      if (retry) retry.onclick = () => { void controller.mount() }
+    }
+    toast(`Plugins error: ${e.message}`, 'error')
+  },
+})
+
 export async function init() {
   const body = document.getElementById('plugins-body')
   if (!body) return
@@ -57,20 +83,7 @@ export async function init() {
     },
   })
 
-  async function load() {
-    try {
-      const plugins = await api.plugins()
-      _pluginDetails = _normalizeDetails(plugins)
-      try { _fieldMeta = await api.configSchema.get() } catch { _fieldMeta = null }
-      _render()
-    } catch (e) {
-      body.innerHTML = document.getElementById('plugins-error-template')?.innerHTML || ''
-      const retry = document.getElementById('plugins-error-retry')
-      if (retry) retry.onclick = () => { void load() }
-      toast(`Plugins error: ${e.message}`, 'error')
-    }
-  }
-  await load()
+  await controller.mount()
 }
 
 function _render() {

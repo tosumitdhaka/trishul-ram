@@ -1,6 +1,7 @@
 import { api } from '../api.js'
 import { router } from '../router.js'
-import { downloadBlob, getSavedPollIntervalMs, renderTableState, setOfflineBanner, toast } from '../utils.js'
+import { createPageController } from '../page.js'
+import { downloadBlob, getSavedPollIntervalMs, toast } from '../utils.js'
 import { renderRunsTable } from './runs_table.js'
 
 const RUN_LIST_LIMIT = 200
@@ -9,16 +10,42 @@ const RUN_EXPORT_LIMIT = 1000
 let _runs = []
 let _hasMore = false
 let _autoRefresh = true
-let _pollTimer = null
 let _focusRunId = null
 let _focusedOnce = false
+let _booted = false
+
+const controller = createPageController({
+  page: 'runs',
+  fetch: async () => {
+    if (!_booted) {
+      // One-time page setup: the pipeline filter dropdown + deep-link filters.
+      const pipelines = await api.pipelines.list()
+      populatePipelineSelect(pipelines)
+      applyRouteFilters()
+      _booted = true
+    }
+    return api.runs.list(buildRunParams())
+  },
+  render: (runs) => {
+    _runs = runs
+    _hasMore = runs.length >= RUN_LIST_LIMIT
+    renderRuns(_runs)
+    updateCount()
+  },
+  pollMs: () => getSavedPollIntervalMs(),
+  // QW6 pause/resume: the timer keeps ticking but skips fetches while paused.
+  pollEnabled: () => _autoRefresh,
+  tableBody: () => document.getElementById('runs-body'),
+})
 
 export async function init() {
   _runs = []
   _hasMore = false
   _autoRefresh = true
+  _focusRunId = null
+  _focusedOnce = false
+  _booted = false
   updateAutoRefreshBtn()
-  if (_pollTimer) { clearInterval(_pollTimer); _pollTimer = null }
 
   const onFilterChange = () => {
     // Changing filters invalidates a deep-linked run focus.
@@ -27,7 +54,7 @@ export async function init() {
       router.replaceRoute('runs')
     }
     syncRouteFilters()
-    void loadFiltered().catch(e => toast(e.message, 'error'))
+    void controller.refresh()
   }
   document.getElementById('runs-pipeline')?.addEventListener('change', onFilterChange)
   document.getElementById('runs-status')?.addEventListener('change',   onFilterChange)
@@ -37,27 +64,7 @@ export async function init() {
   document.getElementById('runs-autorefresh-btn')?.addEventListener('click', toggleAutoRefresh)
   document.getElementById('runs-more-btn')?.addEventListener('click', () => { void loadMore() })
 
-  _pollTimer = setInterval(() => {
-    if (!document.getElementById('runs-table')) { clearInterval(_pollTimer); _pollTimer = null; return }
-    if (!_autoRefresh) return
-    loadFiltered().catch(() => setOfflineBanner(true))
-  }, getSavedPollIntervalMs())
-
-  await loadInitial()
-}
-
-async function loadInitial() {
-  renderTableState(document.getElementById('runs-body'), 'loading')
-  try {
-    const pipelines = await api.pipelines.list()
-    populatePipelineSelect(pipelines)
-    applyRouteFilters()
-    await loadFiltered()
-  } catch (e) {
-    renderTableState(document.getElementById('runs-body'), 'error', e.message, {
-      onRetry: () => { void loadInitial() },
-    })
-  }
+  await controller.mount()
 }
 
 function buildRunParams(limit = RUN_LIST_LIMIT, offset = 0) {
@@ -69,15 +76,6 @@ function buildRunParams(limit = RUN_LIST_LIMIT, offset = 0) {
   if (status)   params.status   = status
   if (from)     params.from_dt  = new Date(`${from}T00:00:00`).toISOString()
   return params
-}
-
-async function loadFiltered() {
-  const runs = await api.runs.list(buildRunParams())
-  _runs = runs
-  _hasMore = runs.length >= RUN_LIST_LIMIT
-  renderRuns(_runs)
-  setOfflineBanner(false)
-  updateCount()
 }
 
 // Appends the next page. Browsing deeper than the first page pauses
@@ -109,7 +107,7 @@ function toggleAutoRefresh() {
   _autoRefresh = !_autoRefresh
   if (_autoRefresh) {
     // Resuming reloads the latest page — the expanded history is replaced.
-    loadFiltered().catch(() => setOfflineBanner(true))
+    void controller.pollNow()
   }
   updateAutoRefreshBtn()
 }
@@ -185,9 +183,7 @@ async function refreshRuns() {
   const icon = document.getElementById('runs-refresh-icon')
   if (icon) icon.className = 'bi bi-arrow-clockwise spin'
   try {
-    await loadFiltered()
-  } catch (e) {
-    toast(e.message, 'error')
+    await controller.refresh()
   } finally {
     if (icon) icon.className = 'bi bi-arrow-clockwise'
   }
