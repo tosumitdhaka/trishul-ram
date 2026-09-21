@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from fastapi import APIRouter
 
-from tram.api.config_schema import SCHEMA_LINES
+from tram.api.config_schema import SCHEMA_LINES, schema_version
 
 router = APIRouter()
 
@@ -48,6 +48,12 @@ def build_ai_context(prompt: str, plugins: dict) -> str:
     - Full schema for all serializers and transforms (they're short).
     """
     sections: list[str] = []
+
+    # ── Schema identity (Issue #24 / Option A) ──────────────────────────────
+    # One line identifying which schema this prompt was built against; the
+    # same hash lands in the ai_usage audit row so every AI output is
+    # attributable to the exact schema knowledge that produced it.
+    sections.append(f"TRAM schema v: {schema_version()}")
 
     # ── Critical rules (always included) ─────────────────────────────────────
     sections.append("""\

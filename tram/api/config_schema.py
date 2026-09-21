@@ -240,4 +240,31 @@ def build_config_schema_payload() -> dict:
     }
 
 
+# Content-hash identity for the derived schema (Issue #24 / Option A). The
+# hash is cached: SCHEMA_FIELDS is built once at import time and never
+# mutated afterwards, so the computed value is stable for the process.
+_schema_version_cache: str | None = None
+
+
+def schema_version() -> str:
+    """Return the schema identity token: the first 12 hex chars of the sha256
+    over the canonical JSON of ``SCHEMA_FIELDS``
+    (``json.dumps(..., sort_keys=True)``).
+
+    This is an identity token for equality checks ("is this the schema the
+    daemon is serving now?"), NOT a semantic version — a Pydantic version bump
+    can change how types/defaults are rendered and rotate the hash with no
+    semantic change (risk noted in docs/ideas/schema-registry-feasibility.md
+    §5). Computed once and cached.
+    """
+    global _schema_version_cache
+    if _schema_version_cache is None:
+        import hashlib
+        import json
+
+        canonical = json.dumps(SCHEMA_FIELDS, sort_keys=True)
+        _schema_version_cache = hashlib.sha256(canonical.encode("utf-8")).hexdigest()[:12]
+    return _schema_version_cache
+
+
 _build_schema_cache()

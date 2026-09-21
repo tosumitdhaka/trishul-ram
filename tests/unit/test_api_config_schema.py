@@ -1,6 +1,7 @@
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
+import tram.api.config_schema as cs
 from tram.api.routers.schemas import config_router
 
 
@@ -40,3 +41,45 @@ def test_config_schema_omits_pydantic_undefined_and_exposes_optional_simple_fiel
     assert sftp_sink_fields["max_records"]["kind"] == "integer"
     assert sftp_sink_fields["max_time"]["kind"] == "integer"
     assert sftp_sink_fields["max_bytes"]["kind"] == "integer"
+
+
+# ── Issue #24 / Option A: schema_version content hash ───────────────────────
+
+
+def test_config_schema_endpoint_exposes_schema_version():
+    app = FastAPI()
+    app.include_router(config_router)
+    client = TestClient(app)
+
+    data = client.get("/api/config/schema").json()
+
+    assert "schema_version" in data
+    assert data["schema_version"] == cs.schema_version()
+    assert len(data["schema_version"]) == 12
+    assert all(c in "0123456789abcdef" for c in data["schema_version"])
+
+
+def test_schema_version_stable_for_same_schema():
+    first = cs.schema_version()
+    second = cs.schema_version()
+    assert first == second
+    assert len(first) == 12
+
+
+def test_schema_version_changes_when_schema_changes(monkeypatch):
+    # Contract test: the hash is a content hash of SCHEMA_FIELDS — mutating
+    # the schema must rotate it (reset the module cache: production never
+    # mutates SCHEMA_FIELDS after import, so the cache is stable there).
+    before = cs.schema_version()
+
+    monkeypatch.setitem(
+        cs.SCHEMA_FIELDS["source"],
+        "zzz_dummy_source",
+        [{"name": "dummy_field", "type": "str"}],
+    )
+    cs._schema_version_cache = None
+    try:
+        after = cs.schema_version()
+    finally:
+        cs._schema_version_cache = None
+    assert before != after

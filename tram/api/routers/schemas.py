@@ -20,7 +20,7 @@ import os
 from fastapi import APIRouter, File, HTTPException, Query, Request, UploadFile
 from fastapi.responses import PlainTextResponse, Response
 
-from tram.api.config_schema import build_config_schema_payload
+from tram.api.config_schema import build_config_schema_payload, schema_version
 
 logger = logging.getLogger(__name__)
 
@@ -45,8 +45,18 @@ _EXT_TO_TYPE = {
 
 @config_router.get("/api/config/schema")
 async def get_config_schema() -> dict:
-    """Return backend-generated config schema metadata for UI-driven forms."""
-    return build_config_schema_payload()
+    """Return backend-generated config schema metadata for UI-driven forms.
+
+    The response is the per-category descriptor payload plus a sibling
+    ``schema_version`` key — the content hash of SCHEMA_FIELDS (Issue #24,
+    Option A). Consumers that index known category names (``sources``,
+    ``sinks``, ``serializers``, ``transforms``) are unaffected; the extra key
+    lets a long-lived UI tab detect that the daemon was upgraded underneath
+    it (hash mismatch) instead of rendering forms from a stale schema.
+    """
+    payload = build_config_schema_payload()
+    payload["schema_version"] = schema_version()
+    return payload
 
 
 # ── Helpers ──────────────────────────────────────────────────────────────────

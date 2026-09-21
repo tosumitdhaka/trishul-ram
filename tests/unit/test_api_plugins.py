@@ -1,7 +1,9 @@
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
-from tram.api.routers.health import router
+import tram.api.config_schema as cs
+import tram.registry.registry as reg
+from tram.api.routers.health import _schema_mismatch, router
 
 
 def test_plugins_endpoint_returns_legacy_lists_and_details():
@@ -35,3 +37,58 @@ def test_plugins_endpoint_returns_legacy_lists_and_details():
     assert json_serializer["summary"]
     assert json_serializer["class_name"] == "JsonSerializer"
     assert any(field["name"] == "ensure_ascii" for field in json_serializer["fields"])
+
+
+# ── Issue #24 / Option A: schema_version + registry↔union cross-check ──────
+
+
+def test_plugins_endpoint_exposes_schema_version_and_mismatch():
+    app = FastAPI()
+    app.include_router(router)
+    client = TestClient(app)
+
+    data = client.get("/api/plugins").json()
+
+    assert data["schema_version"] == cs.schema_version()
+    assert len(data["schema_version"]) == 12
+
+    assert "schema_mismatch" in data
+    for category in ("sources", "sinks", "serializers", "transforms"):
+        assert isinstance(data["schema_mismatch"][category], dict)
+        assert set(data["schema_mismatch"][category].keys()) <= {"union_only", "registry_only"}
+
+
+def test_schema_mismatch_flags_registry_only_type(monkeypatch):
+    # A registered type missing from the Pydantic union surfaces as
+    # registry_only (fails validation; AI context shows "no schema available").
+    monkeypatch.setitem(cs.SCHEMA_FIELDS, "source", {"sftp": []})
+    mismatch = _schema_mismatch("source", {"sftp": object, "zzz_registered_only": object})
+    assert mismatch == {"registry_only": ["zzz_registered_only"]}
+
+
+def test_schema_mismatch_flags_union_only_type(monkeypatch):
+    # A union member with no registered class surfaces as union_only (passes
+    # validation, fails at runtime with PluginNotFoundError).
+    monkeypatch.setitem(cs.SCHEMA_FIELDS, "source", {"sftp": [], "zzz_union_only": []})
+    mismatch = _schema_mismatch("source", {"sftp": object})
+    assert mismatch == {"union_only": ["zzz_union_only"]}
+
+
+def test_schema_mismatch_empty_when_in_sync(monkeypatch):
+    monkeypatch.setitem(cs.SCHEMA_FIELDS, "source", {"sftp": []})
+    assert _schema_mismatch("source", {"sftp": object}) == {}
+
+
+def test_plugins_endpoint_flags_constructed_registry_divergence(monkeypatch):
+    # Endpoint-level: register a fake plugin at runtime; the cross-check must
+    # surface it as registry_only in the response.
+    app = FastAPI()
+    app.include_router(router)
+    client = TestClient(app)
+
+    reg._sources["zzz_endpoint_fake"] = object
+    try:
+        data = client.get("/api/plugins").json()
+    finally:
+        del reg._sources["zzz_endpoint_fake"]
+    assert "zzz_endpoint_fake" in data["schema_mismatch"]["sources"]["registry_only"]

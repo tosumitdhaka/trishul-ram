@@ -41,16 +41,31 @@ Build and version information.
 ```
 
 ### GET /api/plugins
-All registered plugin keys by category.
+All registered plugin keys by category, plus per-plugin UI metadata and the
+schema identity.
 
 ```json
 {
   "sources": ["kafka", "webhook", "websocket", "..."],
   "sinks": ["kafka", "opensearch", "elasticsearch", "..."],
   "serializers": ["json", "csv", "xml", "avro", "parquet", "msgpack", "protobuf"],
-  "transforms": ["rename", "cast", "filter", "..."]
+  "transforms": ["rename", "cast", "filter", "..."],
+  "details": { "sources": [...], "sinks": [...], "serializers": [...], "transforms": [...] },
+  "schema_mismatch": { "sources": {}, "sinks": {}, "serializers": {}, "transforms": {} },
+  "schema_version": "eecd1712ea4d"
 }
 ```
+
+- `details` — per-plugin descriptors (`name`, `class_name`, `summary`,
+  `required_fields`, `common_optional_fields`, `fields`, `field_count`).
+- `schema_mismatch` — registry↔union cross-check per category (Issue #24):
+  `union_only` lists types in the Pydantic union with no registered class
+  (validation passes, runtime `PluginNotFoundError`); `registry_only` lists
+  registered types missing from the union (fails Pydantic validation, AI
+  context renders them as "(no schema available)"). `{}` means in sync.
+- `schema_version` — first 12 hex chars of the sha256 over the canonical JSON
+  of `SCHEMA_FIELDS`; the identity token for the schema this payload was
+  derived from (equality check only — not a semantic version).
 
 ### GET /api/cluster/nodes
 Worker pool status (manager mode) or standalone indicator.
@@ -595,21 +610,53 @@ Response:
 
 ---
 
+## Connector schema (v1.4.3, Issue #24)
+
+### GET /api/config/schema
+Backend-generated connector schema metadata for UI-driven forms, derived at
+import time from the Pydantic plugin models. The response is the descriptor
+payload (categories → type → `{fields: [...]}`) plus a sibling
+`schema_version` key — consumers that index the known category names
+(`sources`, `sinks`, `serializers`, `transforms`) are unaffected.
+
+Each field descriptor: `name`, `type`, `kind` (`text`/`select`/`boolean`/
+`integer`/`number`/`list`/`map`/`complex`), `choices`, `required`, `default`,
+`secret` (name heuristic: password/token/secret), `multiline`.
+
+```json
+{
+  "sources": { "sftp": { "fields": [ {"name": "host", "type": "str", "kind": "text", "required": true, "secret": false, ...} ] } },
+  "sinks": {},
+  "serializers": { "json": { "fields": [ ... ] } },
+  "transforms": {},
+  "schema_version": "eecd1712ea4d"
+}
+```
+
+`schema_version` is the first 12 hex chars of the sha256 over the canonical
+JSON of the underlying `SCHEMA_FIELDS` cache — the identity token for this
+schema (equality check only, not a semantic version). A long-lived UI tab can
+compare it across polls to detect a manager upgrade underneath it (hash
+mismatch) instead of rendering forms from a stale schema.
+
+---
+
 ## AI Assist (v1.1.0)
 
 AI assist is configured either via `TRAM_AI_*` env vars or through the Settings
 page, which persists to the DB (DB values override env vars).
 
 ### GET /api/ai/status
-Returns whether AI assist is enabled (an API key is configured) and which
-provider/model would be used.
+Returns whether AI assist is enabled (an API key is configured), which
+provider/model would be used, and the schema identity token the AI prompts
+are built against (Issue #24).
 
 ```json
-{"enabled": true, "provider": "anthropic", "model": "claude-haiku-4-5-20251001"}
+{"enabled": true, "provider": "anthropic", "model": "claude-haiku-4-5-20251001", "schema_version": "eecd1712ea4d"}
 ```
 
-Returns `{"enabled": false, "provider": null, "model": null}` when no API key
-is configured.
+Returns `{"enabled": false, "provider": null, "model": null, "schema_version": "eecd1712ea4d"}`
+when no API key is configured — `schema_version` is always present.
 
 ### GET /api/ai/config
 Returns the current AI configuration. The API key is never returned — only

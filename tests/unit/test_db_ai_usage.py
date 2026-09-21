@@ -37,6 +37,15 @@ def test_append_and_read_ai_usage(db):
     assert row["tokens_in"] == 10
     assert row["tokens_out"] == 25
     assert row["ok"] == 1
+    assert row["schema_version"] is None  # not passed → NULL
+
+
+def test_schema_version_roundtrip(db):
+    # Issue #24: the audit row carries the schema identity the prompt was
+    # built against.
+    db.append_ai_usage(**_entry(), schema_version="eecd1712ea4d")
+    row = db.get_ai_usage()[0]
+    assert row["schema_version"] == "eecd1712ea4d"
 
 
 def test_append_is_append_only_every_call_gets_new_id(db):
@@ -68,6 +77,55 @@ def test_get_ai_usage_limit(db):
     for i in range(3):
         db.append_ai_usage(**_entry(mode=f"m{i}", ts=f"2026-09-21T00:00:0{i}+00:00"))
     assert len(db.get_ai_usage(limit=2)) == 2
+
+
+# ── v1.4.3 migration: schema_version column on pre-existing databases ───────
+
+
+def test_old_shape_ai_usage_table_migrates_in_place(tmp_path):
+    # A v1.4.1/v1.4.2 database has ai_usage WITHOUT schema_version. Building a
+    # TramDB on it must ALTER the table (following the _add_column_if_missing
+    # pattern), keep existing rows readable (schema_version NULL), and accept
+    # new rows with the column.
+    db_path = tmp_path / "legacy.db"
+
+    from sqlalchemy import create_engine, text
+
+    engine = create_engine(f"sqlite:///{db_path}")
+    with engine.begin() as conn:
+        conn.execute(text("""
+            CREATE TABLE ai_usage (
+                id         TEXT PRIMARY KEY NOT NULL,
+                ts         TEXT NOT NULL,
+                mode       TEXT NOT NULL,
+                client     TEXT NOT NULL,
+                provider   TEXT NOT NULL,
+                model      TEXT NOT NULL,
+                tokens_in  INTEGER,
+                tokens_out INTEGER,
+                ok         INTEGER NOT NULL DEFAULT 1
+            )
+        """))
+        conn.execute(text("""
+            INSERT INTO ai_usage (id, ts, mode, client, provider, model, tokens_in, tokens_out, ok)
+            VALUES ('legacy-row', '2026-09-20T00:00:00+00:00', 'generate', '10.0.0.9',
+                    'anthropic', 'claude-haiku-4-5-20251001', 1, 2, 1)
+        """))
+    engine.dispose()
+
+    d = TramDB(url=f"sqlite:///{db_path}")
+    try:
+        rows = d.get_ai_usage()
+        assert len(rows) == 1
+        assert rows[0]["id"] == "legacy-row"
+        assert rows[0]["schema_version"] is None  # old row predates the field
+
+        # New rows carry the column.
+        d.append_ai_usage(**_entry(), schema_version="eecd1712ea4d")
+        new_row = next(r for r in d.get_ai_usage() if r["id"] != "legacy-row")
+        assert new_row["schema_version"] == "eecd1712ea4d"
+    finally:
+        d.close()
 
 
 # ── TRAM_AI_AUDIT feature flag (A10) ────────────────────────────────────────

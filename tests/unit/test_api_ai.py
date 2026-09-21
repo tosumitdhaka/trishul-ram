@@ -9,6 +9,7 @@ import pytest
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
+from tram.api.config_schema import schema_version
 from tram.api.routers.ai import (
     _AiResult,
     _base_url_allowed,
@@ -343,6 +344,16 @@ class TestAiStatus:
         client = TestClient(app)
         r = client.get("/api/ai/status")
         assert r.json()["model"] is not None
+
+    def test_status_exposes_schema_version(self, monkeypatch):
+        # Issue #24: /api/ai/status carries the schema identity token so the
+        # UI can detect a schema change underneath a long-lived tab.
+        monkeypatch.setenv("TRAM_AI_API_KEY", "sk-test")
+        app = _make_app()
+        client = TestClient(app)
+        data = client.get("/api/ai/status").json()
+        assert data["schema_version"] == schema_version()
+        assert len(data["schema_version"]) == 12
 
 
 # ── /api/ai/config endpoints ───────────────────────────────────────────────
@@ -1326,6 +1337,9 @@ class TestAiUsagePersistence:
         assert kwargs["tokens_in"] == 3
         assert kwargs["tokens_out"] == 7
         assert kwargs["ok"] is True
+        # Issue #24: the usage row carries the schema identity the prompt was
+        # built against.
+        assert kwargs["schema_version"] == schema_version()
 
     def test_row_absent_when_audit_disabled(self, monkeypatch):
         monkeypatch.setenv("TRAM_AI_API_KEY", "sk-test")
