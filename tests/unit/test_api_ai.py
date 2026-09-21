@@ -8,7 +8,15 @@ import pytest
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
-from tram.api.routers.ai import _call_ai, _get_ai_cfg, _strip_fences, router
+from tram.api.routers.ai import (
+    _AiResult,
+    _call_ai,
+    _get_ai_cfg,
+    _redact_yaml,
+    _strip_fences,
+    _yaml_mode_result,
+    router,
+)
 
 # ── App factory ────────────────────────────────────────────────────────────
 
@@ -85,10 +93,12 @@ class TestCallAiAnthropic:
         mock_ant = MagicMock()
         mock_msg = MagicMock()
         mock_msg.content = [MagicMock(text="name: my-pipe")]
+        mock_msg.stop_reason = "end_turn"
         mock_ant.Anthropic.return_value.messages.create.return_value = mock_msg
         with patch.dict(sys.modules, {"anthropic": mock_ant}):
             result = _call_ai("system", "user", 100, self._cfg())
-        assert result == "name: my-pipe"
+        assert result.text == "name: my-pipe"
+        assert result.stop_reason == "end_turn"
 
     def test_import_error(self):
         with patch.dict(sys.modules, {"anthropic": None}):
@@ -186,11 +196,12 @@ class TestCallAiOpenAI:
     def test_success(self):
         mock_oai = MagicMock()
         mock_resp = MagicMock()
-        mock_resp.choices = [MagicMock(message=MagicMock(content="ok"))]
+        mock_resp.choices = [MagicMock(message=MagicMock(content="ok"), finish_reason="stop")]
         mock_oai.OpenAI.return_value.chat.completions.create.return_value = mock_resp
         with patch.dict(sys.modules, {"openai": mock_oai}):
             result = _call_ai("system", "user", 100, self._cfg())
-        assert result == "ok"
+        assert result.text == "ok"
+        assert result.stop_reason == "stop"
 
     def test_import_error(self):
         with patch.dict(sys.modules, {"openai": None}):
@@ -244,13 +255,26 @@ class TestCallAiBedrock:
         import json
         mock_resp = MagicMock()
         mock_resp.read.return_value = json.dumps(
-            {"content": [{"text": "pipeline yaml"}]}
+            {"content": [{"text": "pipeline yaml"}], "stop_reason": "max_tokens"}
         ).encode()
         mock_resp.__enter__ = lambda s: s
         mock_resp.__exit__ = MagicMock(return_value=False)
         with patch("urllib.request.urlopen", return_value=mock_resp):
             result = _call_ai("sys", "usr", 100, self._cfg())
-        assert result == "pipeline yaml"
+        assert result.text == "pipeline yaml"
+        assert result.stop_reason == "max_tokens"
+
+    def test_stop_reason_optional(self):
+        # Bedrock proxies may omit stop_reason from the JSON body — report None.
+        import json
+        mock_resp = MagicMock()
+        mock_resp.read.return_value = json.dumps({"content": [{"text": "yaml"}]}).encode()
+        mock_resp.__enter__ = lambda s: s
+        mock_resp.__exit__ = MagicMock(return_value=False)
+        with patch("urllib.request.urlopen", return_value=mock_resp):
+            result = _call_ai("sys", "usr", 100, self._cfg())
+        assert result.text == "yaml"
+        assert result.stop_reason is None
 
     def test_no_base_url_raises(self):
         with pytest.raises(RuntimeError, match="Base URL is required"):
@@ -417,7 +441,7 @@ class TestAiTestEndpoint:
         monkeypatch.setenv("TRAM_AI_API_KEY", "sk-test")
         app = _make_app()
         client = TestClient(app)
-        with patch("tram.api.routers.ai._call_ai", return_value="OK"):
+        with patch("tram.api.routers.ai._call_ai", return_value=_AiResult("OK", None)):
             r = client.post("/api/ai/test")
         assert r.status_code == 200
         assert r.json()["ok"] is True
@@ -446,7 +470,7 @@ class TestAiSuggestEndpoint:
         monkeypatch.setenv("TRAM_AI_API_KEY", "sk-test")
         app = _make_app()
         client = TestClient(app)
-        with patch("tram.api.routers.ai._call_ai", return_value="name: my-pipe"):
+        with patch("tram.api.routers.ai._call_ai", return_value=_AiResult("name: my-pipe", None)):
             r = client.post("/api/ai/suggest", json={"mode": "generate", "prompt": "read kafka"})
         assert r.status_code == 200
         assert "yaml" in r.json()
@@ -463,7 +487,7 @@ class TestAiSuggestEndpoint:
         monkeypatch.setenv("TRAM_AI_API_KEY", "sk-test")
         app = _make_app()
         client = TestClient(app)
-        with patch("tram.api.routers.ai._call_ai", return_value="The error means X"):
+        with patch("tram.api.routers.ai._call_ai", return_value=_AiResult("The error means X", None)):
             r = client.post("/api/ai/suggest", json={
                 "mode": "explain", "yaml": "name: p", "error": "source missing"
             })
@@ -482,7 +506,7 @@ class TestAiSuggestEndpoint:
         monkeypatch.setenv("TRAM_AI_API_KEY", "sk-test")
         app = _make_app()
         client = TestClient(app)
-        with patch("tram.api.routers.ai._call_ai", return_value="name: fixed-pipe"):
+        with patch("tram.api.routers.ai._call_ai", return_value=_AiResult("name: fixed-pipe", None)):
             r = client.post("/api/ai/suggest", json={
                 "mode": "fix", "yaml": "name: p", "error": "missing source"
             })
@@ -501,7 +525,7 @@ class TestAiSuggestEndpoint:
         monkeypatch.setenv("TRAM_AI_API_KEY", "sk-test")
         app = _make_app()
         client = TestClient(app)
-        with patch("tram.api.routers.ai._call_ai", return_value="name: modified-pipe"):
+        with patch("tram.api.routers.ai._call_ai", return_value=_AiResult("name: modified-pipe", None)):
             r = client.post("/api/ai/suggest", json={
                 "mode": "modify", "yaml": "name: p", "instruction": "add a filter"
             })
@@ -522,3 +546,300 @@ class TestAiSuggestEndpoint:
         client = TestClient(app)
         r = client.post("/api/ai/suggest", json={"mode": "bogus"})
         assert r.status_code == 400
+
+
+# ── A3: model-output validation + truncation surfacing ─────────────────────
+
+_VALID_PIPELINE_YAML = (
+    "name: pipe\n"
+    "schedule:\n  type: manual\n"
+    "source:\n  type: local\n  path: /tmp/in\n"
+    "serializer_in:\n  type: json\n"
+    "sinks:\n  - type: local\n    path: /tmp/out\n"
+).strip()
+
+
+class TestYamlModeResult:
+    def test_valid_yaml_returns_no_issues(self):
+        result = _yaml_mode_result(_AiResult(_VALID_PIPELINE_YAML, "end_turn"))
+        assert result["yaml"] == _VALID_PIPELINE_YAML
+        assert result["valid"] is True
+        assert result["issues"] == []
+
+    def test_invalid_yaml_still_returns_yaml_with_issues(self):
+        result = _yaml_mode_result(_AiResult("name: broken\n", "end_turn"))
+        assert result["yaml"] == "name: broken"
+        assert result["valid"] is False
+        assert any("validation" in issue.lower() for issue in result["issues"])
+
+    def test_yaml_syntax_error_reported(self):
+        result = _yaml_mode_result(_AiResult("name: [unclosed\n", "end_turn"))
+        assert result["valid"] is False
+        assert any("parse" in issue.lower() for issue in result["issues"])
+
+    def test_empty_output_reported(self):
+        result = _yaml_mode_result(_AiResult("```\n```", "end_turn"))
+        assert result["valid"] is False
+        assert result["issues"] == ["Model returned empty YAML"]
+
+    def test_anthropic_max_tokens_truncation_warning(self):
+        # A3: stop_reason="max_tokens" (anthropic / bedrock) ⇒ truncation warning.
+        result = _yaml_mode_result(_AiResult(_VALID_PIPELINE_YAML, "max_tokens"))
+        assert result["valid"] is False
+        assert any("truncat" in issue.lower() for issue in result["issues"])
+
+    def test_openai_length_truncation_warning(self):
+        # A3: finish_reason="length" (openai) ⇒ truncation warning.
+        result = _yaml_mode_result(_AiResult(_VALID_PIPELINE_YAML, "length"))
+        assert result["valid"] is False
+        assert any("truncat" in issue.lower() for issue in result["issues"])
+
+    def test_no_truncation_warning_for_end_turn(self):
+        result = _yaml_mode_result(_AiResult(_VALID_PIPELINE_YAML, "end_turn"))
+        assert not any("truncat" in issue.lower() for issue in result["issues"])
+
+    def test_strips_fences_before_validation(self):
+        fenced = f"```yaml\n{_VALID_PIPELINE_YAML}\n```"
+        result = _yaml_mode_result(_AiResult(fenced, "end_turn"))
+        assert result["yaml"] == _VALID_PIPELINE_YAML
+        assert result["valid"] is True
+
+
+class TestAiSuggestValidation:
+    """Endpoint-level: generate/fix/modify return {yaml, valid, issues}."""
+
+    def test_generate_returns_valid_and_issues(self, monkeypatch):
+        monkeypatch.setenv("TRAM_AI_API_KEY", "sk-test")
+        app = _make_app()
+        client = TestClient(app)
+        with patch("tram.api.routers.ai._call_ai",
+                   return_value=_AiResult(_VALID_PIPELINE_YAML, "end_turn")):
+            r = client.post("/api/ai/suggest", json={"mode": "generate", "prompt": "x"})
+        assert r.status_code == 200
+        data = r.json()
+        assert data["yaml"] == _VALID_PIPELINE_YAML
+        assert data["valid"] is True
+        assert data["issues"] == []
+
+    def test_generate_invalid_yaml_returns_raw_yaml(self, monkeypatch):
+        monkeypatch.setenv("TRAM_AI_API_KEY", "sk-test")
+        app = _make_app()
+        client = TestClient(app)
+        with patch("tram.api.routers.ai._call_ai", return_value=_AiResult("name: broken\n", "end_turn")):
+            r = client.post("/api/ai/suggest", json={"mode": "generate", "prompt": "x"})
+        assert r.status_code == 200
+        data = r.json()
+        assert data["yaml"] == "name: broken"  # raw YAML still returned
+        assert data["valid"] is False
+        assert data["issues"]
+
+    def test_fix_mode_returns_valid_and_issues(self, monkeypatch):
+        monkeypatch.setenv("TRAM_AI_API_KEY", "sk-test")
+        app = _make_app()
+        client = TestClient(app)
+        with patch("tram.api.routers.ai._call_ai",
+                   return_value=_AiResult(_VALID_PIPELINE_YAML, "end_turn")):
+            r = client.post("/api/ai/suggest", json={"mode": "fix", "yaml": _VALID_PIPELINE_YAML, "error": "e"})
+        data = r.json()
+        assert data["yaml"] == _VALID_PIPELINE_YAML
+        assert data["valid"] is True
+        assert data["issues"] == []
+
+    def test_modify_mode_returns_valid_and_issues(self, monkeypatch):
+        monkeypatch.setenv("TRAM_AI_API_KEY", "sk-test")
+        app = _make_app()
+        client = TestClient(app)
+        with patch("tram.api.routers.ai._call_ai",
+                   return_value=_AiResult(_VALID_PIPELINE_YAML, "end_turn")):
+            r = client.post("/api/ai/suggest", json={"mode": "modify", "yaml": _VALID_PIPELINE_YAML, "instruction": "i"})
+        data = r.json()
+        assert data["yaml"] == _VALID_PIPELINE_YAML
+        assert data["valid"] is True
+        assert data["issues"] == []
+
+    def test_explain_mode_unchanged(self, monkeypatch):
+        monkeypatch.setenv("TRAM_AI_API_KEY", "sk-test")
+        app = _make_app()
+        client = TestClient(app)
+        with patch("tram.api.routers.ai._call_ai", return_value=_AiResult("The error means X", None)):
+            r = client.post("/api/ai/suggest", json={"mode": "explain", "yaml": "x", "error": "e"})
+        assert r.status_code == 200
+        assert set(r.json().keys()) == {"explanation"}
+
+
+# ── A4: secret redaction in explain/fix/modify prompts ─────────────────────
+
+_SECRET_BEARING_YAML = (
+    "name: pipe\n"
+    "schedule:\n  type: manual\n"
+    "source:\n  type: sftp\n  host: example.com\n  username: op\n  password: supersecret123\n"
+    "serializer_in:\n  type: json\n"
+    "sinks:\n  - type: local\n    path: /tmp/out\n"
+)
+
+
+class TestRedactYaml:
+    def test_masks_secret_fields(self):
+        yaml_text = (
+            "name: pipe\n"
+            "schedule:\n  type: manual\n"
+            "source:\n  type: sftp\n  host: example.com\n  username: op\n  password: s3cr3t\n"
+            "serializer_in:\n  type: json\n"
+            "sinks:\n  - type: rest\n    url: http://x\n    token: abc123\n"
+        )
+        redacted = _redact_yaml(yaml_text)
+        assert "s3cr3t" not in redacted
+        assert "abc123" not in redacted
+        assert "***redacted***" in redacted
+        assert "example.com" in redacted   # non-secret fields untouched
+        assert "op" in redacted
+
+    def test_keeps_env_var_references(self):
+        # ${VAR} refs are env references — the loader substitutes at runtime.
+        yaml_text = (
+            "name: pipe\n"
+            "schedule:\n  type: manual\n"
+            "source:\n  type: sftp\n  host: example.com\n  username: op\n  password: ${SFTP_PASSWORD}\n"
+            "serializer_in:\n  type: json\n"
+            "sinks:\n  - type: kafka\n    brokers: [a:9092]\n    topic: t\n    sasl_password: ${KAFKA_PASS:-fallback}\n"
+        )
+        redacted = _redact_yaml(yaml_text)
+        assert "${SFTP_PASSWORD}" in redacted
+        assert "${KAFKA_PASS:-fallback}" in redacted
+        assert "***redacted***" not in redacted
+
+    def test_non_secret_fields_untouched(self):
+        redacted = _redact_yaml(_SECRET_BEARING_YAML)
+        assert "supersecret123" not in redacted
+        assert "example.com" in redacted
+        assert "username: op" in redacted
+        assert "name: pipe" in redacted
+
+    def test_masks_wrapped_pipeline_format(self):
+        yaml_text = (
+            "pipeline:\n"
+            "  name: pipe\n"
+            "  schedule:\n    type: manual\n"
+            "  source:\n    type: rest\n    url: http://x\n    token: tok123\n"
+            "  serializer_in:\n    type: json\n"
+            "  sinks:\n    - type: local\n      path: /tmp\n"
+        )
+        redacted = _redact_yaml(yaml_text)
+        assert "tok123" not in redacted
+        assert "pipeline:" in redacted
+
+    def test_unknown_connector_type_still_masked(self):
+        # Connector types outside the schema cache (plugin connectors) are
+        # covered by the password/token/secret name heuristic.
+        yaml_text = (
+            "name: pipe\n"
+            "schedule:\n  type: manual\n"
+            "source:\n  type: my_plugin_source\n  api_token: plugintok\n"
+            "serializer_in:\n  type: json\n"
+            "sinks:\n  - type: local\n    path: /tmp\n"
+        )
+        redacted = _redact_yaml(yaml_text)
+        assert "plugintok" not in redacted
+        assert "***redacted***" in redacted
+
+    def test_masks_nested_sink_blocks(self):
+        yaml_text = (
+            "name: pipe\n"
+            "schedule:\n  type: manual\n"
+            "source:\n  type: kafka\n  brokers: [a:9092]\n  topic: in\n  sasl_password: ksecret\n"
+            "serializer_in:\n  type: json\n"
+            "sinks:\n"
+            "  - type: rest\n    url: http://x\n    token: sinktok\n"
+            "    serializer_out:\n      type: json\n"
+            "    transforms:\n      - type: add_field\n        fields:\n          a: b\n"
+        )
+        redacted = _redact_yaml(yaml_text)
+        assert "ksecret" not in redacted
+        assert "sinktok" not in redacted
+        assert "add_field" in redacted      # transforms survive masking
+        assert "serializer_out" in redacted
+
+    def test_unparseable_yaml_returned_unchanged(self):
+        raw = "name: [unclosed\n  source:\n    type: sftp\n    password: keepme"
+        assert _redact_yaml(raw) == raw
+
+    def test_empty_yaml_returned_unchanged(self):
+        assert _redact_yaml("") == ""
+        assert _redact_yaml("   \n") == "   \n"
+
+
+class TestAiPromptRedaction:
+    """Endpoint-level: what reaches the provider has secrets masked."""
+
+    def _post(self, client, payload):
+        return client.post("/api/ai/suggest", json=payload)
+
+    def _capture(self, monkeypatch, client, payload):
+        captured = {}
+        def fake_call_ai(system, user, max_tokens, cfg):
+            captured["user"] = user
+            captured["system"] = system
+            return _AiResult(_VALID_PIPELINE_YAML, None)
+        with patch("tram.api.routers.ai._call_ai", side_effect=fake_call_ai):
+            r = self._post(client, payload)
+        return r, captured
+
+    def test_fix_mode_redacts_yaml_before_calling_ai(self, monkeypatch):
+        monkeypatch.setenv("TRAM_AI_API_KEY", "sk-test")
+        client = TestClient(_make_app())
+        r, captured = self._capture(monkeypatch, client, {
+            "mode": "fix", "yaml": _SECRET_BEARING_YAML, "error": "boom",
+        })
+        assert r.status_code == 200
+        assert "supersecret123" not in captured["user"]
+        assert "***redacted***" in captured["user"]
+        assert "example.com" in captured["user"]   # non-secret intact
+        assert "username: op" in captured["user"]
+
+    def test_explain_mode_redacts_yaml_before_calling_ai(self, monkeypatch):
+        monkeypatch.setenv("TRAM_AI_API_KEY", "sk-test")
+        client = TestClient(_make_app())
+        r, captured = self._capture(monkeypatch, client, {
+            "mode": "explain", "yaml": _SECRET_BEARING_YAML, "error": "boom",
+        })
+        assert r.status_code == 200
+        assert "supersecret123" not in captured["user"]
+        assert "***redacted***" in captured["user"]
+
+    def test_modify_mode_redacts_yaml_before_calling_ai(self, monkeypatch):
+        monkeypatch.setenv("TRAM_AI_API_KEY", "sk-test")
+        client = TestClient(_make_app())
+        r, captured = self._capture(monkeypatch, client, {
+            "mode": "modify", "yaml": _SECRET_BEARING_YAML, "instruction": "add sink",
+        })
+        assert r.status_code == 200
+        assert "supersecret123" not in captured["user"]
+        assert "***redacted***" in captured["user"]
+
+    def test_env_var_refs_survive_into_prompt(self, monkeypatch):
+        monkeypatch.setenv("TRAM_AI_API_KEY", "sk-test")
+        client = TestClient(_make_app())
+        yaml_with_env = (
+            "name: pipe\n"
+            "schedule:\n  type: manual\n"
+            "source:\n  type: sftp\n  host: example.com\n  username: op\n  password: ${SFTP_PASSWORD}\n"
+            "serializer_in:\n  type: json\n"
+            "sinks:\n  - type: local\n    path: /tmp/out\n"
+        )
+        r, captured = self._capture(monkeypatch, client, {
+            "mode": "fix", "yaml": yaml_with_env, "error": "boom",
+        })
+        assert r.status_code == 200
+        assert "${SFTP_PASSWORD}" in captured["user"]
+        assert "***redacted***" not in captured["user"]
+
+    def test_unparseable_yaml_sent_unchanged(self, monkeypatch):
+        # Mid-edit YAML that won't parse is sent as-is so explain/fix still work.
+        monkeypatch.setenv("TRAM_AI_API_KEY", "sk-test")
+        client = TestClient(_make_app())
+        raw = "name: [unclosed\n  source:\n    type: sftp\n    password: keepme"
+        r, captured = self._capture(monkeypatch, client, {
+            "mode": "explain", "yaml": raw, "error": "boom",
+        })
+        assert r.status_code == 200
+        assert "keepme" in captured["user"]

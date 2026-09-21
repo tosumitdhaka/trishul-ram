@@ -666,6 +666,20 @@ Errors: `503` when AI is not configured, `502` when the provider call fails
 Generate, explain, fix, or modify pipeline YAML. Returns `503` when AI is not
 configured, `502` when the provider call fails, and `400` for an unknown mode.
 
+For `generate`/`fix`/`modify`, the response carries `valid` and `issues` in
+addition to the YAML: the model output is validated server-side with the same
+`yaml.safe_load` + `load_pipeline_from_yaml` check the dry-run endpoint uses.
+`valid` is `false` when the YAML fails to parse/validate (errors in `issues`),
+or when the provider reported output truncation (`stop_reason`/`finish_reason`
+of `max_tokens`/`length` — a warning is appended to `issues`). The raw YAML is
+always returned so the editor can still show it.
+
+For `explain`/`fix`/`modify`, secret fields in the incoming YAML (per the
+schema metadata: field names containing `password`/`token`/`secret`) are masked
+with `***redacted***` before the prompt is sent to the provider — the operator's
+pipeline on disk is never modified. `${VAR}` environment references are left
+intact (the loader substitutes them at runtime, so they are not secrets).
+
 #### mode: `generate`
 Create a new pipeline from a description.
 
@@ -683,7 +697,11 @@ curl -X POST http://localhost:8765/api/ai/suggest \
 
 Response:
 ```json
-{"yaml": "name: snmp-to-influxdb\nschedule:\n  ..."}
+{
+  "yaml": "name: snmp-to-influxdb\nschedule:\n  ...",
+  "valid": true,
+  "issues": []
+}
 ```
 
 #### mode: `explain`
@@ -712,7 +730,11 @@ Return corrected YAML for a pipeline that failed dry-run.
 
 Response:
 ```json
-{"yaml": "name: fixed-pipe\nschedule:\n  ..."}
+{
+  "yaml": "name: fixed-pipe\nschedule:\n  ...",
+  "valid": false,
+  "issues": ["Pipeline validation error:\n..."]
+}
 ```
 
 #### mode: `modify`
@@ -727,7 +749,11 @@ Modify existing YAML per an instruction.
 
 Response:
 ```json
-{"yaml": "name: modified-pipe\nschedule:\n  ..."}
+{
+  "yaml": "name: modified-pipe\nschedule:\n  ...",
+  "valid": true,
+  "issues": []
+}
 ```
 
 Configure via env vars:

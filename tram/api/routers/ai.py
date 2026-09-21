@@ -4,10 +4,15 @@ from __future__ import annotations
 
 import asyncio
 import os
+from dataclasses import dataclass
 
+import yaml
 from fastapi import APIRouter, HTTPException, Request
 
+from tram.api.config_schema import SCHEMA_FIELDS
 from tram.api.routers.ai_docs import build_ai_context
+from tram.core.exceptions import ConfigError
+from tram.pipeline.loader import load_pipeline_from_yaml
 
 router = APIRouter()
 
@@ -24,6 +29,15 @@ _AI_PROVIDERS = ("anthropic", "openai", "bedrock")
 _AI_CALL_TIMEOUT = 60.0
 
 _AI_KEYS = ("ai.provider", "ai.api_key", "ai.model", "ai.base_url")
+
+
+@dataclass
+class _AiResult:
+    """Outcome of one provider call: the reply text plus the provider's stop
+    reason (``None`` when the provider does not report one)."""
+
+    text: str
+    stop_reason: str | None = None
 
 
 def _get_ai_cfg(db) -> dict:
@@ -71,7 +85,7 @@ TRAM pipelines are defined in YAML. Given a user description, output ONLY valid 
 """
 
 
-def _call_ai(system: str, user: str, max_tokens: int, cfg: dict) -> str:
+def _call_ai(system: str, user: str, max_tokens: int, cfg: dict) -> _AiResult:
     provider = cfg["provider"]
     api_key  = cfg["api_key"]
     model    = cfg["model"]
@@ -102,7 +116,10 @@ def _call_ai(system: str, user: str, max_tokens: int, cfg: dict) -> str:
             raise RuntimeError("Anthropic rate limit exceeded — try again shortly")
         except anthropic.APIStatusError as exc:
             raise RuntimeError(f"Anthropic API error: {exc.status_code} {exc.message}")
-        return msg.content[0].text.strip()
+        return _AiResult(
+            msg.content[0].text.strip(),
+            getattr(msg, "stop_reason", None),
+        )
 
     elif provider == "openai":
         try:
@@ -130,7 +147,10 @@ def _call_ai(system: str, user: str, max_tokens: int, cfg: dict) -> str:
             raise RuntimeError("OpenAI rate limit exceeded — try again shortly")
         except openai.APIStatusError as exc:
             raise RuntimeError(f"OpenAI API error: {exc.status_code} {exc.message}")
-        return resp.choices[0].message.content.strip()
+        return _AiResult(
+            resp.choices[0].message.content.strip(),
+            getattr(resp.choices[0], "finish_reason", None),
+        )
 
     elif provider == "bedrock":
         # AWS Bedrock-compatible proxy: POST {base_url}/model/{model}/invoke
@@ -155,7 +175,10 @@ def _call_ai(system: str, user: str, max_tokens: int, cfg: dict) -> str:
         try:
             with urllib.request.urlopen(req, timeout=60) as resp:
                 result = _json.loads(resp.read())
-            return result["content"][0]["text"].strip()
+            return _AiResult(
+                result["content"][0]["text"].strip(),
+                result.get("stop_reason"),
+            )
         except urllib.error.HTTPError as exc:
             err_body = exc.read().decode()
             if exc.code == 401:
@@ -176,6 +199,128 @@ def _strip_fences(text: str) -> str:
     if text.endswith("```"):
         text = "\n".join(text.split("\n")[:-1])
     return text.strip()
+
+
+# ── Model-output validation (A3) ───────────────────────────────────────────
+
+
+def _validate_yaml(yaml_text: str) -> list[str]:
+    """Validate model-produced YAML, mirroring the dry-run endpoint's
+    ``yaml.safe_load`` + ``load_pipeline_from_yaml`` check. Returns a list of
+    human-readable issues (empty when the YAML parses and validates)."""
+    if not yaml_text.strip():
+        return ["Model returned empty YAML"]
+    try:
+        yaml.safe_load(yaml_text)
+    except yaml.YAMLError as exc:
+        return [f"YAML parse error: {exc}"]
+    try:
+        load_pipeline_from_yaml(yaml_text)
+    except ConfigError as exc:
+        return [str(exc)]
+    return []
+
+
+_TRUNCATION_REASONS = {"max_tokens", "length"}  # anthropic / openai (bedrock is anthropic-shaped)
+
+
+def _truncation_warning(stop_reason: str | None) -> str | None:
+    """Return a warning when the provider stopped because it ran out of output
+    tokens (anthropic/bedrock: ``max_tokens``, openai: ``length``)."""
+    if stop_reason in _TRUNCATION_REASONS:
+        return (
+            f"Model output may be truncated (stop_reason={stop_reason!r}); "
+            "the YAML is likely incomplete — consider retrying or raising max_tokens"
+        )
+    return None
+
+
+def _yaml_mode_result(result: _AiResult) -> dict:
+    """Post-process a generate/fix/modify reply: strip fences, validate against
+    the pipeline schema, and surface provider truncation (A3). The raw YAML is
+    always returned; ``valid`` is false when issues were found."""
+    yaml_text = _strip_fences(result.text)
+    issues = _validate_yaml(yaml_text)
+    if warning := _truncation_warning(result.stop_reason):
+        issues.append(warning)
+    return {"yaml": yaml_text, "valid": not issues, "issues": issues}
+
+
+# ── Secret redaction for outbound prompts (A4) ─────────────────────────────
+
+_MASK_VALUE = "***redacted***"
+_SECRET_NAME_TOKENS = ("password", "token", "secret")
+
+
+def _is_secret_key(name: str) -> bool:
+    """Same heuristic the schema cache uses to compute ``secret`` metadata
+    (config_schema.py) — also masks keys of connector types outside the
+    schema cache (e.g. plugin connectors)."""
+    return any(token in name for token in _SECRET_NAME_TOKENS)
+
+
+def _mask_block(block: dict, category: str) -> bool:
+    """Mask secret field values in one connector block (in place). ``${VAR}``
+    env references are left intact — the loader substitutes them at runtime,
+    so they are env refs, not secrets. Returns True when any value changed."""
+    type_name = block.get("type")
+    secret_names: set[str] = set()
+    if isinstance(type_name, str):
+        secret_names = {
+            field["name"]
+            for field in SCHEMA_FIELDS[category].get(type_name, [])
+            if field.get("secret")
+        }
+    changed = False
+    for key, value in list(block.items()):
+        if not isinstance(value, str) or "${" in value:
+            continue
+        if key in secret_names or _is_secret_key(key):
+            block[key] = _MASK_VALUE
+            changed = True
+    return changed
+
+
+def _redact_yaml(yaml_text: str) -> str:
+    """Return a copy of the pipeline YAML with secret field values masked, for
+    use in outbound AI prompts. The operator's pipeline on disk is never
+    touched. When the YAML cannot be parsed (e.g. mid-edit in the editor), the
+    input is returned unchanged so explain/fix still work."""
+    if not yaml_text or not yaml_text.strip():
+        return yaml_text
+    try:
+        data = yaml.safe_load(yaml_text)
+    except yaml.YAMLError:
+        return yaml_text
+    if not isinstance(data, dict):
+        return yaml_text
+
+    wrapped = isinstance(data.get("pipeline"), dict)
+    root = data["pipeline"] if wrapped else data
+    if not isinstance(root, dict):
+        return yaml_text
+
+    def mask(category: str, block) -> bool:
+        return _mask_block(block, category) if isinstance(block, dict) else False
+
+    changed = False
+    changed |= mask("source", root.get("source"))
+    changed |= mask("serializer", root.get("serializer_in"))
+    changed |= mask("serializer", root.get("serializer_out"))
+    changed |= mask("sink", root.get("dlq"))
+    for sink in root.get("sinks") or []:
+        if not isinstance(sink, dict):
+            continue
+        changed |= mask("sink", sink)
+        changed |= mask("serializer", sink.get("serializer_out"))
+        for transform in sink.get("transforms") or []:
+            changed |= mask("transform", transform)
+    for transform in root.get("transforms") or []:
+        changed |= mask("transform", transform)
+
+    if not changed:
+        return yaml_text
+    return yaml.safe_dump(data, default_flow_style=False, sort_keys=False)
 
 
 @router.get("/api/ai/status", tags=["ai"])
@@ -262,7 +407,7 @@ async def ai_test(request: Request) -> dict:
         provider = cfg["provider"]
         _defaults = {"anthropic": _ANTHROPIC_DEFAULT_MODEL, "openai": _OPENAI_DEFAULT_MODEL, "bedrock": _BEDROCK_DEFAULT_MODEL}
         model = cfg["model"] or _defaults.get(provider, _ANTHROPIC_DEFAULT_MODEL)
-        return {"ok": True, "reply": reply, "provider": provider, "model": model}
+        return {"ok": True, "reply": reply.text, "provider": provider, "model": model}
     except RuntimeError as exc:
         raise HTTPException(status_code=502, detail=str(exc))
 
@@ -287,14 +432,15 @@ async def ai_suggest(request: Request) -> dict:
             connector_schema   = build_ai_context(prompt, plugins),
         )
         try:
-            yaml_text = await asyncio.to_thread(_call_ai, system, prompt, max_tokens=1024, cfg=cfg)
+            result = await asyncio.to_thread(_call_ai, system, prompt, max_tokens=1024, cfg=cfg)
         except Exception as exc:
             raise HTTPException(status_code=502, detail=str(exc))
-        return {"yaml": _strip_fences(yaml_text)}
+        return _yaml_mode_result(result)
 
     elif mode == "explain":
+        redacted_yaml = _redact_yaml(body.get("yaml", ""))
         user = (
-            f"TRAM pipeline YAML:\n{body.get('yaml', '')}\n\n"
+            f"TRAM pipeline YAML:\n{redacted_yaml}\n\n"
             f"Dry-run error: {body.get('error', '')}\n\n"
             "Explain in 2-3 sentences what is wrong and how to fix it."
         )
@@ -307,38 +453,40 @@ async def ai_suggest(request: Request) -> dict:
             )
         except Exception as exc:
             raise HTTPException(status_code=502, detail=str(exc))
-        return {"explanation": explanation}
+        return {"explanation": explanation.text}
 
     elif mode == "fix":
         plugins = body.get("plugins", {})
+        redacted_yaml = _redact_yaml(body.get("yaml", ""))
         system = _GENERATE_SYSTEM.format(
             pipeline_structure = _PIPELINE_STRUCTURE,
-            connector_schema   = build_ai_context(body.get("yaml", "") + " " + body.get("error", ""), plugins),
+            connector_schema   = build_ai_context(redacted_yaml + " " + body.get("error", ""), plugins),
         ) + "\nFix the provided YAML to resolve the error. Output ONLY valid TRAM pipeline YAML — no prose, no markdown fences."
         user = (
-            f"TRAM pipeline YAML:\n{body.get('yaml', '')}\n\n"
+            f"TRAM pipeline YAML:\n{redacted_yaml}\n\n"
             f"Error to fix: {body.get('error', '')}"
         )
         try:
-            yaml_text = await asyncio.to_thread(_call_ai, system, user, max_tokens=1024, cfg=cfg)
+            result = await asyncio.to_thread(_call_ai, system, user, max_tokens=1024, cfg=cfg)
         except Exception as exc:
             raise HTTPException(status_code=502, detail=str(exc))
-        return {"yaml": _strip_fences(yaml_text)}
+        return _yaml_mode_result(result)
 
     elif mode == "modify":
         plugins = body.get("plugins", {})
+        redacted_yaml = _redact_yaml(body.get("yaml", ""))
         system = _GENERATE_SYSTEM.format(
             pipeline_structure = _PIPELINE_STRUCTURE,
-            connector_schema   = build_ai_context(body.get("yaml", "") + " " + body.get("instruction", ""), plugins),
+            connector_schema   = build_ai_context(redacted_yaml + " " + body.get("instruction", ""), plugins),
         ) + "\nModify the provided YAML per the user instruction. Output ONLY the complete modified TRAM pipeline YAML — no prose, no markdown fences."
         user = (
-            f"Existing pipeline YAML:\n{body.get('yaml', '')}\n\n"
+            f"Existing pipeline YAML:\n{redacted_yaml}\n\n"
             f"Instruction: {body.get('instruction', '')}"
         )
         try:
-            yaml_text = await asyncio.to_thread(_call_ai, system, user, max_tokens=1024, cfg=cfg)
+            result = await asyncio.to_thread(_call_ai, system, user, max_tokens=1024, cfg=cfg)
         except Exception as exc:
             raise HTTPException(status_code=502, detail=str(exc))
-        return {"yaml": _strip_fences(yaml_text)}
+        return _yaml_mode_result(result)
 
     raise HTTPException(status_code=400, detail=f"Unknown mode: {mode!r}")
