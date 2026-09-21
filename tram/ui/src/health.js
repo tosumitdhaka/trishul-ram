@@ -31,7 +31,7 @@ function setOnline(ready, meta) {
   setIndicatorState(icon, 'online')
 
   try {
-    const url = new URL(localStorage.getItem('tram_base_url') || 'http://localhost:8765')
+    const url = new URL(localStorage.getItem('tram_base_url') || window.location.origin)
     if (port) port.textContent = `:${url.port || 8765}`
   } catch { /**/ }
 

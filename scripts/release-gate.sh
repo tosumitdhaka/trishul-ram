@@ -3,10 +3,14 @@
 # for the full release process this gate enforces.
 #
 # Usage:
-#   scripts/release-gate.sh           full gate (all checks)
-#   scripts/release-gate.sh --fast    skip the slow checks (pytest, UI build)
-#   scripts/release-gate.sh --ci      CI mode: skip the "already tagged" check
-#                                     (the CI gate runs on the release tag itself)
+#   scripts/release-gate.sh                    full gate (all checks)
+#   scripts/release-gate.sh --fast            skip the slow checks (pytest, UI build)
+#   scripts/release-gate.sh --ci               CI mode: skip the "already tagged" check
+#                                              (the CI gate runs on the release tag itself)
+#   scripts/release-gate.sh --deploy-kind     after a green gate: deploy the current
+#                                              tree to the kind dev cluster for manual
+#                                              smoke testing (combines with --fast);
+#                                              prints the NodePort UI URL when done
 #
 # Exits 0 only when every check passes.
 
@@ -17,11 +21,13 @@ cd "$ROOT"
 
 FAST=0
 CI=0
-for arg in "$@"; do
-  case "$arg" in
-    --fast) FAST=1 ;;
-    --ci) CI=1 ;;
-    *) echo "unknown option: $arg (supported: --fast, --ci)"; exit 2 ;;
+DEPLOY_KIND=0
+while [ $# -gt 0 ]; do
+  case "$1" in
+    --fast) FAST=1; shift ;;
+    --ci) CI=1; shift ;;
+    --deploy-kind) DEPLOY_KIND=1; shift ;;
+    *) echo "unknown option: $1 (supported: --fast, --ci, --deploy-kind)"; exit 2 ;;
   esac
 done
 
@@ -184,6 +190,42 @@ echo "passed: $PASS   failed: $FAIL"
 
 if [ "$FAIL" -gt 0 ]; then
   echo "GATE RED — resolve every FAIL above before tagging. See docs/release-gate.md."
+  [ "$DEPLOY_KIND" -eq 1 ] && echo "--deploy-kind: skipping deploy (gate is red)."
   exit 1
 fi
 echo "GATE GREEN — ready to tag v$VERSION."
+
+# --- optional: deploy the current tree to kind for manual smoke testing --------
+# Builds the images from the working tree, loads them into the kind dev
+# cluster, upgrades the Helm release, then prints the manager UI's NodePort
+# URL (the kind cluster maps NodePorts directly to host ports — no
+# port-forward needed).
+if [ "$DEPLOY_KIND" -eq 1 ]; then
+  echo
+  echo "== manual validation deploy (--deploy-kind) =="
+  for cmd in docker kind kubectl helm; do
+    if ! need "$cmd"; then
+      echo "--deploy-kind: missing required command: $cmd" >&2
+      exit 1
+    fi
+  done
+  echo "Deploying the current tree to kind (build, load, helm upgrade)…"
+  "$ROOT/scripts/deploy-kind-tram-dev.sh"
+  NS="${NAMESPACE:-trishul-ram}"
+  REL="${RELEASE_NAME:-trishul-ram}"
+  NODE_PORT="$(kubectl -n "$NS" get svc "$REL" -o jsonpath='{.spec.ports[0].nodePort}' 2>/dev/null || true)"
+  echo
+  if [ -n "$NODE_PORT" ]; then
+    echo "UI (NodePort):  http://localhost:${NODE_PORT}"
+  else
+    echo "UI:             http://localhost:30001 (NodePort not found — check: kubectl -n $NS get svc $REL)"
+  fi
+  echo "Note:           hard-refresh (Ctrl-Shift-R) — a cached SPA from an older"
+  echo "                deployment shows a stale version and empty pages."
+  echo
+  echo "Manual smoke checklist (docs/release-gate.md §Manual validation):"
+  echo "  - every confirm modal executes its action (Stop, Reload, rollback,"
+  echo "    delete pipeline/MIB/schema/alert)"
+  echo "  - deep links survive refresh; Back/Forward work"
+  echo "  - dashboard '+ New' opens a blank editor; Save never overwrites"
+fi

@@ -57,6 +57,28 @@ Notes on check 10: it is a best-effort static scan — dynamically constructed n
 7. **Watch the release workflow** — the CI gate re-runs on the tag, then images (standalone/manager/worker) and the Helm chart publish to GHCR.
 8. **Post-release:** verify the images and chart on GHCR; create the GitHub release notes from the changelog section; update the roadmap status; close the issues the version resolves.
 
+## Manual validation
+
+The automated gate cannot click a UI. Before merging the release PR and tagging, run the current tree in the kind dev cluster and click through the release's riskiest interactions yourself:
+
+```bash
+scripts/release-gate.sh --deploy-kind              # full gate, then deploy
+scripts/release-gate.sh --fast --deploy-kind       # skip slow checks, then deploy
+```
+
+What it does: after a green gate, builds manager+worker images from the working tree, loads them into the `tram-dev` kind cluster, and upgrades the `trishul-ram` Helm release. The manager UI is then reachable via the service NodePort, which the kind cluster maps directly to the same host port — the script discovers and prints it (currently `http://localhost:30001`). No port-forward is involved.
+
+**Stale-SPA warning:** browsers happily serve a cached SPA from an older deployment — it shows the old version string and empty pages (its hashed asset references 404 against the new server). Hard-refresh (**Ctrl-Shift-R**) after any redeploy before judging the UI.
+
+Smoke checklist (minimum bar for a release that touches the UI):
+
+- Every confirm modal executes its action after Confirm (Stop, Reload, rollback, delete pipeline/MIB/schema/alert) — the v1.4.2 review caught a class of bug where the modal closed and nothing ran.
+- Deep links survive refresh; browser Back/Forward work.
+- Dashboard "+ New" opens a blank editor; Save never overwrites an unrelated pipeline.
+- Any release-specific items named in the independent review's report.
+
+Record the smoke result in the release PR before tagging.
+
 ## Rules
 
 - **Never tag with a red gate.** If a check fails, fix it or defer the item — do not force past it.

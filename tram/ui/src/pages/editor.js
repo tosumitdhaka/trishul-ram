@@ -1,4 +1,5 @@
 import { api } from '../api.js'
+import { router } from '../router.js'
 import { bindDataActions, esc, setStatusMessage, toast } from '../utils.js'
 import {
   renderCodeOnlyDiffLine,
@@ -29,36 +30,130 @@ let _textarea = null
 let _aiEnabled = false
 let _lastDryRunErrors = []
 let _aiUndoSnapshot = null  // pre-AI text for one-level undo of the last AI write
+let _baselineYaml = null   // value considered "saved" — unsaved changes are relative to this
+let _draftSaveTimer = null
+let _returnTo = 'pipelines'
+
+const DRAFT_STORAGE_KEY = 'tram_editor_draft'
+const DRAFT_SAVE_DEBOUNCE_MS = 500
+
+// Warn before the tab is closed or reloaded with unsaved edits. Hash
+// navigation is covered by the draft recovery flow instead (the router
+// replaces the page unconditionally).
+window.addEventListener('beforeunload', (event) => {
+  if (!document.getElementById('editor-textarea')) return
+  if (!_hasUnsavedChanges()) return
+  event.preventDefault()
+  event.returnValue = ''
+})
+
+function _hasUnsavedChanges() {
+  return Boolean(_textarea) && _textarea.value !== (_baselineYaml ?? '')
+}
+
+function _scheduleDraftSave() {
+  clearTimeout(_draftSaveTimer)
+  _draftSaveTimer = setTimeout(_saveDraftNow, DRAFT_SAVE_DEBOUNCE_MS)
+}
+
+function _saveDraftNow() {
+  if (!_hasUnsavedChanges()) {
+    _clearDraft()
+    return
+  }
+  try {
+    localStorage.setItem(DRAFT_STORAGE_KEY, JSON.stringify({
+      name: _editName ?? null,
+      yaml: _textarea.value,
+      savedAt: Date.now(),
+    }))
+  } catch (_) { /* storage full/blocked — the beforeunload guard still applies */ }
+}
+
+function _clearDraft() {
+  try { localStorage.removeItem(DRAFT_STORAGE_KEY) } catch (_) { /* ignore */ }
+}
+
+function _readDraft() {
+  try {
+    const draft = JSON.parse(localStorage.getItem(DRAFT_STORAGE_KEY) || 'null')
+    return (draft && typeof draft.yaml === 'string') ? draft : null
+  } catch (_) {
+    return null
+  }
+}
+
+function _maybeOfferDraftRestore() {
+  const bar = document.getElementById('editor-draft-bar')
+  if (!bar || !_textarea) return
+  const draft = _readDraft()
+  // Only offer a draft that belongs to this editor context and differs from
+  // what is on screen (a draft identical to the loaded YAML is stale).
+  if (!draft || draft.name !== (_editName ?? null) || draft.yaml === _textarea.value) return
+  const time = new Date(draft.savedAt || Date.now()).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
+  const text = document.getElementById('editor-draft-text')
+  if (text) text.textContent = `Unsaved draft from ${time} found`
+  bar.classList.remove('d-none')
+}
+
+function _hideDraftBar() {
+  document.getElementById('editor-draft-bar')?.classList.add('d-none')
+}
+
+function _restoreDraft() {
+  const draft = _readDraft()
+  if (!draft) { _hideDraftBar(); return }
+  _textarea.value = draft.yaml
+  // The restored draft replaces the AI output — retire the AI undo snapshot
+  // so "Undo AI change" cannot yank the draft out from under the operator.
+  _discardAiUndo()
+  _hideDraftBar()
+  _saveDraftNow()
+  toast('Draft restored')
+}
+
+function _discardDraft() {
+  _clearDraft()
+  _hideDraftBar()
+}
+
+// Leaving via a sidebar link or browser Back doesn't go through Cancel —
+// the router's page-leave event is the last chance to flush the draft.
+window.addEventListener('tram:page-leave', (event) => {
+  if (event.detail?.from !== 'editor') return
+  clearTimeout(_draftSaveTimer)
+  _saveDraftNow()
+})
 
 function _leaveEditor(pipelineName = null) {
   _aiUndoSnapshot = null
-  const returnTo = window._editorReturn
-  window._editorReturn = null
-  window._editorYaml = null
-  window._editorPipeline = null
-  if (returnTo === 'detail' && pipelineName) {
-    window._detailPipeline = pipelineName
-    navigate('detail')
+  clearTimeout(_draftSaveTimer)
+  // Keep the draft on cancel/navigation (it is the recovery copy); on a
+  // successful save _editorSave clears it explicitly first.
+  _saveDraftNow()
+  if (_returnTo === 'detail' && pipelineName) {
+    navigate(`detail/${encodeURIComponent(pipelineName)}`)
     return
   }
-  if (returnTo && returnTo !== 'detail') {
-    navigate(returnTo)
-    return
-  }
-  navigate('pipelines')
+  navigate(_returnTo === 'dashboard' ? 'dashboard' : 'pipelines')
 }
 
 export async function init() {
   const ta       = document.getElementById('editor-textarea')
   const titleEl  = document.getElementById('editor-title')
-  const editName = window._editorPipeline
+  // Route state: #editor/:name?return=detail (edit) or #editor?template=x (new).
+  const { params, query } = router.route()
+  const editName = params[0] || null
   const isEdit   = Boolean(editName)
+  _returnTo = ['detail', 'dashboard', 'pipelines'].includes(query.return) ? query.return : 'pipelines'
   _textarea = ta
   _editName = editName
   _originalYaml = null
   _aiEnabled = false
   _lastDryRunErrors = []
   _aiUndoSnapshot = null
+  _baselineYaml = null
+  clearTimeout(_draftSaveTimer)
   _bindEditorActions()
 
   // ── Mode-specific UI setup ─────────────────────────────────────────────────
@@ -80,18 +175,38 @@ export async function init() {
     }
   } else {
     document.getElementById('editor-diff-btn')?.setAttribute('hidden', '')
-    const preloaded = window._editorYaml
-    window._editorYaml = null
     if (titleEl) titleEl.textContent = 'New Pipeline'
-    if (preloaded) {
-      if (ta) ta.value = preloaded
-    } else {
-      if (ta) ta.value = TEMPLATE
+    if (ta) ta.value = TEMPLATE
+    // New-from-template: #editor?template=<name> — the template is fetched
+    // by name so a refresh recovers it without in-memory handoffs.
+    if (query.template) {
+      try {
+        const templates = await api.templates.list()
+        const template = (templates || []).find(t => t.name === query.template)
+        if (template?.yaml) {
+          if (ta) ta.value = template.yaml
+          toast(`Template "${template.name}" loaded — edit name and connection details, then save`)
+        } else {
+          toast(`Template "${query.template}" not found — started from the default template`, 'warning')
+        }
+      } catch (e) {
+        toast(`Could not load template: ${e.message}`, 'error')
+      }
     }
   }
 
   // ── AI assist ──────────────────────────────────────────────────────────────
   await _checkAI(isEdit)
+
+  // ── Reference pills from the live plugin registry ─────────────────────────
+  void _renderPluginReference()
+
+  // Baseline for unsaved-change detection: the loaded YAML in edit mode, the
+  // template/preloaded YAML in new mode.
+  _baselineYaml = _textarea?.value ?? ''
+
+  // Offer recovery of an unsaved draft from a previous session.
+  _maybeOfferDraftRestore()
 
   // ── Tab key inserts spaces ────────────────────────────────────────────────
   ta?.addEventListener('keydown', e => {
@@ -104,8 +219,14 @@ export async function init() {
     }
   })
 
-  // ── Typing in the textarea retires the AI undo affordance ─────────────────
-  ta?.addEventListener('input', _discardAiUndo)
+  // ── Typing retires the AI undo affordance and schedules a draft save ───────
+  ta?.addEventListener('input', _onEditorInput)
+}
+
+function _onEditorInput() {
+  _discardAiUndo()
+  _hideDraftBar()
+  _scheduleDraftSave()
 }
 
 function _bindEditorActions() {
@@ -130,6 +251,8 @@ function _bindEditorActions() {
     event.preventDefault()
     navigate('settings')
   })
+  document.getElementById('editor-draft-restore')?.addEventListener('click', _restoreDraft)
+  document.getElementById('editor-draft-discard')?.addEventListener('click', _discardDraft)
 }
 
 async function _checkAI(isEdit) {
@@ -167,6 +290,26 @@ async function _getPlugins() {
   if (_editorPlugins) return _editorPlugins
   try { _editorPlugins = await api.plugins() } catch (_) { _editorPlugins = {} }
   return _editorPlugins
+}
+
+// Fill the sidebar reference pills from the live registry so they never drift
+// from what the daemon actually has registered (the Plugins page shows the
+// same source of truth in full detail).
+async function _renderPluginReference() {
+  try {
+    const plugins = await _getPlugins()
+    const groups = {
+      'ref-sources':      plugins.sources,
+      'ref-sinks':        plugins.sinks,
+      'ref-serializers':  plugins.serializers,
+      'ref-transforms':   plugins.transforms,
+    }
+    Object.entries(groups).forEach(([id, names]) => {
+      const el = document.getElementById(id)
+      if (!el || !Array.isArray(names) || !names.length) return
+      el.innerHTML = names.map(name => `<span class="ref-pill">${esc(name)}</span>`).join('')
+    })
+  } catch (_) { /* reference stays empty; full details live on the Plugins page */ }
 }
 
 // ── AI: Generate (new pipeline) ──────────────────────────────────────────────
@@ -226,6 +369,8 @@ function _applyAiYaml(result) {
   _showAiUndo()
   _showInlineDiff()
   _renderAiValidation(result)
+  // The AI output is unsaved work — persist it as the recovery draft too.
+  _saveDraftNow()
 }
 
 function _undoAiChange() {
@@ -237,6 +382,7 @@ function _undoAiChange() {
   // Refresh the diff only when the operator had it open, so it matches the
   // restored text instead of showing the AI output.
   if (document.getElementById('editor-inline-diff')) _showInlineDiff()
+  _saveDraftNow()
   toast('AI change undone')
 }
 
@@ -376,6 +522,8 @@ async function _editorSave() {
   if (!yaml) { toast('Nothing to save', 'error'); return }
   if (_editName && _originalYaml && yaml === _originalYaml.trim()) {
     toast('No changes — pipeline is already up to date')
+    _baselineYaml = _textarea.value
+    _clearDraft()
     _leaveEditor(_editName)
     return
   }
@@ -384,12 +532,14 @@ async function _editorSave() {
       await api.pipelines.update(_editName, yaml)
       _originalYaml = yaml
       toast(`Saved ${_editName}`)
-      _leaveEditor(_editName)
     } else {
       await api.pipelines.create(yaml)
       toast('Pipeline created')
-      _leaveEditor()
     }
+    // The work is persisted — the recovery draft is no longer needed.
+    _baselineYaml = _textarea.value
+    _clearDraft()
+    _leaveEditor(_editName)
   } catch (e) {
     toast(e.message, 'error')
   }

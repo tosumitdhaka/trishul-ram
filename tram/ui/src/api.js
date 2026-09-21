@@ -1,4 +1,5 @@
 // ── TRAM REST API client ─────────────────────────────────────────────────────
+import { isAuthPending } from './auth_state.js'
 
 export function getConfig() {
   return {
@@ -31,6 +32,14 @@ function errorFromResponse(text, fallback) {
   return new Error(detail || fallback)
 }
 
+// A 401 from any API call means the session expired mid-session. Route back
+// to the login overlay once (main.js listens) instead of letting every page
+// toast the same auth error on its next poll.
+function handleUnauthorized() {
+  if (isAuthPending()) return
+  window.dispatchEvent(new CustomEvent('tram:unauthorized'))
+}
+
 function encodePathSegment(value) {
   return encodeURIComponent(String(value ?? ''))
 }
@@ -57,6 +66,7 @@ async function reqText(path) {
   const headers = withAuthHeaders()
   const res = await fetch(`${baseUrl}${path}`, { headers })
   if (!res.ok) {
+    if (res.status === 401) handleUnauthorized()
     const text = await res.text()
     throw Object.assign(errorFromResponse(text, res.statusText), { status: res.status })
   }
@@ -86,6 +96,7 @@ async function req(path, options = {}) {
   const text = await res.text()
   const json = parseJsonSafe(text)
   if (!res.ok) {
+    if (res.status === 401) handleUnauthorized()
     throw Object.assign(new Error(json?.detail || res.statusText), { status: res.status })
   }
   return json ?? text ?? null
@@ -100,6 +111,7 @@ async function reqBlob(path, options = {}) {
   }
   const res = await fetch(`${baseUrl}${path}`, { ...options, headers })
   if (!res.ok) {
+    if (res.status === 401) handleUnauthorized()
     const text = await res.text()
     throw Object.assign(errorFromResponse(text, res.statusText), { status: res.status })
   }
@@ -203,6 +215,7 @@ export const api = {
     list: () => req('/api/templates'),
   },
 
+  // ── Config schema (plugin field metadata for the Plugins page) ─────────────
   configSchema: {
     get: () => req('/api/config/schema'),
   },

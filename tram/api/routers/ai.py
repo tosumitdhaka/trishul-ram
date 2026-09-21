@@ -430,6 +430,7 @@ def _yaml_mode_result(result: _AiResult) -> dict:
 
 _MASK_VALUE = "***redacted***"
 _SECRET_NAME_TOKENS = ("password", "token", "secret")
+_HEADER_FIELD_NAMES = ("headers", "extra_headers")
 
 
 def _is_secret_key(name: str) -> bool:
@@ -439,10 +440,25 @@ def _is_secret_key(name: str) -> bool:
     return any(token in name for token in _SECRET_NAME_TOKENS)
 
 
+def _mask_dict_values(mapping: dict) -> bool:
+    """Mask every scalar string value of *mapping* in place, keeping the keys
+    (they are structural; the values are the secret-bearing part — e.g. header
+    dicts whose values carry Authorization tokens). ``${VAR}`` env references
+    are left intact. Returns True when any value changed."""
+    changed = False
+    for key, value in list(mapping.items()):
+        if isinstance(value, str) and "${" not in value:
+            mapping[key] = _MASK_VALUE
+            changed = True
+    return changed
+
+
 def _mask_block(block: dict, category: str) -> bool:
     """Mask secret field values in one connector block (in place). ``${VAR}``
     env references are left intact — the loader substitutes them at runtime,
-    so they are env refs, not secrets. Returns True when any value changed."""
+    so they are env refs, not secrets. Dict-valued ``headers``/``extra_headers``
+    fields have ALL their values masked (keys kept). Returns True when any
+    value changed."""
     type_name = block.get("type")
     secret_names: set[str] = set()
     if isinstance(type_name, str):
@@ -453,10 +469,28 @@ def _mask_block(block: dict, category: str) -> bool:
         }
     changed = False
     for key, value in list(block.items()):
+        if key in _HEADER_FIELD_NAMES and isinstance(value, dict):
+            changed |= _mask_dict_values(value)
+            continue
         if not isinstance(value, str) or "${" in value:
             continue
         if key in secret_names or _is_secret_key(key):
             block[key] = _MASK_VALUE
+            changed = True
+    return changed
+
+
+def _mask_alert_webhooks(alerts: list) -> bool:
+    """Mask ``webhook_url`` on every alert rule (in place) — webhook URLs embed
+    credentials in their userinfo/query, so the whole value is the secret.
+    ``${VAR}`` env references are left intact. Returns True when any changed."""
+    changed = False
+    for alert in alerts:
+        if not isinstance(alert, dict):
+            continue
+        webhook = alert.get("webhook_url")
+        if isinstance(webhook, str) and "${" not in webhook:
+            alert["webhook_url"] = _MASK_VALUE
             changed = True
     return changed
 
@@ -468,9 +502,11 @@ def _redact_yaml(yaml_text: str) -> str:
     input is returned unchanged so explain/fix still work.
 
     Known limitation: masking covers scalar secret fields (schema ``secret``
-    metadata + the password/token/secret name heuristic). Dict-valued fields
-    such as ``headers`` / ``extra_headers`` (which can carry Authorization
-    values) and tokens embedded in ``alerts[].webhook_url`` are NOT masked.
+    metadata + the password/token/secret name heuristic), every value of
+    ``headers``/``extra_headers`` dicts, and ``alerts[].webhook_url``.
+    Arbitrary dict-valued fields (e.g. ``metadata``) and ``${VAR}`` env
+    references are intentionally left untouched — env refs are substituted at
+    load time and are not secrets in the file.
     """
     if not yaml_text or not yaml_text.strip():
         return yaml_text
@@ -504,6 +540,7 @@ def _redact_yaml(yaml_text: str) -> str:
             changed |= mask("transform", transform)
     for transform in root.get("transforms") or []:
         changed |= mask("transform", transform)
+    changed |= _mask_alert_webhooks(root.get("alerts") or [])
 
     if not changed:
         return yaml_text
@@ -605,46 +642,57 @@ async def ai_get_config(request: Request) -> dict:
 async def ai_save_config(request: Request) -> dict:
     """Persist AI configuration to the DB (overrides env vars).
 
-    Chosen A2 semantics: absent AND blank values are both "no change" —
-    this endpoint can set a value but never clears one. In particular a blank
-    `api_key` (which older UIs sent whenever the password field was left
-    empty) no longer deletes a DB-stored key. Clearing a value is a manual
-    DB edit, which is the intended trade-off to protect stored keys.
+    Three-state semantics per field (absent/blank = keep, value = set,
+    explicit null = clear):
+
+    - absent OR blank (``""``): no change — a blank `api_key` (which older
+      UIs sent whenever the password field was left empty) never deletes a
+      DB-stored key, and untouched fields are never overwritten.
+    - a non-empty value: validated (``provider`` and ``base_url``) and stored.
+    - explicit JSON ``null``: clears the setting (delete_setting), reverting
+      to the env-var / default. Use this to deliberately clear a stored key,
+      provider, model, or base URL without editing the DB by hand.
     """
     db = getattr(request.app.state, "db", None)
     if db is None:
         raise HTTPException(status_code=503, detail="Database not available")
     body = await request.json()
-    provider = (body.get("provider") or "").strip()
-    api_key  = (body.get("api_key")  or "").strip()
-    model    = (body.get("model")    or "").strip()
-    base_url = (body.get("base_url") or "").strip()
-    if provider:
-        if provider not in _AI_PROVIDERS:
-            raise HTTPException(
-                status_code=400,
-                detail=f"Unknown AI provider: {provider!r} — must be one of {', '.join(_AI_PROVIDERS)}",
-            )
-        db.set_setting("ai.provider", provider)
-    if api_key:
-        db.set_setting("ai.api_key", api_key)
-    if model:
-        db.set_setting("ai.model", model)
-    if base_url:
-        # A11: reject bad schemes/allowlist violations at save time so the
-        # operator hears about them here, not on the first AI call.
-        if problem := _base_url_problem(base_url):
-            raise HTTPException(status_code=400, detail=problem)
-        if allowed := _allowed_base_urls():
-            if not _base_url_allowed(base_url, allowed):
+    for field, setting in (
+        ("provider", "ai.provider"),
+        ("api_key", "ai.api_key"),
+        ("model", "ai.model"),
+        ("base_url", "ai.base_url"),
+    ):
+        if field not in body:
+            continue                      # absent → keep (no change)
+        value = body[field]
+        if value is None:
+            db.delete_setting(setting)    # explicit null → clear
+            continue
+        value = str(value).strip()
+        if not value:
+            continue                      # blank → keep (no change)
+        if field == "provider":
+            if value not in _AI_PROVIDERS:
                 raise HTTPException(
                     status_code=400,
-                    detail=(
-                        "base_url not allowed by TRAM_AI_ALLOWED_BASE_URLS: "
-                        f"{base_url!r} — it must prefix-match one of {allowed}"
-                    ),
+                    detail=f"Unknown AI provider: {value!r} — must be one of {', '.join(_AI_PROVIDERS)}",
                 )
-        db.set_setting("ai.base_url", base_url)
+        if field == "base_url":
+            # A11: reject bad schemes/allowlist violations at save time so the
+            # operator hears about them here, not on the first AI call.
+            if problem := _base_url_problem(value):
+                raise HTTPException(status_code=400, detail=problem)
+            if allowed := _allowed_base_urls():
+                if not _base_url_allowed(value, allowed):
+                    raise HTTPException(
+                        status_code=400,
+                        detail=(
+                            "base_url not allowed by TRAM_AI_ALLOWED_BASE_URLS: "
+                            f"{value!r} — it must prefix-match one of {allowed}"
+                        ),
+                    )
+        db.set_setting(setting, value)
     return {"ok": True}
 
 

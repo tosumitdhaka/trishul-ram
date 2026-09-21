@@ -10,10 +10,14 @@
     <option value="aborted">Aborted</option>
   </select>
   <input type="date" class="form-control form-control-sm page-toolbar-date" id="runs-from" aria-label="From date"/>
-  <button class="btn-flat ms-auto" id="runs-refresh-btn" title="Refresh" type="button">
+  <button class="btn-flat ms-auto" id="runs-autorefresh-btn" type="button"
+          title="Auto-refresh is on — click to pause" aria-label="Pause auto-refresh" aria-pressed="true">
+    <i class="bi bi-pause-circle-fill" id="runs-autorefresh-icon"></i>
+  </button>
+  <button class="btn-flat" id="runs-refresh-btn" title="Refresh" type="button" aria-label="Refresh">
     <i class="bi bi-arrow-clockwise" id="runs-refresh-icon"></i>
   </button>
-  <button class="btn-flat" id="runs-export-btn" title="Export CSV" type="button">
+  <button class="btn-flat" id="runs-export-btn" title="Export CSV" type="button" aria-label="Export CSV">
     <i class="bi bi-download"></i>
   </button>
 </div>
@@ -23,13 +27,20 @@
     <span class="table-head-title">Run History</span>
     <span class="count-pill" id="runs-count"></span>
   </div>
-  <table class="table mb-0">
-    <thead><tr>
-      <th>Run ID</th><th>Pipeline</th><th>Node</th>
-      <th>Started</th><th>Dur</th><th>In</th><th>Out</th><th>Skipped</th><th>DLQ</th><th>Status</th><th>Issues</th><th></th>
-    </tr></thead>
-    <tbody id="runs-body">
-      <tr><td colspan="12" class="text-secondary text-center py-4">Loading…</td></tr>
-    </tbody>
-  </table>
+  <div class="table-responsive">
+    <table class="table mb-0" id="runs-table">
+      <thead><tr>
+        <th>Run ID</th><th>Pipeline</th><th>Node</th>
+        <th>Started</th><th>Dur</th><th>In</th><th>Out</th><th>Skipped</th><th>DLQ</th><th>Status</th><th>Issues</th><th></th>
+      </tr></thead>
+      <tbody id="runs-body">
+        <tr><td colspan="12" class="text-secondary text-center py-4">Loading…</td></tr>
+      </tbody>
+    </table>
+  </div>
+  <div class="text-center py-2 d-none" id="runs-more-wrap">
+    <button class="btn btn-sm btn-outline-secondary" id="runs-more-btn" type="button">
+      <i class="bi bi-chevron-double-down me-1"></i>Load more
+    </button>
+  </div>
 </div>

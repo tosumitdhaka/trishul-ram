@@ -47,12 +47,6 @@ function wireActions() {
       if (icon) icon.className = 'bi bi-arrow-clockwise'
     }
   })
-  bindDataActions(document.getElementById('cluster-streams'), {
-    'open-placement': (row) => {
-      window._detailPipeline = row.dataset.pipelineName
-      navigate('detail')
-    },
-  })
   bindDataActions(document.getElementById('cluster-nodes'), {
     'toggle-worker': (button) => {
       const key = button.dataset.workerKey
@@ -311,8 +305,8 @@ function renderStreams(streams, mode) {
             const slots = Array.isArray(stream.slots) ? stream.slots : []
             const healthy = slots.filter(slot => !slot.stats?.stale).length
             const stale = slots.filter(slot => slot.stats?.stale).length
-            return `<tr class="table-row-link" data-action="open-placement" data-pipeline-name="${esc(stream.pipeline_name)}">
-              <td class="fw-semibold">${esc(stream.pipeline_name)}</td>
+            return `<tr data-pipeline-name="${esc(stream.pipeline_name)}">
+              <td class="fw-semibold"><a class="table-row-name-link" href="#detail/${encodeURIComponent(stream.pipeline_name)}">${esc(stream.pipeline_name)}</a></td>
               <td>${statusBadge(stream.status)}</td>
               <td class="text-secondary">${healthy}/${stream.slot_count}${stale ? ` · ${stale} stale` : ''}</td>
               <td class="text-secondary">${fmtRate(stream.records_in_per_sec || 0)}</td>

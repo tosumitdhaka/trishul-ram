@@ -9,6 +9,8 @@ const CATEGORY_META = {
 }
 const _openState = {}
 let _pluginDetails = null
+let _fieldMeta = null      // {sources: {type: {fields: [...]}}} from /api/config/schema — best-effort
+const _sampleCache = new Map()
 
 function _normalizeDetails(plugins) {
   const details = plugins?.details || {}
@@ -46,16 +48,29 @@ export async function init() {
       _openState[stateKey] = !(_openState[stateKey] ?? false)
       _render()
     },
+    'copy-sample': (button) => {
+      const sample = _sampleCache.get(button.dataset.stateKey)
+      if (!sample) return
+      void navigator.clipboard.writeText(sample)
+        .then(() => toast('Sample YAML copied'))
+        .catch(() => toast('Could not copy — select the text manually', 'warning'))
+    },
   })
 
-  try {
-    const plugins = await api.plugins()
-    _pluginDetails = _normalizeDetails(plugins)
-    _render()
-  } catch (e) {
-    body.innerHTML = document.getElementById('plugins-error-template')?.innerHTML || ''
-    toast(`Plugins error: ${e.message}`, 'error')
+  async function load() {
+    try {
+      const plugins = await api.plugins()
+      _pluginDetails = _normalizeDetails(plugins)
+      try { _fieldMeta = await api.configSchema.get() } catch { _fieldMeta = null }
+      _render()
+    } catch (e) {
+      body.innerHTML = document.getElementById('plugins-error-template')?.innerHTML || ''
+      const retry = document.getElementById('plugins-error-retry')
+      if (retry) retry.onclick = () => { void load() }
+      toast(`Plugins error: ${e.message}`, 'error')
+    }
   }
+  await load()
 }
 
 function _render() {
@@ -131,6 +146,50 @@ function _renderSectionRows(items, key) {
     </div>`
 }
 
+// Merge /api/config/schema metadata (choices, secret, multiline) into the
+// plugin's field descriptors so rows can show enum values and mask secrets.
+function _enrichedFields(key, item) {
+  const fields = item.fields || []
+  const metaFields = _fieldMeta?.[key]?.[item.name]?.fields
+  if (!Array.isArray(metaFields)) return fields
+  const byName = new Map(metaFields.map(f => [f.name, f]))
+  return fields.map(f => ({ ...f, ...byName.get(f.name) }))
+}
+
+// A copy-pasteable YAML fragment built from the plugin's schema fields.
+function _yamlFragment(key, item, fields) {
+  const indent = (key === 'sinks' || key === 'transforms') ? '    ' : '  '
+  const lines = []
+  if (key === 'sources') {
+    lines.push('source:')
+    lines.push(`  type: ${item.name}`)
+  } else if (key === 'sinks') {
+    lines.push('sinks:')
+    lines.push(`  - type: ${item.name}`)
+  } else if (key === 'transforms') {
+    lines.push('transforms:')
+    lines.push(`  - type: ${item.name}`)
+  } else {
+    lines.push('serializer_out:')
+    lines.push(`  type: ${item.name}`)
+  }
+  for (const f of fields) {
+    if (f.secret) { lines.push(`${indent}${f.name}: "••••••"`); continue }
+    const d = f.default
+    if (d === null || d === undefined || d === '') {
+      lines.push(`${indent}${f.name}:  # ${f.required ? 'required' : 'optional'}`)
+    } else if (typeof d === 'string') {
+      lines.push(`${indent}${f.name}: "${d}"`)
+    } else if (typeof d === 'object') {
+      lines.push(`${indent}${f.name}: ${JSON.stringify(d)}`)
+    } else {
+      lines.push(`${indent}${f.name}: ${d}`)
+    }
+  }
+  if (!fields.length) lines.push(`${indent}# no extra fields — type is all it takes`)
+  return lines.join('\n')
+}
+
 function _renderRow(item, key) {
   const stateKey = `${key}:${item.name}`
   const open = _openState[stateKey] ?? false
@@ -166,7 +225,11 @@ function _renderRow(item, key) {
             </div>
             <div class="mt-3">
               <div class="plugins-field-heading mb-2">Available Fields</div>
-              ${_renderFieldDetails(item.fields || [])}
+              ${_renderFieldDetails(key, item)}
+            </div>
+            <div class="mt-3">
+              <div class="plugins-field-heading mb-2">Sample Usage</div>
+              ${_renderSample(key, item)}
             </div>
           </div>
         </td>
@@ -180,7 +243,8 @@ function _chipLine(label, values) {
   return `<div><span class="text-secondary">${label}:</span> ${values.map(value => `<span class="count-pill me-1">${esc(value)}</span>`).join('')}</div>`
 }
 
-function _renderFieldDetails(fields) {
+function _renderFieldDetails(key, item) {
+  const fields = _enrichedFields(key, item)
   if (!fields.length) {
     return '<div class="text-secondary">No schema-backed fields available.</div>'
   }
@@ -193,22 +257,28 @@ function _renderFieldDetails(fields) {
             <th class="plugins-col-type">Type</th>
             <th class="plugins-col-required">Required</th>
             <th>Default</th>
+            <th>Notes</th>
           </tr>
         </thead>
         <tbody>
           ${fields.map(field => `
             <tr>
               <td class="mono">${esc(field.name)}</td>
-              <td>${esc(field.type || 'n/a')}</td>
+              <td>${esc(field.type || 'n/a')}${field.multiline ? '<span class="plugins-field-note">multiline</span>' : ''}</td>
               <td><span class="${field.required ? 'text-light fw-semibold' : 'text-secondary'}">${field.required ? 'yes' : 'no'}</span></td>
-              <td>${_renderDefault(field.default)}</td>
+              <td>${_renderDefault(field)}</td>
+              <td>${field.choices?.length ? `<span class="plugins-field-choices">one of ${field.choices.map(c => esc(String(c))).join(', ')}</span>` : '<span class="text-secondary">—</span>'}</td>
             </tr>`).join('')}
         </tbody>
       </table>
     </div>`
 }
 
-function _renderDefault(value) {
+function _renderDefault(field) {
+  if (field.secret) {
+    return '<span class="mono">••••••</span><span class="plugins-field-note">secret</span>'
+  }
+  const value = field.default
   if (value === null || value === undefined || value === '') {
     return '<span class="text-secondary">n/a</span>'
   }
@@ -219,4 +289,22 @@ function _renderDefault(value) {
     return `<span class="mono">${esc(JSON.stringify(value))}</span>`
   }
   return `<span class="mono">${esc(String(value))}</span>`
+}
+
+function _renderSample(key, item) {
+  const stateKey = `${key}:${item.name}`
+  const sample = _yamlFragment(key, item, _enrichedFields(key, item))
+  _sampleCache.set(stateKey, sample)
+  return `
+    <div class="plugins-sample">
+      <div class="plugins-sample-head">
+        <span class="plugins-sample-title">Snippet</span>
+        <button class="btn-flat detail-action-inline" type="button"
+                title="Copy sample YAML" aria-label="Copy sample YAML for ${esc(item.name)}"
+                data-action="copy-sample" data-state-key="${esc(stateKey)}">
+          <i class="bi bi-clipboard"></i><span>Copy</span>
+        </button>
+      </div>
+      <pre class="plugins-sample-yaml">${esc(sample)}</pre>
+    </div>`
 }

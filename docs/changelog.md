@@ -5,6 +5,25 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ---
 
+## [1.4.2] - 2026-09-21
+
+### Added
+- UI wave — stability: single stacking toast container (`aria-live`, per-toast dismiss, 8s dedupe with ×N counter) with poll failures degraded to one inline offline banner; `renderTableState()` shared loading/empty/error(+retry) states across all table pages; `confirmAction()` Bootstrap modal (Enter/Esc semantics, danger variant) replaces every native confirm (Stop, Reload, rollback, deletes); responsive 12-column run tables and card grids
+- UI wave — operator trust: run-history polling with pause/resume and Load-more pagination, honest count pill and CSV export cap warning; editor draft guard (`beforeunload` vs baseline YAML, debounced localStorage persistence, Restore/Discard offer, integrated with the AI-undo lifecycle); `aria-labels` on icon-only buttons, `prefers-reduced-motion` support, table rows promoted to real links; import-replace conflict modal with current-vs-uploaded side-by-side diff; next-run on the pipeline detail Schedule card; plugins page extended with schema-derived Notes (choices, secret, multiline) and per-plugin sample usage YAML
+- L1 — route parameters: hash routes with path params and query filters (`#detail/:name?tab=`, `#editor/:name?return=&template=`, `#runs/:runId?pipeline=&status=&from=`, dashboard period/granularity in query); every `window._*` global handoff retired (grep-verified zero); table rows are real links; deep links survive refresh and bookmark, Back/Forward work
+- Editor plugin pills now derived from `/api/plugins` (previously missing 9 transforms)
+- AI settings: explicit `null`-means-clear semantics — `POST /api/ai/config` accepts JSON `null` to deliberately clear a field while blank/absent still mean "no change" (the anti-key-wipe guarantee holds)
+- AI redaction: outbound prompts now also mask `headers`/`extra_headers` dict values (keys kept, `${VAR}` intact) and `alerts[].webhook_url` (URLs embed credentials in userinfo/query)
+- CI: `#24` schema identifier + registry feasibility study recorded (docs/ideas/schema-registry-feasibility.md — Option A content-hash `schema_version` recommended, gates v1.4.3 L2 design)
+
+### Changed
+- CI workflow actions bumped for the Node-20 deprecation: `actions/checkout` v7, `docker/setup-qemu-action` v4, `docker/setup-buildx-action` v4, `docker/login-action` v4, `docker/metadata-action` v6, `docker/build-push-action` v7, `azure/setup-helm` v5
+- Dead code deleted (~1,100 lines): the unused wizard (pages + CSS), plugins loading template, never-populated nav badges, dead `statusBadge` mapping; 401 responses now dispatch a `tram:unauthorized` event (login overlay) instead of dead-ending; health-port fallback uses `window.location.origin`
+
+### Fixed
+- `GET /api/daemon/status` returned 500 — the router called `scheduler.get_status()`, which does not exist on the controller (`get_scheduler_status()`); over-mocked unit tests hid the break (mocks updated to the real method and response shape)
+- Dashboard "+ New" stale-editor bug class structurally eliminated by L1 route parameters (state no longer flows through window globals)
+
 ## [1.4.1] - 2026-09-21
 
 ### Added

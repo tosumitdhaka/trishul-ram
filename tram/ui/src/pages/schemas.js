@@ -1,5 +1,5 @@
 import { api } from '../api.js'
-import { bindDataActions, downloadText, esc, toast } from '../utils.js'
+import { bindDataActions, confirmAction, downloadText, esc, renderTableState, toast } from '../utils.js'
 
 let _allSchemas = []
 
@@ -19,7 +19,9 @@ async function loadSchemas() {
     _allSchemas = await api.schemas.list()
     applySchemaFilter()
   } catch (e) {
-    toast(`Schemas error: ${e.message}`, 'error')
+    renderTableState(document.getElementById('schemas-body'), 'error', e.message, {
+      onRetry: () => { void loadSchemas() },
+    })
   }
 }
 
@@ -77,7 +79,13 @@ async function uploadSchemas() {
 
 async function deleteSchema(filepath) {
   if (!filepath) return
-  if (!confirm(`Delete schema "${filepath}"?`)) return
+  const ok = await confirmAction({
+    title: 'Delete schema file',
+    body: `Delete schema "${filepath}"? Pipelines that reference it may fail until it is uploaded again.`,
+    confirmLabel: 'Delete',
+    danger: true,
+  })
+  if (!ok) return
   try {
     await api.schemas.delete(filepath)
     toast('Deleted')

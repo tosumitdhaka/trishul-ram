@@ -196,6 +196,9 @@ if [[ "${MODE}" == "standalone" ]]; then
     --set manager.enabled=false
     --set image.repository="${STANDALONE_IMAGE_REPOSITORY}"
     --set image.tag="${IMAGE_TAG}"
+    --set image.registry=""
+    --set manager.image.registry=""
+    --set worker.image.registry=""
   )
 else
   HELM_ARGS=(
@@ -208,8 +211,18 @@ else
     --set manager.image.tag="${IMAGE_TAG}"
     --set worker.image.repository="${WORKER_IMAGE_REPOSITORY}"
     --set worker.image.tag="${IMAGE_TAG}"
+    --set image.registry=""
+    --set manager.image.registry=""
+    --set worker.image.registry=""
   )
 fi
+# NOTE: the explicit empty registry settings are load-bearing. --reuse-values
+# keeps registry settings from a previous GHCR-based deploy (e.g.
+# image.registry=ghcr.io/...), and the chart composes {{registry}}/{{repo}}:{{tag}}
+# with Helm's `default` chain (component registry falls back to the top-level
+# one when empty). Local kind images carry no registry prefix, so every
+# registry level must be explicitly emptied or the pods try to pull
+# ghcr.io/...:local-* and hit ErrImagePull.
 
 if [[ -n "${VALUES_FILE}" ]]; then
   HELM_ARGS+=(--values "${VALUES_FILE}")

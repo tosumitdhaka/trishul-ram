@@ -1,5 +1,6 @@
 import { api } from '../api.js'
-import { bindDataActions, downloadText, relTime, fmtNum, schedBadge, statusBadge, esc, toast, pipelineStartFeedback } from '../utils.js'
+import { router } from '../router.js'
+import { bindDataActions, confirmAction, downloadText, relTime, fmtNum, renderTableState, schedBadge, statusBadge, esc, toast, pipelineStartFeedback } from '../utils.js'
 import { monitorTriggeredRun, runOutcomeToast } from '../run_monitor.js'
 import {
   renderDiffStats,
@@ -17,12 +18,11 @@ let _versions = []
 const _versionYamlCache = new Map()
 
 export async function init() {
-  _name = window._detailPipeline
+  const { params, query } = router.route()
+  _name = params[0] || null
   if (!_name) { navigate('pipelines'); return }
+  _activeTab = ['runs', 'config', 'versions', 'alerts'].includes(query.tab) ? query.tab : 'runs'
   _versionYamlCache.clear()
-
-  const sub = document.getElementById('tb-sub')
-  if (sub) sub.textContent = _name
 
   try {
     const [pipeline, placement, versions] = await Promise.all([
@@ -37,7 +37,9 @@ export async function init() {
     renderPlacement(placement)
     wireActions(pipeline)
   } catch (e) {
-    toast(`Detail error: ${e.message}`, 'error')
+    renderTableState(document.getElementById('detail-runs-body'), 'error', e.message, {
+      onRetry: () => { void init() },
+    })
   }
 
   wireTabs()
@@ -55,6 +57,7 @@ function wireTabs() {
 
 function showTab(tabName) {
   _activeTab = tabName || 'runs'
+  if (router.route().params[0]) router.setSearchParams({ tab: _activeTab })
   document.querySelectorAll('#detail-tabs .nav-link').forEach(tab => {
     tab.classList.toggle('active', tab.dataset.tab === _activeTab)
   })
@@ -65,6 +68,27 @@ function showTab(tabName) {
   if (_activeTab === 'config') loadConfig()
   if (_activeTab === 'versions') loadVersions()
   if (_activeTab === 'alerts') loadAlerts()
+}
+
+// Next scheduled run for this pipeline, from the daemon scheduler state
+// (GET /api/daemon/status). Only interval and cron pipelines have a next run;
+// stream pipelines are always-on, manual ones run on demand.
+async function _loadNextRun() {
+  const el = document.getElementById('detail-next-run')
+  if (!el) return
+  try {
+    const status = await api.daemon.status()
+    const job = (status?.scheduled_jobs || []).find(j => j.pipeline === _name)
+    if (job?.next_run) {
+      el.textContent = `Next run ${fmtTimestamp(job.next_run)} (${relTime(job.next_run)})`
+      el.hidden = false
+    } else {
+      el.hidden = true
+      el.textContent = ''
+    }
+  } catch {
+    el.hidden = true
+  }
 }
 
 function renderHeader(p) {
@@ -117,6 +141,7 @@ function renderCards(p) {
   const sinks = Array.isArray(p.sinks) ? p.sinks.map(s => s.type || s).join(', ') : '—'
   set('detail-sinks',     sinks)
   set('detail-schedule', scheduleLabel(p))
+  void _loadNextRun()
   set('detail-serializers', p.serializer_in || '—')
   const transformsEl = document.getElementById('detail-transforms')
   if (transformsEl) transformsEl.innerHTML = renderTransformFlow(p.transforms)
@@ -175,13 +200,10 @@ function renderPlacement(placement) {
 function wireActions(pipeline) {
   document.getElementById('detail-back-btn').onclick = () => navigate('pipelines')
   document.getElementById('detail-edit-btn').onclick = () => {
-    window._editorReturn = 'detail'
-    window._editorPipeline = _name
-    navigate('editor')
+    navigate(`editor/${encodeURIComponent(_name)}?return=detail`)
   }
   document.getElementById('detail-open-runs-btn').onclick = () => {
-    window._runsFilters = { pipeline: _name }
-    navigate('runs')
+    navigate(`runs?pipeline=${encodeURIComponent(_name)}`)
   }
   document.getElementById('detail-refresh-btn').onclick = () => { void _detailRefresh() }
   document.getElementById('detail-restart-btn').onclick = () => { void _detailRestart() }
@@ -272,6 +294,13 @@ async function _detailTrigger() {
 }
 
 async function _detailStop() {
+  const ok = await confirmAction({
+    title: 'Stop pipeline',
+    body: `Stop "${_name}"? Active execution stops and the pipeline stays stopped until you start it again. Queued manual runs are cancelled.`,
+    confirmLabel: 'Stop',
+    danger: true,
+  })
+  if (!ok) return
   try {
     await api.pipelines.stop(_name)
     toast(`Stopped ${_name}`)
@@ -347,13 +376,12 @@ async function loadDetailRuns() {
   tbody.innerHTML = '<tr><td colspan="12" class="text-secondary text-center py-4">Loading run history…</td></tr>'
   try {
     const runs = await api.runs.list({ pipeline: _name, limit: 100 })
-    renderRunsTable({
-      tbody,
-      runs,
-      rowIdPrefix: 'detail-runs',
-      toggleHandlerName: '_detailRunsToggleLog',
-      emptyMessage: 'No runs recorded for this pipeline',
-    })
+      renderRunsTable({
+        tbody,
+        runs,
+        rowIdPrefix: 'detail-runs',
+        emptyMessage: 'No runs recorded yet',
+      })
     if (count) count.textContent = runs.length
   } catch (e) {
     if (count) count.textContent = ''
@@ -750,7 +778,13 @@ async function _compareVersion(version) {
 }
 
 async function _rollbackVersion(version) {
-  if (!confirm(`Rollback to version ${version}?`)) return
+  const ok = await confirmAction({
+    title: 'Rollback pipeline',
+    body: `Rollback "${_name}" to version ${version}? If the pipeline is active, it stops and restarts on the restored config. Older versions stay in the history, so you can switch back the same way.`,
+    confirmLabel: 'Rollback',
+    danger: true,
+  })
+  if (!ok) return
   try {
     await api.pipelines.rollback(_name, version)
     toast(`Rolled back to v${version}`)
@@ -762,7 +796,13 @@ async function _rollbackVersion(version) {
 
 async function _deleteAlert(index, rules) {
   const label = rules[index]?.name || `rule #${index}`
-  if (!confirm(`Delete alert rule '${label}'?`)) return
+  const ok = await confirmAction({
+    title: 'Delete alert rule',
+    body: `Delete alert rule '${label}' from "${_name}"?`,
+    confirmLabel: 'Delete',
+    danger: true,
+  })
+  if (!ok) return
   try {
     await api.alerts.delete(_name, index)
     toast(`Deleted ${label}`)
