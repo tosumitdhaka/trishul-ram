@@ -5,6 +5,11 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ---
 
+## [Unreleased]
+
+### Added
+- v1.4.3 theme — structure & creation: schema content-hash identifier (#24 Option A), shared page shell (L3), run pagination + run-detail route (L4), structured creation wizard revival (L2), editor upgrade (L5), a11y contrast pass (L6)
+
 ## [1.4.2] - 2026-09-21
 
 ### Added
