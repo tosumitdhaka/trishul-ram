@@ -37,6 +37,14 @@
           </div>
         </div>
       </div>
+      <div id="editor-draft-bar" class="editor-draft-bar d-none">
+        <i class="bi bi-cloud-arrow-up"></i>
+        <span class="flex-grow-1" id="editor-draft-text"></span>
+        <button class="btn btn-sm btn-outline-secondary" id="editor-draft-restore" type="button">Restore draft</button>
+        <button class="btn-flat" id="editor-draft-discard" type="button" title="Discard the draft and keep what is in the editor" aria-label="Discard draft">
+          <i class="bi bi-x-lg"></i>
+        </button>
+      </div>
       <textarea id="editor-textarea" class="editor-body editor-textarea w-100"
                 spellcheck="false" placeholder="Paste or type YAML pipeline definition…"></textarea>
     </div>

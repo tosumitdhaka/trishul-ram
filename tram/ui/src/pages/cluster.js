@@ -1,6 +1,7 @@
 import { api } from '../api.js'
 import {
   bindDataActions,
+  bindKeyboardActivation,
   esc,
   fmtBytes,
   fmtBytesRate,
@@ -52,6 +53,10 @@ function wireActions() {
       window._detailPipeline = row.dataset.pipelineName
       navigate('detail')
     },
+  })
+  bindKeyboardActivation(document.getElementById('cluster-streams'), (row) => {
+    window._detailPipeline = row.dataset.pipelineName
+    navigate('detail')
   })
   bindDataActions(document.getElementById('cluster-nodes'), {
     'toggle-worker': (button) => {
@@ -311,7 +316,7 @@ function renderStreams(streams, mode) {
             const slots = Array.isArray(stream.slots) ? stream.slots : []
             const healthy = slots.filter(slot => !slot.stats?.stale).length
             const stale = slots.filter(slot => slot.stats?.stale).length
-            return `<tr class="table-row-link" data-action="open-placement" data-pipeline-name="${esc(stream.pipeline_name)}">
+            return `<tr class="table-row-link" tabindex="0" role="link" aria-label="Open pipeline ${esc(stream.pipeline_name)}" data-action="open-placement" data-pipeline-name="${esc(stream.pipeline_name)}">
               <td class="fw-semibold">${esc(stream.pipeline_name)}</td>
               <td>${statusBadge(stream.status)}</td>
               <td class="text-secondary">${healthy}/${stream.slot_count}${stale ? ` · ${stale} stale` : ''}</td>

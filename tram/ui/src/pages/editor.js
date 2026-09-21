@@ -29,9 +29,98 @@ let _textarea = null
 let _aiEnabled = false
 let _lastDryRunErrors = []
 let _aiUndoSnapshot = null  // pre-AI text for one-level undo of the last AI write
+let _baselineYaml = null   // value considered "saved" — unsaved changes are relative to this
+let _draftSaveTimer = null
+
+const DRAFT_STORAGE_KEY = 'tram_editor_draft'
+const DRAFT_SAVE_DEBOUNCE_MS = 500
+
+// Warn before the tab is closed or reloaded with unsaved edits. Hash
+// navigation is covered by the draft recovery flow instead (the router
+// replaces the page unconditionally).
+window.addEventListener('beforeunload', (event) => {
+  if (!document.getElementById('editor-textarea')) return
+  if (!_hasUnsavedChanges()) return
+  event.preventDefault()
+  event.returnValue = ''
+})
+
+function _hasUnsavedChanges() {
+  return Boolean(_textarea) && _textarea.value !== (_baselineYaml ?? '')
+}
+
+function _scheduleDraftSave() {
+  clearTimeout(_draftSaveTimer)
+  _draftSaveTimer = setTimeout(_saveDraftNow, DRAFT_SAVE_DEBOUNCE_MS)
+}
+
+function _saveDraftNow() {
+  if (!_hasUnsavedChanges()) {
+    _clearDraft()
+    return
+  }
+  try {
+    localStorage.setItem(DRAFT_STORAGE_KEY, JSON.stringify({
+      name: _editName ?? null,
+      yaml: _textarea.value,
+      savedAt: Date.now(),
+    }))
+  } catch (_) { /* storage full/blocked — the beforeunload guard still applies */ }
+}
+
+function _clearDraft() {
+  try { localStorage.removeItem(DRAFT_STORAGE_KEY) } catch (_) { /* ignore */ }
+}
+
+function _readDraft() {
+  try {
+    const draft = JSON.parse(localStorage.getItem(DRAFT_STORAGE_KEY) || 'null')
+    return (draft && typeof draft.yaml === 'string') ? draft : null
+  } catch (_) {
+    return null
+  }
+}
+
+function _maybeOfferDraftRestore() {
+  const bar = document.getElementById('editor-draft-bar')
+  if (!bar || !_textarea) return
+  const draft = _readDraft()
+  // Only offer a draft that belongs to this editor context and differs from
+  // what is on screen (a draft identical to the loaded YAML is stale).
+  if (!draft || draft.name !== (_editName ?? null) || draft.yaml === _textarea.value) return
+  const time = new Date(draft.savedAt || Date.now()).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
+  const text = document.getElementById('editor-draft-text')
+  if (text) text.textContent = `Unsaved draft from ${time} found`
+  bar.classList.remove('d-none')
+}
+
+function _hideDraftBar() {
+  document.getElementById('editor-draft-bar')?.classList.add('d-none')
+}
+
+function _restoreDraft() {
+  const draft = _readDraft()
+  if (!draft) { _hideDraftBar(); return }
+  _textarea.value = draft.yaml
+  // The restored draft replaces the AI output — retire the AI undo snapshot
+  // so "Undo AI change" cannot yank the draft out from under the operator.
+  _discardAiUndo()
+  _hideDraftBar()
+  _saveDraftNow()
+  toast('Draft restored')
+}
+
+function _discardDraft() {
+  _clearDraft()
+  _hideDraftBar()
+}
 
 function _leaveEditor(pipelineName = null) {
   _aiUndoSnapshot = null
+  clearTimeout(_draftSaveTimer)
+  // Keep the draft on cancel/navigation (it is the recovery copy); on a
+  // successful save _editorSave clears it explicitly first.
+  _saveDraftNow()
   const returnTo = window._editorReturn
   window._editorReturn = null
   window._editorYaml = null
@@ -59,6 +148,8 @@ export async function init() {
   _aiEnabled = false
   _lastDryRunErrors = []
   _aiUndoSnapshot = null
+  _baselineYaml = null
+  clearTimeout(_draftSaveTimer)
   _bindEditorActions()
 
   // ── Mode-specific UI setup ─────────────────────────────────────────────────
@@ -96,6 +187,13 @@ export async function init() {
   // ── Reference pills from the live plugin registry ─────────────────────────
   void _renderPluginReference()
 
+  // Baseline for unsaved-change detection: the loaded YAML in edit mode, the
+  // template/preloaded YAML in new mode.
+  _baselineYaml = _textarea?.value ?? ''
+
+  // Offer recovery of an unsaved draft from a previous session.
+  _maybeOfferDraftRestore()
+
   // ── Tab key inserts spaces ────────────────────────────────────────────────
   ta?.addEventListener('keydown', e => {
     if (e.key === 'Tab') {
@@ -107,8 +205,14 @@ export async function init() {
     }
   })
 
-  // ── Typing in the textarea retires the AI undo affordance ─────────────────
-  ta?.addEventListener('input', _discardAiUndo)
+  // ── Typing retires the AI undo affordance and schedules a draft save ───────
+  ta?.addEventListener('input', _onEditorInput)
+}
+
+function _onEditorInput() {
+  _discardAiUndo()
+  _hideDraftBar()
+  _scheduleDraftSave()
 }
 
 function _bindEditorActions() {
@@ -133,6 +237,8 @@ function _bindEditorActions() {
     event.preventDefault()
     navigate('settings')
   })
+  document.getElementById('editor-draft-restore')?.addEventListener('click', _restoreDraft)
+  document.getElementById('editor-draft-discard')?.addEventListener('click', _discardDraft)
 }
 
 async function _checkAI(isEdit) {
@@ -249,6 +355,8 @@ function _applyAiYaml(result) {
   _showAiUndo()
   _showInlineDiff()
   _renderAiValidation(result)
+  // The AI output is unsaved work — persist it as the recovery draft too.
+  _saveDraftNow()
 }
 
 function _undoAiChange() {
@@ -260,6 +368,7 @@ function _undoAiChange() {
   // Refresh the diff only when the operator had it open, so it matches the
   // restored text instead of showing the AI output.
   if (document.getElementById('editor-inline-diff')) _showInlineDiff()
+  _saveDraftNow()
   toast('AI change undone')
 }
 
@@ -399,6 +508,8 @@ async function _editorSave() {
   if (!yaml) { toast('Nothing to save', 'error'); return }
   if (_editName && _originalYaml && yaml === _originalYaml.trim()) {
     toast('No changes — pipeline is already up to date')
+    _baselineYaml = _textarea.value
+    _clearDraft()
     _leaveEditor(_editName)
     return
   }
@@ -407,12 +518,14 @@ async function _editorSave() {
       await api.pipelines.update(_editName, yaml)
       _originalYaml = yaml
       toast(`Saved ${_editName}`)
-      _leaveEditor(_editName)
     } else {
       await api.pipelines.create(yaml)
       toast('Pipeline created')
-      _leaveEditor()
     }
+    // The work is persisted — the recovery draft is no longer needed.
+    _baselineYaml = _textarea.value
+    _clearDraft()
+    _leaveEditor(_editName)
   } catch (e) {
     toast(e.message, 'error')
   }

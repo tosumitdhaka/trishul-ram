@@ -126,7 +126,7 @@ async def get_run(run_id: str, request: Request) -> dict:
 async def daemon_status(request: Request) -> dict:
     """Scheduler state, active streams, next scheduled runs."""
     scheduler = request.app.state.scheduler
-    return scheduler.get_status()
+    return scheduler.get_scheduler_status()
 
 
 @router.post("/daemon/stop")

@@ -69,6 +69,27 @@ function showTab(tabName) {
   if (_activeTab === 'alerts') loadAlerts()
 }
 
+// Next scheduled run for this pipeline, from the daemon scheduler state
+// (GET /api/daemon/status). Only interval and cron pipelines have a next run;
+// stream pipelines are always-on, manual ones run on demand.
+async function _loadNextRun() {
+  const el = document.getElementById('detail-next-run')
+  if (!el) return
+  try {
+    const status = await api.daemon.status()
+    const job = (status?.scheduled_jobs || []).find(j => j.pipeline === _name)
+    if (job?.next_run) {
+      el.textContent = `Next run ${fmtTimestamp(job.next_run)} (${relTime(job.next_run)})`
+      el.hidden = false
+    } else {
+      el.hidden = true
+      el.textContent = ''
+    }
+  } catch {
+    el.hidden = true
+  }
+}
+
 function renderHeader(p) {
   const title = document.getElementById('detail-title')
   const meta = document.getElementById('detail-meta')
@@ -119,6 +140,7 @@ function renderCards(p) {
   const sinks = Array.isArray(p.sinks) ? p.sinks.map(s => s.type || s).join(', ') : '—'
   set('detail-sinks',     sinks)
   set('detail-schedule', scheduleLabel(p))
+  void _loadNextRun()
   set('detail-serializers', p.serializer_in || '—')
   const transformsEl = document.getElementById('detail-transforms')
   if (transformsEl) transformsEl.innerHTML = renderTransformFlow(p.transforms)

@@ -1,6 +1,7 @@
 import { api } from '../api.js'
 import {
   bindDataActions,
+  bindKeyboardActivation,
   confirmAction,
   downloadText,
   fmtBytes,
@@ -195,13 +196,13 @@ function _renderPipelines(perPipeline) {
     const isRunning = p.status === 'running' || p.status === 'scheduled'
     const scheduleType = p.schedule_type || _pipelineMeta.get(p.name)?.schedule_type || ''
     const primaryBtn = isRunning
-      ? `<button class="btn-flat-danger" type="button" title="Stop" data-action="stop" data-name="${esc(p.name)}"><i class="bi bi-stop-fill"></i></button>`
+      ? `<button class="btn-flat-danger" type="button" title="Stop" aria-label="Stop ${esc(p.name)}" data-action="stop" data-name="${esc(p.name)}"><i class="bi bi-stop-fill"></i></button>`
       : scheduleType === 'manual'
-        ? `<button class="btn-flat-primary" type="button" title="Run now" aria-label="Run now" data-action="run" data-name="${esc(p.name)}"><i class="bi bi-play-fill"></i></button>`
-        : `<button class="btn-flat-primary" type="button" title="Start" data-action="start" data-name="${esc(p.name)}"><i class="bi bi-play-fill"></i></button>`
-    const dlBtn    = `<button class="btn-flat" type="button" title="Download YAML" data-action="download" data-name="${esc(p.name)}"><i class="bi bi-download"></i></button>`
+        ? `<button class="btn-flat-primary" type="button" title="Run now" aria-label="Run ${esc(p.name)} now" data-action="run" data-name="${esc(p.name)}"><i class="bi bi-play-fill"></i></button>`
+        : `<button class="btn-flat-primary" type="button" title="Start" aria-label="Start ${esc(p.name)}" data-action="start" data-name="${esc(p.name)}"><i class="bi bi-play-fill"></i></button>`
+    const dlBtn    = `<button class="btn-flat" type="button" title="Download YAML" aria-label="Download YAML for ${esc(p.name)}" data-action="download" data-name="${esc(p.name)}"><i class="bi bi-download"></i></button>`
     const errCls = p.errors > 0 ? ' dashboard-error-cell has-errors' : ' dashboard-error-cell'
-    return `<tr class="dashboard-row-link" data-pipeline-name="${esc(p.name)}">
+    return `<tr class="dashboard-row-link" tabindex="0" role="link" aria-label="Open pipeline ${esc(p.name)}" data-pipeline-name="${esc(p.name)}">
       <td class="fw-semibold">${esc(p.name)}</td>
       <td>${statusBadge(p.status)}</td>
       <td class="text-secondary dashboard-metric-cell">${fmtNum(p.records_out)}</td>
@@ -378,6 +379,7 @@ function _wireActions() {
     }
     pipelineBody.addEventListener('click', rowClickListener)
     pipelineBody._tramRowClickListener = rowClickListener
+    bindKeyboardActivation(pipelineBody, (row) => openDetail(row.dataset.pipelineName))
   }
 
   document.getElementById('dash-refresh-btn')?.addEventListener('click', async () => {

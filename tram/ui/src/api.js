@@ -214,6 +214,11 @@ export const api = {
     list: () => req('/api/templates'),
   },
 
+  // ── Config schema (plugin field metadata for the Plugins page) ─────────────
+  configSchema: {
+    get: () => req('/api/config/schema'),
+  },
+
   // ── Stats ──────────────────────────────────────────────────────────────────
   stats: {
     get: (params = {}) => req(`/api/stats${buildQuery(params)}`),

@@ -1,7 +1,8 @@
 import { api } from '../api.js'
-import { bindDataActions, confirmAction, downloadText, getSavedPollIntervalMs, relTime, renderTableState, schedBadge, setOfflineBanner, statusBadge, esc, toast, pipelineStartFeedback } from '../utils.js'
+import { bindDataActions, bindKeyboardActivation, confirmAction, downloadText, getSavedPollIntervalMs, relTime, renderTableState, schedBadge, setOfflineBanner, statusBadge, esc, toast, pipelineStartFeedback } from '../utils.js'
 import { monitorTriggeredRun, runOutcomeToast } from '../run_monitor.js'
 import { filterTemplates, normalizeTemplates, populateTemplateFilters, templateFlowText, templateScheduleClass } from './template_helpers.js'
+import { renderDiffStats, renderNumberedDiffLine, renderSideBySideYamlDiff } from '../yaml_diff.js'
 import * as bootstrap from 'bootstrap'
 
 let _all = []
@@ -99,6 +100,7 @@ function wireTableActions() {
   }
   tbody.addEventListener('click', rowClickListener)
   tbody._tramRowClickListener = rowClickListener
+  bindKeyboardActivation(tbody, (row) => openPipelineDetail(row.dataset.pipelineName))
 }
 
 function wireImportFlow() {
@@ -320,7 +322,36 @@ async function handleImportSelection(event) {
   document.getElementById('pl-import-name').textContent = name
   const renameInput = document.getElementById('pl-import-newname')
   if (renameInput) renameInput.value = ''
+  void _renderImportDiff(name, yaml)
   new bootstrap.Modal(document.getElementById('pl-import-modal')).show()
+}
+
+// Show what the upload would change before "Replace current YAML" is used.
+// The diff component is the same one the detail Versions tab uses.
+async function _renderImportDiff(name, uploadedYaml) {
+  const left  = document.getElementById('pl-import-diff-left')
+  const right = document.getElementById('pl-import-diff-right')
+  if (!left || !right) return
+  left.innerHTML = right.innerHTML = '<div class="text-secondary p-2">Loading diff…</div>'
+  try {
+    const p = await api.pipelines.get(name)
+    const currentYaml = p.yaml || p.raw || ''
+    renderSideBySideYamlDiff(currentYaml, uploadedYaml, {
+      leftPane: left,
+      rightPane: right,
+      statsEl: document.getElementById('pl-import-diff-stats'),
+      renderLine: (lineNo, line, type) => renderNumberedDiffLine(lineNo, line, type, 'detail-diff'),
+      renderStats: (adds, dels) => renderDiffStats(adds, dels, {
+        muted: 'detail-diff-stat-muted',
+        insert: 'detail-diff-stat-insert',
+        delete: 'detail-diff-stat-delete',
+      }),
+      emptyLine: renderNumberedDiffLine('', '— empty —', 'gap', 'detail-diff'),
+    })
+  } catch (e) {
+    left.innerHTML = right.innerHTML =
+      '<div class="text-secondary p-2">Could not load the current YAML — the diff preview is unavailable.</div>'
+  }
 }
 
 async function openTemplates() {
@@ -464,12 +495,12 @@ function renderTable(pipelines) {
     const isActive = p.status === 'running' || p.status === 'scheduled'
     const isManual = p.schedule_type === 'manual'
     const actionBtn = isActive
-      ? `<button class="btn-flat-danger" type="button" title="Stop" data-action="stop" data-name="${esc(p.name)}"><i class="bi bi-stop-fill"></i></button>`
+      ? `<button class="btn-flat-danger" type="button" title="Stop" aria-label="Stop ${esc(p.name)}" data-action="stop" data-name="${esc(p.name)}"><i class="bi bi-stop-fill"></i></button>`
       : isManual
-        ? `<button class="btn-flat-primary" type="button" title="Run now" data-action="run" data-name="${esc(p.name)}"><i class="bi bi-play-fill"></i></button>`
-        : `<button class="btn-flat-primary" type="button" title="Start" data-action="start" data-name="${esc(p.name)}"><i class="bi bi-play-fill"></i></button>`
+        ? `<button class="btn-flat-primary" type="button" title="Run now" aria-label="Run ${esc(p.name)} now" data-action="run" data-name="${esc(p.name)}"><i class="bi bi-play-fill"></i></button>`
+        : `<button class="btn-flat-primary" type="button" title="Start" aria-label="Start ${esc(p.name)}" data-action="start" data-name="${esc(p.name)}"><i class="bi bi-play-fill"></i></button>`
     const sinks = Array.isArray(p.sinks) ? p.sinks.map(s => esc(s.type || s)).join(', ') : '—'
-    return `<tr class="table-row-link" data-pipeline-name="${esc(p.name)}">
+    return `<tr class="table-row-link" tabindex="0" role="link" aria-label="Open pipeline ${esc(p.name)}" data-pipeline-name="${esc(p.name)}">
       <td class="fw-semibold">${esc(p.name)}</td>
       <td class="text-secondary">${esc(p.source?.type || '—')}</td>
       <td class="text-secondary">${sinks}</td>
@@ -479,9 +510,9 @@ function renderTable(pipelines) {
       <td>${p.last_run_status ? statusBadge(p.last_run_status) : '—'}</td>
       <td class="text-end">
         ${actionBtn}
-        <button class="btn-flat" type="button" title="Edit" data-action="edit" data-name="${esc(p.name)}"><i class="bi bi-pencil"></i></button>
-        <button class="btn-flat" type="button" title="Export YAML" data-action="download" data-name="${esc(p.name)}"><i class="bi bi-download"></i></button>
-        <button class="btn-flat-danger" type="button" title="Delete" data-action="delete" data-name="${esc(p.name)}"><i class="bi bi-trash"></i></button>
+        <button class="btn-flat" type="button" title="Edit" aria-label="Edit ${esc(p.name)}" data-action="edit" data-name="${esc(p.name)}"><i class="bi bi-pencil"></i></button>
+        <button class="btn-flat" type="button" title="Export YAML" aria-label="Export YAML for ${esc(p.name)}" data-action="download" data-name="${esc(p.name)}"><i class="bi bi-download"></i></button>
+        <button class="btn-flat-danger" type="button" title="Delete" aria-label="Delete ${esc(p.name)}" data-action="delete" data-name="${esc(p.name)}"><i class="bi bi-trash"></i></button>
       </td>
     </tr>`
   }).join('')

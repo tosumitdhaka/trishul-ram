@@ -50,7 +50,12 @@ def _make_runs_app():
     app.state.controller = MagicMock()
     app.state.controller.get_runs.return_value = []
     mock_scheduler = MagicMock()
-    mock_scheduler.get_status.return_value = {"jobs": [], "streams": []}
+    mock_scheduler.get_scheduler_status.return_value = {
+        "scheduler_running": True,
+        "active_streams": [],
+        "scheduled_jobs": [],
+        "workers": None,
+    }
     app.state.scheduler = mock_scheduler
     return app
 
@@ -551,11 +556,16 @@ class TestGetRun:
 class TestDaemonStatus:
     def test_returns_scheduler_status(self):
         app = _make_runs_app()
-        app.state.scheduler.get_status.return_value = {"jobs": [{"id": "j1"}], "streams": []}
+        app.state.scheduler.get_scheduler_status.return_value = {
+            "scheduler_running": True,
+            "active_streams": [],
+            "scheduled_jobs": [{"pipeline": "p1", "next_run": None}],
+            "workers": None,
+        }
         client = TestClient(app)
         r = client.get("/api/daemon/status")
         assert r.status_code == 200
-        assert "jobs" in r.json()
+        assert "scheduled_jobs" in r.json()
 
 
 # ── Metrics router ─────────────────────────────────────────────────────────

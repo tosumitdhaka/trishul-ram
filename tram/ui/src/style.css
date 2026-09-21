@@ -502,6 +502,7 @@ body {
 .detail-card  { background: var(--bg-surface); border: 1px solid var(--border); border-radius: 8px; padding: 14px 16px; }
 .detail-label { font-size: 10px; font-weight: 600; color: var(--fg-muted); text-transform: uppercase; letter-spacing: .5px; margin-bottom: 6px; }
 .detail-val   { font-size: 13px; font-weight: 600; display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
+.detail-sub   { font-size: 11px; color: var(--fg-2); margin-top: 4px; }
 .pill { display:inline-flex;align-items:center;padding:2px 8px;border-radius:10px;font-size:11px;font-weight:500;background:var(--bg-inset);color:var(--fg-2);border:1px solid var(--border); }
 .detail-hero {
   background: linear-gradient(180deg, rgba(56,139,253,.06), rgba(56,139,253,.02));
@@ -837,6 +838,113 @@ body {
   outline: none;
   border: none;
   min-height: 640px;
+}
+.editor-draft-bar {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 8px 16px;
+  border-bottom: 1px solid rgba(210,153,34,.4);
+  background: var(--badge-yellow-bg);
+  color: var(--badge-yellow-fg);
+  font-size: 12px;
+}
+.editor-draft-bar i {
+  flex-shrink: 0;
+}
+.editor-draft-bar .btn {
+  font-size: 11px;
+  padding: 2px 10px;
+}
+
+/* ── Plugins page (sample usage + field notes) ────────────────────────────── */
+.plugins-sample {
+  border: 1px solid var(--border-sub);
+  border-radius: 8px;
+  overflow: hidden;
+  max-width: 560px;
+}
+.plugins-sample-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 2px 6px 2px 12px;
+  background: var(--bg-surface2);
+  border-bottom: 1px solid var(--border-sub);
+}
+.plugins-sample-title {
+  font-size: 10px;
+  color: var(--fg-muted);
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+}
+.plugins-sample-yaml {
+  margin: 0;
+  padding: 10px 14px;
+  font-family: 'SFMono-Regular', Consolas, monospace;
+  font-size: 12px;
+  line-height: 1.55;
+  color: var(--fg-2);
+  background: var(--bg-inset);
+  overflow-x: auto;
+  white-space: pre;
+}
+.plugins-field-note {
+  font-size: 10px;
+  color: var(--fg-muted);
+  margin-left: 6px;
+}
+.plugins-field-choices { font-size: 11px; }
+
+/* ── Import conflict diff preview ───────────────────────────────────────────── */
+.pl-import-diff {
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  overflow: hidden;
+  background: var(--bg-surface);
+}
+.pl-import-diff-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 6px 12px;
+  border-bottom: 1px solid var(--border-sub);
+  background: var(--bg-surface2);
+}
+.pl-import-diff-title {
+  font-size: 11px;
+  color: var(--fg-muted);
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+}
+.pl-import-diff-panels {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+}
+.pl-import-diff-pane-header {
+  padding: 4px 12px;
+  font-size: 10px;
+  color: var(--fg-muted);
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  border-bottom: 1px solid var(--border-sub);
+  background: var(--bg-surface2);
+}
+.pl-import-diff-pane:first-child .pl-import-diff-pane-header,
+.pl-import-diff-pane:first-child .pl-import-diff-pane-body { border-right: 1px solid var(--border-sub); }
+.pl-import-diff-pane-body {
+  max-height: 320px;
+  overflow: auto;
+  font-family: 'SFMono-Regular', Consolas, monospace;
+  font-size: 12px;
+  line-height: 1.5;
+  padding: 8px 0;
+}
+@media (max-width: 767.98px) {
+  .pl-import-diff-panels { grid-template-columns: 1fr; }
+  .pl-import-diff-pane:first-child .pl-import-diff-pane-header,
+  .pl-import-diff-pane:first-child .pl-import-diff-pane-body { border-right: none; }
+  .pl-import-diff-pane:first-child .pl-import-diff-pane-body { border-bottom: 1px solid var(--border-sub); }
 }
 .editor-side-stack {
   display: flex;
@@ -1585,3 +1693,20 @@ body {
 
 @keyframes spin { to { transform: rotate(360deg); } }
 .spin { display: inline-block; animation: spin 0.6s linear infinite; }
+
+/* ── Keyboard focus on clickable rows ─────────────────────────────────────── */
+.table-row-link:focus-visible,
+.dashboard-row-link:focus-visible {
+  outline: 2px solid var(--accent-blue);
+  outline-offset: -2px;
+}
+
+/* ── Reduced motion ─────────────────────────────────────────────────────────── */
+@media (prefers-reduced-motion: reduce) {
+  .tram-badge.running::before,
+  .tram-badge.queued::before { animation: none; }
+  .spin { animation: none; }
+  .tram-toast { transition: none; }
+  .health-indicator,
+  .live-dot { transition: none; }
+}
