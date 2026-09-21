@@ -3,18 +3,29 @@
 from __future__ import annotations
 
 import asyncio
+import ipaddress
+import logging
 import os
+import time
 from dataclasses import dataclass
+from datetime import UTC, datetime
+from urllib.parse import urlsplit
 
 import yaml
 from fastapi import APIRouter, HTTPException, Request
 
 from tram.api.config_schema import SCHEMA_FIELDS
 from tram.api.routers.ai_docs import build_ai_context
+from tram.core.config import ai_audit_enabled
 from tram.core.exceptions import ConfigError
 from tram.pipeline.loader import load_pipeline_from_yaml
 
 router = APIRouter()
+
+# A10: per-call audit log (mode, client host, provider, model, tokens,
+# duration, outcome). The ai_usage DB rows are gated by TRAM_AI_AUDIT; the
+# log line itself is always emitted.
+logger = logging.getLogger("tram.ai")
 
 _ANTHROPIC_DEFAULT_MODEL = "claude-haiku-4-5-20251001"
 _OPENAI_DEFAULT_MODEL    = "gpt-4o-mini"
@@ -30,14 +41,119 @@ _AI_CALL_TIMEOUT = 60.0
 
 _AI_KEYS = ("ai.provider", "ai.api_key", "ai.model", "ai.base_url")
 
+_DEFAULT_MODELS = {
+    "anthropic": _ANTHROPIC_DEFAULT_MODEL,
+    "openai": _OPENAI_DEFAULT_MODEL,
+    "bedrock": _BEDROCK_DEFAULT_MODEL,
+}
+
+
+def _resolve_model(cfg: dict) -> str:
+    """Effective model for *cfg*: the configured one, else the provider default."""
+    return cfg["model"] or _DEFAULT_MODELS.get(cfg["provider"], _ANTHROPIC_DEFAULT_MODEL)
+
 
 @dataclass
 class _AiResult:
     """Outcome of one provider call: the reply text plus the provider's stop
-    reason (``None`` when the provider does not report one)."""
+    reason (``None`` when the provider does not report one) and token usage
+    (``None`` when the SDK does not expose it — A10 audit fields)."""
 
     text: str
     stop_reason: str | None = None
+    tokens_in: int | None = None
+    tokens_out: int | None = None
+
+
+# ── A11: base_url scheme enforcement + allowlist ────────────────────────────
+
+# http base_urls are only accepted for local use: loopback (127.0.0.0/8, ::1)
+# plus RFC1918 private ranges (10/8, 172.16/12, 192.168/16) and IPv6
+# unique-local (fc00::/7). Deliberately NOT included: link-local 169.254.0.0/16
+# (cloud metadata endpoints) and CGNAT 100.64.0.0/10 — those are routable
+# infrastructure, not "the operator's own host" (Ollama/LiteLLM local use).
+_PRIVATE_NETS = (
+    ipaddress.ip_network("127.0.0.0/8"),
+    ipaddress.ip_network("10.0.0.0/8"),
+    ipaddress.ip_network("172.16.0.0/12"),
+    ipaddress.ip_network("192.168.0.0/16"),
+    ipaddress.ip_network("::1/128"),
+    ipaddress.ip_network("fc00::/7"),
+)
+
+
+def _is_loopback_or_private_host(host: str) -> bool:
+    """True when *host* is a loopback/private-range IP literal, or a
+    ``localhost`` name. DNS names (other than ``*.localhost``) are never
+    treated as local — resolving them at validation time would make the check
+    vulnerable to DNS-rebinding and network lookups."""
+    if host in ("localhost",) or host.endswith(".localhost"):
+        return True
+    try:
+        addr = ipaddress.ip_address(host)
+    except ValueError:
+        return False
+    return any(addr in net for net in _PRIVATE_NETS)
+
+
+def _base_url_problem(base_url: str) -> str | None:
+    """Return a human-readable rejection reason for *base_url*, or None when
+    it is acceptable. ``https`` is always allowed; ``http`` only for loopback
+    and private-range hosts (local Ollama/LiteLLM use). URLs without a
+    recognized scheme are rejected too — urlsplit would mis-parse e.g.
+    ``localhost:11434`` (scheme becomes the hostname)."""
+    base_url = base_url.strip()
+    if not base_url:
+        return None
+    parts = urlsplit(base_url)
+    scheme = (parts.scheme or "").lower()
+    if scheme not in ("http", "https"):
+        return (
+            f"base_url must use the http or https scheme, got {base_url!r} — "
+            "include the scheme, e.g. https://llm.example.com"
+        )
+    if scheme == "https":
+        return None
+    host = parts.hostname or ""
+    if _is_loopback_or_private_host(host):
+        return None
+    return (
+        f"base_url over http is only allowed for local/private hosts "
+        f"(localhost or loopback/private IP ranges); got {base_url!r}"
+    )
+
+
+def _normalize_base_url(url: str) -> str:
+    """Normalize a base URL for allowlist prefix matching: strip whitespace
+    and trailing slashes, lowercase the scheme and host, drop userinfo,
+    query, and fragment."""
+    url = url.strip().rstrip("/")
+    parts = urlsplit(url)
+    if not parts.scheme and not parts.netloc:
+        return url
+    try:
+        port = parts.port
+    except ValueError:
+        port = None
+    host = parts.hostname or ""
+    netloc = host if port is None else f"{host}:{port}"
+    return f"{parts.scheme.lower()}://{netloc}{parts.path.rstrip('/')}"
+
+
+def _allowed_base_urls() -> list[str]:
+    """Normalized entries from TRAM_AI_ALLOWED_BASE_URLS (comma-separated).
+    Empty when the env var is unset — no allowlist restriction applies."""
+    return [
+        _normalize_base_url(entry)
+        for entry in os.getenv("TRAM_AI_ALLOWED_BASE_URLS", "").split(",")
+        if entry.strip()
+    ]
+
+
+def _base_url_allowed(base_url: str, allowed: list[str]) -> bool:
+    """Prefix match of the normalized *base_url* against the allowlist."""
+    normalized = _normalize_base_url(base_url)
+    return any(normalized.startswith(entry) for entry in allowed)
 
 
 def _get_ai_cfg(db) -> dict:
@@ -91,6 +207,13 @@ def _call_ai(system: str, user: str, max_tokens: int, cfg: dict) -> _AiResult:
     model    = cfg["model"]
     base_url = cfg["base_url"]
 
+    # A11 defense-in-depth: also enforced at save time in ai_save_config, but
+    # env-var-configured base_urls bypass the config endpoint, so re-check
+    # here before any provider path attaches the API key.
+    if base_url:
+        if problem := _base_url_problem(base_url):
+            raise RuntimeError(problem)
+
     if provider == "anthropic":
         try:
             import anthropic
@@ -119,6 +242,8 @@ def _call_ai(system: str, user: str, max_tokens: int, cfg: dict) -> _AiResult:
         return _AiResult(
             msg.content[0].text.strip(),
             getattr(msg, "stop_reason", None),
+            getattr(getattr(msg, "usage", None), "input_tokens", None),
+            getattr(getattr(msg, "usage", None), "output_tokens", None),
         )
 
     elif provider == "openai":
@@ -150,6 +275,8 @@ def _call_ai(system: str, user: str, max_tokens: int, cfg: dict) -> _AiResult:
         return _AiResult(
             resp.choices[0].message.content.strip(),
             getattr(resp.choices[0], "finish_reason", None),
+            getattr(getattr(resp, "usage", None), "prompt_tokens", None),
+            getattr(getattr(resp, "usage", None), "completion_tokens", None),
         )
 
     elif provider == "bedrock":
@@ -175,9 +302,12 @@ def _call_ai(system: str, user: str, max_tokens: int, cfg: dict) -> _AiResult:
         try:
             with urllib.request.urlopen(req, timeout=60) as resp:
                 result = _json.loads(resp.read())
+            usage = result.get("usage") or {}
             return _AiResult(
                 result["content"][0]["text"].strip(),
                 result.get("stop_reason"),
+                usage.get("input_tokens"),
+                usage.get("output_tokens"),
             )
         except urllib.error.HTTPError as exc:
             err_body = exc.read().decode()
@@ -323,18 +453,78 @@ def _redact_yaml(yaml_text: str) -> str:
     return yaml.safe_dump(data, default_flow_style=False, sort_keys=False)
 
 
+# ── A10: per-call audit log + optional ai_usage persistence ────────────────
+
+
+def _audit_ai_call(
+    request: Request,
+    mode: str,
+    cfg: dict,
+    result: _AiResult | None,
+    duration_s: float,
+    error: BaseException | None = None,
+) -> None:
+    """Emit one audit line per AI call: who (client host), what (mode,
+    provider, model), cost (tokens when the SDK reported them), duration,
+    and outcome. The log line is always emitted; the ai_usage DB row is
+    gated by the TRAM_AI_AUDIT feature flag (default on)."""
+    client = request.client.host if request.client else ""
+    provider = cfg["provider"]
+    model = _resolve_model(cfg)
+    tokens_in = result.tokens_in if result else None
+    tokens_out = result.tokens_out if result else None
+    ok = error is None
+    extra = {
+        "mode": mode,
+        "client": client,
+        "provider": provider,
+        "model": model,
+        "tokens_in": tokens_in,
+        "tokens_out": tokens_out,
+        "duration_s": round(duration_s, 3),
+        "ok": ok,
+    }
+    if ok:
+        logger.info("AI call completed", extra=extra)
+    else:
+        logger.warning("AI call failed", extra=extra, exc_info=error)
+    db = getattr(request.app.state, "db", None)
+    if db is not None and ai_audit_enabled():
+        try:
+            db.append_ai_usage(
+                ts=datetime.now(UTC).isoformat(),
+                mode=mode, client=client, provider=provider, model=model,
+                tokens_in=tokens_in, tokens_out=tokens_out, ok=ok,
+            )
+        except Exception:
+            # Audit persistence must never break the AI call itself.
+            logger.exception("Failed to persist AI usage row")
+
+
+async def _run_ai_call(request: Request, mode: str, system: str, user: str,
+                       max_tokens: int, cfg: dict) -> _AiResult:
+    """Execute one AI call off the event loop and audit it (A10). Raises the
+    underlying exception on failure — callers convert it to HTTPException."""
+    started = time.monotonic()
+    try:
+        result = await asyncio.to_thread(_call_ai, system, user, max_tokens, cfg)
+    except Exception as exc:
+        _audit_ai_call(request, mode, cfg, None, time.monotonic() - started, error=exc)
+        raise
+    _audit_ai_call(request, mode, cfg, result, time.monotonic() - started)
+    return result
+
+
 @router.get("/api/ai/status", tags=["ai"])
 async def ai_status(request: Request) -> dict:
     """Returns whether AI assist is configured."""
     db = getattr(request.app.state, "db", None)
     cfg = _get_ai_cfg(db)
     enabled = bool(cfg["api_key"])
-    _defaults = {"anthropic": _ANTHROPIC_DEFAULT_MODEL, "openai": _OPENAI_DEFAULT_MODEL, "bedrock": _BEDROCK_DEFAULT_MODEL}
-    default_model = _defaults.get(cfg["provider"], _ANTHROPIC_DEFAULT_MODEL)
     return {
         "enabled": enabled,
         "provider": cfg["provider"] if enabled else None,
-        "model": (cfg["model"] or default_model) if enabled else None,
+        "model": _resolve_model(cfg) if enabled else None,
     }
 
 
@@ -384,6 +574,19 @@ async def ai_save_config(request: Request) -> dict:
     if model:
         db.set_setting("ai.model", model)
     if base_url:
+        # A11: reject bad schemes/allowlist violations at save time so the
+        # operator hears about them here, not on the first AI call.
+        if problem := _base_url_problem(base_url):
+            raise HTTPException(status_code=400, detail=problem)
+        if allowed := _allowed_base_urls():
+            if not _base_url_allowed(base_url, allowed):
+                raise HTTPException(
+                    status_code=400,
+                    detail=(
+                        "base_url not allowed by TRAM_AI_ALLOWED_BASE_URLS: "
+                        f"{base_url!r} — it must prefix-match one of {allowed}"
+                    ),
+                )
         db.set_setting("ai.base_url", base_url)
     return {"ok": True}
 
@@ -397,17 +600,15 @@ async def ai_test(request: Request) -> dict:
         raise HTTPException(status_code=503, detail="AI assist not configured — set API key in Settings → AI")
     try:
         # Run the blocking SDK/urllib call in a worker thread so the event
-        # loop stays responsive for all other API traffic (A1).
-        reply = await asyncio.to_thread(
-            _call_ai,
+        # loop stays responsive for all other API traffic (A1). The audit
+        # wrapper (A10) also records the call with mode="test".
+        reply = await _run_ai_call(
+            request, "test",
             "You are a helpful assistant.",
             "Reply with exactly: OK",
             max_tokens=10, cfg=cfg,
         )
-        provider = cfg["provider"]
-        _defaults = {"anthropic": _ANTHROPIC_DEFAULT_MODEL, "openai": _OPENAI_DEFAULT_MODEL, "bedrock": _BEDROCK_DEFAULT_MODEL}
-        model = cfg["model"] or _defaults.get(provider, _ANTHROPIC_DEFAULT_MODEL)
-        return {"ok": True, "reply": reply.text, "provider": provider, "model": model}
+        return {"ok": True, "reply": reply.text, "provider": cfg["provider"], "model": _resolve_model(cfg)}
     except RuntimeError as exc:
         raise HTTPException(status_code=502, detail=str(exc))
 
@@ -432,7 +633,7 @@ async def ai_suggest(request: Request) -> dict:
             connector_schema   = build_ai_context(prompt, plugins),
         )
         try:
-            result = await asyncio.to_thread(_call_ai, system, prompt, max_tokens=1024, cfg=cfg)
+            result = await _run_ai_call(request, "generate", system, prompt, max_tokens=1024, cfg=cfg)
         except Exception as exc:
             raise HTTPException(status_code=502, detail=str(exc))
         return _yaml_mode_result(result)
@@ -445,8 +646,8 @@ async def ai_suggest(request: Request) -> dict:
             "Explain in 2-3 sentences what is wrong and how to fix it."
         )
         try:
-            explanation = await asyncio.to_thread(
-                _call_ai,
+            explanation = await _run_ai_call(
+                request, "explain",
                 "You are a helpful TRAM pipeline configuration assistant. "
                 "Be concise and actionable.",
                 user, max_tokens=300, cfg=cfg,
@@ -467,7 +668,7 @@ async def ai_suggest(request: Request) -> dict:
             f"Error to fix: {body.get('error', '')}"
         )
         try:
-            result = await asyncio.to_thread(_call_ai, system, user, max_tokens=1024, cfg=cfg)
+            result = await _run_ai_call(request, "fix", system, user, max_tokens=1024, cfg=cfg)
         except Exception as exc:
             raise HTTPException(status_code=502, detail=str(exc))
         return _yaml_mode_result(result)
@@ -484,7 +685,7 @@ async def ai_suggest(request: Request) -> dict:
             f"Instruction: {body.get('instruction', '')}"
         )
         try:
-            result = await asyncio.to_thread(_call_ai, system, user, max_tokens=1024, cfg=cfg)
+            result = await _run_ai_call(request, "modify", system, user, max_tokens=1024, cfg=cfg)
         except Exception as exc:
             raise HTTPException(status_code=502, detail=str(exc))
         return _yaml_mode_result(result)

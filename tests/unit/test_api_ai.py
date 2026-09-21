@@ -1,6 +1,7 @@
 """Tests for AI assist router — /api/ai/status, config, test, suggest."""
 from __future__ import annotations
 
+import logging
 import sys
 from unittest.mock import MagicMock, patch
 
@@ -10,6 +11,7 @@ from fastapi.testclient import TestClient
 
 from tram.api.routers.ai import (
     _AiResult,
+    _base_url_problem,
     _call_ai,
     _get_ai_cfg,
     _redact_yaml,
@@ -173,9 +175,9 @@ class TestCallAiAnthropic:
         mock_ant.RateLimitError = type("RateLimitError", (Exception,), {})
         mock_ant.APIStatusError = type("APIStatusError", (Exception,), {})
         with patch.dict(sys.modules, {"anthropic": mock_ant}):
-            _call_ai("sys", "usr", 100, self._cfg(base_url="http://proxy/v1"))
+            _call_ai("sys", "usr", 100, self._cfg(base_url="https://proxy/v1"))
         call_kwargs = mock_ant.Anthropic.call_args.kwargs
-        assert call_kwargs.get("base_url") == "http://proxy"
+        assert call_kwargs.get("base_url") == "https://proxy"
 
     def test_timeout_passed_to_client(self):
         # A1: explicit 60 s timeout on the client, matching the Bedrock path.
@@ -231,9 +233,9 @@ class TestCallAiOpenAI:
         mock_oai.RateLimitError = type("RateLimitError", (Exception,), {})
         mock_oai.APIStatusError = type("APIStatusError", (Exception,), {})
         with patch.dict(sys.modules, {"openai": mock_oai}):
-            _call_ai("sys", "usr", 100, self._cfg(base_url="http://my-proxy"))
+            _call_ai("sys", "usr", 100, self._cfg(base_url="https://my-proxy"))
         call_kwargs = mock_oai.OpenAI.call_args.kwargs
-        assert call_kwargs.get("base_url") == "http://my-proxy"
+        assert call_kwargs.get("base_url") == "https://my-proxy"
 
     def test_timeout_passed_to_client(self):
         # A1: explicit 60 s timeout on the client, matching the Bedrock path.
@@ -249,7 +251,7 @@ class TestCallAiOpenAI:
 class TestCallAiBedrock:
     def _cfg(self, **kw):
         return {"provider": "bedrock", "api_key": "key",
-                "model": "", "base_url": "http://bedrock-proxy", **kw}
+                "model": "", "base_url": "https://bedrock-proxy", **kw}
 
     def test_success(self):
         import json
@@ -843,3 +845,281 @@ class TestAiPromptRedaction:
         })
         assert r.status_code == 200
         assert "keepme" in captured["user"]
+
+
+# ── A11: base_url scheme enforcement + allowlist ────────────────────────────
+
+
+class TestBaseUrlScheme:
+    """A11: https always OK; http only for loopback/private hosts."""
+
+    def test_https_public_host_accepted(self):
+        assert _base_url_problem("https://llm.example.com") is None
+        assert _base_url_problem("https://llm.example.com/v1") is None
+
+    def test_http_localhost_accepted(self):
+        assert _base_url_problem("http://localhost:11434") is None
+        assert _base_url_problem("http://my-ollama.localhost:11434") is None
+
+    @pytest.mark.parametrize("url", [
+        "http://127.0.0.1:11434",
+        "http://127.8.8.8:11434",      # whole 127.0.0.0/8 is loopback
+        "http://10.0.0.5:8080",
+        "http://172.16.0.3:11434",
+        "http://192.168.1.10:11434",
+        "http://[::1]:11434",          # IPv6 loopback
+        "http://[fd00::1]:11434",      # IPv6 unique-local
+    ])
+    def test_http_loopback_private_accepted(self, url):
+        assert _base_url_problem(url) is None
+
+    @pytest.mark.parametrize("url", [
+        "http://example.com",
+        "http://llm.example.com:8080",
+        "http://169.254.169.254",      # link-local / cloud metadata — NOT local
+        "http://100.64.0.1",           # CGNAT shared space — NOT local
+        "http://8.8.8.8",
+    ])
+    def test_http_public_host_rejected(self, url):
+        assert _base_url_problem(url) is not None
+
+    def test_missing_scheme_rejected(self):
+        # urlsplit would parse "localhost:11434" as scheme="localhost"
+        assert _base_url_problem("localhost:11434") is not None
+        assert _base_url_problem("llm.example.com/v1") is not None
+
+    def test_unknown_scheme_rejected(self):
+        assert _base_url_problem("ftp://example.com") is not None
+
+    def test_empty_base_url_ok(self):
+        assert _base_url_problem("") is None
+        assert _base_url_problem("   ") is None
+
+    def test_https_accepted_at_save(self):
+        db = _make_db()
+        app = _make_app(db=db)
+        client = TestClient(app)
+        r = client.post("/api/ai/config", json={"base_url": "https://llm.example.com"})
+        assert r.status_code == 200
+        db.set_setting.assert_called_with("ai.base_url", "https://llm.example.com")
+
+    def test_http_public_rejected_at_save(self):
+        db = _make_db()
+        app = _make_app(db=db)
+        client = TestClient(app)
+        r = client.post("/api/ai/config", json={"base_url": "http://example.com"})
+        assert r.status_code == 400
+        assert "http" in r.json()["detail"]
+        db.set_setting.assert_not_called()
+
+    def test_http_loopback_accepted_at_save(self):
+        db = _make_db()
+        app = _make_app(db=db)
+        client = TestClient(app)
+        r = client.post("/api/ai/config", json={"base_url": "http://localhost:11434"})
+        assert r.status_code == 200
+        db.set_setting.assert_called_with("ai.base_url", "http://localhost:11434")
+
+    def test_http_public_rejected_at_call(self):
+        # Defense-in-depth: env-var-configured base_urls skip the config
+        # endpoint, so _call_ai re-checks before attaching the API key.
+        cfg = {"provider": "openai", "api_key": "k", "model": "", "base_url": "http://example.com"}
+        with pytest.raises(RuntimeError, match="http"):
+            _call_ai("sys", "usr", 10, cfg)
+
+    def test_http_localhost_accepted_at_call(self):
+        mock_oai = MagicMock()
+        mock_resp = MagicMock()
+        mock_resp.choices = [MagicMock(message=MagicMock(content="ok"))]
+        mock_oai.OpenAI.return_value.chat.completions.create.return_value = mock_resp
+        with patch.dict(sys.modules, {"openai": mock_oai}):
+            result = _call_ai("sys", "usr", 10, {"provider": "openai", "api_key": "k",
+                                                 "model": "", "base_url": "http://localhost:11434"})
+        assert result.text == "ok"
+        assert mock_oai.OpenAI.call_args.kwargs["base_url"] == "http://localhost:11434"
+
+
+class TestBaseUrlAllowlist:
+    """A11: TRAM_AI_ALLOWED_BASE_URLS — prefix match on normalized URLs."""
+
+    def test_matching_prefix_accepted_at_save(self, monkeypatch):
+        monkeypatch.setenv("TRAM_AI_ALLOWED_BASE_URLS", "https://llm.example.com,http://localhost:11434")
+        db = _make_db()
+        app = _make_app(db=db)
+        client = TestClient(app)
+        r = client.post("/api/ai/config", json={"base_url": "https://llm.example.com/v1"})
+        assert r.status_code == 200
+        db.set_setting.assert_called_with("ai.base_url", "https://llm.example.com/v1")
+
+    def test_matching_local_http_accepted_at_save(self, monkeypatch):
+        monkeypatch.setenv("TRAM_AI_ALLOWED_BASE_URLS", "https://llm.example.com,http://localhost:11434")
+        db = _make_db()
+        app = _make_app(db=db)
+        client = TestClient(app)
+        r = client.post("/api/ai/config", json={"base_url": "http://localhost:11434"})
+        assert r.status_code == 200
+
+    def test_non_matching_rejected_at_save(self, monkeypatch):
+        monkeypatch.setenv("TRAM_AI_ALLOWED_BASE_URLS", "https://llm.example.com")
+        db = _make_db()
+        app = _make_app(db=db)
+        client = TestClient(app)
+        r = client.post("/api/ai/config", json={"base_url": "https://other.example.com"})
+        assert r.status_code == 400
+        assert "ALLOWED_BASE_URLS" in r.json()["detail"]
+        db.set_setting.assert_not_called()
+
+    def test_scheme_rule_still_enforced_with_allowlist(self, monkeypatch):
+        # An http allowlist entry can't whitelist a PUBLIC host — the scheme
+        # rule runs first and rejects it.
+        monkeypatch.setenv("TRAM_AI_ALLOWED_BASE_URLS", "http://llm.example.com")
+        db = _make_db()
+        app = _make_app(db=db)
+        client = TestClient(app)
+        r = client.post("/api/ai/config", json={"base_url": "http://llm.example.com"})
+        assert r.status_code == 400
+        assert "http" in r.json()["detail"]
+
+    def test_no_allowlist_no_restriction(self, monkeypatch):
+        monkeypatch.delenv("TRAM_AI_ALLOWED_BASE_URLS", raising=False)
+        db = _make_db()
+        app = _make_app(db=db)
+        client = TestClient(app)
+        r = client.post("/api/ai/config", json={"base_url": "https://anything.example.com"})
+        assert r.status_code == 200
+
+    def test_prefix_match_normalizes_case_and_trailing_slash(self, monkeypatch):
+        monkeypatch.setenv("TRAM_AI_ALLOWED_BASE_URLS", "https://LLM.Example.com")
+        db = _make_db()
+        app = _make_app(db=db)
+        client = TestClient(app)
+        r = client.post("/api/ai/config", json={"base_url": "https://llm.example.com/v1/"})
+        assert r.status_code == 200
+
+
+# ── A10: per-call audit log ─────────────────────────────────────────────────
+
+
+class TestAiAuditLog:
+    def test_success_log_line_has_all_fields(self, monkeypatch, caplog):
+        monkeypatch.setenv("TRAM_AI_API_KEY", "sk-test")
+        monkeypatch.delenv("TRAM_AI_AUDIT", raising=False)
+        app = _make_app()
+        client = TestClient(app)
+        with caplog.at_level(logging.INFO, logger="tram.ai"):
+            with patch("tram.api.routers.ai._call_ai",
+                       return_value=_AiResult("name: my-pipe", None, tokens_in=10, tokens_out=25)):
+                r = client.post("/api/ai/suggest", json={"mode": "generate", "prompt": "x"})
+        assert r.status_code == 200
+        records = [rec for rec in caplog.records if rec.name == "tram.ai"]
+        assert len(records) == 1
+        rec = records[0]
+        assert rec.getMessage() == "AI call completed"
+        assert rec.mode == "generate"
+        assert rec.client == "testclient"
+        assert rec.provider == "anthropic"
+        assert rec.model == "claude-haiku-4-5-20251001"
+        assert rec.tokens_in == 10
+        assert rec.tokens_out == 25
+        assert rec.ok is True
+        assert rec.duration_s >= 0
+
+    def test_error_outcome_logged(self, monkeypatch, caplog):
+        monkeypatch.setenv("TRAM_AI_API_KEY", "sk-test")
+        app = _make_app()
+        client = TestClient(app)
+        with caplog.at_level(logging.WARNING, logger="tram.ai"):
+            with patch("tram.api.routers.ai._call_ai", side_effect=RuntimeError("boom")):
+                r = client.post("/api/ai/suggest", json={"mode": "explain", "yaml": "x", "error": "e"})
+        assert r.status_code == 502
+        records = [rec for rec in caplog.records if rec.name == "tram.ai"]
+        assert len(records) == 1
+        rec = records[0]
+        assert rec.getMessage() == "AI call failed"
+        assert rec.mode == "explain"
+        assert rec.ok is False
+        assert rec.tokens_in is None
+        assert rec.tokens_out is None
+
+    def test_ai_test_endpoint_logs_mode_test(self, monkeypatch, caplog):
+        monkeypatch.setenv("TRAM_AI_API_KEY", "sk-test")
+        app = _make_app()
+        client = TestClient(app)
+        with caplog.at_level(logging.INFO, logger="tram.ai"):
+            with patch("tram.api.routers.ai._call_ai", return_value=_AiResult("OK", None)):
+                r = client.post("/api/ai/test")
+        assert r.status_code == 200
+        records = [rec for rec in caplog.records if rec.name == "tram.ai"]
+        assert len(records) == 1
+        assert records[0].mode == "test"
+        assert records[0].ok is True
+
+
+# ── A10: ai_usage persistence (gated by TRAM_AI_AUDIT) ──────────────────────
+
+
+class TestAiUsagePersistence:
+    def test_row_appended_when_audit_enabled(self, monkeypatch):
+        monkeypatch.setenv("TRAM_AI_API_KEY", "sk-test")
+        monkeypatch.setenv("TRAM_AI_AUDIT", "1")
+        db = _make_db()
+        app = _make_app(db=db)
+        client = TestClient(app)
+        with patch("tram.api.routers.ai._call_ai",
+                   return_value=_AiResult("name: p", None, tokens_in=3, tokens_out=7)):
+            r = client.post("/api/ai/suggest", json={"mode": "modify", "yaml": "x", "instruction": "i"})
+        assert r.status_code == 200
+        assert db.append_ai_usage.call_count == 1
+        kwargs = db.append_ai_usage.call_args.kwargs
+        assert kwargs["mode"] == "modify"
+        assert kwargs["client"] == "testclient"
+        assert kwargs["provider"] == "anthropic"
+        assert kwargs["model"] == "claude-haiku-4-5-20251001"
+        assert kwargs["tokens_in"] == 3
+        assert kwargs["tokens_out"] == 7
+        assert kwargs["ok"] is True
+
+    def test_row_absent_when_audit_disabled(self, monkeypatch):
+        monkeypatch.setenv("TRAM_AI_API_KEY", "sk-test")
+        monkeypatch.setenv("TRAM_AI_AUDIT", "0")
+        db = _make_db()
+        app = _make_app(db=db)
+        client = TestClient(app)
+        with patch("tram.api.routers.ai._call_ai", return_value=_AiResult("OK", None)):
+            r = client.post("/api/ai/test")
+        assert r.status_code == 200
+        db.append_ai_usage.assert_not_called()
+
+    def test_error_outcome_recorded_with_ok_false(self, monkeypatch):
+        monkeypatch.setenv("TRAM_AI_API_KEY", "sk-test")
+        monkeypatch.setenv("TRAM_AI_AUDIT", "1")
+        db = _make_db()
+        app = _make_app(db=db)
+        client = TestClient(app)
+        with patch("tram.api.routers.ai._call_ai", side_effect=RuntimeError("boom")):
+            r = client.post("/api/ai/suggest", json={"mode": "fix", "yaml": "x", "error": "e"})
+        assert r.status_code == 502
+        assert db.append_ai_usage.call_count == 1
+        kwargs = db.append_ai_usage.call_args.kwargs
+        assert kwargs["ok"] is False
+        assert kwargs["tokens_in"] is None
+        assert kwargs["tokens_out"] is None
+
+    def test_no_db_does_not_crash_audit(self, monkeypatch):
+        monkeypatch.setenv("TRAM_AI_API_KEY", "sk-test")
+        app = _make_app()  # app.state.db unset
+        client = TestClient(app)
+        with patch("tram.api.routers.ai._call_ai", return_value=_AiResult("OK", None)):
+            r = client.post("/api/ai/test")
+        assert r.status_code == 200
+
+    def test_usage_persistence_failure_swallowed(self, monkeypatch):
+        monkeypatch.setenv("TRAM_AI_API_KEY", "sk-test")
+        monkeypatch.setenv("TRAM_AI_AUDIT", "1")
+        db = _make_db()
+        db.append_ai_usage.side_effect = RuntimeError("db down")
+        app = _make_app(db=db)
+        client = TestClient(app)
+        with patch("tram.api.routers.ai._call_ai", return_value=_AiResult("OK", None)):
+            r = client.post("/api/ai/test")
+        assert r.status_code == 200  # audit failure must not break the AI call
