@@ -41,6 +41,23 @@ def stateful_transforms_enabled() -> bool:
     return raw != "0"
 
 
+def ai_audit_enabled() -> bool:
+    """``TRAM_AI_AUDIT`` feature flag (A10) — default ON, fails open.
+
+    "0" stops the ``ai_usage`` append-only audit rows; the per-call
+    "tram.ai" log line is always emitted regardless. Any unrecognized value
+    is logged at WARNING and treated as enabled (the D.2/E.2 flag
+    convention — a typo'd value never silently disables auditing).
+    """
+    raw = os.environ.get("TRAM_AI_AUDIT", "1")
+    if raw not in ("0", "1"):
+        logger.warning(
+            "Unrecognized TRAM_AI_AUDIT value — treating as enabled (\"1\")",
+            extra={"value": raw},
+        )
+    return raw != "0"
+
+
 # TRAM_STATE_MAX_BYTES default: 20 MiB. Justification — the design F.1 §3.2a
 # blob bound is ~2.5 MB at 50k counter keys; 20 MiB is ~8× that, so a
 # ``window_aggregate`` group/window blob has room to grow between polls

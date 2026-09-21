@@ -72,6 +72,13 @@
         </div>
 
         <div id="editor-ai-status" class="mt-2 editor-ai-status"></div>
+        <div id="editor-ai-undo" class="d-none mt-2">
+          <button class="btn-flat detail-action-inline" id="editor-ai-undo-btn" type="button"
+                  title="Restore the YAML from before the last AI change">
+            <i class="bi bi-arrow-counterclockwise"></i><span>Undo AI change</span>
+          </button>
+        </div>
+        <div id="editor-ai-validation" class="mt-2 d-none"></div>
         <div id="editor-ai-unconfigured" class="d-none mt-2 p-2 rounded editor-ai-warning">
           <i class="bi bi-exclamation-triangle me-1"></i>AI not configured — <a href="#" id="editor-open-settings-link" class="editor-ai-warning-link">open Settings</a> to add your API key.
         </div>

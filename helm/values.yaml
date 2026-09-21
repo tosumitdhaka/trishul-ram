@@ -216,6 +216,19 @@ env:
   # TRAM_PIPELINE_SYNC_INTERVAL: "30"  # seconds between DB polls for new/deleted pipelines
   # --- Schema Registry (v1.0.4) ---
   # Prefer using .Values.schemaRegistry below — it injects these vars automatically.
+  # --- AI Assist (v1.1.0) ---
+  # DB config (Settings → AI Assist) overrides these. Prefer TRAM_AI_API_KEY
+  # via envSecret below to avoid storing the key in values.yaml.
+  # TRAM_AI_PROVIDER: "anthropic"  # anthropic | openai | bedrock
+  # TRAM_AI_API_KEY: ""            # API key for the AI provider; empty disables AI assist
+  # TRAM_AI_MODEL: ""              # defaults: claude-haiku-4-5-20251001 (anthropic),
+  #                                # gpt-4o-mini (openai), us.anthropic.claude-sonnet-4-6 (bedrock)
+  # TRAM_AI_BASE_URL: ""           # optional provider endpoint override; required for bedrock
+  # TRAM_AI_ALLOWED_BASE_URLS: ""  # optional comma-separated allowlist of base_url prefixes
+  #                                # accepted by POST /api/ai/config; unset = no restriction.
+  #                                # https required by default; http only for loopback/private hosts
+  # TRAM_AI_AUDIT: "1"             # AI usage audit: "1" (default) appends ai_usage rows per AI
+  #                                # call; "0" disables the DB rows (log lines always emitted)
 
 ## Environment variables sourced from a Kubernetes Secret
 ## Use this for sensitive values (API keys, passwords) instead of plain env above.
@@ -230,6 +243,9 @@ env:
 ##     TRAM_SMTP_PASS:
 ##       secretName: tram-smtp
 ##       secretKey: password
+##     TRAM_AI_API_KEY:
+##       secretName: tram-secrets
+##       secretKey: aiApiKey
 envSecret:
   TRAM_AUTH_SECRET:
     secretName: tram-auth

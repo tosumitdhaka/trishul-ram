@@ -381,7 +381,12 @@ function _wireActions() {
     }
   })
   document.getElementById('dash-manage-btn')?.addEventListener('click', () => navigate('pipelines'))
-  document.getElementById('dash-new-btn')?.addEventListener('click', () => navigate('editor'))
+  document.getElementById('dash-new-btn')?.addEventListener('click', () => {
+    window._editorReturn = 'dashboard'
+    window._editorPipeline = null
+    window._editorYaml = null
+    navigate('editor')
+  })
   document.getElementById('dash-view-runs-btn')?.addEventListener('click', () => navigate('runs'))
 }
 

@@ -5,12 +5,26 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ---
 
-## [Unreleased]
+## [1.4.1] - 2026-09-21
+
+### Added
+- Release gate: releases are now tag-triggered (merging to main never publishes). `scripts/release-gate.sh` runs the 10 mandatory checks (ruff, pytest + 75% coverage floor, UI build, pipeline-example validation, Helm lint/template, version alignment, changelog, docs-sync, clean tree, tag check) with `--fast`/`--ci` modes; procedure documented in `docs/release-gate.md` with PR-template and AGENTS.md rules
+- CI: new `ui-build`, `pipeline-lint`, and `helm-lint` jobs on pull requests
+- AI assist: server-side validation of model YAML — `generate`/`fix`/`modify` now return `{yaml, valid, issues}` using the dry-run validation pattern, with provider `stop_reason`/`finish_reason` truncation warnings
+- AI assist: secret redaction — `explain`/`fix`/`modify` prompts carry a redacted copy of the pipeline YAML (schema-driven secret-field masking with a name-heuristic fallback for plugin connectors; `${VAR}` env references preserved; the pipeline on disk is untouched)
+- AI assist: per-call audit trail — a structured `tram.ai` log line (mode, client host, provider, model, tokens in/out, duration, outcome) plus an append-only `ai_usage` table gated by `TRAM_AI_AUDIT` (default on, fails open)
+- AI assist: optional `TRAM_AI_ALLOWED_BASE_URLS` prefix-match allowlist restricting accepted base URLs at save time
+- Editor: "Undo AI change" after AI generate/modify/fix (one-level snapshot, retired on typing or saving), auto-opened diff on all AI paths, and immediate validation feedback (`valid`/`issues`) instead of discovering truncation or parse errors only at dry-run
 
 ### Changed
+- AI provider calls no longer block the event loop: `_call_ai` runs via `asyncio.to_thread` with explicit 60 s timeouts on the anthropic and openai clients (matching the Bedrock path)
+- AI `base_url` now enforces `https` — `http` only for loopback/private-range hosts (local Ollama/LiteLLM keeps working; `169.254.0.0/16` deliberately rejected to block cloud-metadata SSRF); checked at save time (400) and call time
 - Release workflow authenticates to GHCR with the built-in `GITHUB_TOKEN` instead of the `GHCR_TOKEN` PAT — the token can no longer expire, and pushed packages stay linked to the repository (the `GHCR_TOKEN` secret can be deleted)
+- AI settings docs synced: `docs/api.md` AI section rewritten to the real response shapes (including `fix`/`modify`/config/test endpoints), `TRAM_AI_*` documented in `helm/values.yaml` (+ `envSecret` example), `.env.example`, and `docs/deployment.md`; Base URL help text corrected (honored for Anthropic, required for Bedrock); unknown providers rejected with 400 at save time
 
 ### Fixed
+- Settings no longer wipes stored AI keys: blank/absent config fields mean "no change" (the endpoint can set a value but never clear one), and the UI omits blank fields from the save payload — an untouched password field can no longer delete a DB-stored key
+- Dashboard "+ New" no longer opens the editor in edit mode of a previously viewed pipeline (which silently overwrote that pipeline on Save) — editor globals are reset before navigating, mirroring the pipelines page
 - Docker images: the UI build stage (`ui-builder`) in `Dockerfile` and `Dockerfile.manager` now runs
   natively on the build host via `--platform=$BUILDPLATFORM` instead of under QEMU emulation on the
   arm64 leg. The static assets are architecture-independent; node-under-QEMU is slow and prone to

@@ -901,6 +901,14 @@ body {
   font-size: 11px;
   min-height: 16px;
 }
+.editor-ai-validation-ok {
+  font-size: 11px;
+  color: var(--badge-green-fg);
+}
+.editor-ai-validation-list {
+  margin: 4px 0 0;
+  padding-left: 16px;
+}
 .editor-ai-accent {
   color: #388bfd;
 }

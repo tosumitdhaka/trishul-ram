@@ -78,12 +78,17 @@ export async function init() {
   } catch { /* AI not available */ }
 
   document.getElementById('ai-save-btn')?.addEventListener('click', async () => {
-    const payload = {
-      provider: document.getElementById('ai-provider')?.value || '',
-      api_key:  document.getElementById('ai-api-key')?.value  || '',
-      model:    document.getElementById('ai-model')?.value    || '',
-      base_url: document.getElementById('ai-base-url')?.value || '',
-    }
+    // Omit blank fields so an untouched API-key field never sends api_key: ""
+    // (the server treats blank/absent as "keep existing" — see ai_save_config).
+    const payload = {}
+    const provEl  = document.getElementById('ai-provider')
+    const keyEl   = document.getElementById('ai-api-key')
+    const modelEl = document.getElementById('ai-model')
+    const baseEl  = document.getElementById('ai-base-url')
+    if (provEl?.value)  payload.provider = provEl.value
+    if (keyEl?.value)   payload.api_key  = keyEl.value
+    if (modelEl?.value) payload.model    = modelEl.value
+    if (baseEl?.value)  payload.base_url = baseEl.value
     try {
       setStatusMessage('ai-cfg-status', 'Saving…', 'muted')
       await api.ai.saveConfig(payload)

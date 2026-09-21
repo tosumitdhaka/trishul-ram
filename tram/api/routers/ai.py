@@ -2,19 +2,208 @@
 
 from __future__ import annotations
 
+import asyncio
+import ipaddress
+import logging
 import os
+import time
+from dataclasses import dataclass
+from datetime import UTC, datetime
+from urllib.parse import urlsplit
 
+import yaml
 from fastapi import APIRouter, HTTPException, Request
 
+from tram.api.config_schema import SCHEMA_FIELDS
 from tram.api.routers.ai_docs import build_ai_context
+from tram.core.config import ai_audit_enabled
+from tram.core.exceptions import ConfigError
+from tram.pipeline.loader import load_pipeline_from_yaml
 
 router = APIRouter()
+
+# A10: per-call audit log (mode, client host, provider, model, tokens,
+# duration, outcome). The ai_usage DB rows are gated by TRAM_AI_AUDIT; the
+# log line itself is always emitted.
+logger = logging.getLogger("tram.ai")
 
 _ANTHROPIC_DEFAULT_MODEL = "claude-haiku-4-5-20251001"
 _OPENAI_DEFAULT_MODEL    = "gpt-4o-mini"
 _BEDROCK_DEFAULT_MODEL   = "us.anthropic.claude-sonnet-4-6"
 
+_AI_PROVIDERS = ("anthropic", "openai", "bedrock")
+
+# Outbound LLM timeout, seconds — matches the Bedrock path's 60 s
+# (urllib urlopen timeout at _call_ai). Bounds event-loop stalls: _call_ai
+# runs in a worker thread (asyncio.to_thread) but a hung call would still
+# occupy that thread, so cap the SDK default (minutes) here.
+_AI_CALL_TIMEOUT = 60.0
+
 _AI_KEYS = ("ai.provider", "ai.api_key", "ai.model", "ai.base_url")
+
+_DEFAULT_MODELS = {
+    "anthropic": _ANTHROPIC_DEFAULT_MODEL,
+    "openai": _OPENAI_DEFAULT_MODEL,
+    "bedrock": _BEDROCK_DEFAULT_MODEL,
+}
+
+
+def _resolve_model(cfg: dict) -> str:
+    """Effective model for *cfg*: the configured one, else the provider default."""
+    return cfg["model"] or _DEFAULT_MODELS.get(cfg["provider"], _ANTHROPIC_DEFAULT_MODEL)
+
+
+@dataclass
+class _AiResult:
+    """Outcome of one provider call: the reply text plus the provider's stop
+    reason (``None`` when the provider does not report one) and token usage
+    (``None`` when the SDK does not expose it — A10 audit fields)."""
+
+    text: str
+    stop_reason: str | None = None
+    tokens_in: int | None = None
+    tokens_out: int | None = None
+
+
+# ── A11: base_url scheme enforcement + allowlist ────────────────────────────
+
+# http base_urls are only accepted for local use: loopback (127.0.0.0/8, ::1)
+# plus RFC1918 private ranges (10/8, 172.16/12, 192.168/16) and IPv6
+# unique-local (fc00::/7). Deliberately NOT included: link-local 169.254.0.0/16
+# (cloud metadata endpoints) and CGNAT 100.64.0.0/10 — those are routable
+# infrastructure, not "the operator's own host" (Ollama/LiteLLM local use).
+_PRIVATE_NETS = (
+    ipaddress.ip_network("127.0.0.0/8"),
+    ipaddress.ip_network("10.0.0.0/8"),
+    ipaddress.ip_network("172.16.0.0/12"),
+    ipaddress.ip_network("192.168.0.0/16"),
+    ipaddress.ip_network("::1/128"),
+    ipaddress.ip_network("fc00::/7"),
+)
+
+
+def _is_loopback_or_private_host(host: str) -> bool:
+    """True when *host* is a loopback/private-range IP literal, or a
+    ``localhost`` name. DNS names (other than ``*.localhost``) are never
+    treated as local — resolving them at validation time would make the check
+    vulnerable to DNS-rebinding and network lookups."""
+    if host in ("localhost",) or host.endswith(".localhost"):
+        return True
+    try:
+        addr = ipaddress.ip_address(host)
+    except ValueError:
+        return False
+    return any(addr in net for net in _PRIVATE_NETS)
+
+
+def _base_url_problem(base_url: str) -> str | None:
+    """Return a human-readable rejection reason for *base_url*, or None when
+    it is acceptable. ``https`` is always allowed; ``http`` only for loopback
+    and private-range hosts (local Ollama/LiteLLM use). URLs without a
+    recognized scheme are rejected too — urlsplit would mis-parse e.g.
+    ``localhost:11434`` (scheme becomes the hostname)."""
+    base_url = base_url.strip()
+    if not base_url:
+        return None
+    parts = urlsplit(base_url)
+    scheme = (parts.scheme or "").lower()
+    if scheme not in ("http", "https"):
+        return (
+            f"base_url must use the http or https scheme, got {base_url!r} — "
+            "include the scheme, e.g. https://llm.example.com"
+        )
+    if scheme == "https":
+        return None
+    host = parts.hostname or ""
+    if _is_loopback_or_private_host(host):
+        return None
+    return (
+        f"base_url over http is only allowed for local/private hosts "
+        f"(localhost or loopback/private IP ranges); got {base_url!r}"
+    )
+
+
+def _normalize_base_url(url: str) -> str:
+    """Normalize a base URL for allowlist display/iteration: strip whitespace
+    and trailing slashes, lowercase the scheme and host, drop userinfo,
+    query, and fragment."""
+    url = url.strip().rstrip("/")
+    parts = urlsplit(url)
+    if not parts.scheme and not parts.netloc:
+        return url
+    try:
+        port = parts.port
+    except ValueError:
+        port = None
+    host = parts.hostname or ""
+    netloc = host if port is None else f"{host}:{port}"
+    return f"{parts.scheme.lower()}://{netloc}{parts.path.rstrip('/')}"
+
+
+def _allowed_base_urls() -> list[str]:
+    """Normalized entries from TRAM_AI_ALLOWED_BASE_URLS (comma-separated).
+    Empty when the env var is unset — no allowlist restriction applies."""
+    return [
+        _normalize_base_url(entry)
+        for entry in os.getenv("TRAM_AI_ALLOWED_BASE_URLS", "").split(",")
+        if entry.strip()
+    ]
+
+
+def _origin_key(url: str) -> tuple[str, str, int | None] | None:
+    """Return the (scheme, hostname, port) origin of *url*, or None when it is
+    not a valid http(s) origin (no scheme/host, or a garbage port). Default
+    ports are normalized away (80 for http, 443 for https) so ``https://host``
+    and ``https://host:443`` compare equal."""
+    parts = urlsplit(url.strip())
+    scheme = (parts.scheme or "").lower()
+    host = parts.hostname or ""
+    if scheme not in ("http", "https") or not host:
+        return None
+    try:
+        port = parts.port
+    except ValueError:
+        return None
+    default_port = 443 if scheme == "https" else 80
+    if port is not None and port == default_port:
+        port = None
+    return (scheme, host, port)
+
+
+def _path_allowed(submitted_path: str, entry_path: str) -> bool:
+    """Directory-boundary path match: the submitted path must equal the entry
+    path or extend it one directory level deeper. ``/v1`` matches ``/v1`` and
+    ``/v1/foo`` but never ``/v1anything``. Trailing slashes are insignificant
+    and an empty/root entry path matches any path on the same origin."""
+    submitted = submitted_path.rstrip("/")
+    entry = entry_path.rstrip("/")
+    if entry in ("", "/"):
+        return True
+    return submitted == entry or submitted.startswith(entry + "/")
+
+
+def _base_url_allowed(base_url: str, allowed: list[str]) -> bool:
+    """Allowlist check — origin-exact + directory-boundary path match.
+
+    A submitted URL is allowed only when its (scheme, hostname, port) equals
+    an entry's, AND its path is an exact match or a directory-boundary prefix
+    of the entry path. Sibling domains (``https://llm.example.com.evil.io``)
+    and partial-path suffixes (``/v1anything``) never match, so the allowlist
+    cannot be widened by sharing a hostname prefix or path prefix."""
+    origin = _origin_key(base_url)
+    if origin is None:
+        return False
+    scheme, host, port = origin
+    submitted_path = urlsplit(base_url.strip()).path
+    for entry in allowed:
+        entry_origin = _origin_key(entry)
+        if entry_origin is None:
+            continue
+        if (scheme, host, port) != entry_origin:
+            continue
+        if _path_allowed(submitted_path, urlsplit(entry.strip()).path):
+            return True
+    return False
 
 
 def _get_ai_cfg(db) -> dict:
@@ -62,11 +251,18 @@ TRAM pipelines are defined in YAML. Given a user description, output ONLY valid 
 """
 
 
-def _call_ai(system: str, user: str, max_tokens: int, cfg: dict) -> str:
+def _call_ai(system: str, user: str, max_tokens: int, cfg: dict) -> _AiResult:
     provider = cfg["provider"]
     api_key  = cfg["api_key"]
     model    = cfg["model"]
     base_url = cfg["base_url"]
+
+    # A11 defense-in-depth: also enforced at save time in ai_save_config, but
+    # env-var-configured base_urls bypass the config endpoint, so re-check
+    # here before any provider path attaches the API key.
+    if base_url:
+        if problem := _base_url_problem(base_url):
+            raise RuntimeError(problem)
 
     if provider == "anthropic":
         try:
@@ -74,7 +270,7 @@ def _call_ai(system: str, user: str, max_tokens: int, cfg: dict) -> str:
         except ImportError:
             raise RuntimeError("anthropic package not installed — pip install tram[ai-anthropic]")
         model = model or _ANTHROPIC_DEFAULT_MODEL
-        client_kwargs: dict = {"api_key": api_key or None}
+        client_kwargs: dict = {"api_key": api_key or None, "timeout": _AI_CALL_TIMEOUT}
         if base_url:
             # Anthropic SDK appends /v1/messages itself — strip trailing /v1 to avoid duplication
             client_kwargs["base_url"] = base_url.rstrip("/").removesuffix("/v1")
@@ -93,7 +289,12 @@ def _call_ai(system: str, user: str, max_tokens: int, cfg: dict) -> str:
             raise RuntimeError("Anthropic rate limit exceeded — try again shortly")
         except anthropic.APIStatusError as exc:
             raise RuntimeError(f"Anthropic API error: {exc.status_code} {exc.message}")
-        return msg.content[0].text.strip()
+        return _AiResult(
+            msg.content[0].text.strip(),
+            getattr(msg, "stop_reason", None),
+            getattr(getattr(msg, "usage", None), "input_tokens", None),
+            getattr(getattr(msg, "usage", None), "output_tokens", None),
+        )
 
     elif provider == "openai":
         try:
@@ -101,7 +302,7 @@ def _call_ai(system: str, user: str, max_tokens: int, cfg: dict) -> str:
         except ImportError:
             raise RuntimeError("openai package not installed — pip install tram[ai-openai]")
         model = model or _OPENAI_DEFAULT_MODEL
-        kwargs: dict = {"api_key": api_key or "none"}
+        kwargs: dict = {"api_key": api_key or "none", "timeout": _AI_CALL_TIMEOUT}
         if base_url:
             kwargs["base_url"] = base_url
         client = openai.OpenAI(**kwargs)
@@ -121,7 +322,12 @@ def _call_ai(system: str, user: str, max_tokens: int, cfg: dict) -> str:
             raise RuntimeError("OpenAI rate limit exceeded — try again shortly")
         except openai.APIStatusError as exc:
             raise RuntimeError(f"OpenAI API error: {exc.status_code} {exc.message}")
-        return resp.choices[0].message.content.strip()
+        return _AiResult(
+            resp.choices[0].message.content.strip(),
+            getattr(resp.choices[0], "finish_reason", None),
+            getattr(getattr(resp, "usage", None), "prompt_tokens", None),
+            getattr(getattr(resp, "usage", None), "completion_tokens", None),
+        )
 
     elif provider == "bedrock":
         # AWS Bedrock-compatible proxy: POST {base_url}/model/{model}/invoke
@@ -146,7 +352,13 @@ def _call_ai(system: str, user: str, max_tokens: int, cfg: dict) -> str:
         try:
             with urllib.request.urlopen(req, timeout=60) as resp:
                 result = _json.loads(resp.read())
-            return result["content"][0]["text"].strip()
+            usage = result.get("usage") or {}
+            return _AiResult(
+                result["content"][0]["text"].strip(),
+                result.get("stop_reason"),
+                usage.get("input_tokens"),
+                usage.get("output_tokens"),
+            )
         except urllib.error.HTTPError as exc:
             err_body = exc.read().decode()
             if exc.code == 401:
@@ -169,18 +381,207 @@ def _strip_fences(text: str) -> str:
     return text.strip()
 
 
+# ── Model-output validation (A3) ───────────────────────────────────────────
+
+
+def _validate_yaml(yaml_text: str) -> list[str]:
+    """Validate model-produced YAML, mirroring the dry-run endpoint's
+    ``yaml.safe_load`` + ``load_pipeline_from_yaml`` check. Returns a list of
+    human-readable issues (empty when the YAML parses and validates)."""
+    if not yaml_text.strip():
+        return ["Model returned empty YAML"]
+    try:
+        yaml.safe_load(yaml_text)
+    except yaml.YAMLError as exc:
+        return [f"YAML parse error: {exc}"]
+    try:
+        load_pipeline_from_yaml(yaml_text)
+    except ConfigError as exc:
+        return [str(exc)]
+    return []
+
+
+_TRUNCATION_REASONS = {"max_tokens", "length"}  # anthropic / openai (bedrock is anthropic-shaped)
+
+
+def _truncation_warning(stop_reason: str | None) -> str | None:
+    """Return a warning when the provider stopped because it ran out of output
+    tokens (anthropic/bedrock: ``max_tokens``, openai: ``length``)."""
+    if stop_reason in _TRUNCATION_REASONS:
+        return (
+            f"Model output may be truncated (stop_reason={stop_reason!r}); "
+            "the YAML is likely incomplete — consider retrying or raising max_tokens"
+        )
+    return None
+
+
+def _yaml_mode_result(result: _AiResult) -> dict:
+    """Post-process a generate/fix/modify reply: strip fences, validate against
+    the pipeline schema, and surface provider truncation (A3). The raw YAML is
+    always returned; ``valid`` is false when issues were found."""
+    yaml_text = _strip_fences(result.text)
+    issues = _validate_yaml(yaml_text)
+    if warning := _truncation_warning(result.stop_reason):
+        issues.append(warning)
+    return {"yaml": yaml_text, "valid": not issues, "issues": issues}
+
+
+# ── Secret redaction for outbound prompts (A4) ─────────────────────────────
+
+_MASK_VALUE = "***redacted***"
+_SECRET_NAME_TOKENS = ("password", "token", "secret")
+
+
+def _is_secret_key(name: str) -> bool:
+    """Same heuristic the schema cache uses to compute ``secret`` metadata
+    (config_schema.py) — also masks keys of connector types outside the
+    schema cache (e.g. plugin connectors)."""
+    return any(token in name for token in _SECRET_NAME_TOKENS)
+
+
+def _mask_block(block: dict, category: str) -> bool:
+    """Mask secret field values in one connector block (in place). ``${VAR}``
+    env references are left intact — the loader substitutes them at runtime,
+    so they are env refs, not secrets. Returns True when any value changed."""
+    type_name = block.get("type")
+    secret_names: set[str] = set()
+    if isinstance(type_name, str):
+        secret_names = {
+            field["name"]
+            for field in SCHEMA_FIELDS[category].get(type_name, [])
+            if field.get("secret")
+        }
+    changed = False
+    for key, value in list(block.items()):
+        if not isinstance(value, str) or "${" in value:
+            continue
+        if key in secret_names or _is_secret_key(key):
+            block[key] = _MASK_VALUE
+            changed = True
+    return changed
+
+
+def _redact_yaml(yaml_text: str) -> str:
+    """Return a copy of the pipeline YAML with secret field values masked, for
+    use in outbound AI prompts. The operator's pipeline on disk is never
+    touched. When the YAML cannot be parsed (e.g. mid-edit in the editor), the
+    input is returned unchanged so explain/fix still work.
+
+    Known limitation: masking covers scalar secret fields (schema ``secret``
+    metadata + the password/token/secret name heuristic). Dict-valued fields
+    such as ``headers`` / ``extra_headers`` (which can carry Authorization
+    values) and tokens embedded in ``alerts[].webhook_url`` are NOT masked.
+    """
+    if not yaml_text or not yaml_text.strip():
+        return yaml_text
+    try:
+        data = yaml.safe_load(yaml_text)
+    except yaml.YAMLError:
+        return yaml_text
+    if not isinstance(data, dict):
+        return yaml_text
+
+    wrapped = isinstance(data.get("pipeline"), dict)
+    root = data["pipeline"] if wrapped else data
+    if not isinstance(root, dict):
+        return yaml_text
+
+    def mask(category: str, block) -> bool:
+        return _mask_block(block, category) if isinstance(block, dict) else False
+
+    changed = False
+    changed |= mask("source", root.get("source"))
+    changed |= mask("serializer", root.get("serializer_in"))
+    changed |= mask("serializer", root.get("serializer_out"))
+    changed |= mask("sink", root.get("sink"))      # backward-compat singular sink
+    changed |= mask("sink", root.get("dlq"))
+    for sink in root.get("sinks") or []:
+        if not isinstance(sink, dict):
+            continue
+        changed |= mask("sink", sink)
+        changed |= mask("serializer", sink.get("serializer_out"))
+        for transform in sink.get("transforms") or []:
+            changed |= mask("transform", transform)
+    for transform in root.get("transforms") or []:
+        changed |= mask("transform", transform)
+
+    if not changed:
+        return yaml_text
+    return yaml.safe_dump(data, default_flow_style=False, sort_keys=False)
+
+
+# ── A10: per-call audit log + optional ai_usage persistence ────────────────
+
+
+def _audit_ai_call(
+    request: Request,
+    mode: str,
+    cfg: dict,
+    result: _AiResult | None,
+    duration_s: float,
+    error: BaseException | None = None,
+) -> None:
+    """Emit one audit line per AI call: who (client host), what (mode,
+    provider, model), cost (tokens when the SDK reported them), duration,
+    and outcome. The log line is always emitted; the ai_usage DB row is
+    gated by the TRAM_AI_AUDIT feature flag (default on)."""
+    client = request.client.host if request.client else ""
+    provider = cfg["provider"]
+    model = _resolve_model(cfg)
+    tokens_in = result.tokens_in if result else None
+    tokens_out = result.tokens_out if result else None
+    ok = error is None
+    extra = {
+        "mode": mode,
+        "client": client,
+        "provider": provider,
+        "model": model,
+        "tokens_in": tokens_in,
+        "tokens_out": tokens_out,
+        "duration_s": round(duration_s, 3),
+        "ok": ok,
+    }
+    if ok:
+        logger.info("AI call completed", extra=extra)
+    else:
+        logger.warning("AI call failed", extra=extra, exc_info=error)
+    db = getattr(request.app.state, "db", None)
+    if db is not None and ai_audit_enabled():
+        try:
+            db.append_ai_usage(
+                ts=datetime.now(UTC).isoformat(),
+                mode=mode, client=client, provider=provider, model=model,
+                tokens_in=tokens_in, tokens_out=tokens_out, ok=ok,
+            )
+        except Exception:
+            # Audit persistence must never break the AI call itself.
+            logger.exception("Failed to persist AI usage row")
+
+
+async def _run_ai_call(request: Request, mode: str, system: str, user: str,
+                       max_tokens: int, cfg: dict) -> _AiResult:
+    """Execute one AI call off the event loop and audit it (A10). Raises the
+    underlying exception on failure — callers convert it to HTTPException."""
+    started = time.monotonic()
+    try:
+        result = await asyncio.to_thread(_call_ai, system, user, max_tokens, cfg)
+    except Exception as exc:
+        _audit_ai_call(request, mode, cfg, None, time.monotonic() - started, error=exc)
+        raise
+    _audit_ai_call(request, mode, cfg, result, time.monotonic() - started)
+    return result
+
+
 @router.get("/api/ai/status", tags=["ai"])
 async def ai_status(request: Request) -> dict:
     """Returns whether AI assist is configured."""
     db = getattr(request.app.state, "db", None)
     cfg = _get_ai_cfg(db)
     enabled = bool(cfg["api_key"])
-    _defaults = {"anthropic": _ANTHROPIC_DEFAULT_MODEL, "openai": _OPENAI_DEFAULT_MODEL, "bedrock": _BEDROCK_DEFAULT_MODEL}
-    default_model = _defaults.get(cfg["provider"], _ANTHROPIC_DEFAULT_MODEL)
     return {
         "enabled": enabled,
         "provider": cfg["provider"] if enabled else None,
-        "model": (cfg["model"] or default_model) if enabled else None,
+        "model": _resolve_model(cfg) if enabled else None,
     }
 
 
@@ -202,22 +603,48 @@ async def ai_get_config(request: Request) -> dict:
 
 @router.post("/api/ai/config", tags=["ai"])
 async def ai_save_config(request: Request) -> dict:
-    """Persist AI configuration to the DB (overrides env vars). Empty string clears a key."""
+    """Persist AI configuration to the DB (overrides env vars).
+
+    Chosen A2 semantics: absent AND blank values are both "no change" —
+    this endpoint can set a value but never clears one. In particular a blank
+    `api_key` (which older UIs sent whenever the password field was left
+    empty) no longer deletes a DB-stored key. Clearing a value is a manual
+    DB edit, which is the intended trade-off to protect stored keys.
+    """
     db = getattr(request.app.state, "db", None)
     if db is None:
         raise HTTPException(status_code=503, detail="Database not available")
     body = await request.json()
-    fields = {
-        "ai.provider": body.get("provider", ""),
-        "ai.api_key":  body.get("api_key", ""),
-        "ai.model":    body.get("model", ""),
-        "ai.base_url": body.get("base_url", ""),
-    }
-    for key, value in fields.items():
-        if value:
-            db.set_setting(key, value)
-        else:
-            db.delete_setting(key)
+    provider = (body.get("provider") or "").strip()
+    api_key  = (body.get("api_key")  or "").strip()
+    model    = (body.get("model")    or "").strip()
+    base_url = (body.get("base_url") or "").strip()
+    if provider:
+        if provider not in _AI_PROVIDERS:
+            raise HTTPException(
+                status_code=400,
+                detail=f"Unknown AI provider: {provider!r} — must be one of {', '.join(_AI_PROVIDERS)}",
+            )
+        db.set_setting("ai.provider", provider)
+    if api_key:
+        db.set_setting("ai.api_key", api_key)
+    if model:
+        db.set_setting("ai.model", model)
+    if base_url:
+        # A11: reject bad schemes/allowlist violations at save time so the
+        # operator hears about them here, not on the first AI call.
+        if problem := _base_url_problem(base_url):
+            raise HTTPException(status_code=400, detail=problem)
+        if allowed := _allowed_base_urls():
+            if not _base_url_allowed(base_url, allowed):
+                raise HTTPException(
+                    status_code=400,
+                    detail=(
+                        "base_url not allowed by TRAM_AI_ALLOWED_BASE_URLS: "
+                        f"{base_url!r} — it must prefix-match one of {allowed}"
+                    ),
+                )
+        db.set_setting("ai.base_url", base_url)
     return {"ok": True}
 
 
@@ -229,15 +656,16 @@ async def ai_test(request: Request) -> dict:
     if not cfg["api_key"]:
         raise HTTPException(status_code=503, detail="AI assist not configured — set API key in Settings → AI")
     try:
-        reply = _call_ai(
+        # Run the blocking SDK/urllib call in a worker thread so the event
+        # loop stays responsive for all other API traffic (A1). The audit
+        # wrapper (A10) also records the call with mode="test".
+        reply = await _run_ai_call(
+            request, "test",
             "You are a helpful assistant.",
             "Reply with exactly: OK",
             max_tokens=10, cfg=cfg,
         )
-        provider = cfg["provider"]
-        _defaults = {"anthropic": _ANTHROPIC_DEFAULT_MODEL, "openai": _OPENAI_DEFAULT_MODEL, "bedrock": _BEDROCK_DEFAULT_MODEL}
-        model = cfg["model"] or _defaults.get(provider, _ANTHROPIC_DEFAULT_MODEL)
-        return {"ok": True, "reply": reply, "provider": provider, "model": model}
+        return {"ok": True, "reply": reply.text, "provider": cfg["provider"], "model": _resolve_model(cfg)}
     except RuntimeError as exc:
         raise HTTPException(status_code=502, detail=str(exc))
 
@@ -262,57 +690,61 @@ async def ai_suggest(request: Request) -> dict:
             connector_schema   = build_ai_context(prompt, plugins),
         )
         try:
-            yaml_text = _call_ai(system, prompt, max_tokens=1024, cfg=cfg)
+            result = await _run_ai_call(request, "generate", system, prompt, max_tokens=1024, cfg=cfg)
         except Exception as exc:
             raise HTTPException(status_code=502, detail=str(exc))
-        return {"yaml": _strip_fences(yaml_text)}
+        return _yaml_mode_result(result)
 
     elif mode == "explain":
+        redacted_yaml = _redact_yaml(body.get("yaml", ""))
         user = (
-            f"TRAM pipeline YAML:\n{body.get('yaml', '')}\n\n"
+            f"TRAM pipeline YAML:\n{redacted_yaml}\n\n"
             f"Dry-run error: {body.get('error', '')}\n\n"
             "Explain in 2-3 sentences what is wrong and how to fix it."
         )
         try:
-            explanation = _call_ai(
+            explanation = await _run_ai_call(
+                request, "explain",
                 "You are a helpful TRAM pipeline configuration assistant. "
                 "Be concise and actionable.",
                 user, max_tokens=300, cfg=cfg,
             )
         except Exception as exc:
             raise HTTPException(status_code=502, detail=str(exc))
-        return {"explanation": explanation}
+        return {"explanation": explanation.text}
 
     elif mode == "fix":
         plugins = body.get("plugins", {})
+        redacted_yaml = _redact_yaml(body.get("yaml", ""))
         system = _GENERATE_SYSTEM.format(
             pipeline_structure = _PIPELINE_STRUCTURE,
-            connector_schema   = build_ai_context(body.get("yaml", "") + " " + body.get("error", ""), plugins),
+            connector_schema   = build_ai_context(redacted_yaml + " " + body.get("error", ""), plugins),
         ) + "\nFix the provided YAML to resolve the error. Output ONLY valid TRAM pipeline YAML — no prose, no markdown fences."
         user = (
-            f"TRAM pipeline YAML:\n{body.get('yaml', '')}\n\n"
+            f"TRAM pipeline YAML:\n{redacted_yaml}\n\n"
             f"Error to fix: {body.get('error', '')}"
         )
         try:
-            yaml_text = _call_ai(system, user, max_tokens=1024, cfg=cfg)
+            result = await _run_ai_call(request, "fix", system, user, max_tokens=1024, cfg=cfg)
         except Exception as exc:
             raise HTTPException(status_code=502, detail=str(exc))
-        return {"yaml": _strip_fences(yaml_text)}
+        return _yaml_mode_result(result)
 
     elif mode == "modify":
         plugins = body.get("plugins", {})
+        redacted_yaml = _redact_yaml(body.get("yaml", ""))
         system = _GENERATE_SYSTEM.format(
             pipeline_structure = _PIPELINE_STRUCTURE,
-            connector_schema   = build_ai_context(body.get("yaml", "") + " " + body.get("instruction", ""), plugins),
+            connector_schema   = build_ai_context(redacted_yaml + " " + body.get("instruction", ""), plugins),
         ) + "\nModify the provided YAML per the user instruction. Output ONLY the complete modified TRAM pipeline YAML — no prose, no markdown fences."
         user = (
-            f"Existing pipeline YAML:\n{body.get('yaml', '')}\n\n"
+            f"Existing pipeline YAML:\n{redacted_yaml}\n\n"
             f"Instruction: {body.get('instruction', '')}"
         )
         try:
-            yaml_text = _call_ai(system, user, max_tokens=1024, cfg=cfg)
+            result = await _run_ai_call(request, "modify", system, user, max_tokens=1024, cfg=cfg)
         except Exception as exc:
             raise HTTPException(status_code=502, detail=str(exc))
-        return {"yaml": _strip_fences(yaml_text)}
+        return _yaml_mode_result(result)
 
     raise HTTPException(status_code=400, detail=f"Unknown mode: {mode!r}")

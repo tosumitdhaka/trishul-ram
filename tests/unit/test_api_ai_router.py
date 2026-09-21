@@ -7,7 +7,7 @@ from unittest.mock import patch
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
-from tram.api.routers.ai import router
+from tram.api.routers.ai import _AiResult, router
 
 
 def _make_app():
@@ -63,7 +63,7 @@ class TestAiSuggest:
         app = _make_app()
         client = TestClient(app, raise_server_exceptions=False)
         with patch.dict(os.environ, {"TRAM_AI_API_KEY": "test-key"}), \
-             patch("tram.api.routers.ai._call_ai", return_value="name: test\nschedule:\n  type: manual"):
+             patch("tram.api.routers.ai._call_ai", return_value=_AiResult("name: test\nschedule:\n  type: manual", None)):
             resp = client.post("/api/ai/suggest", json={
                 "mode": "generate",
                 "prompt": "create a test pipeline",
@@ -76,7 +76,7 @@ class TestAiSuggest:
         app = _make_app()
         client = TestClient(app, raise_server_exceptions=False)
         with patch.dict(os.environ, {"TRAM_AI_API_KEY": "test-key"}), \
-             patch("tram.api.routers.ai._call_ai", return_value="The error is in the sink config."):
+             patch("tram.api.routers.ai._call_ai", return_value=_AiResult("The error is in the sink config.", None)):
             resp = client.post("/api/ai/suggest", json={
                 "mode": "explain",
                 "yaml": "name: test",
@@ -108,7 +108,7 @@ class TestAiSuggest:
         client = TestClient(app, raise_server_exceptions=False)
         fenced = "```yaml\nname: test\n```"
         with patch.dict(os.environ, {"TRAM_AI_API_KEY": "test-key"}), \
-             patch("tram.api.routers.ai._call_ai", return_value=fenced):
+             patch("tram.api.routers.ai._call_ai", return_value=_AiResult(fenced, None)):
             resp = client.post("/api/ai/suggest", json={"mode": "generate", "prompt": "x"})
         assert resp.status_code == 200
         yaml_text = resp.json()["yaml"]

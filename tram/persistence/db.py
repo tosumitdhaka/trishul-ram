@@ -224,6 +224,26 @@ def _create_tables(engine: Engine) -> None:
             "CREATE INDEX IF NOT EXISTS idx_ts_updated ON transform_state(updated_at)"
         ))
 
+        # v1.4.1 (A10): AI-audit append-only log — one row per AI call when
+        # TRAM_AI_AUDIT is on. Not upserted: every call inserts a fresh UUID,
+        # rows are never updated or deleted (append-only audit trail).
+        conn.execute(text("""
+            CREATE TABLE IF NOT EXISTS ai_usage (
+                id         TEXT PRIMARY KEY NOT NULL,
+                ts         TEXT NOT NULL,
+                mode       TEXT NOT NULL,
+                client     TEXT NOT NULL,
+                provider   TEXT NOT NULL,
+                model      TEXT NOT NULL,
+                tokens_in  INTEGER,
+                tokens_out INTEGER,
+                ok         INTEGER NOT NULL DEFAULT 1
+            )
+        """))
+        conn.execute(text(
+            "CREATE INDEX IF NOT EXISTS idx_au_ts ON ai_usage(ts)"
+        ))
+
         # v0.7.0 column migrations: add new columns to existing databases
         _add_column_if_missing(conn, dialect, "run_history", "node_id", "TEXT NOT NULL DEFAULT ''")
         _add_column_if_missing(conn, dialect, "run_history", "dlq_count", "INTEGER NOT NULL DEFAULT 0")
@@ -805,6 +825,56 @@ class TramDB:
         """Remove a setting, reverting to env-var / default."""
         with self._engine.begin() as conn:
             conn.execute(text("DELETE FROM settings WHERE key = :k"), {"k": key})
+
+    # ── AI usage audit (v1.4.1, A10) ──────────────────────────────────────
+
+    def append_ai_usage(
+        self,
+        ts: str,
+        mode: str,
+        client: str,
+        provider: str,
+        model: str,
+        tokens_in: int | None,
+        tokens_out: int | None,
+        ok: bool,
+    ) -> None:
+        """Append one AI-call audit row. Append-only: every call gets a fresh
+        UUID, so nothing is ever updated or deleted."""
+        with self._engine.begin() as conn:
+            conn.execute(
+                text("""
+                    INSERT INTO ai_usage
+                      (id, ts, mode, client, provider, model, tokens_in, tokens_out, ok)
+                    VALUES
+                      (:id, :ts, :mode, :client, :provider, :model, :tokens_in, :tokens_out, :ok)
+                """),
+                {
+                    "id": str(uuid.uuid4()),
+                    "ts": ts,
+                    "mode": mode,
+                    "client": client,
+                    "provider": provider,
+                    "model": model,
+                    "tokens_in": tokens_in,
+                    "tokens_out": tokens_out,
+                    "ok": 1 if ok else 0,
+                },
+            )
+
+    def get_ai_usage(self, limit: int = 100) -> list[dict]:
+        """Return the most recent AI-audit rows, newest first."""
+        with self._engine.connect() as conn:
+            rows = conn.execute(
+                text("""
+                    SELECT id, ts, mode, client, provider, model, tokens_in, tokens_out, ok
+                    FROM ai_usage
+                    ORDER BY ts DESC, id DESC
+                    LIMIT :limit
+                """),
+                {"limit": limit},
+            ).mappings().fetchall()
+        return [dict(r) for r in rows]
 
     # ── Broadcast placements (v1.3.0) ────────────────────────────────────
 
