@@ -28,8 +28,10 @@ let _editName = null
 let _textarea = null
 let _aiEnabled = false
 let _lastDryRunErrors = []
+let _aiUndoSnapshot = null  // pre-AI text for one-level undo of the last AI write
 
 function _leaveEditor(pipelineName = null) {
+  _aiUndoSnapshot = null
   const returnTo = window._editorReturn
   window._editorReturn = null
   window._editorYaml = null
@@ -56,6 +58,7 @@ export async function init() {
   _originalYaml = null
   _aiEnabled = false
   _lastDryRunErrors = []
+  _aiUndoSnapshot = null
   _bindEditorActions()
 
   // ── Mode-specific UI setup ─────────────────────────────────────────────────
@@ -100,6 +103,9 @@ export async function init() {
       ta.selectionStart = ta.selectionEnd = start + 2
     }
   })
+
+  // ── Typing in the textarea retires the AI undo affordance ─────────────────
+  ta?.addEventListener('input', _discardAiUndo)
 }
 
 function _bindEditorActions() {
@@ -119,6 +125,7 @@ function _bindEditorActions() {
   document.getElementById('editor-save-btn')?.addEventListener('click', () => { void _editorSave() })
   document.getElementById('editor-ai-gen-btn')?.addEventListener('click', () => { void _editorAiGenerate() })
   document.getElementById('editor-ai-mod-btn')?.addEventListener('click', () => { void _editorAiModify() })
+  document.getElementById('editor-ai-undo-btn')?.addEventListener('click', _undoAiChange)
   document.getElementById('editor-open-settings-link')?.addEventListener('click', (event) => {
     event.preventDefault()
     navigate('settings')
@@ -173,7 +180,7 @@ async function _editorAiGenerate() {
     const plugins = await _getPlugins()
     const r = await api.ai.suggest({ mode: 'generate', prompt, plugins })
     if (!r.yaml) throw new Error('No YAML returned')
-    if (_textarea) _textarea.value = r.yaml
+    _applyAiYaml(r)
     setStatusMessage('editor-ai-status', '', 'muted')
     toast('YAML generated — review and save')
   } catch (e) {
@@ -197,11 +204,8 @@ async function _editorAiModify() {
     const plugins = await _getPlugins()
     const r = await api.ai.suggest({ mode: 'modify', yaml, instruction, plugins })
     if (!r.yaml) throw new Error('No YAML returned')
-    if (_textarea) _textarea.value = r.yaml
+    _applyAiYaml(r)
     setStatusMessage('editor-ai-status', '', 'muted')
-    // Refresh inline diff if already open, otherwise open it
-    document.getElementById('editor-inline-diff')?.remove()
-    _editorDiffSaved()
     toast('Pipeline modified — review the diff and save')
   } catch (e) {
     toast(`AI error: ${e.message}`, 'error')
@@ -209,6 +213,76 @@ async function _editorAiModify() {
   } finally {
     if (btn) btn.disabled = false
   }
+}
+
+// ── AI output application: snapshot, write, diff, validate, undo ──────────────
+function _applyAiYaml(result) {
+  if (_textarea) {
+    _aiUndoSnapshot = _textarea.value
+    _textarea.value = result.yaml
+  } else {
+    _aiUndoSnapshot = null
+  }
+  _showAiUndo()
+  _showInlineDiff()
+  _renderAiValidation(result)
+}
+
+function _undoAiChange() {
+  if (_aiUndoSnapshot === null) return
+  if (_textarea) _textarea.value = _aiUndoSnapshot
+  _aiUndoSnapshot = null
+  _hideAiUndo()
+  _clearAiValidation()
+  // Refresh the diff only when the operator had it open, so it matches the
+  // restored text instead of showing the AI output.
+  if (document.getElementById('editor-inline-diff')) _showInlineDiff()
+  toast('AI change undone')
+}
+
+function _discardAiUndo() {
+  _aiUndoSnapshot = null
+  _hideAiUndo()
+}
+
+function _showAiUndo() {
+  document.getElementById('editor-ai-undo')?.classList.remove('d-none')
+}
+
+function _hideAiUndo() {
+  document.getElementById('editor-ai-undo')?.classList.add('d-none')
+}
+
+// Force-open (or refresh) the inline saved-vs-current diff. Unlike the
+// toolbar button, this never toggles: an AI write always leaves the diff open.
+function _showInlineDiff() {
+  document.getElementById('editor-inline-diff')?.remove()
+  _editorDiffSaved()
+}
+
+// ── AI validation result (A3 response shape: {yaml, valid, issues}) ─────────
+function _renderAiValidation(result = {}) {
+  const el = document.getElementById('editor-ai-validation')
+  if (!el) return
+  // Older backends return {yaml} only — nothing to render.
+  if (result.valid === undefined) { _clearAiValidation(); return }
+  const issues = Array.isArray(result.issues) ? result.issues : []
+  if (result.valid) {
+    el.classList.remove('d-none')
+    el.innerHTML = '<div class="editor-ai-validation-ok"><i class="bi bi-check-circle me-1"></i>AI YAML passed validation</div>'
+    return
+  }
+  el.classList.remove('d-none')
+  el.innerHTML = `
+    <div class="p-2 rounded editor-ai-warning">
+      <div><i class="bi bi-exclamation-triangle me-1"></i>AI YAML failed validation — fix before saving:</div>
+      ${issues.length ? `<ul class="editor-ai-validation-list mb-0 mt-1">${issues.map(i => `<li>${esc(i)}</li>`).join('')}</ul>` : ''}
+    </div>`
+}
+
+function _clearAiValidation() {
+  const el = document.getElementById('editor-ai-validation')
+  if (el) { el.classList.add('d-none'); el.innerHTML = '' }
 }
 
 function _renderEditorDiff(oldYaml, newYaml) {
@@ -420,7 +494,7 @@ async function _editorAiFix() {
     const plugins = await _getPlugins()
     const r = await api.ai.suggest({ mode: 'fix', error: _lastDryRunErrors[0], yaml: _textarea?.value, plugins })
     if (!r.yaml) throw new Error('No YAML returned')
-    if (_textarea) _textarea.value = r.yaml
+    _applyAiYaml(r)
     setStatusMessage(el, '', 'muted')
     toast('YAML fixed — review the changes')
   } catch (e) {
