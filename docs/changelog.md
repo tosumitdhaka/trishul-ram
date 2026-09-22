@@ -20,6 +20,11 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - Wizard entry points: dashboard and pipelines "+ New" route to the guided wizard; the raw-YAML editor remains the advanced path
 
 ### Fixed
+- `melt` transform was registered and tested but absent from the `TransformConfig` union — `type: melt` pipelines failed Pydantic validation; config model added and the union↔registry state is now pinned by a test (any future divergence fails CI instead of shipping) (found by independent review)
+- Run listing's queued-run merge is offset-aware — queued rows appeared in every page (duplicated on load-more, skewing the offset so real history rows were skipped); the count endpoint now exactly equals the listing total across pages (found by independent review)
+- Naive `from_dt` query timestamps no longer 500 on the runs listing/count (tz-normalized to UTC at the boundary) (found by independent review)
+- Wizard-generated YAML quotes numeric/boolean-looking strings (`password: "12345"` instead of a YAML int that Pydantic rejects); numeric pipeline names quoted too (found by independent review)
+- Wizard schema-poll timer can no longer start after leaving the page mid-init; legacy `#wizard` bookmarks redirect to `#create`
 - Run-issue expanded rows persist correctly across polling refreshes (state was DOM-only and index-keyed — collapsed and misaligned when rows shifted)
 - Inherited v1.4.1 wizard sink-card selector mismatch (`.wiz-sink-card` vs `.wizard-sink-card`) that had silently broken sink type changes
 
