@@ -4,7 +4,8 @@
 #
 # Usage:
 #   scripts/release-gate.sh                    full gate (all checks)
-#   scripts/release-gate.sh --fast            skip the slow checks (pytest, UI build)
+#   scripts/release-gate.sh --fast            skip the slow checks (pytest, UI build,
+#                                              UI browser smoke)
 #   scripts/release-gate.sh --ci               CI mode: skip the "already tagged" check
 #                                              (the CI gate runs on the release tag itself)
 #   scripts/release-gate.sh --deploy-kind     after a green gate: deploy the current
@@ -123,7 +124,32 @@ else
   fi
 fi
 
-# 8. every example pipeline validates. The console script is invoked with
+# 8. UI browser smoke (Playwright) — boots the freshly built SPA against
+#    fixture-stubbed API responses and exercises the boot/console-error
+#    class, the creation wizard, the editor gutter/anchoring, a11y tokens,
+#    and wizard YAML quoting (tests/browser). Slow; needs node >= 20 and the
+#    playwright browsers installed once (npx playwright install chromium).
+#    The node binary is TRAM_BROWSER_NODE if set, else `command -v node` —
+#    never silently skipped: a missing/old node fails the gate with a
+#    remediation message.
+if [ "$FAST" -eq 1 ]; then
+  record PASS "UI browser smoke (Playwright) (skipped: --fast)"
+else
+  BROWSER_NODE="${TRAM_BROWSER_NODE:-$(command -v node || true)}"
+  if [ -z "$BROWSER_NODE" ]; then
+    record FAIL "UI browser smoke (Playwright)" "node not found on PATH — install Node 20+ or set TRAM_BROWSER_NODE=/path/to/node"
+  elif ! "$BROWSER_NODE" -e 'const m = Number(process.versions.node.split(".")[0]); if (m < 20) process.exit(1)' 2>/dev/null; then
+    record FAIL "UI browser smoke (Playwright)" \
+      "node $( "$BROWSER_NODE" -v 2>/dev/null || echo '?' ) is < 20 — install Node 20+ or set TRAM_BROWSER_NODE=/path/to/node20"
+  elif (cd tram/ui && "$BROWSER_NODE" ../tests/browser/run.mjs >/tmp/tram-gate-browser.log 2>&1); then
+    record PASS "UI browser smoke (Playwright)"
+  else
+    record FAIL "UI browser smoke (Playwright)" \
+      "$(tail -n 8 /tmp/tram-gate-browser.log | tr '\n' ' ' | cut -c1-160)"
+  fi
+fi
+
+# 9. every example pipeline validates. The console script is invoked with
 #    PYTHONPATH=$ROOT so it works from a plain checkout even without an
 #    editable install (a stale wrapper on PATH would otherwise report every
 #    file as failing with no usable error).
@@ -143,7 +169,7 @@ else
   fi
 fi
 
-# 9. Helm chart lints and renders (from a temp copy so the working tree stays
+# 10. Helm chart lints and renders (from a temp copy so the working tree stays
 #    clean — dependency update fetches the postgresql subchart)
 if ! need helm; then
   record FAIL "helm lint + template" "helm not found"
@@ -161,7 +187,7 @@ else
   rm -rf "$HELM_TMP"
 fi
 
-# 10. docs-sync: every TRAM_* environment variable referenced in the Python
+# 11. docs-sync: every TRAM_* environment variable referenced in the Python
 #     source must be documented in .env.example (best-effort static scan)
 missing_env=""
 while IFS= read -r var; do

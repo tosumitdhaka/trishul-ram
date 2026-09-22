@@ -24,15 +24,45 @@ The script exits non-zero if any check fails. `--fast` is for iteration only —
 | 5 | `ruff check .` | Lint clean |
 | 6 | Full pytest + coverage floor 75% | Unit + integration suites, `--cov-fail-under=75` |
 | 7 | UI build | `tram/ui` builds with vite |
-| 8 | Example pipelines validate | `tram validate` over every `pipelines/*.yaml` |
-| 9 | Helm lint + template | Chart lints and renders (dependencies fetched to a temp copy) |
-| 10 | Docs-sync | Every `TRAM_*` env var referenced in the Python source appears in `.env.example` |
+| 8 | UI browser smoke (Playwright) | The built SPA boots against fixture-stubbed API responses — boot/console-error class, wizard flow, editor gutter/anchoring, a11y tokens, wizard YAML quoting (see below) |
+| 9 | Example pipelines validate | `tram validate` over every `pipelines/*.yaml` |
+| 10 | Helm lint + template | Chart lints and renders (dependencies fetched to a temp copy) |
+| 11 | Docs-sync | Every `TRAM_*` env var referenced in the Python source appears in `.env.example` |
 
-Notes on check 10: it is a best-effort static scan — dynamically constructed names can slip through. If a variable is deliberately internal-only, document that decision next to the check rather than deleting it from `.env.example` silently.
+Notes on check 11: it is a best-effort static scan — dynamically constructed names can slip through. If a variable is deliberately internal-only, document that decision next to the check rather than deleting it from `.env.example` silently.
+
+## UI browser smoke (Playwright) — check 8
+
+The gate's last UI barrier: after a fresh `tram/ui` build, the suite (`tests/browser/run.mjs`) starts a dependency-free static server over `tram/ui/dist`, stubs every `/api/**` call at the network level from checked-in fixtures (`tests/browser/fixtures/` — captured shapes from the live cluster), 2026-09-22), and drives a real headless Chromium through five checks:
+
+- **boot** — every main page route boots with no console/page errors, no failed requests, no frozen shell; the shell renders the released version (this is the class that shipped two browser-only release blockers in v1.4.3).
+- **wizard** — schema-driven fields, inline required validation, the stale-`schema_version` guard (rotation blocks navigation/save, reload recovers), template pre-seed, editor hand-off.
+- **editor** — gutter, typing/line sync, tokenizer classes, tab, scroll sync, dry-run error anchoring, draft guard, wizard Review regression.
+- **a11y** — muted/badge contrast tokens in both themes, health-card `<button>` semantics (focus/click/Esc).
+- **yaml-quote** — wizard review-YAML quoting of numeric/boolean-looking strings, the 60s schema-poll page-leave guard, legacy `#wizard` redirect.
+
+Every check **fails loudly**: any `pageerror`, console error, failed request, or failed assertion makes the check exit non-zero, and the runner exits non-zero when any check fails — so the gate turns red on browser regressions instead of logging them.
+
+Run it standalone (requires the UI built first, and node >= 20):
+
+```bash
+(cd tram/ui && npm ci && npm run build)
+node tests/browser/run.mjs            # or: (cd tram/ui && npm run test:browser)
+```
+
+**Node requirement:** Playwright 1.63 needs node >= 20. The gate resolves the node binary as `$TRAM_BROWSER_NODE` if set, else `command -v node`, and fails with a remediation message when the major is < 20 — it is never silently skipped. A common local setup: keep the system node for everything else and point the gate at a node 20+ binary:
+
+```bash
+TRAM_BROWSER_NODE=/path/to/node20 scripts/release-gate.sh
+```
+
+**Playwright browsers:** `playwright` (pinned exactly to 1.63.0) is a `tram/ui` devDependency. Install the browser once per machine/CI image with `(cd tram/ui && npx playwright install chromium)` — the pin keeps the downloaded browser revision stable.
+
+**Fixtures:** `tests/browser/fixtures/` holds the stubbed API shapes. Regenerate them after an API contract change by capturing the live cluster (`curl http://localhost:30001/api/<endpoint>`; see `tests/browser/fixtures/README.md` for the exact commands and the deliberate trims) — remember the version fixtures (`meta.json`) must be updated to the version under gate.
 
 ## How the layers enforce it
 
-1. **PR-level CI** (`.github/workflows/ci.yml`): every PR runs lint, tests + coverage, UI build, example-pipeline validation, and Helm lint. A red PR cannot satisfy the gate.
+1. **PR-level CI** (`.github/workflows/ci.yml`): every PR runs lint, tests + coverage, UI build, the browser smoke suite, example-pipeline validation, and Helm lint. A red PR cannot satisfy the gate.
 2. **Release workflow** (`.github/workflows/release.yml`): fires **only on `v*` tag pushes** — merging to main no longer publishes anything. The `gate` job verifies tag == pyproject version, verifies the changelog section, and re-runs `scripts/release-gate.sh --ci` on the tag itself. Docker images and the Helm chart publish only after the gate is green.
 3. **Process rule**: this document + AGENTS.md bind both maintainers and coding agents — no tagging past a red gate.
 
