@@ -141,7 +141,7 @@ else
   elif ! "$BROWSER_NODE" -e 'const m = Number(process.versions.node.split(".")[0]); if (m < 20) process.exit(1)' 2>/dev/null; then
     record FAIL "UI browser smoke (Playwright)" \
       "node $( "$BROWSER_NODE" -v 2>/dev/null || echo '?' ) is < 20 — install Node 20+ or set TRAM_BROWSER_NODE=/path/to/node20"
-  elif (cd tram/ui && "$BROWSER_NODE" ../tests/browser/run.mjs >/tmp/tram-gate-browser.log 2>&1); then
+  elif (cd tram/ui && "$BROWSER_NODE" ../../tests/browser/run.mjs >/tmp/tram-gate-browser.log 2>&1); then
     record PASS "UI browser smoke (Playwright)"
   else
     record FAIL "UI browser smoke (Playwright)" \

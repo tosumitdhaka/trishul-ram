@@ -6,7 +6,7 @@
     "dev": "vite",
     "build": "vite build",
     "preview": "vite preview",
-    "test:browser": "node ../tests/browser/run.mjs"
+    "test:browser": "node ../../tests/browser/run.mjs"
   },
   "dependencies": {
     "bootstrap": "^5.3.3",
