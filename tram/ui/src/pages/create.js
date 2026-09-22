@@ -291,7 +291,7 @@ async function _aiGenerate() {
     const textarea = document.getElementById('wiz-yaml-preview')
     if (textarea) textarea.value = result.yaml
     setStatusMessage('wiz-ai-status', '', 'muted')
-    toast('YAML generated — review and save')
+    toast('YAML generated — review and save', 'info')
   } catch (e) {
     toast(`AI error: ${e.message}`, 'error')
     setStatusMessage('wiz-ai-status', '', 'muted')
@@ -443,12 +443,12 @@ function _schedChange() {
   document.getElementById('wiz-cron-row')?.classList.toggle('d-none', type !== 'cron')
 }
 
-function _collectStep(n) {
+function _collectStep(n, quiet = false) {
   if (n === 1) {
     const name = (document.getElementById('wiz-name')?.value || '').trim()
-    if (!name) { toast('Pipeline name is required', 'error'); return false }
+    if (!name) { if (!quiet) toast('Pipeline name is required', 'error'); return false }
     if (!/^[a-zA-Z0-9_-]+$/.test(name)) {
-      toast('Name must be alphanumeric with hyphens/underscores', 'error')
+      if (!quiet) toast('Name must be alphanumeric with hyphens/underscores', 'error')
       return false
     }
     _state.name = name
@@ -458,7 +458,7 @@ function _collectStep(n) {
 
   if (n === 2) {
     const type = document.getElementById('wiz-src-type')?.value || ''
-    if (!type) { toast('Select a source type', 'error'); return false }
+    if (!type) { if (!quiet) toast('Select a source type', 'error'); return false }
     const model = _schema.sources[type]
     const collected = _collectModelFields('wiz-src-fields', model)
     _state.source = {
@@ -467,13 +467,13 @@ function _collectStep(n) {
       extraYaml: collected.extraYaml,
     }
     _state.serializer = document.getElementById('wiz-serializer')?.value || 'json'
-    if (!_markMissingRequired('wiz-src-fields', model)) return false
+    if (!_markMissingRequired('wiz-src-fields', model, quiet)) return false
     return true
   }
 
   if (n === 3) {
     _state.serializerOut = document.getElementById('wiz-serializer-out')?.value || ''
-    return _collectSinks()
+    return _collectSinks(quiet)
   }
 
   if (n === 4) {
@@ -484,7 +484,7 @@ function _collectStep(n) {
     const unit = parseInt(document.getElementById('wiz-interval-unit')?.value || '60', 10) || 60
     _state.intervalSeconds = val * unit
     if (_state.scheduleType === 'cron' && !_state.cronExpr) {
-      toast('Enter a cron expression (or pick a different schedule type)', 'error')
+      if (!quiet) toast('Enter a cron expression (or pick a different schedule type)', 'error')
       return false
     }
     return true
@@ -665,8 +665,10 @@ function _collectModelFields(containerId, model) {
 }
 
 // Inline validation: required fields missing at collection time get the
-// Bootstrap invalid style and a message naming them.
-function _markMissingRequired(containerId, model) {
+// Bootstrap invalid style and a message naming them. `quiet` suppresses the
+// toast/focus side effects — the review rebuild must not fire step-advance
+// validation for form state the AI path never fills.
+function _markMissingRequired(containerId, model, quiet = false) {
   const container = document.getElementById(containerId)
   const fields = Array.isArray(model?.fields) ? model.fields : []
   if (!container) return true
@@ -680,8 +682,10 @@ function _markMissingRequired(containerId, model) {
     }
   })
   if (missing.length) {
-    toast(`Required field${missing.length === 1 ? '' : 's'} missing: ${missing.join(', ')}`, 'error')
-    container.querySelector('.is-invalid')?.focus()
+    if (!quiet) {
+      toast(`Required field${missing.length === 1 ? '' : 's'} missing: ${missing.join(', ')}`, 'error')
+      container.querySelector('.is-invalid')?.focus()
+    }
     return false
   }
   return true
@@ -741,7 +745,7 @@ async function _addSink() {
   _renderSinksList()
 }
 
-function _collectSinks() {
+function _collectSinks(quiet = false) {
   const list = document.getElementById('wiz-sinks-list')
   if (!list) return true
   const updated = []
@@ -759,7 +763,7 @@ function _collectSinks() {
   })
   _state.sinks = updated
   if (!_state.sinks.some(sink => sink.type)) {
-    toast('Add at least one sink', 'error')
+    if (!quiet) toast('Add at least one sink', 'error')
     return false
   }
   return true
@@ -954,13 +958,27 @@ function _yamlScalar(value, forceQuote = false) {
   return `"${str.replace(/\\/g, '\\\\').replace(/"/g, '\\"')}"`
 }
 
+// Pipeline name from saved YAML (quoted or bare) — the source of truth for
+// post-save navigation. After AI assist _state.name can be empty or stale,
+// but the YAML that was actually created always carries the real name.
+function _yamlPipelineName(yaml) {
+  const m = String(yaml || '').match(/^\s*name:\s*(.+)$/m)
+  if (!m) return ''
+  const raw = m[1].split('#')[0].trim()
+  if ((raw.startsWith('"') && raw.endsWith('"')) || (raw.startsWith("'") && raw.endsWith("'"))) return raw.slice(1, -1)
+  return raw
+}
+
 function _buildReviewYaml() {
   const textarea = document.getElementById('wiz-yaml-preview')
   if (!textarea) return
-  _collectStep(2)
-  _collectStep(3)
-  _collectStep(4)
-  if (!_state.name) _collectStep(1)
+  // Quiet collects: this runs on every entry to the Review step, including
+  // the AI-assist bypass, where the form steps were never filled — step
+  // validation toasts must not fire for a path that never went through them.
+  _collectStep(2, true)
+  _collectStep(3, true)
+  _collectStep(4, true)
+  if (!_state.name) _collectStep(1, true)
   textarea.value = buildYaml(_state)
 }
 
@@ -1043,8 +1061,12 @@ async function _save() {
   if (btn) btn.disabled = true
   try {
     await api.pipelines.create(yaml)
-    toast(`Pipeline '${_state.name}' created`)
-    router.navigate(`detail/${encodeURIComponent(_state.name)}`)
+    // The created pipeline is named by the YAML itself — after AI assist the
+    // form state may be empty or carry a different name than the AI output,
+    // so never navigate with _state.name here.
+    const createdName = _yamlPipelineName(yaml) || _state.name
+    toast(`Pipeline '${createdName}' created`)
+    router.navigate(`detail/${encodeURIComponent(createdName)}`)
   } catch (e) {
     toast(e.message, 'error')
     if (e.message) _remarkInvalid([e.message])
@@ -1055,13 +1077,20 @@ async function _save() {
 
 // Continue in the editor: the unsaved YAML travels via sessionStorage (never
 // a window global), keyed to an explicit ?from=wizard route flag so it can't
-// leak into ordinary editor entries.
+// leak into ordinary editor entries. After AI assist the Review textarea
+// holds the AI output (the form state was never filled) — hand that off
+// verbatim instead of rebuilding an empty skeleton from _state.
 function _openEditor() {
-  _collectStep(2)
-  _collectStep(3)
-  _collectStep(4)
-  if (!_state.name) _collectStep(1)
-  try { sessionStorage.setItem(WIZARD_PREFILL_KEY, buildYaml(_state)) } catch { /* storage full/blocked — editor starts blank */ }
+  const preview = (document.getElementById('wiz-yaml-preview')?.value || '').trim()
+  let yaml = preview
+  if (!yaml) {
+    _collectStep(2, true)
+    _collectStep(3, true)
+    _collectStep(4, true)
+    if (!_state.name) _collectStep(1, true)
+    yaml = buildYaml(_state)
+  }
+  try { sessionStorage.setItem(WIZARD_PREFILL_KEY, yaml) } catch { /* storage full/blocked — editor starts blank */ }
   router.navigate('editor?from=wizard&return=pipelines')
 }
 
