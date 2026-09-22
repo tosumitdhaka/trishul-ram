@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import csv
 import io
-from datetime import datetime
+from datetime import UTC, datetime
 from typing import Literal
 
 from fastapi import APIRouter, HTTPException, Query, Request
@@ -52,22 +52,16 @@ async def list_runs(
     """List run history with optional filtering and pagination.
 
     E.2 (§8.1): queued manual runs (non-terminal queued_runs rows) are merged
-    into the listing, shaped like ``RunResult.to_dict()``. Dedupe bounds the
-    merge to ≤ 1 row per pipeline, so the pagination skew (queued rows sort by
-    started_at among the run-history rows) is bounded and documented.
+    into the listing, shaped like ``RunResult.to_dict()``. The merge is
+    offset-aware: queued rows occupy the front of the virtual page stream
+    (requested_at DESC), so each queued run appears exactly once across pages
+    and the count endpoint stays consistent with the listing.
     """
-    controller = request.app.state.controller
-    runs = controller.get_runs(
-        pipeline_name=pipeline,
-        status=status,
-        limit=limit,
-        offset=offset,
-        from_dt=from_dt,
-    )
-    rows = [r.to_dict() for r in runs]
+    # Normalize naive from_dt to UTC at the parameter boundary: the queued-row
+    # comparison below mixes aware/naive datetimes otherwise (TypeError → 500).
+    if from_dt and from_dt.tzinfo is None:
+        from_dt = from_dt.replace(tzinfo=UTC)
 
-    # Merge queued runs before serialization so CSV export inherits them too
-    # (finished_at: None renders empty).
     db = getattr(request.app.state, "db", None)
     if db is not None:
         queued_rows = [
@@ -77,9 +71,35 @@ async def list_runs(
             and (status is None or status == "queued")
             and (from_dt is None or run["requested_at"] >= from_dt)
         ]
-        if queued_rows:
-            rows = [*rows, *queued_rows]
-            rows.sort(key=lambda r: r["started_at"] or "", reverse=True)
+        # Virtual total order: queued rows first, then history rows. This page
+        # is the [offset, offset+limit) slice of that order: queued rows take
+        # their slots up front, and the history fetch shifts forward by the
+        # number of queued rows the client has already consumed.
+        queued_rows.sort(key=lambda r: r["started_at"] or "", reverse=True)
+        queued_count = len(queued_rows)
+        queued_slice = queued_rows[min(offset, queued_count):min(offset + limit, queued_count)]
+        db_offset = max(0, offset - queued_count)
+        db_limit = limit - len(queued_slice)
+    else:
+        queued_slice = []
+        db_offset = offset
+        db_limit = limit
+
+    controller = request.app.state.controller
+    runs = controller.get_runs(
+        pipeline_name=pipeline,
+        status=status,
+        limit=db_limit,
+        offset=db_offset,
+        from_dt=from_dt,
+    )
+    rows = [r.to_dict() for r in runs]
+
+    # Merge queued runs before serialization so CSV export inherits them too
+    # (finished_at: None renders empty).
+    if queued_slice:
+        rows = [*rows, *queued_slice]
+        rows.sort(key=lambda r: r["started_at"] or "", reverse=True)
 
     if format == "csv":
         if not rows:
@@ -116,6 +136,11 @@ async def count_runs(
     heuristic there. Registered before /runs/{run_id} so "count" is not
     captured as a run id.
     """
+    # Same boundary normalization as the listing (naive from_dt → 500 in the
+    # aware/naive queued-row comparison otherwise).
+    if from_dt and from_dt.tzinfo is None:
+        from_dt = from_dt.replace(tzinfo=UTC)
+
     db = getattr(request.app.state, "db", None)
     if db is None:
         return {"total": None}

@@ -4,7 +4,7 @@ from __future__ import annotations
 import sys
 import threading
 import time
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from unittest.mock import MagicMock, patch
 
 from fastapi import FastAPI
@@ -592,6 +592,104 @@ class TestCountRuns:
         r = client.get("/api/runs/count")
         assert r.status_code == 200
         assert "total" in r.json()
+
+    def test_counts_real_queued_run(self, tmp_path):
+        """The count must include a real queued row exactly once (the listing
+        merges queued rows the same way, so count == listing total)."""
+        app = _make_runs_app()
+        db = TramDB(url=f"sqlite:///{tmp_path}/runs-count-queued.db")
+        db.save_run(_db_run("r1", pipeline_name="alpha", status="success"))
+        now = datetime.now(UTC)
+        db.save_queued_run("q1", "alpha", "yaml: 1", now, now + timedelta(minutes=15))
+        app.state.db = db
+        client = TestClient(app)
+
+        assert client.get("/api/runs/count").json() == {"total": 2}
+        assert client.get("/api/runs/count?status=queued").json() == {"total": 1}
+        assert client.get("/api/runs/count?status=success").json() == {"total": 1}
+        assert client.get("/api/runs/count?pipeline=alpha").json() == {"total": 2}
+
+
+class TestRunsPaginationWithQueued:
+    """Offset-aware queued merge: a queued run appears exactly once across
+    pages, page 2+ never duplicates it, and count == listing total."""
+
+    def _make_db_app(self, tmp_path, name="runs-pagination.db"):
+        app = _make_runs_app()
+        db = TramDB(url=f"sqlite:///{tmp_path}/{name}")
+        # Route history reads through the real DB so pagination is exercised
+        # end to end (controller.get_runs is a MagicMock otherwise).
+        app.state.controller.get_runs.side_effect = db.get_runs
+        app.state.db = db
+        return app, db
+
+    def test_queued_run_appears_exactly_once_across_pages(self, tmp_path):
+        app, db = self._make_db_app(tmp_path)
+        db.save_run(_db_run("h1", pipeline_name="alpha", status="success"))
+        db.save_run(_db_run("h2", pipeline_name="alpha", status="success"))
+        db.save_run(_db_run("h3", pipeline_name="alpha", status="success"))
+        now = datetime.now(UTC)
+        db.save_queued_run("q1", "alpha", "yaml: 1", now, now + timedelta(minutes=15))
+        client = TestClient(app)
+
+        page1 = client.get("/api/runs?limit=2&offset=0").json()
+        page2 = client.get("/api/runs?limit=2&offset=2").json()
+
+        ids1 = {r["run_id"] for r in page1}
+        ids2 = {r["run_id"] for r in page2}
+        assert ids1 == {"q1", "h1"}  # queued row on page 1
+        assert "q1" not in ids2  # not duplicated on page 2
+        assert ids1.isdisjoint(ids2)  # no row appears twice
+        assert len(page1) == 2 and len(page2) == 2
+        # count == listing total across pages
+        assert client.get("/api/runs/count").json()["total"] == 4
+
+    def test_offset_within_queued_region_serves_remainder(self, tmp_path):
+        """offset < queued_count edge: the client is paging inside the queued
+        front of the virtual stream — serve the remaining queued rows and
+        shift the history fetch accordingly (not just the happy path)."""
+        app, db = self._make_db_app(tmp_path, "runs-pagination-edge.db")
+        db.save_run(_db_run("h1", pipeline_name="alpha", status="success"))
+        db.save_run(_db_run("h2", pipeline_name="alpha", status="success"))
+        db.save_run(_db_run("h3", pipeline_name="alpha", status="success"))
+        now = datetime.now(UTC)
+        for i in range(3):
+            db.save_queued_run(
+                f"q{i}", "alpha", "yaml: 1",
+                now - timedelta(minutes=i), now + timedelta(minutes=15),
+            )
+        client = TestClient(app)
+
+        page1 = client.get("/api/runs?limit=2&offset=0").json()
+        page2 = client.get("/api/runs?limit=2&offset=2").json()  # 2 < 3 queued
+        page3 = client.get("/api/runs?limit=2&offset=4").json()  # 4 >= 3 queued
+
+        ids1 = {r["run_id"] for r in page1}
+        ids2 = {r["run_id"] for r in page2}
+        ids3 = {r["run_id"] for r in page3}
+        assert ids1 == {"q0", "q1"}  # requested_at DESC order
+        assert ids2 == {"q2", "h1"}  # remainder of queued rows + first history
+        assert ids3 == {"h2", "h3"}
+        assert ids1.isdisjoint(ids2) and ids2.isdisjoint(ids3) and ids1.isdisjoint(ids3)
+        assert client.get("/api/runs/count").json()["total"] == 6
+
+    def test_naive_from_dt_does_not_500_with_queued_run(self, tmp_path):
+        """A naive ISO timestamp (no tz) used to raise TypeError in the queued
+        merge (aware vs naive comparison) → 500; normalized at the boundary."""
+        app, db = self._make_db_app(tmp_path, "runs-naive.db")
+        db.save_run(_db_run("h1", pipeline_name="alpha", status="success"))
+        now = datetime.now(UTC)
+        db.save_queued_run("q1", "alpha", "yaml: 1", now, now + timedelta(minutes=15))
+        client = TestClient(app, raise_server_exceptions=False)
+
+        listing = client.get("/api/runs?from_dt=2026-09-01T00:00:00")
+        assert listing.status_code == 200
+        # h1 started 2026-04-01 < cutoff; q1 requested now (>= cutoff) survives
+        assert {r["run_id"] for r in listing.json()} == {"q1"}
+
+        counted = client.get("/api/runs/count?from_dt=2026-09-01T00:00:00")
+        assert counted.status_code == 200
+        assert counted.json() == {"total": 1}
 
 
 class TestGetRun:
