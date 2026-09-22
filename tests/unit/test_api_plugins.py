@@ -92,3 +92,41 @@ def test_plugins_endpoint_flags_constructed_registry_divergence(monkeypatch):
     finally:
         del reg._sources["zzz_endpoint_fake"]
     assert "zzz_endpoint_fake" in data["schema_mismatch"]["sources"]["registry_only"]
+
+
+def test_plugins_endpoint_reports_transforms_in_sync():
+    """The real /api/plugins cross-check must report schema_mismatch empty for
+    every category — melt was registered but missing from the TransformConfig
+    union (any `type: melt` pipeline failed Pydantic validation), so its fix
+    is pinned at the endpoint level too."""
+    app = FastAPI()
+    app.include_router(router)
+    client = TestClient(app)
+
+    data = client.get("/api/plugins").json()
+    for category in ("sources", "sinks", "serializers", "transforms"):
+        assert data["schema_mismatch"][category] == {}
+
+
+def test_real_registry_matches_schema_union():
+    """Pin the REAL union↔registry state (no mocks): every category's registry
+    keys must equal its SCHEMA_FIELDS (union) keys. A registered type missing
+    from the union fails Pydantic validation for real pipelines (the melt bug);
+    a union-only type fails at runtime with PluginNotFoundError. Either
+    divergence fails CI here instead of shipping."""
+    import tram.connectors  # noqa: F401
+    import tram.serializers  # noqa: F401
+    import tram.transforms  # noqa: F401
+
+    for category, registry in (
+        ("source", reg._sources),
+        ("sink", reg._sinks),
+        ("serializer", reg._serializers),
+        ("transform", reg._transforms),
+    ):
+        schema_keys = set(cs.SCHEMA_FIELDS.get(category, {}).keys())
+        registry_keys = set(registry.keys())
+        assert schema_keys == registry_keys, (
+            f"union↔registry divergence in {category}: "
+            f"{_schema_mismatch(category, registry)}"
+        )

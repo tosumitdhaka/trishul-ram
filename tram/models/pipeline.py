@@ -653,6 +653,17 @@ class UnnestTransformConfig(BaseModel):
     on_non_dict: Literal["keep", "drop", "raise"] = "keep"
 
 
+class MeltTransformConfig(BaseModel):
+    type: Literal["melt"]
+    value_field: str
+    label_fields: list[str] = Field(default_factory=list)
+    metric_name_col: str = "metric_name"
+    metric_value_col: str = "metric_value"
+    drop_source: bool = True
+    include_only: list[str] = Field(default_factory=list)
+    exclude: list[str] = Field(default_factory=list)
+
+
 class CoalesceFieldRuleConfig(BaseModel):
     sources: list[str]
     default: Any | None = None
@@ -786,7 +797,7 @@ class HexDecodeTransformConfig(BaseModel):
 
 
 TransformConfig = Annotated[
-    RenameTransformConfig | CastTransformConfig | AddFieldTransformConfig | DropTransformConfig | ValueMapTransformConfig | FilterTransformConfig | FlattenTransformConfig | TimestampNormalizeTransformConfig | AggregateTransformConfig | CounterDeltaTransformConfig | WindowAggregateTransformConfig | EnrichTransformConfig | ExplodeTransformConfig | DeduplicateTransformConfig | RegexExtractTransformConfig | InjectMetaTransformConfig | TemplateTransformConfig | MaskTransformConfig | ValidateTransformConfig | SortTransformConfig | LimitTransformConfig | JmesPathExtractTransformConfig | UnnestTransformConfig | CoalesceFieldsTransformConfig | SelectFromListTransformConfig | ProjectTransformConfig | JsonFlattenTransformConfig | HexDecodeTransformConfig,
+    RenameTransformConfig | CastTransformConfig | AddFieldTransformConfig | DropTransformConfig | ValueMapTransformConfig | FilterTransformConfig | FlattenTransformConfig | TimestampNormalizeTransformConfig | AggregateTransformConfig | CounterDeltaTransformConfig | WindowAggregateTransformConfig | EnrichTransformConfig | ExplodeTransformConfig | DeduplicateTransformConfig | RegexExtractTransformConfig | InjectMetaTransformConfig | TemplateTransformConfig | MaskTransformConfig | ValidateTransformConfig | SortTransformConfig | LimitTransformConfig | JmesPathExtractTransformConfig | UnnestTransformConfig | MeltTransformConfig | CoalesceFieldsTransformConfig | SelectFromListTransformConfig | ProjectTransformConfig | JsonFlattenTransformConfig | HexDecodeTransformConfig,
     Field(discriminator="type"),
 ]
 
