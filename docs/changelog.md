@@ -5,6 +5,14 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ---
 
+## [1.4.4] - 2026-09-22
+
+### Fixed
+- Wizard AI-assist path (operator-reported, all reproduced headless before fixing): AI generate no longer fires form-step validation toasts ("Select a source type", "Add at least one sink", "Pipeline name is required") for the steps the AI flow bypasses — the Review build collects silently, and "YAML generated — review and save" is an info toast, not error-styled
+- Editor hand-off after AI assist delivers the AI-generated YAML verbatim (was rebuilt from the empty form state, showing a `name: ""` placeholder)
+- Pipeline detail pages shipped dead (no clickable buttons) — `detail.js` was missing the `createPageController` import (regression in the v1.4.3 page-controller refactor): the chunk threw at evaluation, the router's lazy import swallowed the error, and every detail page rendered unwired; save also navigated with an empty pipeline name after AI assist — both fixed, and the wizard AI-assist regression check now exercises the full path through post-save detail (the boot check cannot see lazily-imported chunk errors)
+- Browser-harness stub fidelity: the placement stub now mirrors the real backend (synthetic view for existing pipelines, 404 only for unknown) — the old unconditional 404 passed only while the detail page was dead
+
 ## [1.4.3] - 2026-09-22
 
 ### Added
