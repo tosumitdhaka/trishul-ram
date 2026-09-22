@@ -3,6 +3,7 @@
 // Routes carry state so deep links, refresh, and browser Back/Forward work:
 //   #dashboard?period=24h&granularity=hour
 //   #pipelines
+//   #create                          (guided pipeline creation wizard)
 //   #pipelines/templates          (opens the templates modal on load)
 //   #detail/:pipeline?tab=runs
 //   #editor/:pipeline?return=detail        (edit)
@@ -111,7 +112,7 @@ function resolveRoute(routeString) {
     return { ...parsed, page: 'runs_detail', urlPage: 'runs' }
   }
   if (parsed.page === 'templates') return { ...parsed, page: 'pipelines', params: ['templates'], replace: true }
-  if (parsed.page === 'wizard')   return { ...parsed, page: 'pipelines', params: [], replace: true }
+  if (parsed.page === 'wizard')   return { ...parsed, page: 'create', params: [], replace: true }
 
   if (!pages[parsed.page]) {
     return { page: 'dashboard', params: [], query: parsed.query, replace: true }

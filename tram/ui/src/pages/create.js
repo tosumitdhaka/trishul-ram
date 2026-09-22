@@ -25,6 +25,7 @@ let _schema = { sources: {}, sinks: {}, serializers: {}, transforms: {} }
 let _schemaVersion = null
 let _schemaStale = false
 let _schemaTimer = null
+let _pageLeft = false
 let _state = _defaultState()
 let _returnTo = 'pipelines'
 let _templatesLoaded = false
@@ -53,6 +54,7 @@ export async function init() {
   _schemaStale = false
   _state = _defaultState()
   _templatesLoaded = false
+  _pageLeft = false
 
   const { query } = router.route()
   _returnTo = ['dashboard', 'pipelines', 'detail'].includes(query.return) ? query.return : 'pipelines'
@@ -195,6 +197,7 @@ function _extractTemplateBasics(yaml) {
 // ── Stale-schema guard ────────────────────────────────────────────────────────
 
 function _startSchemaPoll() {
+  if (_pageLeft) return // init may resume after the operator already left (page-leave fired during the load awaits)
   if (_schemaTimer) clearInterval(_schemaTimer)
   if (_schemaVersion === null) return // backend without schema_version — nothing to compare
   _schemaTimer = setInterval(() => { void _checkSchemaFreshness() }, SCHEMA_POLL_MS)
@@ -249,7 +252,9 @@ async function _reloadFromFreshSchema() {
 // Wire cleanup: the router's page-leave event clears the version poll when
 // the operator navigates away (same pattern as the editor's draft flush).
 window.addEventListener('tram:page-leave', (e) => {
-  if (e.detail?.from === 'create') _stopSchemaPoll()
+  if (e.detail?.from !== 'create') return
+  _pageLeft = true
+  _stopSchemaPoll()
 })
 
 // ── AI assist ────────────────────────────────────────────────────────────────
@@ -842,17 +847,19 @@ async function _testSink(index) {
 
 function buildYaml(state) {
   const lines = []
-  lines.push(`name: ${state.name}`)
-  if (state.description) lines.push(`description: ${_yamlScalar(state.description)}`)
+  // Pipeline name is a text value — always quote so a numeric-looking name
+  // ("123") stays a YAML string instead of an int that Pydantic rejects.
+  lines.push(`name: ${_yamlScalar(state.name, true)}`)
+  if (state.description) lines.push(`description: ${_yamlScalar(state.description, true)}`)
   lines.push('schedule:')
   lines.push(`  type: ${state.scheduleType}`)
   if (state.scheduleType === 'interval') lines.push(`  interval_seconds: ${state.intervalSeconds}`)
-  if (state.scheduleType === 'cron' && state.cronExpr) lines.push(`  cron: ${_yamlScalar(state.cronExpr)}`)
+  if (state.scheduleType === 'cron' && state.cronExpr) lines.push(`  cron: ${_yamlScalar(state.cronExpr, true)}`)
   if (state.onError && state.onError !== 'continue') lines.push(`on_error: ${state.onError}`)
 
   lines.push('source:')
   lines.push(`  type: ${state.source.type}`)
-  _emitFields(lines, state.source.fields, 2)
+  _emitFields(lines, state.source.fields, 2, _schema.sources[state.source.type])
   _appendExtraYaml(lines, state.source.extraYaml, 2)
 
   if (state.serializer) {
@@ -869,7 +876,7 @@ function buildYaml(state) {
     lines.push('transforms:')
     state.transforms.forEach((transform) => {
       lines.push(`  - type: ${transform.type}`)
-      _emitFields(lines, transform.fields || {}, 4)
+      _emitFields(lines, transform.fields || {}, 4, _schema.transforms[transform.type])
     })
   }
 
@@ -877,12 +884,12 @@ function buildYaml(state) {
     lines.push('sinks:')
     state.sinks.filter(sink => sink.type).forEach((sink) => {
       lines.push(`  - type: ${sink.type}`)
-      _emitFields(lines, sink.fields, 4)
+      _emitFields(lines, sink.fields, 4, _schema.sinks[sink.type])
       if (sink.serializer_out) {
         lines.push('    serializer_out:')
         lines.push(`      type: ${sink.serializer_out}`)
       }
-      if (sink.condition) lines.push(`    condition: ${_yamlScalar(sink.condition)}`)
+      if (sink.condition) lines.push(`    condition: ${_yamlScalar(sink.condition, true)}`)
       _appendExtraYaml(lines, sink.extraYaml, 4)
     })
   }
@@ -890,15 +897,23 @@ function buildYaml(state) {
   return lines.join('\n')
 }
 
-function _emitFields(lines, fields, indent) {
+function _emitFields(lines, fields, indent, model) {
+  const descriptors = {}
+  ;(Array.isArray(model?.fields) ? model.fields : []).forEach((field) => { descriptors[field.name] = field })
   Object.entries(fields || {}).forEach(([key, value]) => {
-    _emitField(lines, key, value, indent)
+    _emitField(lines, key, value, indent, descriptors[key])
   })
 }
 
-function _emitField(lines, key, value, indent) {
+function _emitField(lines, key, value, indent, field) {
   if (value === undefined || value === null || value === '') return
   const pad = ' '.repeat(indent)
+  // Only schema kinds that genuinely carry numbers/bools emit scalars
+  // unquoted; every other kind (text/secret/select/list/map — and values
+  // without a descriptor) is quoted so `password: 12345` never becomes a
+  // YAML int. The string is already parsed per-kind on collection, so this
+  // only controls quoting, never the value.
+  const forceQuote = !field || (field.kind !== 'integer' && field.kind !== 'number' && field.kind !== 'boolean')
   if (Array.isArray(value)) {
     if (!value.length) return
     lines.push(`${pad}${key}:`)
@@ -907,7 +922,7 @@ function _emitField(lines, key, value, indent) {
         lines.push(`${pad}  -`)
         Object.entries(item).forEach(([childKey, childValue]) => _emitField(lines, childKey, childValue, indent + 4))
       } else {
-        lines.push(`${pad}  - ${_yamlScalar(item)}`)
+        lines.push(`${pad}  - ${_yamlScalar(item, forceQuote)}`)
       }
     })
     return
@@ -915,10 +930,10 @@ function _emitField(lines, key, value, indent) {
   if (typeof value === 'object') {
     if (!Object.keys(value).length) return
     lines.push(`${pad}${key}:`)
-    Object.entries(value).forEach(([childKey, childValue]) => _emitField(lines, childKey, childValue, indent + 2))
+    Object.entries(value).forEach(([childKey, childValue]) => _emitField(lines, childKey, childValue, indent + 2, { kind: 'string' }))
     return
   }
-  lines.push(`${pad}${key}: ${_yamlScalar(value)}`)
+  lines.push(`${pad}${key}: ${_yamlScalar(value, forceQuote)}`)
 }
 
 function _appendExtraYaml(lines, extraYaml, indent) {
@@ -930,12 +945,12 @@ function _appendExtraYaml(lines, extraYaml, indent) {
   })
 }
 
-function _yamlScalar(value) {
+function _yamlScalar(value, forceQuote = false) {
   if (typeof value === 'boolean') return value ? 'true' : 'false'
   if (typeof value === 'number') return String(value)
   const str = String(value)
-  if (/^-?\d+(\.\d+)?$/.test(str)) return str
-  if (/^(true|false|null)$/i.test(str)) return str.toLowerCase()
+  if (!forceQuote && /^-?\d+(\.\d+)?$/.test(str)) return str
+  if (!forceQuote && /^(true|false|null)$/i.test(str)) return str.toLowerCase()
   return `"${str.replace(/\\/g, '\\\\').replace(/"/g, '\\"')}"`
 }
 
