@@ -1,5 +1,6 @@
 import { api } from '../api.js'
 import { router } from '../router.js'
+import { createPageController } from '../page.js'
 import { bindDataActions, confirmAction, downloadText, relTime, fmtNum, schedBadge, statusBadge, esc, toast, pipelineStartFeedback } from '../utils.js'
 import { monitorTriggeredRun, runOutcomeToast } from '../run_monitor.js'
 import {
