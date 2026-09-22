@@ -5,6 +5,30 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ---
 
+## [1.4.3] - 2026-09-22
+
+### Added
+- Release gate: new mandatory "UI browser smoke (Playwright)" check (`scripts/release-gate.sh` check 8, after the UI build; `--fast`-skippable, node>=20 via `TRAM_BROWSER_NODE`) — boots the freshly built SPA against fixture-stubbed API responses (`tests/browser/`, captured shapes from the live cluster) and exercises the boot/console-error class, the creation wizard (fields, validation, stale-schema guard, template seed), the editor gutter/typing/anchor, a11y tokens, and wizard YAML quoting; a new `browser-smoke` CI job runs it on every PR. `playwright` pinned exactly (1.63.0) as a `tram/ui` devDependency so the cached browser revision stays stable
+- Schema identity (#24, Option A): content-hash `schema_version` (sha256 over canonical `SCHEMA_FIELDS`, 12 hex) exposed on `/api/config/schema`, `/api/plugins`, and `/api/ai/status`; every AI system prompt carries `TRAM schema v: <hash>`; `ai_usage` rows record the schema they were built against (in-place `ALTER TABLE` migration, old rows NULL); `/api/plugins` now cross-checks the Pydantic unions against the runtime registry (`schema_mismatch`: `union_only` / `registry_only`) — the two hand-maintained lists are finally machine-checked. The hash is an identity token for equality, not a semantic version
+- Shared page shell (L3): one `createPageController` owns mount/unmount, the poll timer, and error/empty/loading states for every page; focus-preserving re-render keeps keyboard position and expanded rows stable across polls; the five hand-rolled poll loops are gone; `window.navigate` global call sites removed (named import)
+- Run-detail route (L4): `#runs/:id` — a real page with run/pipeline/outcome/record cards, the shared failure-reason + grouped-skip-reasons + DLQ rendering (extracted from the expandable row), deep-linkable for incident sharing, with a scoped Back to the pipeline's run history
+- Honest run-history totals (L4): new `GET /api/runs/count` endpoint (same filters; registered before `/runs/{run_id}` so `"count"` cannot be captured as an id); the pill shows "showing N of M", load-more is exact, heuristic fallback when persistence reports no total
+- Structured creation wizard (L2): `#create` route, five steps (basics → source → sinks → schedule → review) rendering fields entirely from the live `/api/config/schema` descriptors (enum choices, defaults, multiline, `secret` masked with `autocomplete="new-password"`, only required fields revealed, optional behind disclosure); `schema_version` stale-form guard — a 60s poll plus pre-advance/save check blocks submission and offers a reload when the daemon was upgraded under an open form; template pre-seed (`#create?template=`); dry-run validation with issues mapped back to the offending step; "skip to raw YAML"/"Continue In Editor" hand-offs via `sessionStorage` (no window globals)
+- Editor upgrade (L5): line-number gutter and read-only YAML highlight layer (revived theme-aware `.yk/.yv/.ys/.yn/.yb/.yc` tokens) with exact shared metrics and IME-safe visible-text mode; dry-run/save failures anchor to the offending YAML line
+
+### Changed
+- A11y (L6): muted-text contrast cleared 4.5:1 in both themes (dark `--fg-muted` `#6e7681`→`#8b949e`, light `#8c959f`→`#57606a`); off/cyan badge contrast fixed both themes; the health card is a real `<button>` — opens on focus-within, click pins, Esc closes
+- Wizard entry points: dashboard and pipelines "+ New" route to the guided wizard; the raw-YAML editor remains the advanced path
+
+### Fixed
+- `melt` transform was registered and tested but absent from the `TransformConfig` union — `type: melt` pipelines failed Pydantic validation; config model added and the union↔registry state is now pinned by a test (any future divergence fails CI instead of shipping) (found by independent review)
+- Run listing's queued-run merge is offset-aware — queued rows appeared in every page (duplicated on load-more, skewing the offset so real history rows were skipped); the count endpoint now exactly equals the listing total across pages (found by independent review)
+- Naive `from_dt` query timestamps no longer 500 on the runs listing/count (tz-normalized to UTC at the boundary) (found by independent review)
+- Wizard-generated YAML quotes numeric/boolean-looking strings (`password: "12345"` instead of a YAML int that Pydantic rejects); numeric pipeline names quoted too (found by independent review)
+- Wizard schema-poll timer can no longer start after leaving the page mid-init; legacy `#wizard` bookmarks redirect to `#create`
+- Run-issue expanded rows persist correctly across polling refreshes (state was DOM-only and index-keyed — collapsed and misaligned when rows shifted)
+- Inherited v1.4.1 wizard sink-card selector mismatch (`.wiz-sink-card` vs `.wizard-sink-card`) that had silently broken sink type changes
+
 ## [1.4.2] - 2026-09-21
 
 ### Added

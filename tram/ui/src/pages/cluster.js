@@ -1,4 +1,5 @@
 import { api } from '../api.js'
+import { createPageController } from '../page.js'
 import {
   bindDataActions,
   esc,
@@ -12,24 +13,41 @@ import {
 } from '../utils.js'
 
 const _openWorkers = {}
-let _pollTimer = null
-let _refreshInFlight = null
 let _workers = []
 
-export async function init() {
-  if (_pollTimer) { clearInterval(_pollTimer); _pollTimer = null }
-  wireActions()
-  await refresh()
-
-  const pollMs = getSavedPollIntervalMs()
-  _pollTimer = setInterval(() => {
-    if (!document.getElementById('cluster-streams')) {
-      clearInterval(_pollTimer)
-      _pollTimer = null
-      return
+const controller = createPageController({
+  page: 'cluster',
+  fetch: async () => {
+    const [readyResp, statusResp, streamsResp, statsResp] = await Promise.allSettled([
+      api.ready(),
+      api.cluster.nodes(),
+      api.cluster.streams(),
+      api.stats.get({ period: '1h', granularity: '15m' }),
+    ])
+    if (statusResp.status !== 'fulfilled') throw statusResp.reason
+    if (streamsResp.status !== 'fulfilled') throw streamsResp.reason
+    return {
+      ready: readyResp.status === 'fulfilled' ? (readyResp.value || {}) : null,
+      status: statusResp.value,
+      streams: streamsResp.value?.streams || [],
+      stats: statsResp.status === 'fulfilled' ? (statsResp.value || {}) : {},
     }
-    void refresh({ silent: true })
-  }, pollMs)
+  },
+  render: ({ ready, status, streams, stats }) => {
+    renderDaemonStatus(ready)
+    renderCluster(status, streams, stats)
+  },
+  pollMs: () => getSavedPollIntervalMs(),
+  onError: (e, mode) => {
+    const txt = document.getElementById('cluster-status-text')
+    if (txt) txt.textContent = 'Cluster info unavailable — daemon offline'
+    if (mode !== 'poll') toast(`Cluster error: ${e.message}`, 'error')
+  },
+})
+
+export async function init() {
+  wireActions()
+  await controller.mount()
 }
 
 function wireActions() {
@@ -39,9 +57,7 @@ function wireActions() {
     if (btn) btn.disabled = true
     if (icon) icon.className = 'bi bi-arrow-clockwise spin'
     try {
-      await refresh()
-    } catch (e) {
-      toast(e.message, 'error')
+      await controller.refresh()
     } finally {
       if (btn) btn.disabled = false
       if (icon) icon.className = 'bi bi-arrow-clockwise'
@@ -56,33 +72,6 @@ function wireActions() {
   })
 }
 
-async function refresh({ silent = false } = {}) {
-  if (_refreshInFlight) return _refreshInFlight
-  _refreshInFlight = (async () => {
-    try {
-      const [readyResp, statusResp, streamsResp, statsResp] = await Promise.allSettled([
-        api.ready(),
-        api.cluster.nodes(),
-        api.cluster.streams(),
-        api.stats.get({ period: '1h', granularity: '15m' }),
-      ])
-      if (statusResp.status !== 'fulfilled') throw statusResp.reason
-      if (streamsResp.status !== 'fulfilled') throw streamsResp.reason
-      const stats = statsResp.status === 'fulfilled' ? (statsResp.value || {}) : {}
-      const ready = readyResp.status === 'fulfilled' ? (readyResp.value || {}) : null
-      renderDaemonStatus(ready)
-      renderCluster(statusResp.value, streamsResp.value?.streams || [], stats)
-    } catch (e) {
-      const txt = document.getElementById('cluster-status-text')
-      if (txt) txt.textContent = 'Cluster info unavailable — daemon offline'
-      if (!silent) toast(`Cluster error: ${e.message}`, 'error')
-      throw e
-    } finally {
-      _refreshInFlight = null
-    }
-  })()
-  return _refreshInFlight
-}
 
 function renderDaemonStatus(ready) {
   const modeEl = document.getElementById('cluster-daemon-mode')

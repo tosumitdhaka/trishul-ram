@@ -3,22 +3,27 @@
 // Routes carry state so deep links, refresh, and browser Back/Forward work:
 //   #dashboard?period=24h&granularity=hour
 //   #pipelines
+//   #create                          (guided pipeline creation wizard)
 //   #pipelines/templates          (opens the templates modal on load)
 //   #detail/:pipeline?tab=runs
 //   #editor/:pipeline?return=detail        (edit)
 //   #editor?template=tpl&return=pipelines  (new from template)
-//   #runs/:runId?pipeline=x&status=failed&from=2026-09-01
+//   #runs?pipeline=x&status=failed&from=2026-09-01      (run list)
+//   #runs/:runId                          (run detail page)
 //   #schemas #mibs #cluster #plugins #settings
 //
 // Large payloads (YAML) are never carried in the hash — the editor fetches
 // them by name, so a refresh recovers without in-memory handoffs.
 
 import { isAuthPending } from './auth_state.js'
+import { unmountPage } from './page.js'
 import dashboardHtml from './pages/dashboard.html?raw'
 import pipelinesHtml from './pages/pipelines.html?raw'
+import createHtml     from './pages/create.html?raw'
 import detailHtml    from './pages/detail.html?raw'
 import editorHtml    from './pages/editor.html?raw'
 import runsHtml      from './pages/runs.html?raw'
+import runsDetailHtml from './pages/runs_detail.html?raw'
 import schemasHtml   from './pages/schemas.html?raw'
 import mibsHtml      from './pages/mibs.html?raw'
 import clusterHtml   from './pages/cluster.html?raw'
@@ -28,9 +33,11 @@ import settingsHtml   from './pages/settings.html?raw'
 const pages = {
   dashboard: dashboardHtml,
   pipelines: pipelinesHtml,
+  create:    createHtml,
   detail:    detailHtml,
   editor:    editorHtml,
   runs:      runsHtml,
+  runs_detail: runsDetailHtml,
   schemas:   schemasHtml,
   mibs:      mibsHtml,
   cluster:   clusterHtml,
@@ -41,9 +48,11 @@ const pages = {
 const meta = {
   dashboard: { title: 'Dashboard',         sub: 'Overview' },
   pipelines: { title: 'Pipelines',         sub: '' },
+  create:    { title: 'New Pipeline',      sub: 'Guided creation' },
   detail:    { title: 'Pipeline Detail',   sub: '' },
   editor:    { title: 'Pipeline Editor',   sub: '' },
   runs:      { title: 'Run History',      sub: '' },
+  runs_detail: { title: 'Run Detail',      sub: '' },
   schemas:   { title: 'Schemas',           sub: '' },
   mibs:      { title: 'MIB Modules',       sub: '' },
   cluster:   { title: 'Cluster',           sub: 'Runtime and worker status' },
@@ -55,9 +64,11 @@ const meta = {
 const inits = {
   dashboard: () => import('./pages/dashboard.js').then(m => m.init?.()),
   pipelines: () => import('./pages/pipelines.js').then(m => m.init?.()),
+  create:    () => import('./pages/create.js').then(m => m.init?.()),
   detail:    () => import('./pages/detail.js').then(m => m.init?.()),
   editor:    () => import('./pages/editor.js').then(m => m.init?.()),
   runs:      () => import('./pages/runs.js').then(m => m.init?.()),
+  runs_detail: () => import('./pages/runs_detail.js').then(m => m.init?.()),
   schemas:   () => import('./pages/schemas.js').then(m => m.init?.()),
   mibs:      () => import('./pages/mibs.js').then(m => m.init?.()),
   cluster:   () => import('./pages/cluster.js').then(m => m.init?.()),
@@ -89,14 +100,19 @@ function buildRoute(page, params = [], query = {}) {
   return `#${path}${suffix}`
 }
 
-// Legacy aliases and unknown routes → canonical replacements.
+// Legacy aliases and unknown routes → canonical replacements. A run-id path
+// segment on the runs route selects the run-detail page — the URL keeps the
+// `runs` prefix so the list and detail pages read as one family.
 function resolveRoute(routeString) {
   const parsed = typeof routeString === 'object' && routeString !== null
     ? routeString
     : parseRoute(routeString)
 
+  if (parsed.page === 'runs' && parsed.params.length > 0) {
+    return { ...parsed, page: 'runs_detail', urlPage: 'runs' }
+  }
   if (parsed.page === 'templates') return { ...parsed, page: 'pipelines', params: ['templates'], replace: true }
-  if (parsed.page === 'wizard')   return { ...parsed, page: 'pipelines', params: [], replace: true }
+  if (parsed.page === 'wizard')   return { ...parsed, page: 'create', params: [], replace: true }
 
   if (!pages[parsed.page]) {
     return { page: 'dashboard', params: [], query: parsed.query, replace: true }
@@ -117,6 +133,10 @@ export const router = {
 
     if (isAuthPending()) return
 
+    // Tear down the outgoing page's controller (poll timer, in-flight loads)
+    // before its DOM is replaced. Same-page re-renders keep the controller.
+    if (this.current && this.current !== page) unmountPage(this.current)
+
     // Let the outgoing page flush in-memory state (the editor saves its
     // recovery draft here when the operator leaves via a sidebar link).
     window.dispatchEvent(new CustomEvent('tram:page-leave', { detail: { from: this.current, page } }))
@@ -124,11 +144,12 @@ export const router = {
     // Render HTML
     document.getElementById('content').innerHTML = pages[page]
 
-    // Update topbar (detail/editor carry the pipeline name)
+    // Update topbar (detail/editor/run detail carry the route argument)
     const m = meta[page] || {}
-    const nameArg = page === 'detail' || page === 'editor' ? parsed?.params?.[0] : null
-    document.getElementById('tb-title').textContent = nameArg
-      ? `${m.title}: ${nameArg}`
+    const nameArg = page === 'detail' || page === 'editor' || page === 'runs_detail' ? parsed?.params?.[0] : null
+    const displayArg = page === 'runs_detail' && nameArg ? String(nameArg).slice(0, 8) : nameArg
+    document.getElementById('tb-title').textContent = displayArg
+      ? `${m.title}: ${displayArg}`
       : (m.title || page)
     document.getElementById('tb-sub').textContent   = m.sub   || ''
 
@@ -136,7 +157,9 @@ export const router = {
     document.querySelectorAll('#sidebar .nav-link').forEach(a => {
       a.classList.toggle('active', a.dataset.page === page ||
         (page === 'detail' && a.dataset.page === 'pipelines') ||
-        (page === 'editor' && a.dataset.page === 'pipelines'))
+        (page === 'editor' && a.dataset.page === 'pipelines') ||
+        (page === 'create' && a.dataset.page === 'pipelines') ||
+        (page === 'runs_detail' && a.dataset.page === 'runs'))
     })
     this.current = page
 
@@ -148,7 +171,7 @@ export const router = {
     const resolved = resolveRoute(routeString)
     const { page, params, query, replace: routeReplace } = resolved
     const replace = Boolean(options.replace || routeReplace)
-    const targetHash = buildRoute(page, params, query)
+    const targetHash = buildRoute(resolved.urlPage || page, params, query)
 
     if (window.location.hash !== targetHash) {
       if (replace) {
@@ -176,13 +199,13 @@ export const router = {
       if (v === undefined || v === null || v === '') delete query[k]
       else query[k] = String(v)
     })
-    history.replaceState(null, '', buildRoute(current.page, current.params, query))
+    history.replaceState(null, '', buildRoute(current.urlPage || current.page, current.params, query))
   },
 
   // Replace the whole route (path and query) without adding a history entry.
   replaceRoute(routeString) {
     const resolved = resolveRoute(routeString)
-    history.replaceState(null, '', buildRoute(resolved.page, resolved.params, resolved.query))
+    history.replaceState(null, '', buildRoute(resolved.urlPage || resolved.page, resolved.params, resolved.query))
   },
 
   init() {
@@ -194,4 +217,10 @@ export const router = {
     // Initial page from hash or default
     this.navigate(window.location.hash || '#dashboard', { fromHashChange: true })
   },
+}
+
+// Named export so pages navigate via a module import instead of a
+// window global.
+export function navigate(routeString, options) {
+  router.navigate(routeString, options)
 }

@@ -1,0 +1,19 @@
+{
+  "pipelines_total": 13,
+  "pipelines_running": 2,
+  "pipelines_scheduled": 0,
+  "pipelines_error": 0,
+  "runs_today": 291,
+  "runs_last_hour": 120,
+  "records_in_last_15m": 180,
+  "records_out_last_15m": 0,
+  "bytes_in_last_15m": 18630,
+  "bytes_out_last_15m": 0,
+  "errors_last_15m": 0,
+  "avg_duration_last_hour_s": 6.61,
+  "per_pipeline": [
+    {"name": "sftp-pm-to-kafka", "status": "running", "runs_last_hour": 120, "records_in": 708, "records_out": 0, "errors": 2},
+    {"name": "snmp-to-kafka", "status": "running", "runs_last_hour": 0, "records_in": 0, "records_out": 0, "errors": 0},
+    {"name": "sample-health", "status": "stopped", "runs_last_hour": 0, "records_in": 0, "records_out": 0, "errors": 0}
+  ]
+}

@@ -1,0 +1,12 @@
+[
+  {
+    "id": "kafka-to-os",
+    "name": "kafka-to-os",
+    "description": "Kafka to OpenSearch",
+    "tags": [],
+    "source_type": "kafka",
+    "sink_types": ["opensearch"],
+    "schedule_type": "interval",
+    "yaml": "name: kafka-to-os\ndescription: Test\nschedule:\n  type: interval\n  interval_seconds: 300\nsource:\n  type: kafka\n  brokers:\n    - localhost:9092\n  topic: in\nsinks:\n  - type: opensearch\n    hosts:\n      - localhost:9200\n"
+  }
+]

@@ -1,17 +1,19 @@
 {
   "name": "tram-ui",
-  "version": "1.4.2",
+  "version": "1.4.3",
   "private": true,
   "scripts": {
     "dev": "vite",
     "build": "vite build",
-    "preview": "vite preview"
+    "preview": "vite preview",
+    "test:browser": "node ../../tests/browser/run.mjs"
   },
   "dependencies": {
     "bootstrap": "^5.3.3",
     "bootstrap-icons": "^1.11.3"
   },
   "devDependencies": {
+    "playwright": "1.63.0",
     "vite": "^5.4.0"
   }
 }

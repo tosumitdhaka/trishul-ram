@@ -275,7 +275,11 @@ class TestSFTPSourceFileDone:
         assert results == []
 
     def test_min_age_gate_skips_young_and_reads_old(self):
-        stats = {"old.xml": (10, NOW - 3600), "new.xml": (10, NOW - 5)}
+        # Fresh now: a module-level NOW captured at collection can be minutes
+        # stale by the time this test executes in the full suite, aging the
+        # "young" file past the 60s gate and inverting the assertion.
+        now = time.time()
+        stats = {"old.xml": (10, now - 3600), "new.xml": (10, now - 5)}
         mock_sftp, mock_transport = self._make_client(
             {"old.xml": b"old", "new.xml": b"new"}, stats=stats
         )

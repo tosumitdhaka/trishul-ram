@@ -45,8 +45,15 @@
           <i class="bi bi-x-lg"></i>
         </button>
       </div>
-      <textarea id="editor-textarea" class="editor-body editor-textarea w-100"
-                spellcheck="false" placeholder="Paste or type YAML pipeline definition…"></textarea>
+      <div class="editor-code-wrap">
+        <div class="editor-gutter" id="editor-gutter" aria-hidden="true"></div>
+        <div class="editor-canvas">
+          <pre class="editor-highlight" id="editor-highlight" aria-hidden="true"><code></code></pre>
+          <textarea id="editor-textarea" class="editor-body editor-textarea"
+                    spellcheck="false" wrap="off"
+                    placeholder="Paste or type YAML pipeline definition…"></textarea>
+        </div>
+      </div>
     </div>
   </div>
   <div class="col-12 col-xl-4 d-flex">

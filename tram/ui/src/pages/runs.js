@@ -1,33 +1,58 @@
 import { api } from '../api.js'
 import { router } from '../router.js'
-import { downloadBlob, getSavedPollIntervalMs, renderTableState, setOfflineBanner, toast } from '../utils.js'
+import { createPageController } from '../page.js'
+import { downloadBlob, getSavedPollIntervalMs, toast } from '../utils.js'
 import { renderRunsTable } from './runs_table.js'
 
 const RUN_LIST_LIMIT = 200
 const RUN_EXPORT_LIMIT = 1000
 
 let _runs = []
+let _total = null    // matching runs for the current filters (null = unknown, no persistence)
 let _hasMore = false
 let _autoRefresh = true
-let _pollTimer = null
-let _focusRunId = null
-let _focusedOnce = false
+let _booted = false
+
+const controller = createPageController({
+  page: 'runs',
+  fetch: async () => {
+    if (!_booted) {
+      // One-time page setup: the pipeline filter dropdown + deep-link filters.
+      const pipelines = await api.pipelines.list()
+      populatePipelineSelect(pipelines)
+      applyRouteFilters()
+      _booted = true
+    }
+    const [runs, count] = await Promise.all([
+      api.runs.list(buildRunParams()),
+      api.runs.count(buildCountParams()).catch(() => ({ total: null })),
+    ])
+    return { runs, total: count?.total ?? null }
+  },
+  render: ({ runs, total }) => {
+    _runs = runs
+    _total = total
+    _hasMore = computeHasMore(runs)
+    renderRuns(_runs)
+    updateCount()
+  },
+  pollMs: () => getSavedPollIntervalMs(),
+  // QW6 pause/resume: the timer keeps ticking but skips fetches while paused.
+  pollEnabled: () => _autoRefresh,
+  tableBody: () => document.getElementById('runs-body'),
+})
 
 export async function init() {
   _runs = []
+  _total = null
   _hasMore = false
   _autoRefresh = true
+  _booted = false
   updateAutoRefreshBtn()
-  if (_pollTimer) { clearInterval(_pollTimer); _pollTimer = null }
 
   const onFilterChange = () => {
-    // Changing filters invalidates a deep-linked run focus.
-    if (_focusRunId) {
-      _focusRunId = null
-      router.replaceRoute('runs')
-    }
     syncRouteFilters()
-    void loadFiltered().catch(e => toast(e.message, 'error'))
+    void controller.refresh()
   }
   document.getElementById('runs-pipeline')?.addEventListener('change', onFilterChange)
   document.getElementById('runs-status')?.addEventListener('change',   onFilterChange)
@@ -37,27 +62,7 @@ export async function init() {
   document.getElementById('runs-autorefresh-btn')?.addEventListener('click', toggleAutoRefresh)
   document.getElementById('runs-more-btn')?.addEventListener('click', () => { void loadMore() })
 
-  _pollTimer = setInterval(() => {
-    if (!document.getElementById('runs-table')) { clearInterval(_pollTimer); _pollTimer = null; return }
-    if (!_autoRefresh) return
-    loadFiltered().catch(() => setOfflineBanner(true))
-  }, getSavedPollIntervalMs())
-
-  await loadInitial()
-}
-
-async function loadInitial() {
-  renderTableState(document.getElementById('runs-body'), 'loading')
-  try {
-    const pipelines = await api.pipelines.list()
-    populatePipelineSelect(pipelines)
-    applyRouteFilters()
-    await loadFiltered()
-  } catch (e) {
-    renderTableState(document.getElementById('runs-body'), 'error', e.message, {
-      onRetry: () => { void loadInitial() },
-    })
-  }
+  await controller.mount()
 }
 
 function buildRunParams(limit = RUN_LIST_LIMIT, offset = 0) {
@@ -71,13 +76,23 @@ function buildRunParams(limit = RUN_LIST_LIMIT, offset = 0) {
   return params
 }
 
-async function loadFiltered() {
-  const runs = await api.runs.list(buildRunParams())
-  _runs = runs
-  _hasMore = runs.length >= RUN_LIST_LIMIT
-  renderRuns(_runs)
-  setOfflineBanner(false)
-  updateCount()
+// Filter params for the count endpoint — same filters, no pagination.
+function buildCountParams() {
+  const params = {}
+  const pipeline = document.getElementById('runs-pipeline')?.value || ''
+  const status   = document.getElementById('runs-status')?.value   || ''
+  const from     = document.getElementById('runs-from')?.value     || ''
+  if (pipeline) params.pipeline = pipeline
+  if (status)   params.status   = status
+  if (from)     params.from_dt  = new Date(`${from}T00:00:00`).toISOString()
+  return params
+}
+
+// With a known total the cut-off is exact; without persistence fall back to
+// the page-full heuristic.
+function computeHasMore(runs) {
+  if (_total !== null) return runs.length < _total
+  return runs.length >= RUN_LIST_LIMIT
 }
 
 // Appends the next page. Browsing deeper than the first page pauses
@@ -89,14 +104,12 @@ async function loadMore() {
   try {
     const more = await api.runs.list(buildRunParams(RUN_LIST_LIMIT, _runs.length))
     _runs = _runs.concat(more)
-    _hasMore = more.length >= RUN_LIST_LIMIT
+    _hasMore = computeHasMore(_runs)
     renderRuns(_runs)
     updateCount()
     if (_autoRefresh) {
       _autoRefresh = false
-  _focusRunId = null
-  _focusedOnce = false
-  updateAutoRefreshBtn()
+      updateAutoRefreshBtn()
     }
   } catch (e) {
     toast(e.message, 'error')
@@ -109,7 +122,7 @@ function toggleAutoRefresh() {
   _autoRefresh = !_autoRefresh
   if (_autoRefresh) {
     // Resuming reloads the latest page — the expanded history is replaced.
-    loadFiltered().catch(() => setOfflineBanner(true))
+    void controller.pollNow()
   }
   updateAutoRefreshBtn()
 }
@@ -127,12 +140,11 @@ function updateAutoRefreshBtn() {
   if (icon) icon.className = _autoRefresh ? 'bi bi-pause-circle-fill' : 'bi bi-play-circle-fill'
 }
 
-// Deep link state: #runs/:runId?pipeline=x&status=failed&from=2026-09-01.
+// Deep link state: #runs?pipeline=x&status=failed&from=2026-09-01.
 // Filters initialize from the route; every change is written back with
 // replaceState so the URL stays shareable without spamming Back.
 function applyRouteFilters() {
-  const { params, query } = router.route()
-  _focusRunId = params[0] ? String(params[0]) : null
+  const { query } = router.route()
   const pipeline = document.getElementById('runs-pipeline')
   const status = document.getElementById('runs-status')
   const from = document.getElementById('runs-from')
@@ -185,9 +197,7 @@ async function refreshRuns() {
   const icon = document.getElementById('runs-refresh-icon')
   if (icon) icon.className = 'bi bi-arrow-clockwise spin'
   try {
-    await loadFiltered()
-  } catch (e) {
-    toast(e.message, 'error')
+    await controller.refresh()
   } finally {
     if (icon) icon.className = 'bi bi-arrow-clockwise'
   }
@@ -213,19 +223,6 @@ function renderRuns(runs) {
     rowIdPrefix: 'runs',
     emptyMessage: 'No runs found',
   })
-  if (_focusRunId) _highlightFocusedRun()
-}
-
-// Deep link (#runs/:runId) — scroll to the run and keep it highlighted
-// across polls until the operator changes filters.
-function _highlightFocusedRun() {
-  const row = document.querySelector(`tr[data-run-id="${CSS.escape(_focusRunId)}"]`)
-  if (!row) return
-  row.classList.add('run-row-focused')
-  if (!_focusedOnce) {
-    row.scrollIntoView({ block: 'center', behavior: 'smooth' })
-    _focusedOnce = true
-  }
 }
 
 function updateCount() {
@@ -237,6 +234,13 @@ function updateCount() {
     pill.textContent = ''
     return
   }
+  if (_total !== null) {
+    pill.textContent = _hasMore
+      ? `showing ${_runs.length} of ${_total}`
+      : `${_total} run${_total === 1 ? '' : 's'}`
+    return
+  }
+  // No persistence → no count endpoint; fall back to the page-full heuristic.
   pill.textContent = _hasMore
     ? `showing latest ${_runs.length} — more available`
     : `${_runs.length} run${_runs.length === 1 ? '' : 's'}`

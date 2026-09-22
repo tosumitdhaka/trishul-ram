@@ -1,3 +1,4 @@
+import { navigate } from '../router.js'
 import { api } from '../api.js'
 import { setAuthPending } from '../auth_state.js'
 import { setStatusMessage } from '../utils.js'
@@ -27,7 +28,7 @@ export async function init() {
       document.getElementById('app-shell').hidden = false
       document.getElementById('login-overlay').hidden = true
       document.getElementById('logout-btn').hidden = false
-      window.navigate(window.location.hash.slice(1) || 'dashboard')
+      navigate(window.location.hash.slice(1) || 'dashboard')
     } catch (e) {
       showErr(e.message)
     } finally {

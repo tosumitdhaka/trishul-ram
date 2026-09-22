@@ -10,7 +10,7 @@ from fastapi import APIRouter, Request
 from fastapi.concurrency import run_in_threadpool
 
 from tram import __version__
-from tram.api.config_schema import SCHEMA_FIELDS
+from tram.api.config_schema import SCHEMA_FIELDS, schema_version
 from tram.api.routers._stream_views import build_cluster_streams
 from tram.registry.registry import _serializers, _sinks, _sources, _transforms, list_plugins
 
@@ -135,6 +135,13 @@ async def plugins() -> dict:
         "serializers": _build_plugin_details("serializer", _serializers),
         "transforms": _build_plugin_details("transform", _transforms),
     }
+    payload["schema_mismatch"] = {
+        "sources": _schema_mismatch("source", _sources),
+        "sinks": _schema_mismatch("sink", _sinks),
+        "serializers": _schema_mismatch("serializer", _serializers),
+        "transforms": _schema_mismatch("transform", _transforms),
+    }
+    payload["schema_version"] = schema_version()
     return payload
 
 
@@ -191,6 +198,31 @@ def _build_plugin_details(category: str, registry: dict[str, type]) -> list[dict
             }
         )
     return items
+
+
+def _schema_mismatch(category: str, registry: dict[str, type]) -> dict[str, list[str]]:
+    """Cross-check the Pydantic union (``SCHEMA_FIELDS[category]``) against the
+    runtime plugin registry (Issue #24, Option A — both lists are in memory
+    here). Flags types present in one list but not the other:
+
+    - ``union_only`` — in the union, so config validation passes, but no class
+      is registered: the run fails later with ``PluginNotFoundError``.
+    - ``registry_only`` — registered/selectable, but missing from the union:
+      a pipeline using it fails Pydantic validation with a discriminator
+      error, and the AI context renders it as "(no schema available)".
+
+    Returns a dict with only the non-empty lists; ``{}`` means the two lists
+    are in sync for this category."""
+    schema_keys = set(SCHEMA_FIELDS.get(category, {}).keys())
+    registry_keys = set(registry.keys())
+    mismatch: dict[str, list[str]] = {}
+    union_only = sorted(schema_keys - registry_keys)
+    if union_only:
+        mismatch["union_only"] = union_only
+    registry_only = sorted(registry_keys - schema_keys)
+    if registry_only:
+        mismatch["registry_only"] = registry_only
+    return mismatch
 
 
 @router.get("/api/cluster/nodes")

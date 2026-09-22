@@ -14,7 +14,7 @@ from urllib.parse import urlsplit
 import yaml
 from fastapi import APIRouter, HTTPException, Request
 
-from tram.api.config_schema import SCHEMA_FIELDS
+from tram.api.config_schema import SCHEMA_FIELDS, schema_version
 from tram.api.routers.ai_docs import build_ai_context
 from tram.core.config import ai_audit_enabled
 from tram.core.exceptions import ConfigError
@@ -589,6 +589,7 @@ def _audit_ai_call(
                 ts=datetime.now(UTC).isoformat(),
                 mode=mode, client=client, provider=provider, model=model,
                 tokens_in=tokens_in, tokens_out=tokens_out, ok=ok,
+                schema_version=schema_version(),
             )
         except Exception:
             # Audit persistence must never break the AI call itself.
@@ -619,6 +620,7 @@ async def ai_status(request: Request) -> dict:
         "enabled": enabled,
         "provider": cfg["provider"] if enabled else None,
         "model": _resolve_model(cfg) if enabled else None,
+        "schema_version": schema_version(),
     }
 
 

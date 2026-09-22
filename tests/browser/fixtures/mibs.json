@@ -1,0 +1,4 @@
+[
+  {"name": "CISCO-EPM-NOTIFICATION-MIB", "raw_available": true, "raw_file": "CISCO-EPM-NOTIFICATION-MIB.mib", "raw_size_bytes": 36183, "raw_origin": "local", "compiled_available": true, "compiled_file": "CISCO-EPM-NOTIFICATION-MIB.py", "compiled_size_bytes": 32413},
+  {"name": "SNMPv2-MIB", "raw_available": true, "raw_file": "SNMPv2-MIB", "raw_size_bytes": 31542, "raw_origin": "bundled", "compiled_available": true, "compiled_file": "SNMPv2-MIB.py", "compiled_size_bytes": 26346}
+]

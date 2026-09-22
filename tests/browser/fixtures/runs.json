@@ -1,0 +1,37 @@
+[
+  {
+    "run_id": "7987ea36-c017-43a6-972f-e92098c2d576",
+    "pipeline": "sftp-pm-to-kafka",
+    "status": "success",
+    "started_at": "2026-09-22T06:30:07.924436+00:00",
+    "finished_at": "2026-09-22T06:30:14.261716+00:00",
+    "records_in": 6,
+    "records_out": 0,
+    "records_skipped": 9,
+    "bytes_in": 621,
+    "bytes_out": 0,
+    "dlq_count": 0,
+    "error": null,
+    "errors": [
+      "Kafka producer init failed: NoBrokersAvailable",
+      "Records skipped — no sink wrote successfully (condition filtered all records or every sink failed/circuit-open)"
+    ],
+    "node": "trishul-ram-worker-0"
+  },
+  {
+    "run_id": "479d6f4d-fa80-4e79-976c-6a6c1b84925c",
+    "pipeline": "sftp-pm-to-kafka",
+    "status": "failed",
+    "started_at": "2026-09-22T06:17:37.887922+00:00",
+    "finished_at": "2026-09-22T06:18:08.143342+00:00",
+    "records_in": 0,
+    "records_out": 0,
+    "records_skipped": 0,
+    "bytes_in": 0,
+    "bytes_out": 0,
+    "dlq_count": 0,
+    "error": "Manager recovered no active worker batch run for pipeline marked running",
+    "errors": [],
+    "node": "trishul-ram-manager-0"
+  }
+]

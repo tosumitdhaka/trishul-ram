@@ -227,17 +227,21 @@ def _create_tables(engine: Engine) -> None:
         # v1.4.1 (A10): AI-audit append-only log — one row per AI call when
         # TRAM_AI_AUDIT is on. Not upserted: every call inserts a fresh UUID,
         # rows are never updated or deleted (append-only audit trail).
+        # schema_version (v1.4.3, Issue #24): the content hash of SCHEMA_FIELDS
+        # the prompt was built against — makes each row attributable to the
+        # exact schema knowledge that produced the call.
         conn.execute(text("""
             CREATE TABLE IF NOT EXISTS ai_usage (
-                id         TEXT PRIMARY KEY NOT NULL,
-                ts         TEXT NOT NULL,
-                mode       TEXT NOT NULL,
-                client     TEXT NOT NULL,
-                provider   TEXT NOT NULL,
-                model      TEXT NOT NULL,
-                tokens_in  INTEGER,
-                tokens_out INTEGER,
-                ok         INTEGER NOT NULL DEFAULT 1
+                id              TEXT PRIMARY KEY NOT NULL,
+                ts              TEXT NOT NULL,
+                mode            TEXT NOT NULL,
+                client          TEXT NOT NULL,
+                provider        TEXT NOT NULL,
+                model           TEXT NOT NULL,
+                tokens_in       INTEGER,
+                tokens_out      INTEGER,
+                ok              INTEGER NOT NULL DEFAULT 1,
+                schema_version  TEXT
             )
         """))
         conn.execute(text(
@@ -259,6 +263,11 @@ def _create_tables(engine: Engine) -> None:
         # 'stopped': user explicitly stopped this pipeline; sync must NOT restart it
         #            replaces 'paused' (same semantics, clearer name)
         _add_column_if_missing(conn, dialect, "registered_pipelines", "stopped", "INTEGER NOT NULL DEFAULT 0")
+        # v1.4.3 (Issue #24): schema identity on AI-audit rows — pre-existing
+        # databases (v1.4.1/v1.4.2) get the column added; old rows stay NULL
+        # (they predate the schema hash). The deployed /data/tram.db must not
+        # break on upgrade.
+        _add_column_if_missing(conn, dialect, "ai_usage", "schema_version", "TEXT")
 
         # v1.2.0 data migration: copy paused=1 → stopped=1 for existing rows
         try:
@@ -838,16 +847,19 @@ class TramDB:
         tokens_in: int | None,
         tokens_out: int | None,
         ok: bool,
+        schema_version: str | None = None,
     ) -> None:
         """Append one AI-call audit row. Append-only: every call gets a fresh
-        UUID, so nothing is ever updated or deleted."""
+        UUID, so nothing is ever updated or deleted. ``schema_version`` is the
+        content hash of the connector schema the prompt was built against
+        (Issue #24); None for callers/rows that predate the field."""
         with self._engine.begin() as conn:
             conn.execute(
                 text("""
                     INSERT INTO ai_usage
-                      (id, ts, mode, client, provider, model, tokens_in, tokens_out, ok)
+                      (id, ts, mode, client, provider, model, tokens_in, tokens_out, ok, schema_version)
                     VALUES
-                      (:id, :ts, :mode, :client, :provider, :model, :tokens_in, :tokens_out, :ok)
+                      (:id, :ts, :mode, :client, :provider, :model, :tokens_in, :tokens_out, :ok, :schema_version)
                 """),
                 {
                     "id": str(uuid.uuid4()),
@@ -859,6 +871,7 @@ class TramDB:
                     "tokens_in": tokens_in,
                     "tokens_out": tokens_out,
                     "ok": 1 if ok else 0,
+                    "schema_version": schema_version,
                 },
             )
 
@@ -867,7 +880,7 @@ class TramDB:
         with self._engine.connect() as conn:
             rows = conn.execute(
                 text("""
-                    SELECT id, ts, mode, client, provider, model, tokens_in, tokens_out, ok
+                    SELECT id, ts, mode, client, provider, model, tokens_in, tokens_out, ok, schema_version
                     FROM ai_usage
                     ORDER BY ts DESC, id DESC
                     LIMIT :limit

@@ -1,6 +1,7 @@
 import { api } from '../api.js'
 import { router } from '../router.js'
-import { bindDataActions, confirmAction, downloadText, getSavedPollIntervalMs, relTime, renderTableState, schedBadge, setOfflineBanner, statusBadge, esc, toast, pipelineStartFeedback } from '../utils.js'
+import { createPageController } from '../page.js'
+import { bindDataActions, confirmAction, downloadText, getSavedPollIntervalMs, relTime, schedBadge, statusBadge, esc, toast, pipelineStartFeedback } from '../utils.js'
 import { monitorTriggeredRun, runOutcomeToast } from '../run_monitor.js'
 import { filterTemplates, normalizeTemplates, populateTemplateFilters, templateFlowText, templateScheduleClass } from './template_helpers.js'
 import { renderDiffStats, renderNumberedDiffLine, renderSideBySideYamlDiff } from '../yaml_diff.js'
@@ -8,44 +9,29 @@ import * as bootstrap from 'bootstrap'
 
 let _all = []
 let _templates = []
-let _pollTimer = null
 let _runMonitorToken = 0
 let _pendingImportYaml = null
 let _pendingImportName = null
 
-export async function init() {
-  if (_pollTimer) { clearInterval(_pollTimer); _pollTimer = null }
-  _pollTimer = setInterval(() => {
-    if (!document.getElementById('pl-table')) { clearInterval(_pollTimer); _pollTimer = null; return }
-    refresh().catch(() => setOfflineBanner(true))
-  }, getSavedPollIntervalMs())
+const controller = createPageController({
+  page: 'pipelines',
+  fetch: () => api.pipelines.list(),
+  render: (pipelines) => {
+    _all = pipelines
+    renderTable(filteredPipelines())
+  },
+  pollMs: () => getSavedPollIntervalMs(),
+  tableBody: () => document.getElementById('pl-body'),
+})
 
+export async function init() {
   wireToolbar()
   wireTableActions()
   wireImportFlow()
   wireTemplateFlow()
 
-  await loadInitial()
-}
-
-async function loadInitial() {
-  renderTableState(document.getElementById('pl-body'), 'loading')
-  try {
-    _all = await api.pipelines.list()
-    setOfflineBanner(false)
-    renderTable(filteredPipelines())
-    _maybeOpenTemplatesFromRoute()
-  } catch (e) {
-    renderTableState(document.getElementById('pl-body'), 'error', e.message, {
-      onRetry: () => { void loadInitial() },
-    })
-  }
-}
-
-async function refresh() {
-  _all = await api.pipelines.list()
-  setOfflineBanner(false)
-  renderTable(filteredPipelines())
+  const ok = await controller.mount()
+  if (ok) _maybeOpenTemplatesFromRoute()
 }
 
 function wireToolbar() {
@@ -111,7 +97,7 @@ function wireImportFlow() {
     try {
       await api.pipelines.update(_pendingImportName, _pendingImportYaml)
       toast(`Updated ${_pendingImportName}`)
-      await refresh()
+      await controller.refresh()
     } catch (e) {
       toast(e.message, 'error')
     }
@@ -127,7 +113,7 @@ function wireImportFlow() {
     try {
       await api.pipelines.create(patched)
       toast(`Imported as ${newName}`)
-      await refresh()
+      await controller.refresh()
     } catch (e) {
       toast(e.message, 'error')
     }
@@ -177,9 +163,7 @@ async function refreshWithSpinner() {
   if (btn) btn.disabled = true
   if (icon) icon.className = 'bi bi-arrow-clockwise spin'
   try {
-    await refresh()
-  } catch (e) {
-    toast(e.message, 'error')
+    await controller.refresh()
   } finally {
     if (btn) btn.disabled = false
     if (icon) icon.className = 'bi bi-arrow-clockwise'
@@ -200,7 +184,7 @@ async function reloadPipelines() {
   try {
     await api.pipelines.reload()
     toast('Pipelines reloaded')
-    await refresh()
+    await controller.refresh()
   } catch (e) {
     toast(e.message, 'error')
   } finally {
@@ -210,15 +194,15 @@ async function reloadPipelines() {
 }
 
 function openNewPipeline() {
-  navigate('editor?return=pipelines')
+  router.navigate('create?return=pipelines')
 }
 
 function openPipelineDetail(name) {
-  navigate(`detail/${encodeURIComponent(name)}`)
+  router.navigate(`detail/${encodeURIComponent(name)}`)
 }
 
 function editPipeline(name) {
-  navigate(`editor/${encodeURIComponent(name)}?return=pipelines`)
+  router.navigate(`editor/${encodeURIComponent(name)}?return=pipelines`)
 }
 
 async function startPipeline(name) {
@@ -226,7 +210,7 @@ async function startPipeline(name) {
     const result = await api.pipelines.start(name)
     const feedback = pipelineStartFeedback(name, result)
     toast(feedback.message, feedback.type)
-    await refresh()
+    await controller.refresh()
   } catch (e) {
     toast(e.message, 'error')
   }
@@ -243,7 +227,7 @@ async function stopPipeline(name) {
   try {
     await api.pipelines.stop(name)
     toast(`Stopped ${name}`)
-    await refresh()
+    await controller.refresh()
   } catch (e) {
     toast(e.message, 'error')
   }
@@ -252,7 +236,7 @@ async function stopPipeline(name) {
 async function runPipeline(name) {
   try {
     const result = await api.pipelines.run(name)
-    await refresh()
+    await controller.refresh()
     if (result?.run_id) {
       const token = ++_runMonitorToken
       void _monitorTriggeredRun(name, result.run_id, token).catch((err) => {
@@ -304,7 +288,7 @@ async function handleImportSelection(event) {
     try {
       await api.pipelines.create(yaml)
       toast(`Imported ${name}`)
-      await refresh()
+      await controller.refresh()
     } catch (e) {
       toast(e.message, 'error')
     }
@@ -424,7 +408,7 @@ function doTemplateDeploy(template) {
   document.body.classList.remove('modal-open')
   document.body.style.removeProperty('overflow')
   document.body.style.removeProperty('padding-right')
-  navigate(`editor?template=${encodeURIComponent(template.name)}&return=pipelines`)
+  router.navigate(`editor?template=${encodeURIComponent(template.name)}&return=pipelines`)
 }
 
 // #pipelines/templates deep link — open the templates modal after load.
@@ -519,7 +503,7 @@ async function _monitorTriggeredRun(name, runId, token) {
   })
   if (token !== _runMonitorToken || !document.getElementById('pl-table')) return
 
-  await refresh()
+  await controller.refresh()
   const feedback = runOutcomeToast(run, { name })
   if (feedback) {
     toast(feedback.message, feedback.type)

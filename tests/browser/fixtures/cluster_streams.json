@@ -1,0 +1,54 @@
+{
+  "mode": "manager",
+  "streams": [
+    {
+      "pipeline_name": "snmp-to-kafka",
+      "placement_group_id": "snmp-to-kafka-20260921102806-2da115",
+      "status": "running",
+      "target_count": "1",
+      "started_at": "2026-09-21T10:28:06.650742Z",
+      "slot_count": 1,
+      "active_slots": 1,
+      "records_in": 0,
+      "records_out": 0,
+      "records_skipped": 0,
+      "dlq_count": 0,
+      "error_count": 0,
+      "bytes_in": 0,
+      "bytes_out": 0,
+      "records_in_per_sec": 0.0,
+      "records_out_per_sec": 0.0,
+      "bytes_in_per_sec": 0.0,
+      "bytes_out_per_sec": 0.0,
+      "slots": [
+        {
+          "worker_index": 0,
+          "worker_id": "trishul-ram-worker-1",
+          "worker_url": "http://trishul-ram-worker-1.trishul-ram-worker.trishul-ram.svc.cluster.local:8766",
+          "run_id_prefix": "snmp-to-kafka-20260921102806-2da115",
+          "current_run_id": "snmp-to-kafka-20260921102806-2da115-r1",
+          "status": "running",
+          "restart_count": 1,
+          "stats": {
+            "schedule_type": "stream",
+            "timestamp": null,
+            "uptime_seconds": 845.871183,
+            "records_in": 0,
+            "records_out": 0,
+            "records_skipped": 0,
+            "dlq_count": 0,
+            "error_count": 0,
+            "bytes_in": 0,
+            "bytes_out": 0,
+            "errors_last_window": [],
+            "stale": false,
+            "records_in_per_sec": 0.0,
+            "records_out_per_sec": 0.0,
+            "bytes_in_per_sec": 0.0,
+            "bytes_out_per_sec": 0.0
+          }
+        }
+      ]
+    }
+  ]
+}

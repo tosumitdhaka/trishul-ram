@@ -153,6 +153,7 @@ export const api = {
   // ── Runs ───────────────────────────────────────────────────────────────────
   runs: {
     list:      (params = {}) => req(`/api/runs${buildQuery(params)}`),
+    count:     (params = {}) => req(`/api/runs/count${buildQuery(params)}`),
     get:       (id)          => req(`/api/runs/${id}`),
     exportCsv: (params = {}) => reqBlob(`/api/runs${buildQuery({ ...params, format: 'csv' })}`),
   },

@@ -1,6 +1,7 @@
 import { api } from '../api.js'
 import { router } from '../router.js'
 import { bindDataActions, esc, setStatusMessage, toast } from '../utils.js'
+import { highlightYaml } from '../yaml_highlight.js'
 import {
   renderCodeOnlyDiffLine,
   renderDiffStats,
@@ -104,6 +105,7 @@ function _restoreDraft() {
   const draft = _readDraft()
   if (!draft) { _hideDraftBar(); return }
   _textarea.value = draft.yaml
+  _renderCode()
   // The restored draft replaces the AI output — retire the AI undo snapshot
   // so "Undo AI change" cannot yank the draft out from under the operator.
   _discardAiUndo()
@@ -132,10 +134,10 @@ function _leaveEditor(pipelineName = null) {
   // successful save _editorSave clears it explicitly first.
   _saveDraftNow()
   if (_returnTo === 'detail' && pipelineName) {
-    navigate(`detail/${encodeURIComponent(pipelineName)}`)
+    router.navigate(`detail/${encodeURIComponent(pipelineName)}`)
     return
   }
-  navigate(_returnTo === 'dashboard' ? 'dashboard' : 'pipelines')
+  router.navigate(_returnTo === 'dashboard' ? 'dashboard' : 'pipelines')
 }
 
 export async function init() {
@@ -169,14 +171,29 @@ export async function init() {
       const yaml = p.yaml || p.raw || JSON.stringify(p, null, 2)
       if (ta) ta.value = yaml
       _originalYaml = yaml
+      _renderCode()
     } catch (e) {
       toast(`Could not load pipeline: ${e.message}`, 'error')
       if (ta) ta.value = TEMPLATE
+      _renderCode()
     }
   } else {
     document.getElementById('editor-diff-btn')?.setAttribute('hidden', '')
     if (titleEl) titleEl.textContent = 'New Pipeline'
     if (ta) ta.value = TEMPLATE
+    // Wizard hand-off: #editor?from=wizard — the unsaved YAML travels via
+    // sessionStorage (never a window global), tied to this explicit route
+    // flag. The key is dropped on first edit; after that the editor's own
+    // draft guard owns persistence, so a refresh recovers the user's work.
+    if (query.from === 'wizard') {
+      let prefill = null
+      try { prefill = sessionStorage.getItem('tram_wizard_prefill') } catch { /**/ }
+      if (prefill) {
+        if (ta) ta.value = prefill
+        _renderCode()
+        toast('Wizard YAML loaded — dry-run, then save')
+      }
+    }
     // New-from-template: #editor?template=<name> — the template is fetched
     // by name so a refresh recovers it without in-memory handoffs.
     if (query.template) {
@@ -185,6 +202,7 @@ export async function init() {
         const template = (templates || []).find(t => t.name === query.template)
         if (template?.yaml) {
           if (ta) ta.value = template.yaml
+          _renderCode()
           toast(`Template "${template.name}" loaded — edit name and connection details, then save`)
         } else {
           toast(`Template "${query.template}" not found — started from the default template`, 'warning')
@@ -216,17 +234,158 @@ export async function init() {
       const end   = ta.selectionEnd
       ta.value = ta.value.slice(0, start) + '  ' + ta.value.slice(end)
       ta.selectionStart = ta.selectionEnd = start + 2
+      _renderCode()
     }
   })
 
   // ── Typing retires the AI undo affordance and schedules a draft save ───────
   ta?.addEventListener('input', _onEditorInput)
+
+  // ── Line-number gutter + YAML highlight layer ─────────────────────────────
+  _initCodeSurfaces(ta)
 }
 
 function _onEditorInput() {
   _discardAiUndo()
   _hideDraftBar()
+  // First edit consumes the wizard hand-off — from here the draft guard owns
+  // persistence, so the one-shot prefill can't overwrite user changes on a
+  // refresh.
+  try { sessionStorage.removeItem('tram_wizard_prefill') } catch { /**/ }
   _scheduleDraftSave()
+}
+
+// ── Line-number gutter, highlight layer, error anchoring ─────────────────────
+//
+// The textarea is the single source of truth for input; a read-only <pre>
+// behind it renders tokenized YAML and a sibling gutter renders line
+// numbers. Metrics (font, 20px line-height, padding) are shared exactly so
+// the layers stay aligned; scroll is mirrored from the textarea.
+
+const LINE_HEIGHT_PX = 20
+let _codeErrorLines = new Set()
+
+function _initCodeSurfaces(ta) {
+  const gutter = document.getElementById('editor-gutter')
+  const pre = document.getElementById('editor-highlight')
+  if (!ta || !gutter || !pre) return
+
+  ta.addEventListener('input', () => {
+    _codeErrorLines = new Set()
+    _renderCode()
+  })
+  ta.addEventListener('scroll', () => {
+    pre.scrollTop = ta.scrollTop
+    pre.scrollLeft = ta.scrollLeft
+    gutter.scrollTop = ta.scrollTop
+  })
+  // IME composition: the textarea's own text is transparent, so its
+  // composition preview would be invisible — show it during composition by
+  // hiding the highlight layer (text becomes visible via .composing rules).
+  ta.addEventListener('compositionstart', () => {
+    pre.classList.add('composing')
+    ta.classList.add('composing')
+  })
+  ta.addEventListener('compositionend', () => {
+    pre.classList.remove('composing')
+    ta.classList.remove('composing')
+    _renderCode()
+  })
+  // Gutter click: move the caret to that line without losing focus.
+  gutter.addEventListener('mousedown', (event) => {
+    const lineEl = event.target.closest('.editor-gutter-line')
+    if (!lineEl) return
+    event.preventDefault()
+    const line = parseInt(lineEl.dataset.line || '0', 10)
+    if (line > 0) _gotoLine(line)
+  })
+
+  _renderCode()
+}
+
+function _renderCode() {
+  const ta = _textarea
+  const gutter = document.getElementById('editor-gutter')
+  const code = document.querySelector('#editor-highlight code')
+  if (!ta || !gutter || !code) return
+  const lineCount = ta.value.split('\n').length
+  code.innerHTML = highlightYaml(ta.value)
+  let gutterHtml = ''
+  for (let i = 1; i <= lineCount; i++) {
+    gutterHtml += `<div class="editor-gutter-line${_codeErrorLines.has(i) ? ' editor-gutter-error' : ''}" data-line="${i}">${i}</div>`
+  }
+  gutter.innerHTML = gutterHtml
+
+  const pre = document.getElementById('editor-highlight')
+  if (pre) {
+    pre.scrollTop = ta.scrollTop
+    pre.scrollLeft = ta.scrollLeft
+  }
+  gutter.scrollTop = ta.scrollTop
+  // Mirror error marks onto the highlight layer's line spans.
+  document.querySelectorAll('#editor-highlight .yl').forEach((el) => {
+    el.classList.toggle('yl-error', _codeErrorLines.has(parseInt(el.dataset.line || '0', 10)))
+  })
+}
+
+function _gotoLine(line) {
+  const ta = _textarea
+  if (!ta || line < 1) return
+  const lines = ta.value.split('\n')
+  const clamped = Math.min(line, lines.length)
+  let offset = 0
+  for (let i = 0; i < clamped - 1; i++) offset += lines[i].length + 1
+  ta.focus()
+  ta.setSelectionRange(offset, offset)
+  // Bring the line into comfortable view.
+  ta.scrollTop = Math.max(0, (clamped - 1) * LINE_HEIGHT_PX - ta.clientHeight / 2 + LINE_HEIGHT_PX)
+}
+
+// Best-effort mapping of a dry-run/save issue string to a YAML line:
+//  1. explicit "line N" hints (PyYAML parse errors carry them), then
+//  2. the first line defining a key named in the issue — field paths from
+//     Pydantic errors (e.g. "sinks.0.topic") resolve via their segments,
+//     preferring the longest matching key.
+function _issueLine(issue, lines) {
+  const text = String(issue || '')
+  const lineHint = text.match(/line (\d+)/i)
+  if (lineHint) {
+    const n = parseInt(lineHint[1], 10)
+    if (n >= 1 && n <= lines.length) return n - 1
+  }
+  const keys = Array.from(text.matchAll(/[A-Za-z_][A-Za-z0-9_.-]*/g), (m) => m[0])
+  const unique = [...new Set(keys)].sort((a, b) => b.length - a.length)
+  for (const key of unique) {
+    const candidates = [key, key.split('.')[0], key.split('.').pop()].filter(Boolean)
+    for (const candidate of candidates) {
+      const pattern = new RegExp(`^(\\s*)(-\\s+)?${candidate.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}\\s*:`)
+      const idx = lines.findIndex((l) => pattern.test(l))
+      if (idx >= 0) return idx
+    }
+  }
+  return null
+}
+
+// Mark the offending lines in the gutter + highlight layer and scroll the
+// first one into view. Typing or the next successful dry-run clears the marks.
+function _showYamlErrors(issues) {
+  const ta = _textarea
+  if (!ta) return
+  const lines = ta.value.split('\n')
+  const found = new Set()
+  for (const issue of issues || []) {
+    const idx = _issueLine(issue, lines)
+    if (idx !== null) found.add(idx + 1)
+  }
+  _codeErrorLines = found
+  _renderCode()
+  if (found.size) _gotoLine(Math.min(...found))
+}
+
+function _clearYamlErrors() {
+  if (!_codeErrorLines.size) return
+  _codeErrorLines = new Set()
+  _renderCode()
 }
 
 function _bindEditorActions() {
@@ -249,7 +408,7 @@ function _bindEditorActions() {
   document.getElementById('editor-ai-undo-btn')?.addEventListener('click', _undoAiChange)
   document.getElementById('editor-open-settings-link')?.addEventListener('click', (event) => {
     event.preventDefault()
-    navigate('settings')
+    router.navigate('settings')
   })
   document.getElementById('editor-draft-restore')?.addEventListener('click', _restoreDraft)
   document.getElementById('editor-draft-discard')?.addEventListener('click', _discardDraft)
@@ -363,6 +522,7 @@ function _applyAiYaml(result) {
   if (_textarea) {
     _aiUndoSnapshot = _textarea.value
     _textarea.value = result.yaml
+    _renderCode()
   } else {
     _aiUndoSnapshot = null
   }
@@ -376,6 +536,7 @@ function _applyAiYaml(result) {
 function _undoAiChange() {
   if (_aiUndoSnapshot === null) return
   if (_textarea) _textarea.value = _aiUndoSnapshot
+  _renderCode()
   _aiUndoSnapshot = null
   _hideAiUndo()
   _clearAiValidation()
@@ -487,6 +648,8 @@ function showDryRunResult(result) {
   const ok = result.status === 'ok' || result.valid
   const issues = result.errors || result.issues || []
   _lastDryRunErrors = issues
+  if (ok) _clearYamlErrors()
+  else if (issues.length) _showYamlErrors(issues)
   div.className = 'editor-status-panel'
   div.innerHTML = `
     <div class="editor-status-panel-header">Dry Run</div>
@@ -542,6 +705,9 @@ async function _editorSave() {
     _leaveEditor(_editName)
   } catch (e) {
     toast(e.message, 'error')
+    // Save failures are often field-level validation — anchor them to the
+    // offending line where the message carries a key or line hint.
+    _showYamlErrors([e.message])
   }
 }
 

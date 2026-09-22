@@ -1,7 +1,18 @@
 import { api } from '../api.js'
-import { bindDataActions, confirmAction, downloadText, esc, renderTableState, toast } from '../utils.js'
+import { createPageController } from '../page.js'
+import { bindDataActions, confirmAction, downloadText, esc, toast } from '../utils.js'
 
 let _allMibs = []
+
+const controller = createPageController({
+  page: 'mibs',
+  fetch: () => api.mibs.list(),
+  render: (mibs) => {
+    _allMibs = mibs
+    applyMibFilter()
+  },
+  tableBody: () => document.getElementById('mibs-body'),
+})
 
 export async function init() {
   wireDropZone()
@@ -13,18 +24,7 @@ export async function init() {
     downloadCompiled: async (button) => downloadCompiled(button.dataset.name),
     downloadRaw: async (button) => downloadRaw(button.dataset.name),
   })
-  await loadMibs()
-}
-
-async function loadMibs() {
-  try {
-    _allMibs = await api.mibs.list()
-    applyMibFilter()
-  } catch (e) {
-    renderTableState(document.getElementById('mibs-body'), 'error', e.message, {
-      onRetry: () => { void loadMibs() },
-    })
-  }
+  await controller.mount()
 }
 
 function applyMibFilter() {
@@ -114,7 +114,7 @@ async function uploadMibs() {
   setUploadBusy(false, summary)
   if (ok) {
     toast(`Uploaded ${ok} file${ok > 1 ? 's' : ''}; compiled ${compiledModules} module${compiledModules === 1 ? '' : 's'}${fail ? `; ${fail} failed` : ''}`)
-    await loadMibs()
+    await controller.refresh()
   }
 }
 
@@ -128,7 +128,7 @@ async function downloadRemoteMibs() {
     const compiled = res.compiled?.length || 0
     setDownloadBusy(false, `Downloaded ${names.length} request${names.length === 1 ? '' : 's'}; compiled ${compiled} module${compiled === 1 ? '' : 's'}`)
     toast(`Downloaded ${names.length} request${names.length === 1 ? '' : 's'}; compiled ${compiled} module${compiled === 1 ? '' : 's'}`)
-    await loadMibs()
+    await controller.refresh()
   } catch (e) {
     setDownloadBusy(false, '')
     toast(e.message, 'error')
@@ -147,7 +147,7 @@ async function deleteMib(name) {
   try {
     await api.mibs.delete(name)
     toast('Deleted')
-    await loadMibs()
+    await controller.refresh()
   } catch (e) {
     toast(e.message, 'error')
   }

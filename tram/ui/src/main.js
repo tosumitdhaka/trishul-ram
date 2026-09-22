@@ -3,14 +3,11 @@ import 'bootstrap-icons/font/bootstrap-icons.css'
 import 'bootstrap/dist/js/bootstrap.bundle.min.js'
 import './style.css'
 
-import { router } from './router.js'
+import { router, navigate } from './router.js'
 import { startHealthPoller } from './health.js'
 import { api } from './api.js'
 import { isAuthPending, setAuthPending } from './auth_state.js'
 import loginHtml from './pages/login.html?raw'
-
-// Expose globally so page modules can navigate without importing the router.
-window.navigate = (page, params) => router.navigate(page, params)
 
 function applyTheme(theme) {
   document.documentElement.setAttribute('data-bs-theme', theme)
@@ -61,12 +58,32 @@ function resumeRequestedRoute({ showLogout = false } = {}) {
   if (overlay) overlay.hidden = true
   if (shell) shell.hidden = false
   if (logoutBtn) logoutBtn.hidden = !showLogout
-  window.navigate(window.location.hash.slice(1) || 'dashboard')
+  navigate(window.location.hash.slice(1) || 'dashboard')
 }
 
 function wireShellActions() {
   document.getElementById('topbar-settings-btn')?.addEventListener('click', () => {
-    window.navigate('settings')
+    navigate('settings')
+  })
+
+  // Health card: hover/focus reveal it, click pins it open (touch and
+  // keyboard), Escape or clicking elsewhere unpins.
+  const healthBtn = document.getElementById('health-btn')
+  healthBtn?.addEventListener('click', () => {
+    const open = healthBtn.classList.toggle('open')
+    healthBtn.setAttribute('aria-expanded', String(open))
+  })
+  document.addEventListener('click', (event) => {
+    if (healthBtn && !healthBtn.contains(event.target) && healthBtn.classList.contains('open')) {
+      healthBtn.classList.remove('open')
+      healthBtn.setAttribute('aria-expanded', 'false')
+    }
+  })
+  document.addEventListener('keydown', (event) => {
+    if (event.key === 'Escape' && healthBtn?.classList.contains('open')) {
+      healthBtn.classList.remove('open')
+      healthBtn.setAttribute('aria-expanded', 'false')
+    }
   })
   document.getElementById('theme-btn')?.addEventListener('click', toggleTheme)
   document.getElementById('logout-btn')?.addEventListener('click', logout)
