@@ -53,6 +53,12 @@ jobs:
       - name: Install dependencies
         run: pip install --no-cache-dir -e ".[dev,all]"
 
+      - name: Install Playwright Chromium (gate browser smoke)
+        # Pinned to the exact version in tram/ui/package.json — a mismatched
+        # installer ships a different chromium revision than the suite's
+        # playwright package expects, and every check fails at launch.
+        run: npx --yes playwright@1.63.0 install --with-deps chromium
+
       - name: Run release gate
         run: bash scripts/release-gate.sh --ci
 
