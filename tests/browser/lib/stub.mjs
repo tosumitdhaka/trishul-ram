@@ -72,7 +72,32 @@ async function fulfillFromFixtures(route, pathname, fixtures) {
       const pipeline = fixtures.pipelines.find((p) => p.name === decode(name))
       return route.fulfill(pipeline ? json(pipeline) : json({ detail: 'pipeline not found' }, 404))
     }
-    if (sub[0] === 'placement') return route.fulfill(json({ detail: 'placement not found' }, 404))
+    if (sub[0] === 'placement') {
+      // The live backend only 404s placement for an unknown pipeline (it
+      // renders a synthetic single-slot view otherwise — see
+      // tram/api/routers/pipelines.py). Mirror that so a working detail page
+      // doesn't log a spurious 404 for an existing pipeline.
+      const pipeline = fixtures.pipelines.find((p) => p.name === decode(name))
+      if (!pipeline) return route.fulfill(json({ detail: 'pipeline not found' }, 404))
+      return route.fulfill(json({
+        pipeline_name: decode(name),
+        placement_group_id: null,
+        status: 'running',
+        active_slots: 1,
+        slot_count: 1,
+        started_at: null,
+        records_out_per_sec: 0,
+        error_count: 0,
+        slots: [{
+          worker_index: 0,
+          worker_id: 'stub-worker',
+          status: 'running',
+          current_run_id: null,
+          restart_count: 0,
+          stats: { records_out_per_sec: 0 },
+        }],
+      }))
+    }
     if (sub[0] === 'versions') return route.fulfill(json([]))
     if (sub[0] === 'alerts') return route.fulfill(json([]))
     if (sub[0] === 'dry-run') return route.fulfill(json({ valid: true, issues: [] }))

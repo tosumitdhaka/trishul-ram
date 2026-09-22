@@ -27,7 +27,7 @@ import { startStaticServer } from './lib/server.mjs'
 const here = dirname(fileURLToPath(import.meta.url))
 const REPO_ROOT = join(here, '..', '..')
 const DIST = join(REPO_ROOT, 'tram', 'ui', 'dist')
-const CHECK_NAMES = ['boot', 'wizard', 'editor', 'a11y', 'yaml-quote']
+const CHECK_NAMES = ['boot', 'wizard', 'wizard-ai', 'editor', 'a11y', 'yaml-quote']
 
 // ── Node gate ────────────────────────────────────────────────────────────────
 const nodeMajor = Number(process.versions.node.split('.')[0])
