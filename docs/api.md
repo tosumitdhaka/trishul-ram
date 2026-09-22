@@ -469,6 +469,30 @@ With SQLite/DB persistence, run history survives daemon restarts.
 ### GET /api/runs/{run_id}
 Get a single run result.
 
+### GET /api/runs/count (v1.4.3)
+Total run count for the current list filters — the honest-pagination
+companion to `GET /api/runs` (the UI pill shows "showing N of M" and drives
+exact load-more). Query params mirror the listing:
+
+| Param | Default | Description |
+|-------|---------|-------------|
+| `pipeline` | — | Filter by pipeline name |
+| `status` | — | Filter: `success` \| `failed` \| `aborted` \| `queued` |
+| `from_dt` | — | ISO8601 lower bound on `started_at` |
+
+```json
+{"total": 42}
+```
+
+- `total` counts every run-history row matching the filters plus each queued
+  run matching them — the listing merges queued rows the same way, so the
+  count always equals the listing's total across pages (each queued run is
+  counted once).
+- Returns `{"total": null}` when no persistence (DB) is configured — the UI
+  falls back to its has-more heuristic there.
+- Registered before `GET /api/runs/{run_id}`, so the literal path segment
+  `count` is never captured as a run id.
+
 ## Internal Transform State (v1.4.0)
 
 Durable per-pipeline state for stateful transforms (`counter_delta`, `window_aggregate`). In manager+worker mode the worker GETs the state at run start and PUTs it back only after a successful run (retries re-hydrate from the same in-run snapshot); in standalone mode the state lives in the local `transform_state` table. Requires `TRAM_STATEFUL_TRANSFORMS=1` (default); `0` disables both the transforms and these endpoints (404). `update()`/`delete()` on the pipeline purge the row; a config-hash mismatch discards the stored state so the new transform identities start fresh.
