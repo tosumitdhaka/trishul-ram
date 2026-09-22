@@ -12,6 +12,7 @@ and the `browser-smoke` CI job (`.github/workflows/ci.yml`).
 |---|---|---|
 | boot | `checks/boot.mjs` | Every main page route boots without console/page errors, failed requests, or a frozen shell; the shell renders the released version (the v1.4.3 "missing import crashed the SPA" class) |
 | wizard | `checks/wizard.mjs` | Schema-driven wizard: step flow, required/secret/disclosure fields, inline validation, stale-`schema_version` guard + reload, template pre-seed, editor hand-off |
+| wizard-ai | `checks/wizard-ai.mjs` | Full AI-assist path: generate → Review (no step-validation toasts, info-toned success toast) → Continue In Editor hands the AI YAML over intact → Save lands on the created pipeline's detail page with wired buttons (the three v1.4.4 operator bugs) |
 | editor | `checks/editor.mjs` | Gutter, typing/line sync, tokenizer classes, tab, transparent overlay, scroll sync, dry-run error anchoring, draft guard, wizard Review regression |
 | a11y | `checks/a11y.mjs` | Contrast tokens in both themes, health-card `<button>` semantics (focus/click/Esc), editor gutter after theme switch |
 | yaml-quote | `checks/yaml-quote.mjs` | Wizard review-YAML quoting of numeric/boolean-looking strings, the 60s schema-poll page-leave guard, legacy `#wizard` redirect |
