@@ -1,0 +1,16 @@
+{
+  "mode": "manager",
+  "workers": [
+    {
+      "url": "http://trishul-ram-worker-0.trishul-ram-worker.trishul-ram.svc.cluster.local:8766",
+      "worker_id": "trishul-ram-worker-0",
+      "ok": true,
+      "active_runs": 1,
+      "active_streams": 0,
+      "running_pipelines": ["sftp-pm-to-kafka"],
+      "running": [],
+      "streams": [],
+      "assigned_pipelines": ["sftp-pm-to-kafka"]
+    }
+  ]
+}

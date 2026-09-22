@@ -1,0 +1,43 @@
+{
+  "scheduler_running": true,
+  "active_streams": [],
+  "scheduled_jobs": [
+    {"pipeline": "sftp-pm-to-kafka", "next_run": "2026-09-22T06:31:07.870602+00:00"}
+  ],
+  "workers": [
+    {
+      "url": "http://trishul-ram-worker-0.trishul-ram-worker.trishul-ram.svc.cluster.local:8766",
+      "worker_id": "trishul-ram-worker-0",
+      "ok": true,
+      "active_runs": 1,
+      "active_streams": 0,
+      "running_pipelines": ["sftp-pm-to-kafka"],
+      "running": [
+        {
+          "run_id": "665a4518-642c-4465-b05e-6ae0ca49024d",
+          "pipeline": "sftp-pm-to-kafka",
+          "started_at": "2026-09-22T06:30:37.886187+00:00",
+          "schedule_type": "interval",
+          "worker_id": "trishul-ram-worker-0",
+          "uptime_seconds": 5.679586,
+          "config_sha256": "c6942dfd11aaff54",
+          "stats": {
+            "records_in": 6,
+            "records_out": 0,
+            "records_skipped": 6,
+            "dlq_count": 0,
+            "error_count": 2,
+            "bytes_in": 621,
+            "bytes_out": 0,
+            "errors_last_window": [
+              "Kafka producer init failed: NoBrokersAvailable",
+              "Kafka producer init failed: NoBrokersAvailable"
+            ]
+          }
+        }
+      ],
+      "streams": [],
+      "assigned_pipelines": ["sftp-pm-to-kafka"]
+    }
+  ]
+}

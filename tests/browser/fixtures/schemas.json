@@ -1,0 +1,4 @@
+[
+  {"path": "asn1/ericsson/3gpp_32104_e.asn", "type": "asn1", "size_bytes": 1727, "schema_file": "/data/schemas/asn1/ericsson/3gpp_32104_e.asn"},
+  {"path": "asn1/ericsson/MTASOLM.asn", "type": "asn1", "size_bytes": 12530, "schema_file": "/data/schemas/asn1/ericsson/MTASOLM.asn"}
+]

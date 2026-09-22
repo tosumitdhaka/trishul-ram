@@ -1,0 +1,43 @@
+{
+  "sources": {
+    "kafka": {
+      "fields": [
+        {"name": "brokers", "type": "list[str]", "kind": "list", "choices": [], "required": true, "default": null, "secret": false, "multiline": false},
+        {"name": "topic", "type": "str", "kind": "text", "choices": [], "required": true, "default": null, "secret": false, "multiline": false},
+        {"name": "group_id", "type": "str", "kind": "text", "choices": [], "required": false, "default": "tram", "secret": false, "multiline": false},
+        {"name": "api_key", "type": "str", "kind": "text", "choices": [], "required": false, "default": null, "secret": true, "multiline": false},
+        {"name": "password", "type": "str", "kind": "text", "choices": [], "required": false, "default": null, "secret": true, "multiline": false},
+        {"name": "port", "type": "int", "kind": "integer", "choices": [], "required": false, "default": null, "secret": false, "multiline": false}
+      ]
+    },
+    "sftp": {
+      "fields": [
+        {"name": "host", "type": "str", "kind": "text", "choices": [], "required": true, "default": null, "secret": false, "multiline": false},
+        {"name": "username", "type": "str", "kind": "text", "choices": [], "required": true, "default": null, "secret": false, "multiline": false},
+        {"name": "port", "type": "int", "kind": "integer", "choices": [], "required": false, "default": 22, "secret": false, "multiline": false},
+        {"name": "password", "type": "str | None", "kind": "text", "choices": [], "required": false, "default": null, "secret": true, "multiline": false}
+      ]
+    }
+  },
+  "sinks": {
+    "kafka": {
+      "fields": [
+        {"name": "brokers", "type": "list[str]", "kind": "list", "choices": [], "required": true, "default": null, "secret": false, "multiline": false},
+        {"name": "topic", "type": "str", "kind": "text", "choices": [], "required": true, "default": null, "secret": false, "multiline": false}
+      ]
+    },
+    "opensearch": {
+      "fields": [
+        {"name": "hosts", "type": "list[str]", "kind": "list", "choices": [], "required": true, "default": null, "secret": false, "multiline": false}
+      ]
+    }
+  },
+  "serializers": {
+    "json": {"fields": []},
+    "csv": {"fields": []}
+  },
+  "transforms": {
+    "rename": {"fields": []}
+  },
+  "schema_version": "dfcc2f98ad48"
+}

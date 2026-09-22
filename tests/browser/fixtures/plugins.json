@@ -1,0 +1,19 @@
+{
+  "sources": ["kafka", "sftp"],
+  "sinks": ["kafka", "opensearch"],
+  "serializers": ["json", "csv"],
+  "transforms": ["rename"],
+  "details": {
+    "sources": [],
+    "sinks": [],
+    "serializers": [],
+    "transforms": []
+  },
+  "schema_mismatch": {
+    "sources": {},
+    "sinks": {},
+    "serializers": {},
+    "transforms": {}
+  },
+  "schema_version": "dfcc2f98ad48"
+}

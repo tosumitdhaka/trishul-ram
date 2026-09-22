@@ -1,0 +1,32 @@
+[
+  {
+    "name": "sftp-pm-to-kafka",
+    "description": "Poll SFTP for PM files and publish to Kafka",
+    "enabled": true,
+    "status": "running",
+    "schedule_type": "interval",
+    "interval_seconds": 300,
+    "cron_expr": null,
+    "registered_at": "2026-09-22T06:16:06.581287+00:00",
+    "last_run": "2026-09-22T06:30:07.924436+00:00",
+    "last_run_status": "success",
+    "source": {"type": "sftp"},
+    "sinks": [{"type": "kafka"}],
+    "queued_run": null
+  },
+  {
+    "name": "snmp-to-kafka",
+    "description": "",
+    "enabled": true,
+    "status": "running",
+    "schedule_type": "stream",
+    "interval_seconds": null,
+    "cron_expr": null,
+    "registered_at": "2026-09-22T06:16:06.993577+00:00",
+    "last_run": null,
+    "last_run_status": null,
+    "source": {"type": "snmp_trap"},
+    "sinks": [{"type": "kafka"}],
+    "queued_run": null
+  }
+]
