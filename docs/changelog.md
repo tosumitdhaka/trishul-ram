@@ -5,6 +5,11 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ---
 
+## [Unreleased]
+
+### Planned
+- v1.4.5 theme — SNMP data integrity: walk boundary fix (#32), grouping redesign with structured index tuples (#36), layered INTEGER classification with the wire-type Integer fix (#35), refuse-instead-of-silently-collapse semantics (#33); UI hardening deferrals from the v1.4.4 review; Dockerfile pip cache mounts
+
 ## [1.4.4] - 2026-09-22
 
 ### Fixed
