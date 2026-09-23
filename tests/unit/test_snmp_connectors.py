@@ -1020,6 +1020,43 @@ class TestClassifyReadSemantics:
         assert rows[0]["_metrics"] == {}
 
 
+class TestClassifyRefuseSemantics:
+    """GH #33 — non-yield_rows classify over multiple row indexes refuses
+    instead of silently collapsing table rows."""
+
+    def test_classify_without_yield_rows_refuses_multiple_rows(self):
+        """GH #33 — non-yield_rows classify over a multi-row table refuses,
+        naming the columns, instead of silently collapsing."""
+        typed_rows = {
+            "1.3.6.1.2.1.2.2.1.2.1": _wire("OctetString", "eth0"),
+            "1.3.6.1.2.1.2.2.1.2.2": _wire("OctetString", "lo"),
+        }
+        src, mock_hlapi, mock_pysnmp, walk_side_effect = TestClassifyReadSemantics()._walk_source(
+            {"yield_rows": False, "index_depth": 1, "resolve_oids": False}, typed_rows
+        )
+        with pytest.raises(SourceError, match="yield_rows"):
+            TestClassifyReadSemantics()._read(src, mock_hlapi, mock_pysnmp, walk_side_effect)
+
+    def test_classify_without_yield_rows_single_row_flat(self):
+        """A single-row classify record keeps the old flat output shape."""
+        typed_rows = {
+            "1.3.6.1.2.1.2.2.1.2.1": _wire("OctetString", "eth0"),
+            "1.3.6.1.2.1.2.2.1.10.1": _wire("Gauge32", "1000"),
+        }
+        src, mock_hlapi, mock_pysnmp, walk_side_effect = TestClassifyReadSemantics()._walk_source(
+            {"yield_rows": False, "index_depth": 1, "resolve_oids": False}, typed_rows
+        )
+        results = TestClassifyReadSemantics()._read(src, mock_hlapi, mock_pysnmp, walk_side_effect)
+        assert len(results) == 1
+        data = json.loads(results[0][0])
+        assert data["_metrics"] == {"1.3.6.1.2.1.2.2.1.10": 1000}
+        assert data["_labels"] == {"1.3.6.1.2.1.2.2.1.2": "eth0"}
+        assert data["_snmp_widths"] == {}
+        assert "_index" not in data
+        assert "_index_parts" not in data
+        assert data["_polled_at"].endswith("+00:00")
+
+
 class TestSNMPPollSourceV3Config:
     """Verify SNMPPollSource stores v3 config fields correctly."""
 

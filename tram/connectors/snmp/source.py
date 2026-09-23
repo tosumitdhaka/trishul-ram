@@ -892,6 +892,19 @@ class SNMPPollSource(BaseSource):
                 # One payload per poll → one chunk → one write per sink
                 yield json.dumps(all_rows).encode("utf-8"), meta
             else:
+                if len(all_rows) > 1:
+                    # Refuse instead of silently collapsing rows (GH #33): a
+                    # multi-row table squeezed into one record loses all but the
+                    # last value per column.
+                    columns = sorted(
+                        {c for row in rows for c in row if not c.startswith("_")}
+                    )
+                    raise SourceError(
+                        f"SNMP poll classify with yield_rows=false would collapse "
+                        f"{len(all_rows)} table rows (columns: {', '.join(columns)}) "
+                        f"into one record — set yield_rows=true to emit one record "
+                        f"per row"
+                    )
                 if all_rows:
                     record = all_rows[0]
                 else:
