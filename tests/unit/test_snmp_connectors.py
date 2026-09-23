@@ -322,6 +322,143 @@ class TestSNMPPollSource:
         assert mock_hlapi.identities[0] == "1.3.6.1.2.1.2.2"
 
 
+class TestWalkBoundary:
+    """GH #32 — WALK subtree termination is exact-or-child tuple membership.
+
+    The old check was ``oid_str.startswith(base_oid.rstrip(".0"))``: the
+    rstrip is a character-set strip (mangles bases ending in 0) and the
+    string prefix matches sibling nodes whose digits extend the base
+    (``1.3.6.1.4.20`` matching base ``1.3.6.1.4.2``).
+    """
+
+    def _walk(self, base_oid: str, rows) -> dict:
+        """Run _do_walk against a scripted nextCmd responder (single base)."""
+
+        class MockHlapi:
+            def __init__(self):
+                self.calls = 0
+
+            class SnmpEngine:
+                pass
+
+            class CommunityData:
+                def __init__(self, *args, **kwargs):
+                    pass
+
+            class UdpTransportTarget:
+                def __init__(self, *args, **kwargs):
+                    pass
+
+            class ContextData:
+                def __init__(self, *args, **kwargs):
+                    pass
+
+            class ObjectIdentity:
+                def __init__(self, oid):
+                    self.oid = oid
+
+            class ObjectType:
+                def __init__(self, identity):
+                    self.identity = identity
+
+            async def nextCmd(self, *args, **kwargs):
+                self.calls += 1
+                if self.calls <= len(rows):
+                    return (None, None, None, rows[self.calls - 1])
+                return (None, None, None, [])
+
+        source = SNMPPollSource({
+            "host": "192.168.1.1",
+            "oids": [base_oid],
+            "operation": "walk",
+        })
+        mock_hlapi = MockHlapi()
+        import asyncio
+        return asyncio.run(source._do_walk(mock_hlapi, typed=False))
+
+    def test_sibling_after_trailing_zero_base_rejected(self):
+        """Case A (live leak): base 1.3.6.1.4.10 — sibling 1.3.6.1.4.11 must not leak.
+
+        Old check: base.rstrip(".0") = "1.3.6.1.4.1" → sibling string-matches.
+        """
+        result = self._walk("1.3.6.1.4.10", [
+            [("1.3.6.1.4.10.1.1", "IN_SUBTREE_A")],
+            [("1.3.6.1.4.11.1", "SIBLING_A_othertree")],
+        ])
+        assert result == {"1.3.6.1.4.10.1.1": "IN_SUBTREE_A"}
+
+    def test_string_prefix_sibling_rejected(self):
+        """Case B (live leak): base 1.3.6.1.4.2 — node 1.3.6.1.4.20 is a sibling.
+
+        "1.3.6.1.4.20.1".startswith("1.3.6.1.4.2") is True but 20 ≠ 2.
+        """
+        result = self._walk("1.3.6.1.4.2", [
+            [("1.3.6.1.4.2.1.1", "IN_SUBTREE_B")],
+            [("1.3.6.1.4.20.1", "SIBLING_B_othertree")],
+        ])
+        assert result == {"1.3.6.1.4.2.1.1": "IN_SUBTREE_B"}
+
+    def test_base_ending_in_zero_keeps_children(self):
+        """A base ending in 0 still collects its own children (old rstrip
+        would have truncated the boundary to the parent node)."""
+        result = self._walk("1.3.6.1.4.10", [
+            [("1.3.6.1.4.10.1.1", "CHILD_A")],
+            [("1.3.6.1.4.11.1", "SIBLING")],
+        ])
+        assert result == {"1.3.6.1.4.10.1.1": "CHILD_A"}
+
+    def test_run_ending_in_zero_mangled_by_rstrip(self):
+        """base 1.3.6.1.4.100 — rstrip(".0") mangled it to 1.3.6.1.4.1 and
+        would have leaked the 1.3.6.1.4.10 sibling."""
+        result = self._walk("1.3.6.1.4.100", [
+            [("1.3.6.1.4.100.1", "IN_SUBTREE")],
+            [("1.3.6.1.4.10.1", "SIBLING")],
+        ])
+        assert result == {"1.3.6.1.4.100.1": "IN_SUBTREE"}
+
+    def test_in_subtree_predicate(self):
+        """The tuple-space boundary predicate: exact-or-child, never string-prefix."""
+        from tram.connectors.snmp.source import _in_walk_subtree
+
+        base = (1, 3, 6, 1, 4, 2)
+        assert _in_walk_subtree((1, 3, 6, 1, 4, 2), base) is True          # exact base
+        assert _in_walk_subtree((1, 3, 6, 1, 4, 2, 1, 1), base) is True     # child
+        assert _in_walk_subtree((1, 3, 6, 1, 4, 20, 1), base) is False      # digit-extension sibling
+        assert _in_walk_subtree((1, 3, 6, 1, 4, 3, 1), base) is False       # plain sibling
+        assert _in_walk_subtree((1, 3, 6, 1, 4, 1), base) is False          # parent is not a child
+
+        base0 = (1, 3, 6, 1, 4, 10)                                         # base ending in 0
+        assert _in_walk_subtree((1, 3, 6, 1, 4, 10, 1, 1), base0) is True
+        assert _in_walk_subtree((1, 3, 6, 1, 4, 11, 1), base0) is False
+        assert _in_walk_subtree((1, 3, 6, 1, 4, 1), base0) is False         # rstrip(".0") would mangle to this
+
+    def test_exact_base_echo_terminates_cleanly(self):
+        """A responder echoing the exact base as its first varbind: boundary
+        allows it (exact match) but the no-progress guard stops the walk —
+        collecting it and re-issuing GETNEXT from it would loop forever.
+        Terminates cleanly with nothing collected."""
+        result = self._walk("1.3.6.1.4.2", [
+            [("1.3.6.1.4.2", "BASE_ITSELF")],
+        ])
+        assert result == {}
+
+    def test_valid_child_collected_then_stops(self):
+        """A valid child is collected; the walk then stops at a sibling."""
+        result = self._walk("1.3.6.1.4.2", [
+            [("1.3.6.1.4.2.1.1", "CHILD")],
+            [("1.3.6.1.4.3.1", "SIBLING")],
+        ])
+        assert result == {"1.3.6.1.4.2.1.1": "CHILD"}
+
+    def test_sibling_in_same_batch_stops_without_collecting(self):
+        """A row batch mixing a child and a sibling: child collected, sibling
+        terminates the walk without being collected."""
+        result = self._walk("1.3.6.1.4.2", [
+            [("1.3.6.1.4.2.1.1", "CHILD"), ("1.3.6.1.4.20.1", "SIBLING")],
+        ])
+        assert result == {"1.3.6.1.4.2.1.1": "CHILD"}
+
+
 # ── SNMPPollSource._group_by_index (pure unit, no SNMP dep) ────────────────
 
 

@@ -38,6 +38,17 @@ def _call_snmp_api(obj: object, snake_name: str, *args):
     return method(*args)
 
 
+def _in_walk_subtree(oid_tuple: tuple, base_tuple: tuple) -> bool:
+    """True iff ``oid_tuple`` belongs to a WALK rooted at ``base_tuple``.
+
+    Exact-or-child in tuple space (GH #32) — never a string-prefix compare
+    (a sibling node like ``1.3.6.1.4.20`` must not match base ``1.3.6.1.4.2``)
+    and never a character-stripped base (``rstrip(".0")`` mangles bases whose
+    last arc ends in 0).
+    """
+    return oid_tuple == base_tuple or oid_tuple[: len(base_tuple)] == base_tuple
+
+
 @register_source("snmp_trap")
 class SNMPTrapSource(BaseSource):
     """Receive SNMP traps (v1/v2c/v3) over UDP, operating in stream mode.
@@ -547,8 +558,9 @@ class SNMPPollSource(BaseSource):
             )
             bindings: dict = {}
             for base_oid in resolved_oids:
+                base_tuple = tuple(int(part) for part in base_oid.strip(".").split("."))
                 current_oid = base_oid
-                current_oid_tuple = tuple(int(part) for part in current_oid.strip(".").split("."))
+                current_oid_tuple = base_tuple
                 while True:
                     errInd, errStatus, errIdx, varBinds = await hlapi_next_cmd(
                         hlapi_mod,
@@ -564,13 +576,15 @@ class SNMPPollSource(BaseSource):
                     advanced = False
                     for oid_obj, val_obj in row:
                         oid_str = str(oid_obj)
-                        # Stop when we leave the subtree (lexicographic boundary)
-                        if not oid_str.startswith(base_oid.rstrip(".0")):
+                        oid_tuple = tuple(int(part) for part in oid_str.strip(".").split("."))
+                        # Stop when we leave the subtree: a varbind belongs to the
+                        # walk iff it is the base itself or a descendant in tuple
+                        # space (GH #32).
+                        if not _in_walk_subtree(oid_tuple, base_tuple):
                             stop = True
                             break
                         # Some agents/hlapi paths can repeat the terminal OID at the
                         # subtree boundary. Guard against a no-progress infinite loop.
-                        oid_tuple = tuple(int(part) for part in oid_str.strip(".").split("."))
                         if oid_tuple <= current_oid_tuple:
                             stop = True
                             break
