@@ -20,7 +20,7 @@ FROM --platform=$BUILDPLATFORM node:20-alpine AS ui-builder
 
 WORKDIR /ui-src
 COPY tram/ui/package.json tram/ui/package-lock.json ./
-RUN npm ci
+RUN --mount=type=cache,target=/root/.npm npm ci
 COPY tram/ui/ ./
 RUN npm run build
 
@@ -31,7 +31,7 @@ WORKDIR /build
 COPY pyproject.toml README.md ./
 COPY tram/ ./tram/
 
-RUN pip install --no-cache-dir build && python -m build --wheel
+RUN --mount=type=cache,target=/root/.cache/pip pip install build && python -m build --wheel
 
 # ── Stage 2: runtime image ────────────────────────────────────────────────────
 FROM python:3.13-slim
@@ -59,8 +59,8 @@ RUN apt-get update && \
 #   mqtt, amqp, nats, gnmi, influxdb, redis, elasticsearch, opensearch
 # corba (omniORBpy) excluded: not on PyPI; install python3-omniorb via apt in a custom layer.
 COPY --from=builder /build/dist/*.whl .
-RUN whl=$(ls *.whl) && \
-    pip install --no-cache-dir \
+RUN --mount=type=cache,target=/root/.cache/pip whl=$(ls *.whl) && \
+    pip install \
         "${whl}[manager,worker,k8s,metrics,watch,mib,protobuf_ser,protobuf,asn1,kafka,snmp,avro,jmespath,sql,websocket,prometheus_rw,ai-anthropic,ai-openai]" && \
     rm *.whl
 

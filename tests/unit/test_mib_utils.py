@@ -165,3 +165,98 @@ class TestMibUtilsWithMocks:
             result = resolve_oid(mock_view, (1, 3, 6, 1, 2, 1, 1, 1))
 
         assert result == "sysDescr"
+
+
+class TestResolveOidStructured:
+    """GH #36 — resolve_oid_structured keeps the MIB-computed index tuple."""
+
+    def test_none_view_returns_numeric_fallback(self):
+        from tram.connectors.snmp.mib_utils import resolve_oid_structured
+        result = resolve_oid_structured(None, (1, 3, 6, 1, 2, 1, 1, 1, 0))
+        assert result == ("", (), "1.3.6.1.2.1.1.1.0", "")
+
+    def test_exception_returns_numeric_fallback(self):
+        from tram.connectors.snmp.mib_utils import resolve_oid_structured
+
+        mock_view = MagicMock()
+        mock_view.getNodeLocation.side_effect = Exception("unknown OID")
+
+        with patch.dict(sys.modules, {
+            "pysnmp.smi.rfc1902": MagicMock(),
+            "pyasn1.type.univ": MagicMock(),
+        }):
+            result = resolve_oid_structured(mock_view, (1, 3, 6, 1, 2, 1, 1, 1, 0))
+        assert result == ("", (), "1.3.6.1.2.1.1.1.0", "")
+
+    def test_resolved_returns_structured_parts(self):
+        """Structured indices are ints; resolved_str matches resolve_oid."""
+        from tram.connectors.snmp.mib_utils import resolve_oid, resolve_oid_structured
+
+        mock_view = MagicMock()
+        mock_view.get_node_location.return_value = ("IF-MIB", "ifDescr", [1])
+
+        mock_oid_obj = MagicMock()
+        mock_oid_cls = MagicMock(return_value=mock_oid_obj)
+        mock_asn1 = MagicMock()
+        mock_asn1.type.univ.ObjectIdentifier = mock_oid_cls
+
+        with patch.dict(sys.modules, {
+            "pysnmp": MagicMock(),
+            "pysnmp.smi": MagicMock(),
+            "pyasn1": mock_asn1,
+            "pyasn1.type": MagicMock(),
+            "pyasn1.type.univ": mock_asn1.type.univ,
+        }):
+            result = resolve_oid_structured(mock_view, (1, 3, 6, 1, 2, 1, 2, 2, 1, 2, 1))
+            assert result == ("ifDescr", (1,), "ifDescr.1", "IF-MIB")
+            # Legacy contract preserved: resolve_oid output equals resolved_str.
+            assert resolve_oid(mock_view, (1, 3, 6, 1, 2, 1, 2, 2, 1, 2, 1)) == "ifDescr.1"
+
+    def test_composite_indices_kept_as_ints(self):
+        """Multi-component indices stay a tuple of ints, not a re-split string."""
+        from tram.connectors.snmp.mib_utils import resolve_oid_structured
+
+        mock_view = MagicMock()
+        mock_view.get_node_location.return_value = ("RFC1213-MIB", "atPhysAddress", [1, 192, 168, 1, 1])
+
+        mock_oid_obj = MagicMock()
+        mock_oid_cls = MagicMock(return_value=mock_oid_obj)
+        mock_asn1 = MagicMock()
+        mock_asn1.type.univ.ObjectIdentifier = mock_oid_cls
+
+        with patch.dict(sys.modules, {
+            "pysnmp": MagicMock(),
+            "pysnmp.smi": MagicMock(),
+            "pyasn1": mock_asn1,
+            "pyasn1.type": MagicMock(),
+            "pyasn1.type.univ": mock_asn1.type.univ,
+        }):
+            result = resolve_oid_structured(mock_view, (1, 3, 6, 1, 2, 1, 22, 1, 2, 1, 192, 168, 1, 1))
+            assert result == (
+                "atPhysAddress",
+                (1, 192, 168, 1, 1),
+                "atPhysAddress.1.192.168.1.1",
+                "RFC1213-MIB",
+            )
+
+    def test_scalar_node_no_indices(self):
+        """A node without an instance returns an empty index tuple."""
+        from tram.connectors.snmp.mib_utils import resolve_oid_structured
+
+        mock_view = MagicMock()
+        mock_view.get_node_location.return_value = ("SNMPv2-MIB", "sysDescr", ())
+
+        mock_oid_obj = MagicMock()
+        mock_oid_cls = MagicMock(return_value=mock_oid_obj)
+        mock_asn1 = MagicMock()
+        mock_asn1.type.univ.ObjectIdentifier = mock_oid_cls
+
+        with patch.dict(sys.modules, {
+            "pysnmp": MagicMock(),
+            "pysnmp.smi": MagicMock(),
+            "pyasn1": mock_asn1,
+            "pyasn1.type": MagicMock(),
+            "pyasn1.type.univ": mock_asn1.type.univ,
+        }):
+            result = resolve_oid_structured(mock_view, (1, 3, 6, 1, 2, 1, 1, 1))
+            assert result == ("sysDescr", (), "sysDescr", "SNMPv2-MIB")

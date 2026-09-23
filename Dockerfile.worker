@@ -37,7 +37,7 @@ WORKDIR /build
 COPY pyproject.toml README.md ./
 COPY tram/ ./tram/
 
-RUN pip install --no-cache-dir build && python -m build --wheel
+RUN --mount=type=cache,target=/root/.cache/pip pip install build && python -m build --wheel
 
 # ── Stage 1: runtime image ────────────────────────────────────────────────────
 FROM python:3.13-slim
@@ -58,8 +58,8 @@ RUN apt-get update && \
 # Excluded to keep the image lean: s3, gcs, azure, otel, parquet, ai-* (UI-driven features).
 # corba (omniORBpy) is excluded: not on PyPI; install python3-omniorb via apt in a custom layer.
 COPY --from=builder /build/dist/*.whl .
-RUN whl=$(ls *.whl) && \
-    pip install --no-cache-dir \
+RUN --mount=type=cache,target=/root/.cache/pip whl=$(ls *.whl) && \
+    pip install \
         "${whl}[worker,kafka,snmp,avro,protobuf,asn1,jmespath,sql,websocket,metrics,prometheus_rw,watch]" && \
     rm *.whl
 

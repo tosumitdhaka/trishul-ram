@@ -70,8 +70,21 @@ await installFixtures(page, {
         const body = route.request().postData() || ''
         const m = body.match(/^\s*name:\s*(.+)$/m)
         const name = m ? String(m[1]).split('#')[0].trim().replace(/^["']|["']$/g, '') : 'unknown'
-        createdByName.set(name, body)
-        await route.fulfill(json({ ok: true }))
+        // The create endpoint persists the pipeline and returns it as
+        // created.name — serve a backend-normalized name that differs from
+        // the raw YAML extraction (the env-substitution edge case) so the
+        // check pins the created.name navigation path.
+        const createdName = `server-${name}`
+        createdByName.set(createdName, body)
+        await route.fulfill(json({
+          name: createdName,
+          status: 'stopped',
+          schedule_type: 'interval',
+          interval_seconds: 300,
+          enabled: true,
+          source: { type: 'kafka' },
+          sinks: [{ type: 'opensearch' }],
+        }))
         return true
       }
       return false
@@ -218,7 +231,7 @@ const afterSave2 = await page.evaluate(() => ({
 }))
 console.log('AFTER_SAVE_NO_NAME:', JSON.stringify(afterSave2))
 check('Save without a typed name lands on the AI-named pipeline detail page',
-  afterSave2.detail && afterSave2.hash.startsWith('#detail/ai-generated-pipe'), JSON.stringify(afterSave2))
+  afterSave2.detail && afterSave2.hash.startsWith('#detail/server-ai-generated-pipe'), JSON.stringify(afterSave2))
 check('detail page buttons wired in the no-name variant too', afterSave2.editWired, JSON.stringify(afterSave2))
 await page.screenshot({ path: `${SHOT_DIR}/bug3-after-save-no-name.png` })
 

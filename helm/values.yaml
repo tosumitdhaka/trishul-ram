@@ -212,6 +212,13 @@ env:
   # --- SNMP MIBs / Schemas (v1.0.3) ---
   # TRAM_MIB_DIR and TRAM_SCHEMA_DIR are auto-set to /data/mibs and /data/schemas when
   # persistence.enabled=true. Override here only if you need a custom location.
+  # --- SNMP classify INTEGER patterns (v1.4.5, GH #35) ---
+  # Comma-separated, case-sensitive globs steering INTEGER field classification
+  # when snmp_poll classify: true is set. metric wins over label; unlisted
+  # INTEGER fields default to metrics. Layers EXTEND the code defaults
+  # (label defaults: *Id,*ID,*Index,*Port) — they never replace them.
+  # TRAM_SNMP_METRIC_PATTERNS: ""   # e.g. "ifSpeed,ifMtu" → these INTEGERs are metrics
+  # TRAM_SNMP_LABEL_PATTERNS: ""    # e.g. "*Vdom,*Status" → restore vdom/status labeling
   # --- Pipeline DB sync (v1.1.2) ---
   # TRAM_PIPELINE_SYNC_INTERVAL: "30"  # seconds between DB polls for new/deleted pipelines
   # --- Schema Registry (v1.0.4) ---

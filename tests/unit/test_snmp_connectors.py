@@ -14,6 +14,21 @@ from tram.connectors.snmp.source import SNMPPollSource, SNMPTrapSource
 from tram.core.exceptions import SinkError, SourceError
 
 
+class _FakeWireValue:
+    """Minimal fake pysnmp wire value: ``type(val).__name__`` is the wire class."""
+
+    def __init__(self, raw: str):
+        self.raw = raw
+
+    def __str__(self) -> str:
+        return self.raw
+
+
+def _wire(type_name: str, raw: str) -> _FakeWireValue:
+    """Build a fake wire value whose class name equals the pysnmp wire type."""
+    return type(type_name, (_FakeWireValue,), {})(raw)
+
+
 def _close_coro(coro: Awaitable[object]) -> None:
     """Consume a created coroutine in tests when asyncio.run is mocked."""
     coro.close()
@@ -322,6 +337,143 @@ class TestSNMPPollSource:
         assert mock_hlapi.identities[0] == "1.3.6.1.2.1.2.2"
 
 
+class TestWalkBoundary:
+    """GH #32 — WALK subtree termination is exact-or-child tuple membership.
+
+    The old check was ``oid_str.startswith(base_oid.rstrip(".0"))``: the
+    rstrip is a character-set strip (mangles bases ending in 0) and the
+    string prefix matches sibling nodes whose digits extend the base
+    (``1.3.6.1.4.20`` matching base ``1.3.6.1.4.2``).
+    """
+
+    def _walk(self, base_oid: str, rows) -> dict:
+        """Run _do_walk against a scripted nextCmd responder (single base)."""
+
+        class MockHlapi:
+            def __init__(self):
+                self.calls = 0
+
+            class SnmpEngine:
+                pass
+
+            class CommunityData:
+                def __init__(self, *args, **kwargs):
+                    pass
+
+            class UdpTransportTarget:
+                def __init__(self, *args, **kwargs):
+                    pass
+
+            class ContextData:
+                def __init__(self, *args, **kwargs):
+                    pass
+
+            class ObjectIdentity:
+                def __init__(self, oid):
+                    self.oid = oid
+
+            class ObjectType:
+                def __init__(self, identity):
+                    self.identity = identity
+
+            async def nextCmd(self, *args, **kwargs):
+                self.calls += 1
+                if self.calls <= len(rows):
+                    return (None, None, None, rows[self.calls - 1])
+                return (None, None, None, [])
+
+        source = SNMPPollSource({
+            "host": "192.168.1.1",
+            "oids": [base_oid],
+            "operation": "walk",
+        })
+        mock_hlapi = MockHlapi()
+        import asyncio
+        return asyncio.run(source._do_walk(mock_hlapi, typed=False))
+
+    def test_sibling_after_trailing_zero_base_rejected(self):
+        """Case A (live leak): base 1.3.6.1.4.10 — sibling 1.3.6.1.4.11 must not leak.
+
+        Old check: base.rstrip(".0") = "1.3.6.1.4.1" → sibling string-matches.
+        """
+        result = self._walk("1.3.6.1.4.10", [
+            [("1.3.6.1.4.10.1.1", "IN_SUBTREE_A")],
+            [("1.3.6.1.4.11.1", "SIBLING_A_othertree")],
+        ])
+        assert result == {"1.3.6.1.4.10.1.1": "IN_SUBTREE_A"}
+
+    def test_string_prefix_sibling_rejected(self):
+        """Case B (live leak): base 1.3.6.1.4.2 — node 1.3.6.1.4.20 is a sibling.
+
+        "1.3.6.1.4.20.1".startswith("1.3.6.1.4.2") is True but 20 ≠ 2.
+        """
+        result = self._walk("1.3.6.1.4.2", [
+            [("1.3.6.1.4.2.1.1", "IN_SUBTREE_B")],
+            [("1.3.6.1.4.20.1", "SIBLING_B_othertree")],
+        ])
+        assert result == {"1.3.6.1.4.2.1.1": "IN_SUBTREE_B"}
+
+    def test_base_ending_in_zero_keeps_children(self):
+        """A base ending in 0 still collects its own children (old rstrip
+        would have truncated the boundary to the parent node)."""
+        result = self._walk("1.3.6.1.4.10", [
+            [("1.3.6.1.4.10.1.1", "CHILD_A")],
+            [("1.3.6.1.4.11.1", "SIBLING")],
+        ])
+        assert result == {"1.3.6.1.4.10.1.1": "CHILD_A"}
+
+    def test_run_ending_in_zero_mangled_by_rstrip(self):
+        """base 1.3.6.1.4.100 — rstrip(".0") mangled it to 1.3.6.1.4.1 and
+        would have leaked the 1.3.6.1.4.10 sibling."""
+        result = self._walk("1.3.6.1.4.100", [
+            [("1.3.6.1.4.100.1", "IN_SUBTREE")],
+            [("1.3.6.1.4.10.1", "SIBLING")],
+        ])
+        assert result == {"1.3.6.1.4.100.1": "IN_SUBTREE"}
+
+    def test_in_subtree_predicate(self):
+        """The tuple-space boundary predicate: exact-or-child, never string-prefix."""
+        from tram.connectors.snmp.source import _in_walk_subtree
+
+        base = (1, 3, 6, 1, 4, 2)
+        assert _in_walk_subtree((1, 3, 6, 1, 4, 2), base) is True          # exact base
+        assert _in_walk_subtree((1, 3, 6, 1, 4, 2, 1, 1), base) is True     # child
+        assert _in_walk_subtree((1, 3, 6, 1, 4, 20, 1), base) is False      # digit-extension sibling
+        assert _in_walk_subtree((1, 3, 6, 1, 4, 3, 1), base) is False       # plain sibling
+        assert _in_walk_subtree((1, 3, 6, 1, 4, 1), base) is False          # parent is not a child
+
+        base0 = (1, 3, 6, 1, 4, 10)                                         # base ending in 0
+        assert _in_walk_subtree((1, 3, 6, 1, 4, 10, 1, 1), base0) is True
+        assert _in_walk_subtree((1, 3, 6, 1, 4, 11, 1), base0) is False
+        assert _in_walk_subtree((1, 3, 6, 1, 4, 1), base0) is False         # rstrip(".0") would mangle to this
+
+    def test_exact_base_echo_terminates_cleanly(self):
+        """A responder echoing the exact base as its first varbind: boundary
+        allows it (exact match) but the no-progress guard stops the walk —
+        collecting it and re-issuing GETNEXT from it would loop forever.
+        Terminates cleanly with nothing collected."""
+        result = self._walk("1.3.6.1.4.2", [
+            [("1.3.6.1.4.2", "BASE_ITSELF")],
+        ])
+        assert result == {}
+
+    def test_valid_child_collected_then_stops(self):
+        """A valid child is collected; the walk then stops at a sibling."""
+        result = self._walk("1.3.6.1.4.2", [
+            [("1.3.6.1.4.2.1.1", "CHILD")],
+            [("1.3.6.1.4.3.1", "SIBLING")],
+        ])
+        assert result == {"1.3.6.1.4.2.1.1": "CHILD"}
+
+    def test_sibling_in_same_batch_stops_without_collecting(self):
+        """A row batch mixing a child and a sibling: child collected, sibling
+        terminates the walk without being collected."""
+        result = self._walk("1.3.6.1.4.2", [
+            [("1.3.6.1.4.2.1.1", "CHILD"), ("1.3.6.1.4.20.1", "SIBLING")],
+        ])
+        assert result == {"1.3.6.1.4.2.1.1": "CHILD"}
+
+
 # ── SNMPPollSource._group_by_index (pure unit, no SNMP dep) ────────────────
 
 
@@ -449,7 +601,10 @@ class TestClassifyBindingsSnmpWidths:
             "ifHCInOctets.1": ("123456789012", "Counter64"),
             "ifSpeed.1": ("1000000000", "Gauge32"),
             "ifDescr.1": ("eth0", "OctetString"),
-            "ifAdminStatus.1": ("1", "Integer32"),
+            # Wire-accurate class name (GH #35): INTEGER decodes as `Integer`
+            # at lookupMib=False, not `Integer32` — the old test fed the dead
+            # MIB-typed spelling and passed for the wrong reason.
+            "ifAdminStatus.1": ("1", "Integer"),
         })
         assert classified["_snmp_widths"] == {
             "ifInOctets": 32,
@@ -481,6 +636,446 @@ class TestClassifyBindingsSnmpWidths:
         classified["_index"] = "1"
         assert classified["_snmp_widths"] == {"ifInOctets": 32}
         assert "_index" in classified
+
+
+class TestClassifyLayeredInteger:
+    """GH #35 — layered INTEGER classification.
+
+    The wire type is `Integer` (not `Integer32`) at lookupMib=False; both
+    spellings enter the same layered resolution. Order: metric_patterns →
+    label_patterns → MIB SYNTAX enum → default metric.
+    """
+
+    def test_wire_integer_defaults_to_metric(self):
+        """Plain INTEGER (measurement) with no patterns/enum → metric."""
+        classified = SNMPPollSource._classify_bindings({
+            "ifSpeed.1": ("1000000000", "Integer"),
+        })
+        assert classified["_metrics"] == {"ifSpeed": 1000000000}
+        assert classified["_labels"] == {}
+
+    def test_integer32_alias_enters_same_zone(self):
+        """The MIB-typed spelling Integer32 resolves identically."""
+        classified = SNMPPollSource._classify_bindings({
+            "ifSpeed.1": ("1000000000", "Integer32"),
+        })
+        assert classified["_metrics"] == {"ifSpeed": 1000000000}
+
+    def test_metric_pattern_wins(self):
+        """metric_patterns match → metric (exceptions win over label patterns)."""
+        classified = SNMPPollSource._classify_bindings(
+            {"ifOperStatus.1": ("1", "Integer")},
+            metric_patterns=("ifOper*",),
+            label_patterns=("ifOper*",),
+        )
+        assert classified["_metrics"] == {"ifOperStatus": 1}
+        assert classified["_labels"] == {}
+
+    def test_label_pattern_glob(self):
+        """label_patterns glob match → label."""
+        classified = SNMPPollSource._classify_bindings(
+            {"ifOperStatus.1": ("1", "Integer")},
+            label_patterns=("ifOper*",),
+        )
+        assert classified["_labels"] == {"ifOperStatus": "1"}
+
+    def test_label_pattern_exact_name(self):
+        """An exact name is a degenerate glob pattern."""
+        classified = SNMPPollSource._classify_bindings(
+            {"ifAdminStatus.1": ("1", "Integer")},
+            label_patterns=("ifAdminStatus",),
+        )
+        assert classified["_labels"] == {"ifAdminStatus": "1"}
+
+    def test_patterns_are_case_sensitive(self):
+        """Globs are case-sensitive — a lowercase glob does not match."""
+        classified = SNMPPollSource._classify_bindings(
+            {"ifOperStatus.1": ("1", "Integer")},
+            label_patterns=("ifoper*",),
+        )
+        assert classified["_metrics"] == {"ifOperStatus": 1}
+
+    def test_default_label_suffixes(self):
+        """Code defaults label *Id/*ID/*Index/*Port INTEGER fields."""
+        classified = SNMPPollSource._classify_bindings({
+            "ifIndex.1": ("1", "Integer"),
+            "sysObjectID.0": ("1.3.6.1.4.1.9", "Integer"),
+            "ifSpeed.1": ("1000", "Integer"),
+        }, label_patterns=("*Id", "*ID", "*Index", "*Port"))
+        assert classified["_labels"] == {
+            "ifIndex": "1",
+            "sysObjectID": "1.3.6.1.4.1.9",
+        }
+        assert classified["_metrics"] == {"ifSpeed": 1000}
+
+    def test_vdom_removed_from_defaults(self):
+        """GH #35 behavior change: *Vdom is no longer a code default — a
+        Fortigate vdom INTEGER field defaults to metric unless configured."""
+        classified = SNMPPollSource._classify_bindings({
+            "fgVdom.1": ("1", "Integer"),
+        })
+        assert classified["_metrics"] == {"fgVdom": 1}
+        # Explicit per-pipeline opt-in restores the old label behavior.
+        classified = SNMPPollSource._classify_bindings(
+            {"fgVdom.1": ("1", "Integer")},
+            label_patterns=("*Vdom",),
+        )
+        assert classified["_labels"] == {"fgVdom": "1"}
+
+    def test_enum_renders_label_with_name(self):
+        """MIB SYNTAX enum → label rendering the symbolic name + int."""
+        classified = SNMPPollSource._classify_bindings(
+            {"ifOperStatus.1": ("2", "Integer")},
+            enum_names={"ifOperStatus": "down"},
+        )
+        assert classified["_labels"] == {"ifOperStatus": "down (2)"}
+        assert classified["_metrics"] == {}
+
+    def test_metric_pattern_beats_enum(self):
+        """metric_patterns win even when the field is a MIB enum."""
+        classified = SNMPPollSource._classify_bindings(
+            {"ifOperStatus.1": ("2", "Integer")},
+            metric_patterns=("ifOper*",),
+            enum_names={"ifOperStatus": "down"},
+        )
+        assert classified["_metrics"] == {"ifOperStatus": 2}
+
+    def test_label_pattern_beats_enum(self):
+        """label_patterns also take precedence over the MIB enum check."""
+        classified = SNMPPollSource._classify_bindings(
+            {"ifOperStatus.1": ("2", "Integer")},
+            label_patterns=("ifOper*",),
+            enum_names={"ifOperStatus": "down"},
+        )
+        assert classified["_labels"] == {"ifOperStatus": "2"}
+
+    def test_non_integer_types_unaffected_by_patterns(self):
+        """Patterns only steer INTEGER fields — fixed type table is immutable."""
+        classified = SNMPPollSource._classify_bindings(
+            {"ifInOctets.1": ("100", "Counter32")},
+            label_patterns=("ifInOctets",),
+        )
+        assert classified["_metrics"] == {"ifInOctets": 100}
+        classified = SNMPPollSource._classify_bindings(
+            {"ifDescr.1": ("eth0", "OctetString")},
+            metric_patterns=("ifDescr",),
+        )
+        assert classified["_labels"] == {"ifDescr": "eth0"}
+
+    def test_non_integer_value_stays_string_metric(self):
+        """A non-numeric INTEGER value falls back to its string form."""
+        classified = SNMPPollSource._classify_bindings({
+            "ifSpeed.1": ("fast", "Integer"),
+        })
+        assert classified["_metrics"] == {"ifSpeed": "fast"}
+
+    def test_mib_enum_name_lookup(self):
+        """_mib_enum_name resolves the MIB SYNTAX enum via namedValues."""
+        from tram.connectors.snmp.source import SNMPPollSource as Src
+
+        class FakeNamedValues:
+            def getName(self, value):
+                return {1: "up", 2: "down"}.get(value)
+
+        class FakeSyntax:
+            namedValues = FakeNamedValues()
+
+        class FakeNode:
+            def getSyntax(self):
+                return FakeSyntax()
+
+        class FakeBuilder:
+            def import_symbols(self, mod, sym):
+                return (FakeNode(),)
+
+        class FakeView:
+            mibBuilder = FakeBuilder()
+
+        assert Src._mib_enum_name(FakeView(), "IF-MIB", "ifOperStatus", "1") == "up"
+        assert Src._mib_enum_name(FakeView(), "IF-MIB", "ifOperStatus", "2") == "down"
+        assert Src._mib_enum_name(FakeView(), "IF-MIB", "ifOperStatus", "99") is None
+
+    def test_mib_enum_name_absent_view_or_enum(self):
+        """No view, no enum syntax, or bad import → None, never raises."""
+        from tram.connectors.snmp.source import SNMPPollSource as Src
+
+        assert Src._mib_enum_name(None, "IF-MIB", "ifOperStatus", "1") is None
+        assert Src._mib_enum_name(None, "", "", "1") is None
+
+        class NoSyntaxNode:
+            def getSyntax(self):
+                raise RuntimeError("no syntax")
+
+        class NoImportBuilder:
+            def import_symbols(self, mod, sym):
+                raise RuntimeError("missing")
+
+        class NoBuilderView:
+            pass
+
+        assert Src._mib_enum_name(NoBuilderView(), "IF-MIB", "ifOperStatus", "1") is None
+
+        class NoImportView:
+            mibBuilder = NoImportBuilder()
+
+        assert Src._mib_enum_name(NoImportView(), "IF-MIB", "ifOperStatus", "1") is None
+
+        class NoSyntaxView:
+            class mibBuilder:
+                @staticmethod
+                def import_symbols(mod, sym):
+                    return (NoSyntaxNode(),)
+
+        assert Src._mib_enum_name(NoSyntaxView(), "IF-MIB", "ifOperStatus", "1") is None
+
+    def test_pattern_layers_extend_defaults(self, monkeypatch):
+        """Env + pipeline layers EXTEND code defaults, never replace."""
+        monkeypatch.setenv("TRAM_SNMP_LABEL_PATTERNS", "ifOper*")
+        src = SNMPPollSource({
+            "host": "192.168.1.1",
+            "oids": ["1.3.6.1.2.1.1.1.0"],
+            "label_patterns": ["*Chan"],
+        })
+        assert src.label_patterns == ("*Id", "*ID", "*Index", "*Port", "*Chan", "ifOper*")
+
+    def test_metric_pattern_layers(self, monkeypatch):
+        """metric_patterns assemble pipeline-then-env (no code defaults)."""
+        monkeypatch.setenv("TRAM_SNMP_METRIC_PATTERNS", "ifSpeed")
+        src = SNMPPollSource({
+            "host": "192.168.1.1",
+            "oids": ["1.3.6.1.2.1.1.1.0"],
+            "metric_patterns": ["ifMtu"],
+        })
+        assert src.metric_patterns == ("ifMtu", "ifSpeed")
+
+    def test_pattern_layers_dedupe(self, monkeypatch):
+        """Repeated patterns across layers collapse to one entry."""
+        monkeypatch.setenv("TRAM_SNMP_LABEL_PATTERNS", "*Port")
+        src = SNMPPollSource({
+            "host": "192.168.1.1",
+            "oids": ["1.3.6.1.2.1.1.1.0"],
+            "label_patterns": ["*Port"],
+        })
+        assert src.label_patterns == ("*Id", "*ID", "*Index", "*Port")
+
+    def test_unspecified_layers_default(self):
+        """No pipeline/env config → code defaults only."""
+        src = SNMPPollSource({
+            "host": "192.168.1.1",
+            "oids": ["1.3.6.1.2.1.1.1.0"],
+        })
+        assert src.metric_patterns == ()
+        assert src.label_patterns == ("*Id", "*ID", "*Index", "*Port")
+
+
+class TestClassifyReadSemantics:
+    """GH #33/#36 — read()-level classify semantics: per-row classification,
+    refusal instead of silent collapse, unresolved+auto refusal, enum labels."""
+
+    def _wire(self, type_name: str, raw: str):
+        """Fake pysnmp wire value whose class name is the wire type."""
+        return _wire(type_name, raw)
+
+    def _walk_source(self, extra: dict, typed_rows: list[dict]):
+        """Source wired to a typed WALK returning typed_rows across batches.
+
+        The walk base is the ifTable root (1.3.6.1.2.1.2.2.1) so every mock
+        varbind lives inside the walked subtree. Returns
+        ``(src, mock_hlapi, mock_pysnmp, walk_side_effect)`` — the caller
+        replays ``walk_side_effect`` into the nextCmd patch during read().
+        """
+        var_binds = list(typed_rows.items())
+        mock_result = (None, None, None, var_binds)
+        walk_side_effect = [
+            iter([mock_result]),
+            iter([(None, None, None, [])]),
+        ]
+        mock_hlapi = MagicMock()
+        mock_hlapi.SnmpEngine.return_value = MagicMock()
+        mock_hlapi.CommunityData.return_value = MagicMock()
+        mock_hlapi.UdpTransportTarget.return_value = MagicMock()
+        mock_hlapi.ContextData.return_value = MagicMock()
+        mock_hlapi.ObjectIdentity = MagicMock(side_effect=lambda x: x)
+        mock_hlapi.ObjectType = MagicMock(side_effect=lambda x: x)
+        mock_pysnmp = MagicMock()
+        mock_pysnmp.hlapi = mock_hlapi
+        cfg = {
+            "host": "192.168.1.1",
+            "oids": ["1.3.6.1.2.1.2.2.1"],
+            "operation": "walk",
+            "classify": True,
+        }
+        cfg.update(extra)
+        src = SNMPPollSource(cfg)
+        return src, mock_hlapi, mock_pysnmp, walk_side_effect
+
+    def _read(self, src, mock_hlapi, mock_pysnmp, walk_side_effect, extra_patch=None):
+        with patch.dict("sys.modules", {"pysnmp": mock_pysnmp, "pysnmp.hlapi": mock_hlapi}):
+            with patch("pysnmp.hlapi.nextCmd", side_effect=walk_side_effect):
+                if extra_patch is not None:
+                    with extra_patch:
+                        return list(src.read())
+                return list(src.read())
+
+    def test_classify_yield_rows_typed_walk(self):
+        """yield_rows classify: per-row records, no endswith double-pass needed."""
+        typed_rows = {
+            "1.3.6.1.2.1.2.2.1.2.1": self._wire("OctetString", "eth0"),
+            "1.3.6.1.2.1.2.2.1.2.2": self._wire("OctetString", "lo"),
+            "1.3.6.1.2.1.2.2.1.10.1": self._wire("Counter32", "100"),
+            "1.3.6.1.2.1.2.2.1.10.2": self._wire("Counter32", "200"),
+        }
+        src, mock_hlapi, mock_pysnmp, walk_side_effect = self._walk_source(
+            {"yield_rows": True, "index_depth": 1, "resolve_oids": False}, typed_rows
+        )
+        results = self._read(src, mock_hlapi, mock_pysnmp, walk_side_effect)
+        assert len(results) == 1
+        rows = json.loads(results[0][0])
+        assert len(rows) == 2
+        by_index = {r["_index"]: r for r in rows}
+        assert by_index["1"]["_metrics"] == {"1.3.6.1.2.1.2.2.1.10": 100}
+        assert by_index["1"]["_labels"] == {"1.3.6.1.2.1.2.2.1.2": "eth0"}
+        assert by_index["1"]["_snmp_widths"] == {"1.3.6.1.2.1.2.2.1.10": 32}
+        assert by_index["2"]["_metrics"] == {"1.3.6.1.2.1.2.2.1.10": 200}
+        assert "_index_parts" not in by_index["1"]
+        assert "_col_locs" not in by_index["1"]
+
+    def test_unresolved_auto_refuses(self):
+        """GH #36 — unresolved keys with auto depth refuse, naming the OID."""
+        typed_rows = {
+            "1.3.6.1.2.1.2.2.1.2.1": self._wire("OctetString", "eth0"),
+        }
+        src, mock_hlapi, mock_pysnmp, walk_side_effect = self._walk_source(
+            {"yield_rows": True, "index_depth": 0, "resolve_oids": False}, typed_rows
+        )
+        with pytest.raises(SourceError, match="index_depth"):
+            self._read(src, mock_hlapi, mock_pysnmp, walk_side_effect)
+
+    def test_mib_load_failure_refusal_names_real_cause(self):
+        """resolve_oids on but the MIB view fails to load (bad module name,
+        missing dir) → the refusal names the load failure instead of telling
+        the user to 'enable resolve_oids' — which is already on."""
+        typed_rows = {
+            "1.3.6.1.2.1.2.2.1.2.1": self._wire("OctetString", "eth0"),
+        }
+        src, mock_hlapi, mock_pysnmp, walk_side_effect = self._walk_source(
+            {"yield_rows": True, "index_depth": 0, "resolve_oids": True,
+             "mib_modules": ["IF-MIB"]},
+            typed_rows,
+        )
+        with pytest.raises(SourceError, match="MIB resolution failed"):
+            self._read(
+                src, mock_hlapi, mock_pysnmp, walk_side_effect,
+                extra_patch=patch(
+                    "tram.connectors.snmp.mib_utils.get_mib_view",
+                    side_effect=RuntimeError("no such MIB module"),
+                ),
+            )
+
+    def test_classify_integer_wire_type_is_metric(self):
+        """The real wire class `Integer` classifies as metric by default —
+        the old dead Integer32 branch never ran in production."""
+        typed_rows = {
+            "1.3.6.1.2.1.2.2.1.9.1": self._wire("Counter32", "42"),
+            "1.3.6.1.2.1.2.2.1.10.1": self._wire("Integer", "500"),
+        }
+        src, mock_hlapi, mock_pysnmp, walk_side_effect = self._walk_source(
+            {"yield_rows": True, "index_depth": 1, "resolve_oids": False}, typed_rows
+        )
+        results = self._read(src, mock_hlapi, mock_pysnmp, walk_side_effect)
+        rows = json.loads(results[0][0])
+        assert rows[0]["_metrics"] == {
+            "1.3.6.1.2.1.2.2.1.10": 500,
+            "1.3.6.1.2.1.2.2.1.9": 42,
+        }
+
+    def test_classify_resolved_enum_label_end_to_end(self):
+        """Resolved INTEGER enum field → label rendering name + int."""
+        typed_rows = {
+            "1.3.6.1.2.1.2.2.1.2.1": self._wire("OctetString", "eth0"),
+            "1.3.6.1.2.1.2.2.1.8.1": self._wire("Integer", "2"),
+        }
+        src, mock_hlapi, mock_pysnmp, walk_side_effect = self._walk_source(
+            {"yield_rows": True, "index_depth": 0, "resolve_oids": True,
+             "mib_modules": ["IF-MIB"]},
+            typed_rows,
+        )
+
+        class FakeNamedValues:
+            def getName(self, value):
+                return {1: "up", 2: "down"}.get(value)
+
+        class FakeSyntax:
+            namedValues = FakeNamedValues()
+
+        class FakeNode:
+            def getSyntax(self):
+                return FakeSyntax()
+
+        class FakeBuilder:
+            def import_symbols(self, mod, sym):
+                return (FakeNode(),)
+
+        class FakeView:
+            def get_node_location(self, oid_obj):
+                tup = tuple(oid_obj)
+                if tup == (1, 3, 6, 1, 2, 1, 2, 2, 1, 8, 1):
+                    return ("IF-MIB", "ifOperStatus", [1])
+                if tup == (1, 3, 6, 1, 2, 1, 2, 2, 1, 2, 1):
+                    return ("IF-MIB", "ifDescr", [1])
+                raise KeyError(tup)
+
+            mibBuilder = FakeBuilder()
+
+        results = self._read(
+            src, mock_hlapi, mock_pysnmp, walk_side_effect,
+            extra_patch=patch("tram.connectors.snmp.mib_utils.get_mib_view", return_value=FakeView()),
+        )
+        rows = json.loads(results[0][0])
+        assert len(rows) == 1
+        assert rows[0]["_index"] == "1"
+        assert rows[0]["_labels"] == {
+            "ifOperStatus": "down (2)",
+            "ifDescr": "eth0",
+        }
+        assert rows[0]["_metrics"] == {}
+
+
+class TestClassifyRefuseSemantics:
+    """GH #33 — non-yield_rows classify over multiple row indexes refuses
+    instead of silently collapsing table rows."""
+
+    def test_classify_without_yield_rows_refuses_multiple_rows(self):
+        """GH #33 — non-yield_rows classify over a multi-row table refuses,
+        naming the columns, instead of silently collapsing."""
+        typed_rows = {
+            "1.3.6.1.2.1.2.2.1.2.1": _wire("OctetString", "eth0"),
+            "1.3.6.1.2.1.2.2.1.2.2": _wire("OctetString", "lo"),
+        }
+        src, mock_hlapi, mock_pysnmp, walk_side_effect = TestClassifyReadSemantics()._walk_source(
+            {"yield_rows": False, "index_depth": 1, "resolve_oids": False}, typed_rows
+        )
+        with pytest.raises(SourceError, match="yield_rows"):
+            TestClassifyReadSemantics()._read(src, mock_hlapi, mock_pysnmp, walk_side_effect)
+
+    def test_classify_without_yield_rows_single_row_flat(self):
+        """A single-row classify record keeps the old flat output shape."""
+        typed_rows = {
+            "1.3.6.1.2.1.2.2.1.2.1": _wire("OctetString", "eth0"),
+            "1.3.6.1.2.1.2.2.1.10.1": _wire("Gauge32", "1000"),
+        }
+        src, mock_hlapi, mock_pysnmp, walk_side_effect = TestClassifyReadSemantics()._walk_source(
+            {"yield_rows": False, "index_depth": 1, "resolve_oids": False}, typed_rows
+        )
+        results = TestClassifyReadSemantics()._read(src, mock_hlapi, mock_pysnmp, walk_side_effect)
+        assert len(results) == 1
+        data = json.loads(results[0][0])
+        assert data["_metrics"] == {"1.3.6.1.2.1.2.2.1.10": 1000}
+        assert data["_labels"] == {"1.3.6.1.2.1.2.2.1.2": "eth0"}
+        assert data["_snmp_widths"] == {}
+        assert "_index" not in data
+        assert "_index_parts" not in data
+        assert data["_polled_at"].endswith("+00:00")
 
 
 class TestSNMPPollSourceV3Config:
@@ -552,8 +1147,17 @@ class TestSNMPTrapSinkV3Config:
         assert sink.context_name == "trapctx"
 
 
+def _loc(sym_name: str, indices, mod_name: str = "IF-MIB"):
+    """Build a resolve_oid_structured-style location entry."""
+    return (sym_name, tuple(indices), mod_name)
+
+
 class TestGroupByIndex:
-    """Tests for SNMPPollSource._group_by_index — no pysnmp required."""
+    """Tests for SNMPPollSource._group_by_index — no pysnmp required.
+
+    Resolved keys carry their MIB-computed index tuples via `locations`;
+    unresolved/numeric keys use index_depth (auto + unresolved refuses).
+    """
 
     def test_single_component_index(self):
         """ifDescr.1, ifDescr.2 → two rows with _index='1' and '2'."""
@@ -563,7 +1167,13 @@ class TestGroupByIndex:
             "ifOperStatus.1": "1",
             "ifOperStatus.2": "1",
         }
-        rows = SNMPPollSource._group_by_index(bindings, index_depth=0)
+        locations = {
+            "ifDescr.1": _loc("ifDescr", (1,)),
+            "ifDescr.2": _loc("ifDescr", (2,)),
+            "ifOperStatus.1": _loc("ifOperStatus", (1,)),
+            "ifOperStatus.2": _loc("ifOperStatus", (2,)),
+        }
+        rows = SNMPPollSource._group_by_index(bindings, index_depth=0, locations=locations)
         assert len(rows) == 2
         by_index = {r["_index"]: r for r in rows}
         assert by_index["1"]["ifDescr"] == "eth0"
@@ -571,18 +1181,24 @@ class TestGroupByIndex:
         assert by_index["2"]["ifDescr"] == "lo"
 
     def test_index_parts_populated(self):
-        """_index_parts is a list split from _index."""
+        """_index_parts is a list of strings split from _index."""
         bindings = {"ifDescr.1": "eth0"}
-        rows = SNMPPollSource._group_by_index(bindings, index_depth=0)
+        locations = {"ifDescr.1": _loc("ifDescr", (1,))}
+        rows = SNMPPollSource._group_by_index(bindings, index_depth=0, locations=locations)
+        assert rows[0]["_index"] == "1"
         assert rows[0]["_index_parts"] == ["1"]
 
-    def test_ipv4_index_auto(self):
+    def test_ipv4_index_structured(self):
         """ipRouteNextHop.10.0.0.1 → col='ipRouteNextHop', idx='10.0.0.1'."""
         bindings = {
             "ipRouteNextHop.10.0.0.1": "192.168.1.254",
             "ipRouteNextHop.10.0.0.2": "192.168.1.254",
         }
-        rows = SNMPPollSource._group_by_index(bindings, index_depth=0)
+        locations = {
+            "ipRouteNextHop.10.0.0.1": _loc("ipRouteNextHop", (10, 0, 0, 1)),
+            "ipRouteNextHop.10.0.0.2": _loc("ipRouteNextHop", (10, 0, 0, 2)),
+        }
+        rows = SNMPPollSource._group_by_index(bindings, index_depth=0, locations=locations)
         assert len(rows) == 2
         by_index = {r["_index"]: r for r in rows}
         assert by_index["10.0.0.1"]["ipRouteNextHop"] == "192.168.1.254"
@@ -604,23 +1220,58 @@ class TestGroupByIndex:
         assert by_index["1.192.168.1.1"]["atPhysAddress"] == "00:11:22:33:44:55"
         assert by_index["1.192.168.1.1"]["_index_parts"] == ["1", "192", "168", "1", "1"]
 
-    def test_no_dot_in_key_becomes_empty_index(self):
-        """Key without a dot → col=key, idx='' (scalar OID row)."""
+    def test_mixed_depth_rows_group_independently(self):
+        """Resolved keys group by their own index tuple — no global depth needed."""
+        bindings = {
+            "ifDescr.1": "eth0",
+            "atPhysAddress.1.192.168.1.1": "00:11:22:33:44:55",
+        }
+        locations = {
+            "ifDescr.1": _loc("ifDescr", (1,)),
+            "atPhysAddress.1.192.168.1.1": _loc("atPhysAddress", (1, 192, 168, 1, 1)),
+        }
+        rows = SNMPPollSource._group_by_index(bindings, index_depth=0, locations=locations)
+        assert len(rows) == 2
+        by_index = {r["_index"]: r for r in rows}
+        assert by_index["1"]["ifDescr"] == "eth0"
+        assert by_index["1.192.168.1.1"]["atPhysAddress"] == "00:11:22:33:44:55"
+
+    def test_scalar_without_index_becomes_empty_index(self):
+        """A resolved scalar without instance indices → col, idx='' row."""
         bindings = {"sysDescr": "Linux"}
-        rows = SNMPPollSource._group_by_index(bindings, index_depth=0)
+        locations = {"sysDescr": _loc("sysDescr", (), "SNMPv2-MIB")}
+        rows = SNMPPollSource._group_by_index(bindings, index_depth=0, locations=locations)
         assert len(rows) == 1
         assert rows[0]["_index"] == ""
+        assert rows[0]["_index_parts"] == []
         assert rows[0]["sysDescr"] == "Linux"
 
-    def test_rows_sorted_by_index(self):
-        """Rows are returned in ascending index order."""
+    def test_rows_sorted_numerically(self):
+        """Rows are sorted by index tuple with numeric comparison — 10 after 2."""
         bindings = {
             "ifSpeed.3": "1000",
             "ifSpeed.1": "100",
             "ifSpeed.2": "10",
+            "ifSpeed.10": "1",
         }
-        rows = SNMPPollSource._group_by_index(bindings, index_depth=0)
-        assert [r["_index"] for r in rows] == ["1", "2", "3"]
+        locations = {
+            "ifSpeed.3": _loc("ifSpeed", (3,)),
+            "ifSpeed.1": _loc("ifSpeed", (1,)),
+            "ifSpeed.2": _loc("ifSpeed", (2,)),
+            "ifSpeed.10": _loc("ifSpeed", (10,)),
+        }
+        rows = SNMPPollSource._group_by_index(bindings, index_depth=0, locations=locations)
+        assert [r["_index"] for r in rows] == ["1", "2", "3", "10"]
+
+    def test_rows_sorted_numerically_numeric_keys(self):
+        """Numeric keys with explicit depth sort numerically too."""
+        bindings = {
+            "1.3.6.1.2.1.2.2.1.2.2": "lo",
+            "1.3.6.1.2.1.2.2.1.2.10": "eth9",
+            "1.3.6.1.2.1.2.2.1.2.1": "eth0",
+        }
+        rows = SNMPPollSource._group_by_index(bindings, index_depth=1)
+        assert [r["_index"] for r in rows] == ["1", "2", "10"]
 
     def test_explicit_depth_numeric_oid(self):
         """Numeric OID with explicit index_depth=1: '1.3.6.1.2.1.2.2.1.2.1'
@@ -633,6 +1284,52 @@ class TestGroupByIndex:
         assert len(rows) == 2
         by_index = {r["_index"]: r for r in rows}
         assert by_index["1"]["1.3.6.1.2.1.2.2.1.2"] == "eth0"
+
+    def test_unresolved_auto_refuses(self):
+        """Unresolved/numeric key with auto depth raises naming the OID."""
+        bindings = {"1.3.6.1.2.1.2.2.1.2.1": "eth0"}
+        with pytest.raises(SourceError, match="1.3.6.1.2.1.2.2.1.2.1"):
+            SNMPPollSource._group_by_index(bindings, index_depth=0)
+
+    def test_unresolved_auto_refusal_names_mib_failure(self):
+        """resolve_oids on but the MIB view failed to load → the refusal names
+        the load failure instead of suggesting 'enable resolve_oids'."""
+        bindings = {"1.3.6.1.2.1.2.2.1.2.1": "eth0"}
+        with pytest.raises(SourceError, match="MIB resolution failed"):
+            SNMPPollSource._group_by_index(
+                bindings, index_depth=0, mib_load_failed=True
+            )
+
+    def test_mixed_resolved_and_unresolved_auto_refuses(self):
+        """One unresolved key poisons auto grouping — refuse, don't guess."""
+        bindings = {
+            "ifDescr.1": "eth0",
+            "1.3.6.1.2.1.2.2.1.2.1": "lo",
+        }
+        locations = {"ifDescr.1": _loc("ifDescr", (1,))}
+        with pytest.raises(SourceError, match="index_depth"):
+            SNMPPollSource._group_by_index(bindings, index_depth=0, locations=locations)
+
+    def test_typed_tuples_carried_into_rows(self):
+        """Classification values (str_val, type_name) travel with the row."""
+        bindings = {
+            "ifInOctets.1": ("100", "Counter32"),
+            "ifDescr.1": ("eth0", "OctetString"),
+        }
+        locations = {
+            "ifInOctets.1": _loc("ifInOctets", (1,)),
+            "ifDescr.1": _loc("ifDescr", (1,)),
+        }
+        rows = SNMPPollSource._group_by_index(bindings, index_depth=0, locations=locations)
+        assert rows[0]["ifInOctets"] == ("100", "Counter32")
+        assert rows[0]["ifDescr"] == ("eth0", "OctetString")
+
+    def test_col_locs_recorded_for_resolved_columns(self):
+        """Resolved columns record their MIB module for enum lookups."""
+        bindings = {"ifOperStatus.1": ("1", "Integer")}
+        locations = {"ifOperStatus.1": _loc("ifOperStatus", (1,), "IF-MIB")}
+        rows = SNMPPollSource._group_by_index(bindings, index_depth=0, locations=locations)
+        assert rows[0]["_col_locs"] == {"ifOperStatus": "IF-MIB"}
 
 
 class TestSNMPPollTimestamp:
@@ -732,6 +1429,7 @@ class TestSNMPPollTimestamp:
                         assert "_polled_at" in row
                         assert "_index" in row
                         assert "_index_parts" not in row
+                        assert "_col_locs" not in row
                 except SourceError as e:
                     assert "pysnmp" in str(e)
 

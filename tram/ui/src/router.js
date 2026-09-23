@@ -17,6 +17,7 @@
 
 import { isAuthPending } from './auth_state.js'
 import { unmountPage } from './page.js'
+import { toast } from './utils.js'
 import dashboardHtml from './pages/dashboard.html?raw'
 import pipelinesHtml from './pages/pipelines.html?raw'
 import createHtml     from './pages/create.html?raw'
@@ -163,8 +164,14 @@ export const router = {
     })
     this.current = page
 
-    // Run page-specific init (lazy, best-effort)
-    inits[page]?.().catch(() => {})
+    // Run page-specific init (lazy, best-effort). A chunk evaluation or
+    // init() failure used to be swallowed silently — that turned a missing
+    // import into a fully rendered but dead page with zero console output.
+    // Surface it: log AND toast so the failure is visible and diagnosable.
+    inits[page]?.().catch((e) => {
+      console.error('page init failed', e)
+      toast('Failed to initialize page — check the browser console', 'error')
+    })
   },
 
   navigate(routeString, options = {}) {

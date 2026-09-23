@@ -5,6 +5,23 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ---
 
+## [1.4.5] - 2026-09-23
+
+### Fixed
+- `snmp_poll` WALK subtree boundary is tuple-space membership (`oid == base or oid[:len(base)] == base`) — the old string-prefix check with an `rstrip(".0")` char-set strip collected OIDs from sibling subtrees (live-verified: both leak classes gone against a real responder) (#32)
+- `snmp_poll` classify+walk without `yield_rows` now raises a `SourceError` naming the collapsed columns instead of silently discarding all but the last row's values; with `yield_rows=true` every row emits intact (#33, live-verified)
+- **[wire-type bug]** INTEGER values were classified as `_labels` in production, always: at `lookupMib=False` pysnmp decodes INTEGER as class `Integer`, so the `Integer32` branch never ran on the wire (unit tests fed `"Integer32"` strings and passed for the wrong reason). INTEGER now enters layered resolution via both class names (#35)
+- Router surfaces lazily-imported page-chunk init errors (console + toast) instead of silently rendering a dead page — the mechanism behind v1.4.3's unwired detail pages (v1.4.4 review hardening)
+- Pipeline-create navigation uses the create response's authoritative `created.name` (env-substituted or nested `name:` keys no longer land on a 404 detail page)
+
+### Added
+- Layered INTEGER classification (#35): `metric_patterns` → `label_patterns` → MIB SYNTAX enum (when `resolve_oids=True`) → default metric; patterns are case-sensitive globs (`fnmatch.translate`); pipeline-level and `TRAM_SNMP_METRIC_PATTERNS`/`TRAM_SNMP_LABEL_PATTERNS` env layers EXTEND code defaults (`*Id`, `*ID`, `*Index`, `*Port`), never replace
+- Structured index grouping (#36): row indices come from `get_node_location`'s structured tuples instead of string re-splitting; mixed-table polls group correctly per key (no single global `index_depth`); unresolved keys with auto grouping now refuse with a `SourceError` naming the OID (was: silently emitted garbage rows); rows sort numerically (`1, 2, 10` — not `1, 10, 2`); output record contracts (`_index`, `_index_parts`, `_polled_at`, `_snmp_widths`) unchanged
+- Dockerfiles: BuildKit cache mounts for pip and npm — wheel downloads persist across local image builds (`--no-cache-dir` dropped so the mount takes effect)
+
+### Changed
+- **[migration]** `snmp_poll` classify: the `*Vdom` code-default label pattern was removed — it is deployment-specific Fortigate vocabulary. Fortigate pipelines relying on the old default must add `label_patterns: ["*Vdom"]` to the pipeline (or `TRAM_SNMP_LABEL_PATTERNS=*Vdom`); without it, vdom INTEGER fields now classify as metrics by default (#35)
+
 ## [1.4.4] - 2026-09-22
 
 ### Fixed
