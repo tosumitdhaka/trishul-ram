@@ -1,5 +1,9 @@
 # TRAM Control-Plane UI — UX/Design Review
 
+> **Status (2026-09-23): the 54 findings shipped v1.4.2–v1.4.3** — QW1–QW11 and L1 (route
+> parameters) in v1.4.2, L2–L6 (creation wizard, page shell, run detail, editor, a11y) in
+> v1.4.3 (see `docs/changelog.md` `[1.4.2]` / `[1.4.3]`). This review is the historical record.
+
 **Date:** 2026-09-17
 **Scope reviewed:** `tram/ui/` — vanilla-JS SPA (Vite build), Bootstrap 5.3 + Bootstrap Icons, token layer in `src/style.css` (1,668 lines), hash router, no framework. Entry chain: `index.html` → `src/main.js` → `src/router.js` → `src/api.js`. All 10 routed pages read in full (`dashboard`, `pipelines`, `detail`, `editor`, `runs`, `schemas`, `mibs`, `cluster`, `plugins`, `settings`) plus `login`, the dead `wizard`, and shared modules (`utils.js`, `health.js`, `run_monitor.js`, `yaml_diff.js`, `runs_table.js`, `template_helpers.js`), `package.json`, `vite.config.mjs`. Backend contract verified against `tram/api/routers/` (`pipelines.py`, `runs.py`, `stats.py`, `health.py`, `mibs.py`, `schemas.py`, `templates.py`, `connectors.py`, `ai.py`, `auth.py`) and `tram/pipeline/manager.py` response shapes. Audience: telecom operators / NOC engineers.
 

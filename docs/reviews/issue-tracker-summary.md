@@ -1,5 +1,10 @@
 # TRAM Issue Tracker — Consolidated Summary
 
+> **Status (2026-09-23): historical snapshot from 2026-09-15.** Every issue listed below
+> shipped resolved: the GH #16–#22 cluster in v1.4.0 (see `docs/changelog.md` `[1.4.0]`) and
+> #24 (schema identity, Option A) in v1.4.3. See `docs/roadmap.md` and
+> `docs/ideas/consolidated-roadmap.md` for current state.
+
 **Date:** 2026-09-15
 **Sources:** GitHub issues on `tosumitdhaka/trishul-ram` (17 total: 9 open, 8 closed), `docs/issue-drafts/` (empty), `docs/roadmap.md`, `docs/ideas/tram-improvements.md`, and the code/UI/domain reviews in this directory.
 

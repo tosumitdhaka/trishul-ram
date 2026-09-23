@@ -1,5 +1,11 @@
 # TRAM — Telecom Mediation Platform Domain Review
 
+> **Status (2026-09-23): most sections fixed v1.4.0** — file-done semantics
+> (`file_stability_seconds`/`file_min_age_seconds`/`file_done_suffix`), `counter_delta` /
+> `window_aggregate` stateful transforms, gNMI subscription modes + reconnect, CORBA dedupe
+> window, and `source_timezone` shipped in v1.4.0 (see `docs/changelog.md` `[1.4.0]`). This
+> review is the historical record.
+
 **Date:** 2026-09-15
 **Reviewer role:** Senior telecom design engineer (PM/FM collection, OSS buyer's lens)
 **Scope reviewed:** `tram/connectors/{snmp,gnmi,sftp,syslog,corba,kafka}`, `tram/pipeline/{executor,controller,manager,k8s_service_manager}`, `tram/models/pipeline.py`, `tram/transforms/{aggregate,timestamp_normalize}`, `tram/serializers/pm_xml_serializer.py`, `tram/persistence/file_tracker.py`, `helm/templates/`, `docs/roadmap.md`, README.

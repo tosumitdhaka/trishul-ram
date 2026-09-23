@@ -1,5 +1,9 @@
 # UI/UX Improvement Proposals — TRAM Control Plane
 
+> **Status (2026-09-23): QW1–QW11 and L1–L6 shipped v1.4.2–v1.4.3** (see `docs/changelog.md`
+> `[1.4.2]` for the QW batch + L1 route parameters, `[1.4.3]` for L2–L6). The proposals below
+> are the historical record.
+
 **Date:** 2026-09-17
 **Source:** findings from `docs/reviews/ui-ux-review.md` (2026-09-17 re-review). Each proposal references the finding(s) it addresses using that document's section numbering. Effort estimates assume one developer familiar with the codebase.
 

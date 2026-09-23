@@ -1,5 +1,10 @@
 # AI Integration Improvements — Proposals & Ranked Ideas
 
+> **Status (2026-09-23):** **A1–A5, A8, A10, A11 shipped v1.4.1–v1.4.2** (see
+> `docs/changelog.md` `[1.4.1]` / `[1.4.2]`). **A6, A7, and B1 remain pending — unscheduled**
+> (the next AI release waits on the treq vendor decision; see
+> `docs/ideas/consolidated-roadmap.md`). The treq-gated A9/B3–B6 are pending likewise.
+
 **Date:** 2026-09-17
 **Companion to:** `docs/reviews/ai-support-review.md` (inventory, bugs, security findings for the *existing* AI surface). This document covers (a) concrete improvements to existing features and (b) new integration points, each grounded in a specific code surface.
 
@@ -26,10 +31,10 @@ The metadata to do this already exists: `SCHEMA_FIELDS[category][type][field]["s
 **A5. Revert path for AI actions in the editor** — effort: S
 Generate (editor.js:176), modify (editor.js:200), and fix (editor.js:423) all overwrite the textarea with no undo. Snapshot the pre-AI text before each AI write and offer "Undo AI change" next to the status message until the user types or saves. The modify path already auto-opens a diff (editor.js:203–204); extend that to generate/fix too, so the model's changes are always visually diffed before save.
 
-**A6. Template-grounded generation (few-shot from the template library)** — effort: S
+**A6. Template-grounded generation (few-shot from the template library)** — effort: S — *pending, unscheduled*
 `GET /api/templates` (`tram/api/routers/templates.py:75–84`) already serves fully worked pipeline YAMLs with tags (source/sink/schedule, templates.py:44–57). In `generate` mode, pick the template whose `source_type`/`sink_types` best match the prompt and include it in the system prompt as a worked example alongside the schema context from `build_ai_context` (`ai_docs.py:42–120`). This attacks the actual weakness of generation today: the model knows field *names* but not idiomatic *usage* (condition strings, oid lists, filename templates). No new endpoints; one function in ai_docs.py.
 
-**A7. Fix iteration loop for `fix` mode** — effort: S
+**A7. Fix iteration loop for `fix` mode** — effort: S — *pending, unscheduled*
 Currently one shot: YAML + error in, YAML out (`ai.py:286–300`). Make the server iterate: call `_call_ai`, validate with `load_pipeline_from_yaml`, and if invalid, feed the new error back for at most one retry before returning the best attempt plus the validation issues. The dry-run feedback the UI already renders (editor.js:280–293) then shows real errors rather than model hallucinations.
 
 **A8. Docs/Helm sync + label fix** — effort: XS
@@ -57,7 +62,7 @@ Each candidate names the exact plug-in point and the data already available ther
 
 ### Tier 1 — high operator value
 
-**B1. Run-failure triage ("Explain this run")** — value: high / effort: S–M
+**B1. Run-failure triage ("Explain this run")** — value: high / effort: S–M — *pending, unscheduled*
 - **Plug-in point (UI):** the run-issues expandable row in `tram/ui/src/pages/runs_table.js:64–102`. It already computes `failureReason` (top-level error), `reasonGroups` (deduped, count-sorted skip reasons, `runs_table.js:145–154`), `records_skipped`, and `dlq_count` — i.e., the exact triage context, pre-grouped.
 - **Plug-in point (backend):** extend `/api/ai/suggest` with `mode: "triage"` taking a `run_id`; fetch via `controller.get_run(run_id)` (already exposed by `GET /api/runs/{run_id}`, `tram/api/routers/runs.py:103–122`), which returns `error`, `errors[]`, counters (`runs.py:16–38` `_queued_run_to_dict` shows the RunResult dict shape).
 - **Why it's the top pick:** it is the operational heart of a mediation NOC — "why did last night's mediation run skip 40k records" — and the editor already proves the pattern works (dry-run explain, editor.js:403–413 uses the same `suggest` mode with an error string). The run path additionally has the pipeline YAML available server-side (join on `pipeline` name via `controller`), so the prompt can carry config + error + grouped skip reasons + counters in one shot, with the redaction from A4 applied.
