@@ -4,8 +4,10 @@ from __future__ import annotations
 
 import asyncio
 import datetime
+import fnmatch
 import logging
 import os
+import re
 import socket
 import threading
 from collections.abc import Iterator
@@ -22,6 +24,29 @@ from tram.interfaces.base_source import BaseSource
 from tram.registry.registry import register_source
 
 logger = logging.getLogger(__name__)
+
+
+# Code-default INTEGER classification globs (GH #35). Standard-only
+# vocabulary: `*Vdom` was removed — it is deployment-specific Fortigate
+# vocabulary, not a standard field suffix. Fortigate pipelines relying on the
+# old default must add `*Vdom` explicitly via `label_patterns` or
+# `TRAM_SNMP_LABEL_PATTERNS`.
+_DEFAULT_LABEL_PATTERNS = ("*Id", "*ID", "*Index", "*Port")
+_DEFAULT_METRIC_PATTERNS: tuple[str, ...] = ()
+
+_ENV_METRIC_PATTERNS = "TRAM_SNMP_METRIC_PATTERNS"
+_ENV_LABEL_PATTERNS = "TRAM_SNMP_LABEL_PATTERNS"
+
+
+def _env_patterns(env_name: str) -> tuple[str, ...]:
+    """Read a comma-separated glob pattern list from the environment."""
+    raw = os.environ.get(env_name, "")
+    return tuple(part for part in (p.strip() for p in raw.split(",")) if part)
+
+
+def _merge_patterns(*layers: tuple[str, ...]) -> tuple[str, ...]:
+    """Merge pattern layers, preserving order and dropping duplicates."""
+    return tuple(dict.fromkeys(p for layer in layers for p in layer))
 
 
 def _call_snmp_api(obj: object, snake_name: str, *args):
@@ -223,7 +248,16 @@ class SNMPPollSource(BaseSource):
         timeout         (float, default 1.0)   Per-request timeout in seconds.
         retries         (int, default 5)       Number of retries per request.
         yield_rows      (bool, default False)  Yield one record per table row.
-        index_depth     (int, default 0)       Index split depth (0=auto).
+        index_depth     (int, default 0)       Index split depth (0=auto). Applies
+                                               to unresolved/numeric keys only —
+                                               MIB-resolved keys use the structured
+                                               instance indices the MIB view already
+                                               computed. Auto + unresolved refuses.
+        classify        (bool, default False)  Split fields into _metrics/_labels.
+        metric_patterns (list[str])  INTEGER globs that force a metric (exceptions
+                                     win over label patterns; extend code defaults).
+        label_patterns  (list[str])  INTEGER globs that force a label (extend the
+                                     code defaults *Id/*ID/*Index/*Port).
         security_name   (str)   SNMPv3 USM username.
         auth_protocol   (str)   MD5 | SHA | SHA224 | SHA256 | SHA384 | SHA512.
         auth_key        (str)   Auth passphrase (None → noAuthNoPriv).
@@ -248,6 +282,18 @@ class SNMPPollSource(BaseSource):
         self.yield_rows: bool = bool(config.get("yield_rows", False))
         self.index_depth: int = int(config.get("index_depth", 0))
         self.classify: bool = bool(config.get("classify", False))
+        # INTEGER classification globs (GH #35): env + pipeline layers EXTEND the
+        # code defaults, never replace them. metric_patterns wins over everything.
+        self.metric_patterns: tuple[str, ...] = _merge_patterns(
+            _DEFAULT_METRIC_PATTERNS,
+            tuple(str(p) for p in config.get("metric_patterns", [])),
+            _env_patterns(_ENV_METRIC_PATTERNS),
+        )
+        self.label_patterns: tuple[str, ...] = _merge_patterns(
+            _DEFAULT_LABEL_PATTERNS,
+            tuple(str(p) for p in config.get("label_patterns", [])),
+            _env_patterns(_ENV_LABEL_PATTERNS),
+        )
         # Auto-prepend /mibs and TRAM_MIB_DIR
         for _d in ["/mibs", os.environ.get("TRAM_MIB_DIR", "")]:
             if _d and os.path.isdir(_d) and _d not in self.mib_dirs:
@@ -502,22 +548,85 @@ class SNMPPollSource(BaseSource):
         """Locations marking every binding as unresolved (numeric keys)."""
         return {oid: ("", (), "") for oid in bindings}
 
-    # SNMP type names that map to metrics (numeric counters/gauges)
+    # SNMP wire types that map to metrics unconditionally (GH #35).
+    # Unsigned32 is listed for MIB-typed completeness but is unreachable on
+    # the real wire at lookupMib=False: tag 0x42 decodes as Gauge32, which is
+    # already in this set (harmless; documented in GH #35).
     _METRIC_TYPES = frozenset({
         "Counter32", "Counter64", "Gauge32", "Unsigned32", "TimeTicks",
     })
-    # Field name suffixes that classify Integer32 values as labels
-    _LABEL_SUFFIXES = ("Id", "ID", "Index", "Port", "Vdom")
+    # SNMP wire types that map to labels unconditionally (GH #35).
+    _LABEL_TYPES = frozenset({
+        "OctetString", "IpAddress", "ObjectIdentifier", "Opaque", "Bits",
+    })
+    # INTEGER wire classes enter the layered resolution zone (GH #35):
+    # metric_patterns → label_patterns → MIB SYNTAX enum → default metric.
+    # Both spellings are handled because the wire class at lookupMib=False is
+    # `Integer` while MIB-typed contexts (and tests written against them)
+    # use `Integer32`.
+    _INTEGER_TYPES = frozenset({"Integer", "Integer32"})
 
     @staticmethod
-    def _classify_bindings(bindings_typed: dict[str, tuple[str, str]]) -> dict:
-        """Classify ``{key: (str_val, type_name)}`` into ``_metrics`` and ``_labels``.
+    def _mib_enum_name(mib_view, mod_name: str, sym_name: str, value: str) -> str | None:
+        """Return the MIB SYNTAX enum label for ``(mod, sym, value)``, or None.
 
-        Rules (applied per field, stripping any trailing ``.index`` suffix first):
+        Looks up the field's MIB node syntax and asks its ``namedValues`` for
+        the symbolic name of the integer value (e.g. ``ifOperStatus`` value
+        ``"1"`` → ``"up"``). Returns None when the view is absent, the node
+        has no enum syntax, or the value is not in the enum. Cheap: the MIB
+        view is already loaded and cached for any ``resolve_oids=True`` poll.
+        """
+        if mib_view is None or not mod_name or not sym_name:
+            return None
+        try:
+            mib_builder = getattr(mib_view, "mibBuilder", None)
+            if mib_builder is None:
+                return None
+            import_symbols = getattr(mib_builder, "import_symbols", None) or getattr(
+                mib_builder, "importSymbols", None
+            )
+            if import_symbols is None:
+                return None
+            node = import_symbols(mod_name, sym_name)
+            if isinstance(node, tuple):
+                node = node[0]
+            syntax = node.getSyntax()
+            named_values = getattr(syntax, "namedValues", None)
+            if named_values is None:
+                return None
+            name = named_values.getName(int(value))
+            return name if isinstance(name, str) else None
+        except Exception:
+            return None
+
+    @staticmethod
+    def _classify_bindings(
+        bindings_typed: dict[str, tuple[str, str]],
+        *,
+        metric_patterns: tuple[str, ...] = (),
+        label_patterns: tuple[str, ...] = (),
+        enum_names: dict[str, str] | None = None,
+    ) -> dict:
+        """Classify ``{key: (str_val, type_name)}`` into ``_metrics``/``_labels``.
+
+        Rules (GH #35, applied per field, stripping any trailing ``.index``
+        suffix first):
+
         - Counter32 / Counter64 / Gauge32 / Unsigned32 / TimeTicks → metric (int)
-        - Integer32 ending in an Id/Index/Port/Vdom suffix → label (str)
-        - Integer32 (other) → metric (int)
-        - Everything else (OctetString, IpAddress, ObjectIdentifier, ...) → label (str)
+        - OctetString / IpAddress / ObjectIdentifier / Opaque / Bits → label (str)
+        - Integer / Integer32 → layered resolution:
+            1. ``metric_patterns`` match → metric (exceptions win)
+            2. ``label_patterns`` match → label
+            3. MIB SYNTAX enum (via ``enum_names``) → label, rendering the
+               symbolic name alongside the int, e.g. ``"down (2)"``
+            4. default → metric (plain INTEGER = measurement)
+
+        ``metric_patterns``/``label_patterns`` are the *effective* glob lists
+        (code defaults + pipeline config + environment — see the module-level
+        ``_DEFAULT_*_PATTERNS``). Matching is case-sensitive glob compiled via
+        ``fnmatch.translate``. ``enum_names`` maps a base field to its MIB enum
+        label for the value in hand (computed by the caller only when
+        ``resolve_oids=True``).
 
         Additionally emits ``_snmp_widths: {field: 32|64}`` for Counter32/
         Counter64 fields — the SNMP type name is in hand here and otherwise
@@ -527,9 +636,16 @@ class SNMPPollSource(BaseSource):
         metrics: dict = {}
         labels: dict = {}
         widths: dict = {}
+        metric_re = [re.compile(fnmatch.translate(p)) for p in metric_patterns]
+        label_re = [re.compile(fnmatch.translate(p)) for p in label_patterns]
         for key, (str_val, type_name) in bindings_typed.items():
-            # Strip trailing dot-index portion (e.g. "ifDescr.1" → base="ifDescr")
-            base = key.split(".")[0] if "." in key else key
+            # Strip a trailing dot-index from *symbolic* keys ("ifDescr.1" →
+            # base="ifDescr"). Numeric column names (which start with a digit)
+            # are already base names and must NOT be stripped — SNMP symbols
+            # can never begin with a digit, so the first-char test is exact.
+            # Keys arriving from the grouping layer are already base names, so
+            # this is a no-op there; it keeps the direct-call contract.
+            base = key.split(".")[0] if "." in key and not key[0].isdigit() else key
             if type_name in SNMPPollSource._METRIC_TYPES:
                 if type_name == "Counter32":
                     widths[base] = 32
@@ -539,9 +655,16 @@ class SNMPPollSource(BaseSource):
                     metrics[base] = int(str_val)
                 except ValueError:
                     metrics[base] = str_val
-            elif type_name == "Integer32":
-                if any(base.endswith(sfx) for sfx in SNMPPollSource._LABEL_SUFFIXES):
+            elif type_name in SNMPPollSource._INTEGER_TYPES:
+                if any(r.match(base) for r in metric_re):
+                    try:
+                        metrics[base] = int(str_val)
+                    except ValueError:
+                        metrics[base] = str_val
+                elif any(r.match(base) for r in label_re):
                     labels[base] = str_val
+                elif enum_names and base in enum_names:
+                    labels[base] = f"{enum_names[base]} ({str_val})"
                 else:
                     try:
                         metrics[base] = int(str_val)
@@ -738,8 +861,28 @@ class SNMPPollSource(BaseSource):
             rows = self._group_by_index(raw, self.index_depth, locations)
             all_rows = []
             for row in rows:
+                col_locs = row.pop("_col_locs", {})
+                # MIB SYNTAX enum labels for INTEGER fields (resolve_oids-only —
+                # the view is already loaded and cached, measured free).
+                enum_names: dict[str, str] = {}
+                for col, col_val in row.items():
+                    if col.startswith("_"):
+                        continue
+                    str_val, type_name = col_val
+                    if type_name not in SNMPPollSource._INTEGER_TYPES:
+                        continue
+                    enum_name = self._mib_enum_name(
+                        mib_view, col_locs.get(col, ""), col, str_val
+                    )
+                    if enum_name:
+                        enum_names[col] = enum_name
                 row_typed = {k: v for k, v in row.items() if not k.startswith("_")}
-                classified = self._classify_bindings(row_typed)
+                classified = self._classify_bindings(
+                    row_typed,
+                    metric_patterns=self.metric_patterns,
+                    label_patterns=self.label_patterns,
+                    enum_names=enum_names or None,
+                )
                 classified["_polled_at"] = polled_at
                 if self.yield_rows:
                     classified["_index"] = row["_index"]

@@ -194,9 +194,12 @@ class SnmpPollSourceConfig(BaseModel):
     mib_modules: list[str] = Field(default_factory=list)
     resolve_oids: bool = True
     yield_rows: bool = False   # True → yield one record per table row (WALK only)
-    index_depth: int = 0       # 0=split on first dot (auto, for resolved names);
-                               # >0=last N OID components form the row index
+    index_depth: int = 0       # 0=auto, applies to unresolved/numeric keys only
+                               # (MIB-resolved keys use structured indices); auto
+                               # + unresolved refuses with a SourceError
     classify: bool = False     # True → replace flat fields with _metrics/_labels dicts
+    metric_patterns: list[str] = Field(default_factory=list)  # INTEGER globs → metrics (win over label)
+    label_patterns: list[str] = Field(default_factory=list)   # INTEGER globs → labels (extend *Id/*ID/*Index/*Port)
     # SNMPv3 USM (used when version="3")
     security_name: str = ""
     auth_protocol: str = "SHA"        # MD5 | SHA | SHA224 | SHA256 | SHA384 | SHA512
