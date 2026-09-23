@@ -294,6 +294,21 @@ Start scheduling or stream execution.
 ### POST /api/pipelines/{name}/stop
 Stop pipeline gracefully.
 
+### POST /api/pipelines/{name}/pause
+**Deprecated alias** for `POST /{name}/stop`. Kept for backward compatibility — use `/stop`.
+
+### POST /api/pipelines/{name}/resume
+**Deprecated alias** for `POST /{name}/start`. Kept for backward compatibility — use `/start`.
+
+### POST /api/pipelines/{name}/restart
+Stop a pipeline's active execution and immediately reschedule it. Works for both batch
+(interval/cron) and stream pipelines — useful after schema/MIB changes or when a stream needs a
+fresh start.
+
+```json
+{"name": "pm-ingest", "status": "restarting"}
+```
+
 ### POST /api/pipelines/{name}/run
 Trigger one immediate batch run (not valid for stream pipelines).
 
@@ -411,6 +426,20 @@ List all saved versions for a pipeline (requires SQLite persistence).
   {"id": 2, "name": "pm-ingest", "version": 2, "created_at": "2026-03-03T12:05:00Z", "is_active": 1},
   {"id": 1, "name": "pm-ingest", "version": 1, "created_at": "2026-03-03T12:00:00Z", "is_active": 0}
 ]
+```
+
+### GET /api/pipelines/{name}/versions/{version}
+Return the raw YAML of a specific pipeline version as `text/plain` (not JSON). Returns `404` if
+the pipeline is unknown or the version does not exist.
+
+```bash
+curl http://localhost:8765/api/pipelines/pm-ingest/versions/2
+```
+
+```yaml
+pipeline:
+  name: pm-ingest
+  ...
 ```
 
 ### POST /api/pipelines/{name}/rollback?version=N

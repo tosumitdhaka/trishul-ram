@@ -171,7 +171,7 @@ If you are upgrading from the older manager `Deployment`, set `manager.persisten
 
 ```dockerfile
 # Build with Dockerfile.worker (no UI assets, no manager deps)
-docker build -f Dockerfile.worker -t trishul-ram-worker:1.4.0 .
+docker build -f Dockerfile.worker -t trishul-ram-worker:1.4.5 .
 ```
 
 The worker image exposes port `8766` for the internal agent API and port `8767` for ingress-only webhook traffic. Kubernetes liveness/readiness probes stay on `/agent/health` over port `8766`.
@@ -343,7 +343,7 @@ Supported upload/compile source filenames are extensionless names plus `.mib`, `
 **Air-gapped environments** — copy pre-compiled MIB `.py` files into the image and optionally seed raw source files for future local dependency resolution:
 
 ```dockerfile
-FROM ghcr.io/tosumitdhaka/trishul-ram:1.4.0
+FROM ghcr.io/tosumitdhaka/trishul-ram:1.4.5
 COPY vendor-mib-sources/ /mib-sources/
 COPY compiled-mibs/*.py /mibs/
 ```
@@ -389,7 +389,7 @@ curl -X DELETE http://localhost:8765/api/schemas/cisco/GenericRecord.proto
 **Mount host directory** for development (read-write):
 
 ```bash
-docker run -v ./schemas:/schemas tram:1.4.0
+docker run -v ./schemas:/schemas tram:1.4.5
 ```
 
 ## Schema Registry Integration (v1.0.4)
@@ -442,8 +442,10 @@ TRAM_UI_DIR="" tram daemon
 | Dashboard | Stat cards, active pipelines, recent runs |
 | Pipelines | Full list with search/filter, start/stop/run/edit/delete |
 | Run History | Filterable table with expandable error rows, CSV export |
+| Run Detail | `#runs/:id` — deep-linkable per-run view (run/pipeline/outcome/record cards, failure reasons, DLQ) (v1.4.3) |
 | Pipeline Detail | Summary cards, run history, Versions tab, Config tab, rollback |
 | Pipeline Editor | YAML editor, dry-run, save (create/update) |
+| Create Wizard | `#create` — guided five-step creation from live schema descriptors, template pre-seed, stale-schema guard (v1.4.3) |
 | Schemas | Upload (drag-and-drop), list, delete |
 | MIB Modules | Upload, bulk download from mibs.pysnmp.com, delete |
 | Cluster | Node accordion with status and pipeline assignments |
@@ -528,7 +530,7 @@ To deploy a published standalone image directly from GHCR in one command:
 
 ```bash
 ./scripts/deploy-docker-standalone.sh up --ghcr
-./scripts/deploy-docker-standalone.sh up --ghcr --tag 1.4.0
+./scripts/deploy-docker-standalone.sh up --ghcr --tag 1.4.5
 ```
 
 For a no-clone bootstrap from GitHub:
@@ -564,7 +566,7 @@ host bind override (`--data-dir`) when you explicitly do not want a Docker-manag
 
 ### Installed extras in the default image
 
-The default `tram:1.4.0` image installs (`clickhouse` added in v1.0.4):
+The default `tram:1.4.5` image installs (`clickhouse` added in v1.0.4):
 
 `kafka`, `opensearch`, `snmp`, `avro`, `protobuf_ser`, `msgpack_ser`, `mqtt`, `amqp`, `nats`,
 `gnmi`, `jmespath`, `sql`, `influxdb`, `redis`, `websocket`, `elasticsearch`, `metrics`,
@@ -584,7 +586,7 @@ The following extras are **excluded by default** to keep the image lean. Extend 
 | `otel` | only needed when `TRAM_OTEL_ENDPOINT` is set; no-op fallback when absent | ~15 MB |
 
 ```dockerfile
-FROM ghcr.io/tosumitdhaka/trishul-ram:1.4.0
+FROM ghcr.io/tosumitdhaka/trishul-ram:1.4.5
 RUN pip install "tram[parquet,s3,gcs,azure,otel]"
 ```
 
@@ -598,11 +600,11 @@ docker compose up
 
 ## Kubernetes — Helm (recommended)
 
-TRAM ships a production-ready Helm chart in `helm/`. The release workflow publishes it to GHCR OCI from the main release branch flow.
+TRAM ships a production-ready Helm chart in `helm/`. The tag-triggered release workflow publishes it to GHCR OCI (merging to `main` publishes nothing).
 
 ### Install
 
-Quick-start examples below use `latest`. For production, pin `image.tag` and worker image tags to a specific release such as `1.4.0`.
+Quick-start examples below use `latest`. For production, pin `image.tag` and worker image tags to a specific release such as `1.4.5`.
 
 ```bash
 # Add chart from OCI registry
@@ -625,7 +627,7 @@ helm upgrade tram oci://ghcr.io/tosumitdhaka/charts/trishul-ram \
 | Value | Default | Description |
 |-------|---------|-------------|
 | `image.repository` | `ghcr.io/tosumitdhaka/trishul-ram` | Docker image repository |
-| `image.tag` | `"1.4.0"` | Image tag |
+| `image.tag` | `"1.4.5"` in `helm/values-template.yaml` (the generic release baseline) | Image tag. Note: the shipped `helm/values.yaml` intentionally carries a local kind/dev tag (`local-20260420-v131`) — use `values-template.yaml` (or an explicit `--set image.tag=`) for real releases |
 | `replicaCount` | `1` | Replicas for the standalone StatefulSet; not used when `manager.enabled=true` |
 | `manager.enabled` | `false` | `true` = manager+worker mode (manager StatefulSet + worker StatefulSet); `false` = standalone StatefulSet |
 | `worker.replicas` | `3` | Number of worker StatefulSet replicas (only when `manager.enabled=true`) |
@@ -666,7 +668,7 @@ helm upgrade tram oci://ghcr.io/tosumitdhaka/charts/trishul-ram \
 ```bash
 helm install tram oci://ghcr.io/tosumitdhaka/charts/trishul-ram \
   --namespace tram --create-namespace \
-  --set image.tag=1.4.0
+  --set image.tag=1.4.5
 ```
 
 A single-replica `StatefulSet` with pod name `tram-0` runs the full daemon. A `PersistentVolumeClaim` (`data-tram-0`) is auto-provisioned via `volumeClaimTemplates` and mounted at `/data`. SQLite run history, API-uploaded schemas (`/data/schemas`), and runtime MIBs (`/data/mibs`) all share this single PVC and survive pod restarts. Standard MIBs baked into the image at `/mibs` remain available alongside any runtime-downloaded ones.
@@ -680,11 +682,11 @@ SQLite on a `ReadWriteOnce` PVC is sufficient — only one manager pod ever writ
 ```bash
 helm install tram oci://ghcr.io/tosumitdhaka/charts/trishul-ram \
   --namespace tram --create-namespace \
-  --set image.tag=1.4.0 \
+  --set image.tag=1.4.5 \
   --set manager.enabled=true \
   --set worker.replicas=3 \
   --set worker.image.repository=trishul-ram-worker \
-  --set worker.image.tag=1.4.0 \
+  --set worker.image.tag=1.4.5 \
   --set apiKey=mysecret
 ```
 
@@ -718,7 +720,7 @@ PostgreSQL is **optional** in manager+worker mode — SQLite on the manager's RW
 ```bash
 helm install tram oci://ghcr.io/tosumitdhaka/charts/trishul-ram \
   --namespace tram --create-namespace \
-  --set image.tag=1.4.0 \
+  --set image.tag=1.4.5 \
   --set manager.enabled=true \
   --set worker.replicas=3 \
   --set postgresql.enabled=true
@@ -751,7 +753,7 @@ Then install/upgrade TRAM with shared storage enabled:
 ```bash
 helm upgrade trishul-ram helm/ \
   --namespace trishul-ram \
-  --set image.tag=1.4.0 \
+  --set image.tag=1.4.5 \
   --set manager.enabled=true \
   --set worker.replicas=3 \
   --set manager.persistence.enabled=true \
@@ -844,7 +846,7 @@ spec:
     spec:
       containers:
       - name: tram
-        image: ghcr.io/tosumitdhaka/trishul-ram:1.4.0
+        image: ghcr.io/tosumitdhaka/trishul-ram:1.4.5
         command: ["tram", "daemon"]
         ports:
         - containerPort: 8765
