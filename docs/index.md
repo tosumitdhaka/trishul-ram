@@ -9,7 +9,7 @@ title: TRAM Documentation
 
 Lightweight, container-native Python daemon for telecom data pipeline orchestration.
 
-**Version:** 1.4.0 | **Status:** Production-ready | **Python:** 3.13+
+**Version:** 1.4.5 | **Status:** Production-ready | **Python:** 3.13+
 
 ---
 
@@ -76,7 +76,7 @@ curl http://localhost:8765/api/ready
 
 ### Kubernetes (Helm)
 
-Quick-start examples below use `latest`. For production, pin `image.tag` to a specific release such as `1.4.0`.
+Quick-start examples below use `latest`. For production, pin `image.tag` to a specific release such as `1.4.5`.
 
 ```bash
 # Standalone mode (SQLite, single pod)
@@ -204,7 +204,12 @@ docs/
 
 See [changelog.md](changelog.md) for detailed release notes.
 
-**Current Release:** v1.4.0 (2026-09-16)
+**Current Release:** v1.4.5 (2026-09-23)
+- SNMP poll data-integrity pass (GH #32, #33, #35, #36): tuple-space WALK subtree boundaries, refuse instead of silently collapsing rows on `classify` + no `yield_rows`, layered INTEGER classification (code-default label patterns `*Id,*ID,*Index,*Port`; `*Vdom` removed with a documented migration), and structured index grouping with `_index`/`_index_parts`
+- Browser-harness hardening: lazy page-chunk init errors surface loudly (console + toast), and pipeline-create navigation uses the response's authoritative `created.name`
+- BuildKit cache mounts for pip and npm in the Dockerfiles
+
+**v1.4.0** (2026-09-16)
 - Correctness & security core: threaded batch-path rework (bounded in-flight chunks, deferred source finalize — the #16 OOMKill root cause), alert-rule edits persist across restarts, watcher delete stops pipelines, syslog RFC 6587 framing + concurrent TCP, internal-surface auth (`TRAM_INTERNAL_AUTH_MODE`), webhook body-size limit, Kafka at-least-once default
 - Visibility: durable count=1 stream placements with manager-restart adoption, worker-death recovery, and config-drift redispatch (GH #17); live mid-run dashboard stats (GH #22); linear-time `json_flatten`/`explode` (GH #18)
 - Enhancements: ASN.1 `split_path` (GH #19), queued manual runs — durable, auto-dispatched on capacity (GH #21), templates-page action contract (GH #20)
@@ -248,4 +253,4 @@ See [changelog.md](changelog.md) for detailed release notes.
 
 ---
 
-*Last updated: 2026-09-16*
+*Last updated: 2026-09-23*
