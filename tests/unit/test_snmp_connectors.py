@@ -689,8 +689,17 @@ class TestSNMPTrapSinkV3Config:
         assert sink.context_name == "trapctx"
 
 
+def _loc(sym_name: str, indices, mod_name: str = "IF-MIB"):
+    """Build a resolve_oid_structured-style location entry."""
+    return (sym_name, tuple(indices), mod_name)
+
+
 class TestGroupByIndex:
-    """Tests for SNMPPollSource._group_by_index — no pysnmp required."""
+    """Tests for SNMPPollSource._group_by_index — no pysnmp required.
+
+    Resolved keys carry their MIB-computed index tuples via `locations`;
+    unresolved/numeric keys use index_depth (auto + unresolved refuses).
+    """
 
     def test_single_component_index(self):
         """ifDescr.1, ifDescr.2 → two rows with _index='1' and '2'."""
@@ -700,7 +709,13 @@ class TestGroupByIndex:
             "ifOperStatus.1": "1",
             "ifOperStatus.2": "1",
         }
-        rows = SNMPPollSource._group_by_index(bindings, index_depth=0)
+        locations = {
+            "ifDescr.1": _loc("ifDescr", (1,)),
+            "ifDescr.2": _loc("ifDescr", (2,)),
+            "ifOperStatus.1": _loc("ifOperStatus", (1,)),
+            "ifOperStatus.2": _loc("ifOperStatus", (2,)),
+        }
+        rows = SNMPPollSource._group_by_index(bindings, index_depth=0, locations=locations)
         assert len(rows) == 2
         by_index = {r["_index"]: r for r in rows}
         assert by_index["1"]["ifDescr"] == "eth0"
@@ -708,18 +723,24 @@ class TestGroupByIndex:
         assert by_index["2"]["ifDescr"] == "lo"
 
     def test_index_parts_populated(self):
-        """_index_parts is a list split from _index."""
+        """_index_parts is a list of strings split from _index."""
         bindings = {"ifDescr.1": "eth0"}
-        rows = SNMPPollSource._group_by_index(bindings, index_depth=0)
+        locations = {"ifDescr.1": _loc("ifDescr", (1,))}
+        rows = SNMPPollSource._group_by_index(bindings, index_depth=0, locations=locations)
+        assert rows[0]["_index"] == "1"
         assert rows[0]["_index_parts"] == ["1"]
 
-    def test_ipv4_index_auto(self):
+    def test_ipv4_index_structured(self):
         """ipRouteNextHop.10.0.0.1 → col='ipRouteNextHop', idx='10.0.0.1'."""
         bindings = {
             "ipRouteNextHop.10.0.0.1": "192.168.1.254",
             "ipRouteNextHop.10.0.0.2": "192.168.1.254",
         }
-        rows = SNMPPollSource._group_by_index(bindings, index_depth=0)
+        locations = {
+            "ipRouteNextHop.10.0.0.1": _loc("ipRouteNextHop", (10, 0, 0, 1)),
+            "ipRouteNextHop.10.0.0.2": _loc("ipRouteNextHop", (10, 0, 0, 2)),
+        }
+        rows = SNMPPollSource._group_by_index(bindings, index_depth=0, locations=locations)
         assert len(rows) == 2
         by_index = {r["_index"]: r for r in rows}
         assert by_index["10.0.0.1"]["ipRouteNextHop"] == "192.168.1.254"
@@ -741,23 +762,58 @@ class TestGroupByIndex:
         assert by_index["1.192.168.1.1"]["atPhysAddress"] == "00:11:22:33:44:55"
         assert by_index["1.192.168.1.1"]["_index_parts"] == ["1", "192", "168", "1", "1"]
 
-    def test_no_dot_in_key_becomes_empty_index(self):
-        """Key without a dot → col=key, idx='' (scalar OID row)."""
+    def test_mixed_depth_rows_group_independently(self):
+        """Resolved keys group by their own index tuple — no global depth needed."""
+        bindings = {
+            "ifDescr.1": "eth0",
+            "atPhysAddress.1.192.168.1.1": "00:11:22:33:44:55",
+        }
+        locations = {
+            "ifDescr.1": _loc("ifDescr", (1,)),
+            "atPhysAddress.1.192.168.1.1": _loc("atPhysAddress", (1, 192, 168, 1, 1)),
+        }
+        rows = SNMPPollSource._group_by_index(bindings, index_depth=0, locations=locations)
+        assert len(rows) == 2
+        by_index = {r["_index"]: r for r in rows}
+        assert by_index["1"]["ifDescr"] == "eth0"
+        assert by_index["1.192.168.1.1"]["atPhysAddress"] == "00:11:22:33:44:55"
+
+    def test_scalar_without_index_becomes_empty_index(self):
+        """A resolved scalar without instance indices → col, idx='' row."""
         bindings = {"sysDescr": "Linux"}
-        rows = SNMPPollSource._group_by_index(bindings, index_depth=0)
+        locations = {"sysDescr": _loc("sysDescr", (), "SNMPv2-MIB")}
+        rows = SNMPPollSource._group_by_index(bindings, index_depth=0, locations=locations)
         assert len(rows) == 1
         assert rows[0]["_index"] == ""
+        assert rows[0]["_index_parts"] == []
         assert rows[0]["sysDescr"] == "Linux"
 
-    def test_rows_sorted_by_index(self):
-        """Rows are returned in ascending index order."""
+    def test_rows_sorted_numerically(self):
+        """Rows are sorted by index tuple with numeric comparison — 10 after 2."""
         bindings = {
             "ifSpeed.3": "1000",
             "ifSpeed.1": "100",
             "ifSpeed.2": "10",
+            "ifSpeed.10": "1",
         }
-        rows = SNMPPollSource._group_by_index(bindings, index_depth=0)
-        assert [r["_index"] for r in rows] == ["1", "2", "3"]
+        locations = {
+            "ifSpeed.3": _loc("ifSpeed", (3,)),
+            "ifSpeed.1": _loc("ifSpeed", (1,)),
+            "ifSpeed.2": _loc("ifSpeed", (2,)),
+            "ifSpeed.10": _loc("ifSpeed", (10,)),
+        }
+        rows = SNMPPollSource._group_by_index(bindings, index_depth=0, locations=locations)
+        assert [r["_index"] for r in rows] == ["1", "2", "3", "10"]
+
+    def test_rows_sorted_numerically_numeric_keys(self):
+        """Numeric keys with explicit depth sort numerically too."""
+        bindings = {
+            "1.3.6.1.2.1.2.2.1.2.2": "lo",
+            "1.3.6.1.2.1.2.2.1.2.10": "eth9",
+            "1.3.6.1.2.1.2.2.1.2.1": "eth0",
+        }
+        rows = SNMPPollSource._group_by_index(bindings, index_depth=1)
+        assert [r["_index"] for r in rows] == ["1", "2", "10"]
 
     def test_explicit_depth_numeric_oid(self):
         """Numeric OID with explicit index_depth=1: '1.3.6.1.2.1.2.2.1.2.1'
@@ -770,6 +826,43 @@ class TestGroupByIndex:
         assert len(rows) == 2
         by_index = {r["_index"]: r for r in rows}
         assert by_index["1"]["1.3.6.1.2.1.2.2.1.2"] == "eth0"
+
+    def test_unresolved_auto_refuses(self):
+        """Unresolved/numeric key with auto depth raises naming the OID."""
+        bindings = {"1.3.6.1.2.1.2.2.1.2.1": "eth0"}
+        with pytest.raises(SourceError, match="1.3.6.1.2.1.2.2.1.2.1"):
+            SNMPPollSource._group_by_index(bindings, index_depth=0)
+
+    def test_mixed_resolved_and_unresolved_auto_refuses(self):
+        """One unresolved key poisons auto grouping — refuse, don't guess."""
+        bindings = {
+            "ifDescr.1": "eth0",
+            "1.3.6.1.2.1.2.2.1.2.1": "lo",
+        }
+        locations = {"ifDescr.1": _loc("ifDescr", (1,))}
+        with pytest.raises(SourceError, match="index_depth"):
+            SNMPPollSource._group_by_index(bindings, index_depth=0, locations=locations)
+
+    def test_typed_tuples_carried_into_rows(self):
+        """Classification values (str_val, type_name) travel with the row."""
+        bindings = {
+            "ifInOctets.1": ("100", "Counter32"),
+            "ifDescr.1": ("eth0", "OctetString"),
+        }
+        locations = {
+            "ifInOctets.1": _loc("ifInOctets", (1,)),
+            "ifDescr.1": _loc("ifDescr", (1,)),
+        }
+        rows = SNMPPollSource._group_by_index(bindings, index_depth=0, locations=locations)
+        assert rows[0]["ifInOctets"] == ("100", "Counter32")
+        assert rows[0]["ifDescr"] == ("eth0", "OctetString")
+
+    def test_col_locs_recorded_for_resolved_columns(self):
+        """Resolved columns record their MIB module for enum lookups."""
+        bindings = {"ifOperStatus.1": ("1", "Integer")}
+        locations = {"ifOperStatus.1": _loc("ifOperStatus", (1,), "IF-MIB")}
+        rows = SNMPPollSource._group_by_index(bindings, index_depth=0, locations=locations)
+        assert rows[0]["_col_locs"] == {"ifOperStatus": "IF-MIB"}
 
 
 class TestSNMPPollTimestamp:
@@ -869,6 +962,7 @@ class TestSNMPPollTimestamp:
                         assert "_polled_at" in row
                         assert "_index" in row
                         assert "_index_parts" not in row
+                        assert "_col_locs" not in row
                 except SourceError as e:
                     assert "pysnmp" in str(e)
 

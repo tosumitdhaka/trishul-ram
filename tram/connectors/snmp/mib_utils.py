@@ -267,6 +267,49 @@ def get_mib_view(mib_dirs: list[str], mib_modules: list[str]):
     return _cached_mib_view(tuple(sorted(mib_dirs)), tuple(sorted(mib_modules)))
 
 
+def resolve_oid_structured(mib_view, oid_tuple: tuple) -> tuple[str, tuple[int, ...], str, str]:
+    """Resolve a numeric OID tuple to structured parts plus the string form.
+
+    Sibling of :func:`resolve_oid` that keeps the MIB-computed instance
+    indices as structured ints instead of flattening them into a string
+    (the grouping layer re-derives row coordinates from strings today — see
+    the structured-index grouping redesign, GH #36).
+
+    Returns ``(sym_name, indices, resolved_str, mod_name)``:
+
+    * ``sym_name`` — symbolic column name (``""`` when unresolved).
+    * ``indices`` — instance indices as a tuple of ints (empty when
+      unresolved or when the node has no instance).
+    * ``resolved_str`` — the legacy string form, byte-identical to
+      :func:`resolve_oid` output (dotted-decimal fallback when unresolved).
+    * ``mod_name`` — MIB module name (``""`` when unresolved).
+
+    Args:
+        mib_view: MibViewController from build_mib_view().
+        oid_tuple: Numeric OID as tuple of ints, e.g. (1, 3, 6, 1, 2, 1, 1, 1, 0).
+    """
+    dotted = ".".join(str(x) for x in oid_tuple)
+    if mib_view is None:
+        return "", (), dotted, ""
+
+    try:
+        from pyasn1.type.univ import ObjectIdentifier
+
+        oid_obj = ObjectIdentifier(oid_tuple)
+        get_node_location = getattr(mib_view, "get_node_location", None)
+        if get_node_location is None:
+            get_node_location = getattr(mib_view, "getNodeLocation")
+        mod_name, sym_name, indices = get_node_location(oid_obj)
+        indices_tuple = tuple(int(i) for i in indices)
+        if indices_tuple:
+            resolved_str = sym_name + "." + ".".join(str(i) for i in indices_tuple)
+        else:
+            resolved_str = sym_name
+        return sym_name, indices_tuple, resolved_str, mod_name
+    except Exception:
+        return "", (), dotted, ""
+
+
 def resolve_oid(mib_view, oid_tuple: tuple) -> str:
     """Resolve a numeric OID tuple to a symbolic name.
 
@@ -277,24 +320,7 @@ def resolve_oid(mib_view, oid_tuple: tuple) -> str:
     Returns:
         Symbolic string like "sysDescr" or dotted-decimal string as fallback.
     """
-    if mib_view is None:
-        return ".".join(str(x) for x in oid_tuple)
-
-    try:
-        from pyasn1.type.univ import ObjectIdentifier
-
-        oid_obj = ObjectIdentifier(oid_tuple)
-        get_node_location = getattr(mib_view, "get_node_location", None)
-        if get_node_location is None:
-            get_node_location = getattr(mib_view, "getNodeLocation")
-        mod_name, sym_name, indices = get_node_location(oid_obj)
-        if indices:
-            idx_str = "." + ".".join(str(i) for i in indices)
-        else:
-            idx_str = ""
-        return f"{sym_name}{idx_str}"
-    except Exception:
-        return ".".join(str(x) for x in oid_tuple)
+    return resolve_oid_structured(mib_view, oid_tuple)[2]
 
 
 def oid_str_to_tuple(oid_str: str) -> tuple[int, ...]:

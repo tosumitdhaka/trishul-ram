@@ -261,47 +261,93 @@ class SNMPPollSource(BaseSource):
         self.context_name: str = config.get("context_name", "")
 
     @staticmethod
-    def _group_by_index(bindings: dict, index_depth: int) -> list[dict]:
+    def _numeric_part(part: int | str) -> int | str:
+        """Coerce a numeric string to int for tuple-space row keys."""
+        if isinstance(part, int):
+            return part
+        if isinstance(part, str) and part.isdigit():
+            return int(part)
+        return part
+
+    @staticmethod
+    def _index_sort_key(idx: tuple) -> tuple:
+        """Numeric-aware row sort key: ints compare numerically, strings fall back."""
+
+        def _key(part: int | str) -> tuple:
+            if isinstance(part, int):
+                return (0, part)
+            if isinstance(part, str) and part.isdigit():
+                return (0, int(part))
+            return (1, str(part))
+
+        return tuple(_key(p) for p in idx)
+
+    @staticmethod
+    def _group_by_index(
+        bindings: dict,
+        index_depth: int,
+        locations: dict[str, tuple[str, tuple[int, ...], str]] | None = None,
+    ) -> list[dict]:
         """Group flat ``{oid_key: value}`` bindings into per-row dicts.
 
-        Each key is split into a *column* name and a *row index*:
+        Row coordinates come from two sources (GH #36):
 
-        * ``index_depth == 0`` (auto) — split on the **first dot**.
-          Works correctly for MIB-resolved names such as ``ifDescr.1`` or
-          ``atPhysAddress.1.192.168.1.1``.
+        * **Resolved keys** (``locations`` entry with a non-empty symbolic
+          name) use the MIB-computed instance indices directly — per-key, so
+          mixed-depth tables group correctly with no global knob.
+        * **Unresolved/numeric keys** use ``index_depth``: the last *N* OID
+          components form the index. With ``index_depth == 0`` (auto) an
+          unresolved key raises :class:`SourceError` naming the OID — the old
+          behavior silently emitted garbage rows from the first-dot split.
 
-        * ``index_depth > 0`` — last *N* OID components form the index.
-          Use this for numeric OIDs when you know the table instance depth
-          (e.g. ``index_depth=4`` for single IPv4-addressed rows).
-
-        The returned list contains one dict per unique index value.  Each
-        dict carries ``_index`` (dot-separated string) and ``_index_parts``
-        (list of strings) alongside the column values.
+        ``locations`` maps each binding key to ``(sym_name, indices, mod_name)``
+        as returned by ``resolve_oid_structured`` (``sym_name == ""`` when
+        unresolved). Rows carry ``_index`` (dot-separated string), ``_index_parts``
+        (list of strings), and, when locations were supplied, an internal
+        ``_col_locs`` map of ``{column: mod_name}`` for resolved columns (the
+        caller pops it before emitting). Rows are sorted by index tuple with
+        numeric comparison (ints where numeric, string fallback).
         """
-        rows: dict[str, dict] = {}
+        rows: dict[tuple, dict] = {}
         for key, val in bindings.items():
-            if index_depth == 0:
-                dot_pos = key.find(".")
-                if dot_pos == -1:
-                    col, idx = key, ""
-                else:
-                    col, idx = key[:dot_pos], key[dot_pos + 1:]
+            loc = locations.get(key) if locations else None
+            if loc is not None and loc[0]:
+                sym_name, indices, mod_name = loc
+                col = sym_name
+                idx_parts = [str(i) for i in indices]
+                idx_key = tuple(indices)
             else:
+                # Unresolved/numeric key — the row index comes from config.
+                if index_depth == 0:
+                    raise SourceError(
+                        f"SNMP poll: cannot determine row index for OID {key} in "
+                        f"auto mode (index_depth=0) — set index_depth to the number "
+                        f"of trailing index components, or enable resolve_oids for "
+                        f"MIB-based row indices"
+                    )
                 parts = key.split(".")
                 if len(parts) > index_depth:
                     col = ".".join(parts[:-index_depth])
-                    idx = ".".join(parts[-index_depth:])
+                    idx_parts = parts[-index_depth:]
                 else:
-                    col, idx = key, ""
+                    col, idx_parts = key, []
+                idx_key = tuple(SNMPPollSource._numeric_part(p) for p in idx_parts)
+                mod_name = ""
 
-            if idx not in rows:
-                rows[idx] = {
-                    "_index": idx,
-                    "_index_parts": idx.split(".") if idx else [],
+            if idx_key not in rows:
+                rows[idx_key] = {
+                    "_index": ".".join(idx_parts),
+                    "_index_parts": idx_parts,
                 }
-            rows[idx][col] = val
+                if locations is not None:
+                    rows[idx_key]["_col_locs"] = {}
+            rows[idx_key][col] = val
+            if mod_name and locations is not None:
+                rows[idx_key]["_col_locs"][col] = mod_name
 
-        return [rows[k] for k in sorted(rows)]
+        return [
+            rows[k] for k in sorted(rows, key=SNMPPollSource._index_sort_key)
+        ]
 
     def test_connection(self) -> dict:
         """Send a real SNMP GET for sysDescr.0 to verify host, port, and community string."""
@@ -403,17 +449,44 @@ class SNMPPollSource(BaseSource):
             mib_view = get_mib_view(self.mib_dirs, self.mib_modules)
         return [self._resolve_configured_oid(oid, mib_view) for oid in self.oids]
 
-    def _resolve_binding_keys(self, bindings: dict) -> dict:
-        """Resolve binding OID keys, warning when resolution is effectively a no-op."""
-        from tram.connectors.snmp.mib_utils import get_mib_view, oid_str_to_tuple, resolve_oid
+    def _load_mib_view(self):
+        """Load the cached MIB view when configured; None otherwise (GH #36)."""
+        if not (self.resolve_oids and (self.mib_dirs or self.mib_modules)):
+            return None
+        from tram.connectors.snmp.mib_utils import get_mib_view
 
-        mib_view = get_mib_view(self.mib_dirs, self.mib_modules)
-        resolved = {
-            resolve_oid(mib_view, oid_str_to_tuple(oid)): val
-            for oid, val in bindings.items()
-        }
-        changed = sum(1 for old_key, new_key in zip(bindings.keys(), resolved.keys(), strict=False) if old_key != new_key)
-        if bindings and changed == 0:
+        try:
+            return get_mib_view(self.mib_dirs, self.mib_modules)
+        except Exception as _exc:
+            logger.warning("MIB OID resolution failed for poll: %s", _exc)
+            return None
+
+    def _resolve_bindings(self, bindings: dict, mib_view) -> tuple[dict, dict]:
+        """Resolve binding OID keys to structured locations + the flat form.
+
+        Returns ``(locations, flat)``:
+
+        * ``locations`` — ``{oid: (sym_name, indices, mod_name)}`` keyed by the
+          *raw* binding keys, for tuple-space row grouping.
+        * ``flat`` — ``{resolved_str: value}`` keyed by the legacy string form
+          (identical to the old ``resolve_oid`` output) for flat emission.
+
+        Warns when resolution produces no symbolic names (a no-op poll).
+        """
+        from tram.connectors.snmp.mib_utils import (
+            oid_str_to_tuple,
+            resolve_oid_structured,
+        )
+
+        locations: dict = {}
+        flat: dict = {}
+        for oid, val in bindings.items():
+            sym_name, indices, resolved_str, mod_name = resolve_oid_structured(
+                mib_view, oid_str_to_tuple(oid)
+            )
+            locations[oid] = (sym_name, indices, mod_name)
+            flat[resolved_str] = val
+        if bindings and not any(loc[0] for loc in locations.values()):
             logger.warning(
                 "SNMP poll MIB resolution produced no symbolic names; using numeric OIDs",
                 extra={
@@ -423,7 +496,11 @@ class SNMPPollSource(BaseSource):
                     "mib_dirs": self.mib_dirs,
                 },
             )
-        return resolved
+        return locations, flat
+
+    def _empty_locations(self, bindings: dict) -> dict:
+        """Locations marking every binding as unresolved (numeric keys)."""
+        return {oid: ("", (), "") for oid in bindings}
 
     # SNMP type names that map to metrics (numeric counters/gauges)
     _METRIC_TYPES = frozenset({
@@ -632,60 +709,6 @@ class SNMPPollSource(BaseSource):
         except Exception as exc:
             raise SourceError(f"SNMP poll failed: {exc}") from exc
 
-        if self.classify:
-            # raw is {oid: (str_val, type_name)} — resolve OID keys then classify
-            if self.resolve_oids and (self.mib_dirs or self.mib_modules):
-                try:
-                    raw = self._resolve_binding_keys(raw)
-                except Exception as _exc:
-                    logger.warning("MIB OID resolution failed for poll: %s", _exc)
-            # For yield_rows mode: group by index preserving type tuples, then classify per row
-            meta = {
-                "source_host": self.host,
-                "source_port": self.port,
-                "operation": self.operation,
-                "oids": self.oids,
-                "polled_at": polled_at,
-            }
-            logger.info(
-                "SNMP poll completed",
-                extra={"host": self.host, "operation": self.operation, "bindings": len(raw)},
-            )
-            if self.yield_rows:
-                # Group by index (str vals only) for index extraction, then re-classify
-                str_bindings = {k: v[0] for k, v in raw.items()}
-                rows = self._group_by_index(str_bindings, self.index_depth)
-                all_rows = []
-                for row in rows:
-                    index = row.get("_index", "")
-                    # Rebuild typed subset for this row index
-                    row_typed = {
-                        k: v for k, v in raw.items()
-                        if k.endswith(f".{index}") or (not index and "." not in k)
-                    }
-                    classified = self._classify_bindings(row_typed)
-                    classified["_index"] = index
-                    classified["_polled_at"] = polled_at
-                    all_rows.append(classified)
-                # Yield all rows as a single payload so the executor processes
-                # them as one chunk → one write per sink (prevents file overwrite)
-                yield json.dumps(all_rows).encode("utf-8"), meta
-            else:
-                classified = self._classify_bindings(raw)
-                classified["_polled_at"] = polled_at
-                yield json.dumps(classified).encode("utf-8"), meta
-            return
-
-        # ── Standard (non-classify) path ──────────────────────────────────────
-        bindings: dict = raw  # type: ignore[assignment]
-
-        # Optional MIB-based OID resolution
-        if self.resolve_oids and (self.mib_dirs or self.mib_modules):
-            try:
-                bindings = self._resolve_binding_keys(bindings)
-            except Exception as _exc:
-                logger.warning("MIB OID resolution failed for poll: %s", _exc)
-
         meta = {
             "source_host": self.host,
             "source_port": self.port,
@@ -695,16 +718,65 @@ class SNMPPollSource(BaseSource):
         }
         logger.info(
             "SNMP poll completed",
-            extra={"host": self.host, "operation": self.operation, "bindings": len(bindings)},
+            extra={"host": self.host, "operation": self.operation, "bindings": len(raw)},
         )
 
+        if self.classify:
+            # Pipeline (GH #36): typed capture → resolve (structured indices) →
+            # group by index tuple → classify per row → emit. Classification never
+            # sees a key without a row coordinate, so row collapse is impossible.
+            mib_view = self._load_mib_view()
+            if mib_view is not None:
+                try:
+                    locations, _flat = self._resolve_bindings(raw, mib_view)
+                except Exception as _exc:
+                    logger.warning("MIB OID resolution failed for poll: %s", _exc)
+                    locations = self._empty_locations(raw)
+            else:
+                locations = self._empty_locations(raw)
+
+            rows = self._group_by_index(raw, self.index_depth, locations)
+            all_rows = []
+            for row in rows:
+                row_typed = {k: v for k, v in row.items() if not k.startswith("_")}
+                classified = self._classify_bindings(row_typed)
+                classified["_polled_at"] = polled_at
+                if self.yield_rows:
+                    classified["_index"] = row["_index"]
+                all_rows.append(classified)
+
+            if self.yield_rows:
+                # One payload per poll → one chunk → one write per sink
+                yield json.dumps(all_rows).encode("utf-8"), meta
+            else:
+                if all_rows:
+                    record = all_rows[0]
+                else:
+                    record = {"_metrics": {}, "_labels": {}, "_snmp_widths": {}, "_polled_at": polled_at}
+                yield json.dumps(record).encode("utf-8"), meta
+            return
+
+        # ── Standard (non-classify) path ──────────────────────────────────────
+        locations: dict = {}
+        flat: dict = raw  # type: ignore[assignment]
+        mib_view = self._load_mib_view()
+        if mib_view is not None:
+            try:
+                locations, flat = self._resolve_bindings(raw, mib_view)
+            except Exception as _exc:
+                logger.warning("MIB OID resolution failed for poll: %s", _exc)
+                locations = self._empty_locations(raw)
+        else:
+            locations = self._empty_locations(raw)
+
         if self.yield_rows:
-            rows = self._group_by_index(bindings, self.index_depth)
+            rows = self._group_by_index(raw, self.index_depth, locations)
             for row in rows:
                 row.pop("_index_parts", None)
+                row.pop("_col_locs", None)
                 row["_polled_at"] = polled_at
             # Yield all rows as a single payload → one chunk → one write per sink
             yield json.dumps(rows).encode("utf-8"), meta
         else:
-            bindings["_polled_at"] = polled_at
-            yield json.dumps(bindings).encode("utf-8"), meta
+            flat["_polled_at"] = polled_at
+            yield json.dumps(flat).encode("utf-8"), meta
