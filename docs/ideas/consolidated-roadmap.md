@@ -3,6 +3,8 @@
 **Date:** 2026-09-18
 **Purpose:** single planning view over ALL pending work — findings from both 2026-09-17 reviews, all improvement proposals, open GitHub issues, and the treq reuse feasibility — grouped by cross-cutting pattern and assigned to releases. All releases stay in the 1.4.x patch series per maintainers' preference (themed waves, not majors).
 
+> **Status (2026-09-23):** this is the living plan. **v1.4.1, v1.4.2, and v1.4.3 shipped as planned** (sections below marked ✅ SHIPPED). **v1.4.4** shipped as an unplanned wizard AI-assist fix pass (operator-reported; see `docs/changelog.md` `[1.4.4]`). **v1.4.5** shipped as an unplanned SNMP data-integrity pass (GH #32/#33/#35/#36; see `docs/changelog.md` `[1.4.5]`). The AI-expansion block is now unscheduled — the next AI release waits on the treq vendor decision plus A6/A7/B1.
+
 **Inputs consolidated:**
 
 | Source | Contents |
@@ -12,7 +14,7 @@
 | `docs/ideas/ui-ux-improvements.md` | QW1–QW11 quick wins, L1–L6 larger efforts |
 | `docs/ideas/ai-integration-improvements.md` | A1–A11 improvements, B1–B8 integration ideas |
 | `docs/ideas/treq-ai-reuse-feasibility.md` | treq `_providers/` vendoring assessment (deferred) |
-| Open issues | #24 (schema registry feasibility), #26 (editor plugin reference), #27 (plugins page restructure) |
+| Open issues | #24 (schema-registry feasibility — closed, implemented v1.4.3), #26 (editor plugin reference — closed v1.4.2), #27 (plugins page restructure — closed v1.4.2); #39 (A1 skip_processed, still open) |
 | Housekeeping | 5 uncommitted doc files (the two reviews, two improvement docs, treq feasibility) |
 
 ---
@@ -41,7 +43,9 @@ Every pending item belongs to one of six patterns. Grouping by pattern (not by s
 
 Commit the 5 uncommitted docs as a `docs:` commit: the two reviews (one modified, one new) and three ideas docs. None of the work below should start on top of uncommitted reference material.
 
-### v1.4.1 — AI trust & safety patch (~3–4 days)
+### v1.4.1 — AI trust & safety patch ✅ SHIPPED (2026-09-21, PR #29)
+
+> Shipped as planned: A1–A5, A8, A10, A11 and QW1 all landed; the release gate became tag-triggered (see `docs/changelog.md` `[1.4.1]`).
 
 Theme: make the existing AI feature safe and honest before any expansion. All backend except two small UI pieces.
 
@@ -59,7 +63,9 @@ Theme: make the existing AI feature safe and honest before any expansion. All ba
 
 **Exit criteria:** no sync SDK call on the event loop; no unredacted secret leaves the server in a prompt; no unvalidated YAML accepted by the editor; `helm`/docs match reality.
 
-### v1.4.2 — Operator trust, UI wave (~2 weeks)
+### v1.4.2 — Operator trust, UI wave ✅ SHIPPED (2026-09-21, PR #30)
+
+> Shipped as planned: QW1–QW11, #26/#27, and L1 (route parameters) all landed; the #24 feasibility study was recorded during the window (see `docs/changelog.md` `[1.4.2]`).
 
 Theme: QW batch first (fast, user-visible), L1 after (per decision). **Single sequential UI lane** — QWs, #26/#27, and L1 all touch the same files; no concurrent UI lanes (repo rule).
 
@@ -73,7 +79,9 @@ Theme: QW batch first (fast, user-visible), L1 after (per decision). **Single se
 
 **Exit criteria:** all QWs land; #26/#27 closed; deep links survive refresh; no `window._*` handoffs remain.
 
-### v1.4.3 — Structure & creation (~2–3 weeks)
+### v1.4.3 — Structure & creation ✅ SHIPPED (2026-09-22, PR #31)
+
+> Shipped as planned: L3 page shell, L4 run-detail + honest run totals, L2 structured creation wizard (`#create`, schema-driven, stale-schema guard), L5 editor gutter/anchoring, L6 a11y, and #24 (Option A content-hash `schema_version`) all landed; the UI browser smoke gate check was added (see `docs/changelog.md` `[1.4.3]`).
 
 Theme: consolidate the UI's structural debt and give operators a structured creation path.
 
@@ -87,7 +95,15 @@ Theme: consolidate the UI's structural debt and give operators a structured crea
 
 L5 may slip to the next release without breaking anything else.
 
-### v1.4.4 — AI expansion (conditional — starts only when AI is prioritized)
+### v1.4.5 — SNMP data integrity (unplanned — shipped 2026-09-23, PR #38)
+
+> Shipped as an unplanned pass out of an operator data-integrity report: GH #32 (tuple-space WALK subtree boundaries), #33 (refuse instead of silently collapsing classify rows), #35 (layered INTEGER classification; `*Vdom` code-default removed with migration), #36 (structured index grouping). See `docs/changelog.md` `[1.4.5]`.
+
+### AI expansion — unscheduled (next AI release)
+
+Theme: convert the AI feature from editor tooling into operator tooling, on top of a hardened base.
+**Not scheduled** — starts only when AI is prioritized; the treq vendor decision (whether to vendor
+`treq/_providers/`) is the gate, and A6/A7/B1 remain the standing next items.
 
 Theme: convert the AI feature from editor tooling into operator tooling, on top of a hardened base.
 
@@ -128,6 +144,6 @@ Theme: convert the AI feature from editor tooling into operator tooling, on top 
 
 ## 5. Open items & triggers
 
-- **Trigger — AI expansion (v1.4.4):** maintainer prioritizes AI tooling; treq feasibility doc has the cut list ready.
-- **Decision needed before v1.4.3:** L2 path choice, informed by #24.
-- **L5 slip tolerance:** may move one release without dependencies.
+- **Trigger — AI expansion (unscheduled):** maintainer prioritizes AI tooling; the treq vendor decision (`docs/ideas/treq-ai-reuse-feasibility.md`) gates the next AI release, with A6/A7/B1 as the standing next items.
+- **SNMP library migration decision (open):** the trishul-smi/trishul-snmp swap remains blocked on SNMPv1 + v3 crypto breadth (`docs/ideas/trishul-smi-snmp-migration-feasibility.md`). v1.4.5 shipped the SNMP data-integrity work on pysnmp; the migration decision is unaffected.
+- **Resolved during the plan's execution:** L2 path choice (decided by the #24 study → structured creation wizard, shipped v1.4.3); L5 slip tolerance (no slip — shipped v1.4.3).

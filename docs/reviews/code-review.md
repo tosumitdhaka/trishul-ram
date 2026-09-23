@@ -6,6 +6,24 @@
 
 **Finding labels:** `[CONFIRMED BUG]` = exact fault path traced; `[LIKELY BUG]` = traced but requires unlucky timing; `[DESIGN ISSUE]`, `[BOILERPLATE]`, `[GAP]`, `[SECURITY]` as marked.
 
+> **Status (2026-09-23):** historical snapshot from 2026-09-15. Most findings shipped fixed in
+> **v1.4.0** (verified against `docs/changelog.md` `[1.4.0]`):
+> - Confirmed bugs — **A2** (deferred source finalize + bounded in-flight cap), **A6** (alert
+>   edits persist via `controller.update()`), **A7** (watcher delete stops pipelines), **A12**
+>   (syslog RFC 6587 framing + concurrent TCP), **A13** (per-slot CAS slot updates).
+> - Likely bugs — **B1, B2, B10** (controller lifecycle RLock), **B3** (Kafka/gNMI `stop()`),
+>   **B4** (lag sampled per batch), **B6** (Kafka at-least-once default).
+> - Security — **C1, C2** (`TRAM_INTERNAL_AUTH_MODE` + agent API-key middleware; Phase 1
+>   warn-only), **C3** (constant-time compares), **C4** (`?api_key=` removed, webhook body limit).
+> - Design/boilerplate — **D4** (honest `records_out`), **E2** (shared `_upsert`), **E5**
+>   (alerts route through `controller.update()`).
+>
+> **A1 remains CONFIRMED STILL OPEN** — `skip_processed` is silently disabled in manager+worker
+> mode: the worker-side executor at `tram/agent/server.py:411` still constructs no
+> `file_tracker`, so file sources reprocess every file on every run with no warning. Tracked as
+> issue **#39**. The remaining findings are not re-triaged here; this document is a historical
+> snapshot and the A1 tracking entry is issue #39.
+
 ---
 
 ## A. Confirmed bugs (exact fault path traced)
