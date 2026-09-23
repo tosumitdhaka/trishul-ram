@@ -79,6 +79,11 @@ Update only the docs affected by the change:
 
 ## Version Release Checklist
 
+### 0. Release Gate (mandatory)
+- [ ] Run `scripts/release-gate.sh` and require every check green — 11 checks: clean working tree, version consistency (pyproject / chart / UI), version not already tagged, changelog entry, `ruff check .`, pytest + 75% coverage floor, UI build, UI browser smoke (Playwright), example pipelines validate, helm lint + template, docs-sync
+- [ ] The UI browser smoke check needs node >= 20 (or `TRAM_BROWSER_NODE=/path/to/node20`); it is never silently skipped
+- [ ] `scripts/release-gate.sh --fast` skips pytest + UI build + browser smoke — iteration only; the **full gate** must pass before tagging
+
 ### 1. Version Bump
 - [ ] Update `pyproject.toml` version to `X.Y.Z`
 - [ ] Update `helm/Chart.yaml`:
@@ -134,14 +139,16 @@ Recommended for releases that touch scheduling, placement, stats, K8s behavior, 
 - [ ] Confirm `release.yml` publishes both versioned and `latest` tags for manager and worker images
 - [ ] Registry auth uses the built-in `GITHUB_TOKEN` (`packages: write`) — no PAT secret to rotate
 
-### 8. Commit and Push
+### 8. Commit, Merge, and Tag
 - [ ] Stage version bump and release-doc files
 - [ ] Commit with `chore: bump version to X.Y.Z`
-- [ ] Push `main` to trigger `.github/workflows/release.yml`
+- [ ] Open the release PR (one branch + one PR per version, progress table in the PR body) and merge it to `main`
+- [ ] Merging to `main` publishes **nothing** — `release.yml` fires only on a `v*` tag push
+- [ ] Tag and push the tag (must equal the `pyproject.toml` version):
+      `git tag vX.Y.Z && git push origin vX.Y.Z` — this triggers `.github/workflows/release.yml`
 
 ### 9. Post-Push Verification
-- [ ] Monitor the `CI` workflow on `main`
-- [ ] Monitor the `Release` workflow on `main`
+- [ ] Monitor the `Release` workflow on the tag (its `gate` job re-runs `scripts/release-gate.sh --ci` on the tag before publishing anything)
 - [ ] Verify pushed images:
   - [ ] `ghcr.io/<owner>/trishul-ram:X.Y.Z`
   - [ ] `ghcr.io/<owner>/trishul-ram-worker:X.Y.Z`
@@ -150,20 +157,19 @@ Recommended for releases that touch scheduling, placement, stats, K8s behavior, 
 - [ ] Verify pushed Helm chart: `oci://ghcr.io/<owner>/charts/trishul-ram:X.Y.Z`
 
 ### 10. Tag / GitHub Release
-Git tagging is optional from a publishing perspective because the current release
-workflow is push-to-main based. Do it when you want Git history and GitHub
-Releases to track the shipped version explicitly.
-- [ ] Create and push annotated tag: `git tag -a vX.Y.Z -m "Release version X.Y.Z" && git push origin vX.Y.Z`
+Tagging is the **publish trigger**, not an optional extra: `release.yml` fires only on `v*` tag
+pushes and re-runs the gate on the tag before publishing images and the Helm chart. Push-to-main
+publishes nothing.
+- [ ] Create and push the tag: `git tag vX.Y.Z && git push origin vX.Y.Z`
 - [ ] Create GitHub release from tag `vX.Y.Z`
 - [ ] Copy the `docs/changelog.md` entry into release notes
 
 ## Hotfix Checklist
 
 - [ ] Keep scope minimal
-- [ ] Repeat the full validation steps above
+- [ ] Repeat the full validation steps above (including `scripts/release-gate.sh`, full gate)
 - [ ] Update `docs/changelog.md`
-- [ ] Push `main` and verify the same workflows
-- [ ] Tag only if you want a GitHub release entry for the hotfix
+- [ ] Merge to `main` — then tag `vX.Y.Z` and push the tag; the tag triggers the release workflow (merging to `main` alone publishes nothing)
 
 ## Rollback Checklist
 
@@ -174,96 +180,7 @@ Releases to track the shipped version explicitly.
 
 ## Notes
 
-- CI and release workflows currently trigger on pushes to `main`; tag creation is not required to publish artifacts.
+- The release workflow (`release.yml`) fires **only on `v*` tag pushes** — merging to `main` never publishes artifacts. `ci.yml` runs lint/tests/UI build on every PR and push.
 - `release.yml` already publishes `latest`; do not use a separate Git tag named `latest`.
 - A successful `./scripts/deploy-kind-tram-dev.sh --tag <tag>` run for the release candidate can stand in for separate local Docker build checks and the Helm install-path sanity check, because it already builds images, loads them into kind, and performs a live `helm upgrade --install`; still record `helm dependency update helm/` and `helm lint helm/` explicitly.
 - Keep this file procedural. Release history belongs in `docs/changelog.md`.
-
-## v1.4.0 Status — 2026-09-16
-
-This section records the current known status of the `1.4.0` release pass (branch `wave-a-stopgaps`, PR #25).
-
-### Completed
-- [x] `pyproject.toml`, `helm/Chart.yaml` (chart + appVersion), and `tram/ui/package.json` bumped to `1.4.0`
-- [x] Release-facing docs updated (`docs/changelog.md`, `docs/index.md`, `docs/deployment.md`, `docs/roadmap.md`, `docs/api.md`, `docs/architecture.md`, `README.md`, `.env.example`); release record at `docs/plans/v1.4.0_plan.md`
-- [x] Docs directory restructured (historical plans → `archive/`, active plans + release record → `plans/`) and an independent docs audit remediated (see the audit findings applied on this branch)
-- [x] Full local validation: `ruff check .`, full backend suite (2130 passed), `cd tram/ui && npm run build`, `helm lint helm/` (0 failures)
-- [x] Live kind-cluster verification (`./scripts/deploy-kind-tram-dev.sh`): `tram 1.4.0` + `/api/meta` 1.4.0 from the bumped images, and all wave exit-criteria gates passed — E.2 queued-runs lifecycle, F.1 stateful-transform semantics, D.2 placement lifecycle, #16 RSS soak (13 threaded runs, stable peak, zero OOMKills); report at `docs/reviews/kind-verification.md`
-- [x] CI green on the release branch (Test + Docker Build Validation)
-
-### Still Open
-- [ ] PR #25 merge to `main` (pending review)
-- [ ] Post-push artifact verification (GHCR images for `1.4.0`)
-- [ ] Optional Git tag / GitHub Release status is not recorded here yet
-
-## v1.3.3 Status — 2026-05-01
-
-This section records the current known status of the `1.3.3` release pass.
-
-### Completed
-- [x] `pyproject.toml` version bumped to `1.3.3`
-- [x] `helm/Chart.yaml` `version` and `appVersion` bumped to `1.3.3`
-- [x] `helm/values-template.yaml` generic release tag bumped to `1.3.3`
-- [x] Release-facing docs updated for `1.3.3` (`docs/changelog.md`, `docs/index.md`, `docs/deployment.md`, `docs/roadmap.md`, `docs/api.md`)
-- [x] CI/release workflow alignment rechecked:
-  - [x] `.github/workflows/ci.yml` uses Python `3.13` and still runs `ruff check .` plus `pytest tests/unit/ tests/integration/`
-  - [x] `.github/workflows/release.yml` uses Python `3.13`, reads the version from `pyproject.toml`, runs `helm dependency update helm/`, publishes versioned and `latest` image tags, and still requires `GHCR_TOKEN`
-- [x] Full local source-level validation completed in the current environment:
-  - [x] `ruff check .`
-  - [x] `pytest tests/unit/ -v -o log_cli=false`
-  - [x] `pytest tests/integration/ -v -o log_cli=false`
-  - [x] `pytest tests/ --cov=tram --cov-fail-under=75 -o log_cli=false`
-  - [x] `cd tram/ui && npm run build`
-- [x] Helm dependency and chart lint validation completed:
-  - [x] `helm dependency update helm/`
-  - [x] `helm lint helm/`
-- [x] Example-pipeline validation completed:
-  - [x] `tram validate pipelines/*.yaml` passed for all `32` bundled YAMLs
-  - [x] Representative dry-runs passed for `pipelines/minimal.yaml`, `pipelines/multi-format-fanout.yaml`, and `pipelines/webhook-alarm-fanout.yaml`
-  - [x] `/api/templates` endpoint behavior is covered by the passing unit API suite (`tests/unit/test_api_misc_routers.py`)
-- [x] Existing live kind deploy validation via `./scripts/deploy-kind-tram-dev.sh` is accepted as the release proof for local Docker image build + Helm upgrade/install behavior
-
-### Intentionally Retained
-- [x] `helm/values.yaml` remains the active kind/dev deployment profile with local image tags; the generic release baseline is `helm/values-template.yaml`
-- [x] The current local `.venv` remains on Python `3.12`, so installed `tram` package metadata is not the source of truth for `1.3.3`; source files, tests, and docs are updated, but runtime version reporting in this venv is intentionally not used as release evidence
-
-### Still Open
-- [ ] Local `/api/meta` verification from a bumped runtime instance remains blocked in the current `.venv` because installed package metadata still reports the previously installed version
-- [ ] Release commit/push to `main` is not recorded here yet
-- [ ] Post-push artifact verification is not recorded here yet
-- [ ] Optional Git tag / GitHub Release status is not recorded here yet
-
-## v1.3.1 Status — 2026-04-20
-
-This section records the current known status of the `1.3.1` release pass.
-
-### Completed
-- [x] `pyproject.toml` version bumped to `1.3.1`
-- [x] `helm/Chart.yaml` `version` and `appVersion` bumped to `1.3.1`
-- [x] Full Python validation completed earlier in the release pass:
-  - [x] `ruff check .`
-  - [x] `pytest tests/unit/ -q`
-  - [x] `pytest tests/integration/ -q`
-  - [x] `pytest tests/ --cov=tram --cov-fail-under=75`
-- [x] Helm validation completed in the release pass:
-  - [x] `helm lint helm/`
-  - [x] chart dependency handling verified in `.github/workflows/release.yml`
-- [x] Live kind deployment validation completed
-- [x] Real manager/worker ingress and placement tests completed on kind
-- [x] Scale-down / stale-slot / degraded placement behavior validated on kind
-- [x] `workers.list` dedicated service endpoint reconciliation bug fixed and revalidated live
-- [x] Release workflow checked:
-  - [x] reads version from `pyproject.toml`
-  - [x] runs `helm dependency update helm/`
-  - [x] publishes versioned and `latest` manager/worker images
-  - [x] uses `GHCR_TOKEN`
-- [x] Helm values split is intentional:
-  - [x] `helm/values.yaml` tracks the active kind/dev deployment profile
-  - [x] `helm/values-template.yaml` is the generic release baseline
-
-### Still Open
-- [ ] Post-push artifact verification is not recorded here yet:
-  - [ ] GHCR manager image verification
-  - [ ] GHCR worker image verification
-  - [ ] OCI Helm chart verification
-- [ ] Optional Git tag / GitHub Release status is not recorded here yet

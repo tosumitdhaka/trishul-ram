@@ -1,16 +1,17 @@
 # CLAUDE.md
 
 This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
+Repo-wide rules, commands, and release process live in `AGENTS.md` — that file is authoritative; this one holds the older deep-dive notes.
 
 ## Project Overview
 
 TRAM (Trishul Real-time Aggregation & Mediation) is a production-ready Python daemon for telecom data pipeline orchestration. It runs as an always-on service that executes pipeline definitions (YAML) on schedules (interval/cron/manual) or continuously (stream mode for Kafka/NATS/webhooks).
 
-**Tech stack:** Python 3.11+, FastAPI, Pydantic v2, APScheduler, SQLAlchemy Core, Bootstrap 5 UI
+**Tech stack:** Python 3.13+, FastAPI, Pydantic v2, APScheduler, SQLAlchemy Core, Bootstrap 5 UI
 
-**Deployment modes** (v1.2.2):
+**Deployment modes** (v1.2.0):
 - `standalone` — single StatefulSet pod; all-in-one (scheduler + DB + UI). Default.
-- `manager` — Deployment that owns scheduling, DB, and UI; dispatches runs to workers.
+- `manager` — StatefulSet that owns scheduling, DB, and UI; dispatches runs to workers.
 - `worker` — StatefulSet pods that execute pipelines and POST results back to manager. No DB, no UI.
 
 ## Development Commands
@@ -21,8 +22,8 @@ pip install -e ".[dev,manager]"            # base + manager (apscheduler, sqlalc
 pip install -e ".[dev,manager,snmp,avro,kafka]"   # with specific extras
 
 # Testing
-pytest tests/unit/                        # 1296 unit tests, no network
-pytest tests/integration/                 # 44 integration tests
+pytest tests/unit/                        # unit tests, no network
+pytest tests/integration/                 # integration tests (SFTP, Kafka, schema registry)
 pytest tests/ --cov=tram --cov-report=term-missing  # with coverage
 pytest tests/unit/test_foo.py::test_bar  # single test
 
@@ -125,20 +126,17 @@ tram/
 │   ├── executor.py       # batch_run(), stream_run(), dry_run() — core execution logic
 │   ├── manager.py        # PipelineManager (add/remove/run/pause/list)
 │   ├── controller.py     # PipelineController — lifecycle authority, state machine, restart
-│   └── linter.py         # Pipeline lint rules (L001-L005)
-├── scheduler/
-│   └── scheduler.py      # TramScheduler — APScheduler wrapper + stream thread pool
+│   └── linter.py         # Pipeline lint rules (L001-L013)
 ├── agent/
 │   ├── server.py         # WorkerAgent — FastAPI on :8766 (run/stop/status/health)
 │   ├── worker_pool.py    # WorkerPool — health polling, least-loaded dispatch, round-robin
 │   └── assets.py         # sync_assets() — pull schemas/MIBs from manager before each run
 ├── connectors/           # 24 sources + 20 sinks (sftp, kafka, rest, s3, opensearch, ...)
-├── transforms/           # 21 transforms (rename, cast, filter, aggregate, jmespath, melt, ...)
+├── transforms/           # 29 transforms (rename, cast, filter, aggregate, jmespath, melt, ...)
 ├── serializers/          # json, csv, xml, avro, parquet, protobuf, msgpack, ndjson
 ├── persistence/
 │   ├── db.py             # TramDB (SQLAlchemy Core)
 │   └── file_tracker.py   # ProcessedFileTracker (skip_processed)
-├── cluster/              # Legacy: NodeRegistry + ClusterCoordinator (pre-v1.2.0 HA model)
 ├── alerts/               # AlertEvaluator (webhook + email, cooldown logic)
 ├── metrics/              # Prometheus metrics (tram_records_*, tram_kafka_consumer_lag, etc.)
 ├── telemetry/            # OpenTelemetry tracing (batch_run, sink writes)
@@ -155,13 +153,13 @@ tram/ui/                  # Bootstrap 5 SPA (built to /ui, served by FastAPI Sta
 ├── src/
 │   ├── api.js            # REST client wrapper
 │   ├── router.js         # client-side routing (hash-based)
-│   └── pages/            # dashboard.js, pipelines.js, detail.js, editor.js, ...
+│   └── pages/            # dashboard.js, pipelines.js, detail.js, editor.js, create.js (wizard), runs_detail.js, ...
 └── dist/                 # Vite build output (copied into Docker image)
 
 helm/                     # Helm chart (standalone + manager+worker mode, TLS, UI service)
 ├── templates/
 │   ├── statefulset.yaml         # standalone StatefulSet (skipped when manager.enabled=true)
-│   ├── manager-deployment.yaml  # manager Deployment (only when manager.enabled=true)
+│   ├── manager-statefulset.yaml # manager StatefulSet (only when manager.enabled=true)
 │   ├── worker-statefulset.yaml  # worker StatefulSet (only when manager.enabled=true)
 │   ├── worker-headless-service.yaml  # headless DNS for workers
 │   └── service-ui.yaml          # optional separate UI service
@@ -236,7 +234,7 @@ Every update saves the previous YAML to `pipeline_versions` table. Rollback load
 
 - **Unit tests** (`tests/unit/`) mock all I/O — connectors, database, HTTP calls
 - **Integration tests** (`tests/integration/`) use real local services (test SFTP server, embedded Kafka)
-- Coverage target: 60% minimum (CI enforces this)
+- Coverage target: 75% minimum (enforced by the release gate and CI)
 - Test file naming: `test_<module>.py` mirrors source structure
 
 ## Common Development Pitfalls
@@ -262,6 +260,6 @@ All runtime config via `TRAM_*` env vars (see `.env.example`). Critical ones:
 ## Versioning
 
 - **Single source of truth:** `pyproject.toml` `version` field
-- Release workflow patches version from git tag
+- Releases are **tag-triggered**: bump `pyproject.toml`, `helm/Chart.yaml` (`version` + `appVersion`), and `tram/ui/package.json` in the release PR, then push tag `vX.Y.Z` (must equal the pyproject version). `.github/workflows/release.yml` fires only on the tag and re-runs the release gate before publishing. See `docs/release-gate.md` and `AGENTS.md`.
 - `tram.__version__` loaded via `importlib.metadata`
 - All references (README, `docs/changelog.md`, Helm chart, `docs/index.md`) must match `pyproject.toml`

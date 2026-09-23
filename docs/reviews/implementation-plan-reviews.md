@@ -1,5 +1,8 @@
 # Independent Reviews of the Implementation Plan
 
+> **Status (2026-09-23): historical snapshot — the reviewed plan shipped as v1.4.0** (waves
+> A–F, GH #16–#22; see `docs/changelog.md` `[1.4.0]` and `docs/plans/v1.4.0_plan.md`).
+
 **Date:** 2026-09-15
 **Subject:** `docs/plans/issue-implementation-plan.md` (v1)
 **Method:** Two independent review sessions with distinct mandates, neither sharing context with the plan's authoring session. Review 1 (technical): solution-vs-root-cause fidelity, dependency graph, completeness, effort calibration, verified against the actual code. Review 2 (execution/delivery): wave ordering, coupling, rollout coordination, planning artifacts, scope realism. Post-review, the highest-impact claims were independently spot-verified (marked below) before the plan was revised to v2.

@@ -27,16 +27,17 @@ The script exits non-zero if any check fails. `--fast` is for iteration only —
 | 8 | UI browser smoke (Playwright) | The built SPA boots against fixture-stubbed API responses — boot/console-error class, wizard flow, editor gutter/anchoring, a11y tokens, wizard YAML quoting (see below) |
 | 9 | Example pipelines validate | `tram validate` over every `pipelines/*.yaml` |
 | 10 | Helm lint + template | Chart lints and renders (dependencies fetched to a temp copy) |
-| 11 | Docs-sync | Every `TRAM_*` env var referenced in the Python source appears in `.env.example` |
+| 11 | Docs-sync | Every `TRAM_*` env var referenced in the Python source appears in `.env.example`, and `helm/values-template.yaml`'s `image.tag` equals the version under gate (`helm/values.yaml` intentionally stays on a local kind/dev tag) |
 
 Notes on check 11: it is a best-effort static scan — dynamically constructed names can slip through. If a variable is deliberately internal-only, document that decision next to the check rather than deleting it from `.env.example` silently.
 
 ## UI browser smoke (Playwright) — check 8
 
-The gate's last UI barrier: after a fresh `tram/ui` build, the suite (`tests/browser/run.mjs`) starts a dependency-free static server over `tram/ui/dist`, stubs every `/api/**` call at the network level from checked-in fixtures (`tests/browser/fixtures/` — captured shapes from the live cluster), 2026-09-22), and drives a real headless Chromium through five checks:
+The gate's last UI barrier: after a fresh `tram/ui` build, the suite (`tests/browser/run.mjs`) starts a dependency-free static server over `tram/ui/dist`, stubs every `/api/**` call at the network level from checked-in fixtures (`tests/browser/fixtures/` — captured shapes from the live cluster), 2026-09-22), and drives a real headless Chromium through six checks:
 
 - **boot** — every main page route boots with no console/page errors, no failed requests, no frozen shell; the shell renders the released version (this is the class that shipped two browser-only release blockers in v1.4.3).
 - **wizard** — schema-driven fields, inline required validation, the stale-`schema_version` guard (rotation blocks navigation/save, reload recovers), template pre-seed, editor hand-off.
+- **wizard-ai** — the AI-assist flow end-to-end: generate from an enabled provider, Review holds the AI YAML, no bypassed-step validation toasts, info-styled "YAML generated", verbatim editor hand-off, Cancel → pipelines, Save → a **wired** detail page (this is the regression net for the v1.4.4 operator-reported detail-page/dead-button class).
 - **editor** — gutter, typing/line sync, tokenizer classes, tab, scroll sync, dry-run error anchoring, draft guard, wizard Review regression.
 - **a11y** — muted/badge contrast tokens in both themes, health-card `<button>` semantics (focus/click/Esc).
 - **yaml-quote** — wizard review-YAML quoting of numeric/boolean-looking strings, the 60s schema-poll page-leave guard, legacy `#wizard` redirect.
@@ -62,7 +63,7 @@ TRAM_BROWSER_NODE=/path/to/node20 scripts/release-gate.sh
 
 ## How the layers enforce it
 
-1. **PR-level CI** (`.github/workflows/ci.yml`): every PR runs lint, tests + coverage, UI build, the browser smoke suite, example-pipeline validation, and Helm lint. A red PR cannot satisfy the gate.
+1. **PR-level CI** (`.github/workflows/ci.yml`): every PR runs lint, tests + coverage, UI build, the browser smoke suite, example-pipeline validation, Helm lint, and a Docker Build Validation job (builds standalone/manager/worker images). A red PR cannot satisfy the gate. GitHub Pages for the docs is a separate workflow (`deploy-docs.yml`) and is not part of the gate.
 2. **Release workflow** (`.github/workflows/release.yml`): fires **only on `v*` tag pushes** — merging to main no longer publishes anything. The `gate` job verifies tag == pyproject version, verifies the changelog section, and re-runs `scripts/release-gate.sh --ci` on the tag itself. Docker images and the Helm chart publish only after the gate is green.
 3. **Process rule**: this document + AGENTS.md bind both maintainers and coding agents — no tagging past a red gate.
 

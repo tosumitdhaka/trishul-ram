@@ -1,5 +1,10 @@
 # AI Support Review
 
+> **Status (2026-09-23): findings fixed v1.4.1/v1.4.2** — the BUG/SECURITY items (blocking
+> `_call_ai`, key-wipe, redaction, base_url) plus the docs/helm sync shipped in v1.4.1, with
+> the redaction extension (headers/alerts) and `null`-means-clear semantics in v1.4.2 (see
+> `docs/changelog.md` `[1.4.1]` / `[1.4.2]`). This review is the historical record.
+
 **Date:** 2026-09-17
 **Scope:** All AI-assist surfaces in TRAM — backend router/service, prompt-context builder, configuration handling, UI integration (editor, settings, wizard), tests, docs, deployment config.
 **Method:** Every AI-related file read end-to-end (`tram/api/routers/ai.py`, `tram/api/routers/ai_docs.py`, `tram/ui/src/pages/editor.js`, `settings.js`, `wizard.js`, `wizard.html`, `editor.html`, `settings.html`, `tram/ui/src/api.js`, all three AI test modules), plus the supporting surfaces they touch (`tram/api/app.py`, `tram/api/middleware.py`, `tram/api/auth.py`, `tram/api/config_schema.py`, `tram/persistence/db.py`, `tram/api/routers/pipelines.py`, `runs.py`, `stats.py`, `mibs.py`, `templates.py`, `connectors.py`, `tram/ui/src/pages/runs_table.js`, `router.js`), config/docs (`.env.example`, `docs/api.md`, `docs/deployment.md`, `helm/values.yaml`, `Dockerfile*`, `pyproject.toml`).

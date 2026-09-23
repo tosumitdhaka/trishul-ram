@@ -188,15 +188,27 @@ else
 fi
 
 # 11. docs-sync: every TRAM_* environment variable referenced in the Python
-#     source must be documented in .env.example (best-effort static scan)
+#     source must be documented in .env.example (best-effort static scan),
+#     and the generic release baseline (helm/values-template.yaml) must point
+#     image.tag at the version under gate — the 1.3.3 drift survived six
+#     releases because this check only covered .env.example.
+#     Note: helm/values.yaml intentionally stays on a local kind/dev tag.
 missing_env=""
 while IFS= read -r var; do
   grep -qE "^#?[[:space:]]*${var}=" .env.example || missing_env="$missing_env $var"
 done < <(grep -rhoP 'TRAM_[A-Z0-9_]+' tram --include='*.py' | sort -u)
-if [ -z "$missing_env" ]; then
-  record PASS "docs-sync: env vars documented in .env.example"
+template_tag="$(grep -oP '(?<=^  tag: ").+(?=")' helm/values-template.yaml || true)"
+problems=""
+if [ -n "$missing_env" ]; then
+  problems="undocumented env:$missing_env"
+fi
+if [ "$template_tag" != "$VERSION" ]; then
+  problems="${problems:+$problems; }helm/values-template.yaml image.tag=$template_tag (expected $VERSION)"
+fi
+if [ -z "$problems" ]; then
+  record PASS "docs-sync: env vars + values-template image.tag"
 else
-  record FAIL "docs-sync: env vars documented in .env.example" "undocumented:$missing_env"
+  record FAIL "docs-sync: env vars + values-template image.tag" "$problems"
 fi
 
 # --- summary -----------------------------------------------------------------

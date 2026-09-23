@@ -7,10 +7,12 @@ unconfirmed work lives in the backlog at the bottom.
 
 ## v1.2.3 — SNMP Poll v3 Validation & ASN.1 Decode Hardening
 
-- [ ] SNMP poll source — validate SNMPv3 USM on real-device GET and WALK; keep existing walk / yield_rows coverage green
+> Historical planning section — v1.2.3 shipped 2026-04-10 and the released-version table below is authoritative. All four items below are closed (two shipped, two deferred and superseded).
+
+- [x] SNMP poll source — validate SNMPv3 USM on real-device GET and WALK; keep existing walk / yield_rows coverage green
 - [x] ASN.1 serializer — decode-path coverage and wording updated for explicit decode-only behavior
-- [ ] SNMP trap source — deferred; blocked by push-source architecture gap (issue #11, resolved in v1.3.0)
-- [ ] SNMP trap sink — deferred until a reachable real receiver/test target is available
+- [x] SNMP trap source — deferred at v1.2.3; blocked by push-source architecture gap (issue #11, resolved in v1.3.0) and shipped via the v1.3.x UDP multi-worker work
+- [x] SNMP trap sink — deferred at v1.2.3 (no reachable real receiver/test target); never re-scoped — see the backlog
 
 ---
 
@@ -181,8 +183,15 @@ unconfirmed work lives in the backlog at the bottom.
 
 ## Released
 
+> **Superseded by [`docs/ideas/consolidated-roadmap.md`](ideas/consolidated-roadmap.md)** — that document is the living plan for pending work and version assignment. This page keeps the released-version table and the historical planning sections above.
+
 | Version | Theme |
 |---------|-------|
+| v1.4.5 | SNMP data-integrity pass: tuple-space walk boundaries (GH #32), refuse-on-collapse (GH #33), layered INTEGER classification + `*Vdom` migration (GH #35), structured index grouping (GH #36) — PR #38, tag `v1.4.5` |
+| v1.4.4 | Wizard AI-assist fixes (operator-reported; unplanned) — PR #37, tag `v1.4.4` |
+| v1.4.3 | Structure & creation: guided creation wizard (`#create`), run-detail route (`#runs/:id`), shared page shell, schema identity (GH #24, Option A), editor gutter/anchoring, a11y; UI browser smoke gate check — PR #31, tag `v1.4.3` |
+| v1.4.2 | Operator-trust UI wave: QW1–QW11, L1 route parameters (deep links), GH #26/#27 — PR #30, tag `v1.4.2` |
+| v1.4.1 | AI trust & safety: A1–A5, A8, A10, A11; tag-triggered release gate — PR #29, tag `v1.4.1` |
 | v1.4.0 | Implementation waves A–F: correctness core, security rollout, visibility/stats, queued runs, stateful transforms, domain gaps (GH #16–#22) |
 | v1.3.0 | Broadcast streams; push-source scaling; placement reconciliation; manager StatefulSet |
 | v1.2.3 | SNMP Poll v3 validation; ASN.1 decode hardening |

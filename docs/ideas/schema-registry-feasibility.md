@@ -1,5 +1,10 @@
 # Feasibility: Schema Identifier + Registry for AI-Assisted Adaptation (Issue #24)
 
+> **Status (2026-09-23): implemented (Option A) in v1.4.3** — the content-hash `schema_version`
+> identity shipped on `/api/config/schema`, `/api/plugins`, and `/api/ai/status`, the AI prompts
+> carry the schema hash, and the registry↔union cross-check (`schema_mismatch`) landed. Issue #24
+> is closed. The analysis below is the historical record.
+
 Date: 2026-09-21
 Status: Assessment complete — a derived registry with a content-hash identifier is feasible and recommended (~1–2 days); explicit versioned files and full JSON Schema generation are rejected for now. This document records the analysis so v1.4.3's L2 design and v1.4.4's A6 (template-grounded generation) can build on it without redoing discovery.
 

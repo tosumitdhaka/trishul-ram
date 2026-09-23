@@ -2,6 +2,7 @@
 
 **Date:** 2026-09-21
 **Status:** Feasibility assessment only — no implementation, no issues, no packaging. Product owner decides next steps.
+**Update (2026-09-23):** v1.4.5 shipped the SNMP data-integrity work (GH #32/#33/#35/#36) on **pysnmp**; the migration decision remains open — the blockers named below are unaffected.
 **Question:** Can TRAM replace `pysnmp>=7,<8` + `pysmi-lextudio>=1.4,<2.0` + `pyasn1` with the in-house `trishul-smi` (tsmi) and `trishul-snmp` (tsmp) libraries, available on PyPI/GitHub and locally at `../trishul-smi` and `../trishul-snmp`?
 
 **Verdict up front:** **Not as a drop-in replacement today.** Both libraries are well-engineered, well-tested, and empirically verified to interoperate with pysnmp on the wire — but two TRAM-facing feature surfaces are hard blockers (SNMPv1, v3 crypto breadth). A full swap is feasible **only after** those gaps are closed (they are closable — the same owner controls both sides). A connector-level parallel adoption is feasible today for v2c + v3/SHA-256/AES-128 deployments. Notably, the classic motivation for escaping pysnmp ("it's abandoned") **does not hold**: pysnmp 7.1.29 (2026-08-21) and pysmi 2.0.0 (2026-04-26) are actively maintained by the LeXtudio community fork.

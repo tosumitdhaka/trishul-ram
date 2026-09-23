@@ -402,8 +402,33 @@ Polls SNMP agents via GET or WALK. Batch mode. Requires `pip install tram[snmp]`
 | `mib_modules` | `[]` | MIB module names to pre-load |
 | `yield_rows` | `false` | `true` = one record per table row (use with walk) |
 | `index_depth` | `0` | `0` = auto; `>0` = last N OID components form row index |
+| `classify` | `false` | Split fields into `_metrics` / `_labels` (INTEGER layering v1.4.5) |
+| `metric_patterns` | `[]` | INTEGER globs that force a metric (extend the code defaults; win over label patterns) |
+| `label_patterns` | `[]` | INTEGER globs that force a label (extend the code defaults `*Id`, `*ID`, `*Index`, `*Port`) |
 
 Every record includes `_polled_at` (UTC ISO 8601).
+
+**Refuse, don't collapse (v1.4.5, GH #33):** `classify: true` on a multi-row poll without
+`yield_rows: true` raises a `SourceError` naming the columns that would have been collapsed —
+the old behavior silently kept only the last value per column. Set `yield_rows: true` to emit
+one record per row.
+
+**Structured index grouping (v1.4.5, GH #36):** row coordinates come from the MIB-computed
+instance indices per key (mixed-depth tables group correctly with no global knob); unresolved
+numeric keys use the last `index_depth` OID components. With `index_depth: 0` (auto) an
+unresolved key raises a `SourceError` naming the OID — previously it silently emitted garbage
+rows. Rows carry `_index` (dot-separated string) and `_index_parts` (list of strings) and sort
+numerically (`1, 2, 10`, not `1, 10, 2`).
+
+**INTEGER classification default flip (v1.4.5, GH #35):** INTEGER fields are **metrics by
+default** (previously always labels on the wire). Classification is layered per field:
+`metric_patterns` → `label_patterns` → MIB SYNTAX enum (when `resolve_oids: true`, rendered as
+`"up (1)"`) → default metric. Patterns are case-sensitive globs and **extend** the code
+defaults (`*Id`, `*ID`, `*Index`, `*Port`) — pipeline-level and the
+`TRAM_SNMP_METRIC_PATTERNS` / `TRAM_SNMP_LABEL_PATTERNS` env layers never replace them. The
+`*Vdom` code-default was **removed** in v1.4.5 (deployment-specific Fortigate vocabulary);
+Fortigate pipelines relying on it must add `label_patterns: ["*Vdom"]` (or
+`TRAM_SNMP_LABEL_PATTERNS=*Vdom`), otherwise vdom INTEGER fields now classify as metrics.
 
 **`_snmp_widths`** (F.1): when `classify: true`, classified records additionally
 carry `_snmp_widths: {field: 32|64}` for Counter32/Counter64 fields — the SNMP

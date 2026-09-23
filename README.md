@@ -248,7 +248,7 @@ For a single standalone container without Compose:
 ./scripts/deploy-docker-standalone.sh up
 ./scripts/deploy-docker-standalone.sh up --tag local-test
 ./scripts/deploy-docker-standalone.sh up --ghcr
-./scripts/deploy-docker-standalone.sh up --ghcr --tag 1.4.0
+./scripts/deploy-docker-standalone.sh up --ghcr --tag 1.4.5
 ./scripts/deploy-docker-standalone.sh up --ghcr --env 'TRAM_AUTH_USERS=admin:changeme123'
 ./scripts/deploy-docker-standalone.sh status
 ```
@@ -330,6 +330,8 @@ pip install tram[all]                      # everything (except corba — system
 - **Stateful transforms** — `counter_delta` (Counter32/64 wrap correction, rates) and `window_aggregate` (epoch-aligned tumbling windows with watermark finalization) with durable per-pipeline state
 - **Queued manual runs** — a manual run with no healthy workers is durably queued and auto-dispatched when capacity returns
 - **Pipeline versioning** — every update saved; one-command rollback to any previous version
+- **Guided creation wizard** — `#create` builds pipelines through a five-step schema-driven form (required/optional fields from the live schema, template pre-seed, stale-schema guard), with an editor hand-off (v1.4.3)
+- **Deep-linkable run detail** — `#runs/:id` shows a per-run breakdown (outcome, failure reasons, DLQ); route-parameter deep links survive refresh and Back/Forward (v1.4.2–v1.4.3)
 - **AI-assisted authoring** — `POST /api/ai/suggest` generates or explains pipeline YAML (Anthropic / OpenAI / Bedrock / local LLM)
 - **Dead Letter Queue** — failed records wrapped in a JSON envelope and routed to a configurable DLQ sink
 - **Per-sink routing** — condition expressions, independent retry/circuit-breaker, and separate serializer per sink

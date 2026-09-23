@@ -1,5 +1,9 @@
 # TRAM — Independent RCA for Open GitHub Issues
 
+> **Status (2026-09-23): historical snapshot from 2026-09-15.** The RCA-covered issues shipped
+> resolved in v1.4.0 (GH #16–#22); #24, excluded from RCA as a feasibility study, was
+> implemented (Option A) in v1.4.3 and is closed. See `docs/roadmap.md` for current state.
+
 **Date:** 2026-09-15
 **Method:** One independent root-cause analysis per open issue, each traced against current code with file:line evidence. The highest-impact claims were independently re-verified after the fact (marked ✅). Issue #24 is a feasibility-study proposal, not a defect — RCA does not apply and it is excluded.
 **Labels:** `[CONFIRMED]` = traced in code; `[HYPOTHESIS]` = plausible, requires runtime confirmation.
