@@ -1060,11 +1060,14 @@ async function _save() {
   const btn = document.getElementById('wiz-save-btn')
   if (btn) btn.disabled = true
   try {
-    await api.pipelines.create(yaml)
-    // The created pipeline is named by the YAML itself — after AI assist the
-    // form state may be empty or carry a different name than the AI output,
-    // so never navigate with _state.name here.
-    const createdName = _yamlPipelineName(yaml) || _state.name
+    const created = await api.pipelines.create(yaml)
+    // The create response carries the pipeline exactly as the backend
+    // persisted it — authoritative over regex extraction (env-substituted
+    // `name: ${PIPE_NAME}` and nested first-`name:` keys both land a 404
+    // detail page otherwise). After AI assist the form state may be empty
+    // or carry a different name than the AI output, so _state.name is the
+    // last resort, never the primary source.
+    const createdName = created?.name || _yamlPipelineName(yaml) || _state.name
     toast(`Pipeline '${createdName}' created`)
     router.navigate(`detail/${encodeURIComponent(createdName)}`)
   } catch (e) {
