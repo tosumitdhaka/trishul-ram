@@ -294,6 +294,18 @@ class SNMPPollSource(BaseSource):
             tuple(str(p) for p in config.get("label_patterns", [])),
             _env_patterns(_ENV_LABEL_PATTERNS),
         )
+        # Compiled matchers are fixed per source instance — hoisted out of the
+        # per-row classify loop (fnmatch.translate + re.compile per row per poll).
+        self._metric_matchers: list[re.Pattern[str]] = [
+            re.compile(fnmatch.translate(p)) for p in self.metric_patterns
+        ]
+        self._label_matchers: list[re.Pattern[str]] = [
+            re.compile(fnmatch.translate(p)) for p in self.label_patterns
+        ]
+        # Set when resolve_oids is on but the MIB view fails to load, so the
+        # auto-grouping refusal names the real cause instead of blaming
+        # resolve_oids.
+        self._mib_load_failed: bool = False
         # Auto-prepend /mibs and TRAM_MIB_DIR
         for _d in ["/mibs", os.environ.get("TRAM_MIB_DIR", "")]:
             if _d and os.path.isdir(_d) and _d not in self.mib_dirs:
@@ -333,6 +345,8 @@ class SNMPPollSource(BaseSource):
         bindings: dict,
         index_depth: int,
         locations: dict[str, tuple[str, tuple[int, ...], str]] | None = None,
+        *,
+        mib_load_failed: bool = False,
     ) -> list[dict]:
         """Group flat ``{oid_key: value}`` bindings into per-row dicts.
 
@@ -345,6 +359,9 @@ class SNMPPollSource(BaseSource):
           components form the index. With ``index_depth == 0`` (auto) an
           unresolved key raises :class:`SourceError` naming the OID — the old
           behavior silently emitted garbage rows from the first-dot split.
+          Pass ``mib_load_failed=True`` when ``resolve_oids`` is on but the
+          MIB view failed to load, so the refusal names that cause instead of
+          suggesting ``resolve_oids``.
 
         ``locations`` maps each binding key to ``(sym_name, indices, mod_name)``
         as returned by ``resolve_oid_structured`` (``sym_name == ""`` when
@@ -365,6 +382,14 @@ class SNMPPollSource(BaseSource):
             else:
                 # Unresolved/numeric key — the row index comes from config.
                 if index_depth == 0:
+                    if mib_load_failed:
+                        raise SourceError(
+                            f"SNMP poll: cannot determine row index for OID {key} in "
+                            f"auto mode (index_depth=0) — resolve_oids is on but MIB "
+                            f"resolution failed (see log for the load error; check "
+                            f"mib_dirs/mibs config), or set index_depth to the number "
+                            f"of trailing index components"
+                        )
                     raise SourceError(
                         f"SNMP poll: cannot determine row index for OID {key} in "
                         f"auto mode (index_depth=0) — set index_depth to the number "
@@ -496,7 +521,13 @@ class SNMPPollSource(BaseSource):
         return [self._resolve_configured_oid(oid, mib_view) for oid in self.oids]
 
     def _load_mib_view(self):
-        """Load the cached MIB view when configured; None otherwise (GH #36)."""
+        """Load the cached MIB view when configured; None otherwise (GH #36).
+
+        A load failure is recorded on ``self._mib_load_failed`` so callers can
+        distinguish "resolve_oids is off" from "resolve_oids is on but the MIB
+        view failed to load".
+        """
+        self._mib_load_failed = False
         if not (self.resolve_oids and (self.mib_dirs or self.mib_modules)):
             return None
         from tram.connectors.snmp.mib_utils import get_mib_view
@@ -505,6 +536,7 @@ class SNMPPollSource(BaseSource):
             return get_mib_view(self.mib_dirs, self.mib_modules)
         except Exception as _exc:
             logger.warning("MIB OID resolution failed for poll: %s", _exc)
+            self._mib_load_failed = True
             return None
 
     def _resolve_bindings(self, bindings: dict, mib_view) -> tuple[dict, dict]:
@@ -603,6 +635,8 @@ class SNMPPollSource(BaseSource):
     def _classify_bindings(
         bindings_typed: dict[str, tuple[str, str]],
         *,
+        metric_matchers: list[re.Pattern[str]] | None = None,
+        label_matchers: list[re.Pattern[str]] | None = None,
         metric_patterns: tuple[str, ...] = (),
         label_patterns: tuple[str, ...] = (),
         enum_names: dict[str, str] | None = None,
@@ -621,10 +655,13 @@ class SNMPPollSource(BaseSource):
                symbolic name alongside the int, e.g. ``"down (2)"``
             4. default → metric (plain INTEGER = measurement)
 
-        ``metric_patterns``/``label_patterns`` are the *effective* glob lists
-        (code defaults + pipeline config + environment — see the module-level
-        ``_DEFAULT_*_PATTERNS``). Matching is case-sensitive glob compiled via
-        ``fnmatch.translate``. ``enum_names`` maps a base field to its MIB enum
+        ``metric_matchers``/``label_matchers`` are the compiled forms of the
+        *effective* glob lists (code defaults + pipeline config + environment
+        — see the module-level ``_DEFAULT_*_PATTERNS``); the read path passes
+        the per-instance precompiled matchers so the per-row loop never
+        recompiles. Matching is case-sensitive glob. When the matchers are
+        omitted (direct calls), the raw ``metric_patterns``/``label_patterns``
+        are compiled here. ``enum_names`` maps a base field to its MIB enum
         label for the value in hand (computed by the caller only when
         ``resolve_oids=True``).
 
@@ -636,8 +673,10 @@ class SNMPPollSource(BaseSource):
         metrics: dict = {}
         labels: dict = {}
         widths: dict = {}
-        metric_re = [re.compile(fnmatch.translate(p)) for p in metric_patterns]
-        label_re = [re.compile(fnmatch.translate(p)) for p in label_patterns]
+        if metric_matchers is None:
+            metric_matchers = [re.compile(fnmatch.translate(p)) for p in metric_patterns]
+        if label_matchers is None:
+            label_matchers = [re.compile(fnmatch.translate(p)) for p in label_patterns]
         for key, (str_val, type_name) in bindings_typed.items():
             # Strip a trailing dot-index from *symbolic* keys ("ifDescr.1" →
             # base="ifDescr"). Numeric column names (which start with a digit)
@@ -656,12 +695,12 @@ class SNMPPollSource(BaseSource):
                 except ValueError:
                     metrics[base] = str_val
             elif type_name in SNMPPollSource._INTEGER_TYPES:
-                if any(r.match(base) for r in metric_re):
+                if any(r.match(base) for r in metric_matchers):
                     try:
                         metrics[base] = int(str_val)
                     except ValueError:
                         metrics[base] = str_val
-                elif any(r.match(base) for r in label_re):
+                elif any(r.match(base) for r in label_matchers):
                     labels[base] = str_val
                 elif enum_names and base in enum_names:
                     labels[base] = f"{enum_names[base]} ({str_val})"
@@ -858,7 +897,10 @@ class SNMPPollSource(BaseSource):
             else:
                 locations = self._empty_locations(raw)
 
-            rows = self._group_by_index(raw, self.index_depth, locations)
+            rows = self._group_by_index(
+                raw, self.index_depth, locations,
+                mib_load_failed=self._mib_load_failed,
+            )
             all_rows = []
             for row in rows:
                 col_locs = row.pop("_col_locs", {})
@@ -879,8 +921,8 @@ class SNMPPollSource(BaseSource):
                 row_typed = {k: v for k, v in row.items() if not k.startswith("_")}
                 classified = self._classify_bindings(
                     row_typed,
-                    metric_patterns=self.metric_patterns,
-                    label_patterns=self.label_patterns,
+                    metric_matchers=self._metric_matchers,
+                    label_matchers=self._label_matchers,
                     enum_names=enum_names or None,
                 )
                 classified["_polled_at"] = polled_at
@@ -926,7 +968,10 @@ class SNMPPollSource(BaseSource):
             locations = self._empty_locations(raw)
 
         if self.yield_rows:
-            rows = self._group_by_index(raw, self.index_depth, locations)
+            rows = self._group_by_index(
+                raw, self.index_depth, locations,
+                mib_load_failed=self._mib_load_failed,
+            )
             for row in rows:
                 row.pop("_index_parts", None)
                 row.pop("_col_locs", None)

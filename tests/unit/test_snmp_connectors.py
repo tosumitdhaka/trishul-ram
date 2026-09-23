@@ -951,6 +951,27 @@ class TestClassifyReadSemantics:
         with pytest.raises(SourceError, match="index_depth"):
             self._read(src, mock_hlapi, mock_pysnmp, walk_side_effect)
 
+    def test_mib_load_failure_refusal_names_real_cause(self):
+        """resolve_oids on but the MIB view fails to load (bad module name,
+        missing dir) → the refusal names the load failure instead of telling
+        the user to 'enable resolve_oids' — which is already on."""
+        typed_rows = {
+            "1.3.6.1.2.1.2.2.1.2.1": self._wire("OctetString", "eth0"),
+        }
+        src, mock_hlapi, mock_pysnmp, walk_side_effect = self._walk_source(
+            {"yield_rows": True, "index_depth": 0, "resolve_oids": True,
+             "mib_modules": ["IF-MIB"]},
+            typed_rows,
+        )
+        with pytest.raises(SourceError, match="MIB resolution failed"):
+            self._read(
+                src, mock_hlapi, mock_pysnmp, walk_side_effect,
+                extra_patch=patch(
+                    "tram.connectors.snmp.mib_utils.get_mib_view",
+                    side_effect=RuntimeError("no such MIB module"),
+                ),
+            )
+
     def test_classify_integer_wire_type_is_metric(self):
         """The real wire class `Integer` classifies as metric by default —
         the old dead Integer32 branch never ran in production."""
@@ -1269,6 +1290,15 @@ class TestGroupByIndex:
         bindings = {"1.3.6.1.2.1.2.2.1.2.1": "eth0"}
         with pytest.raises(SourceError, match="1.3.6.1.2.1.2.2.1.2.1"):
             SNMPPollSource._group_by_index(bindings, index_depth=0)
+
+    def test_unresolved_auto_refusal_names_mib_failure(self):
+        """resolve_oids on but the MIB view failed to load → the refusal names
+        the load failure instead of suggesting 'enable resolve_oids'."""
+        bindings = {"1.3.6.1.2.1.2.2.1.2.1": "eth0"}
+        with pytest.raises(SourceError, match="MIB resolution failed"):
+            SNMPPollSource._group_by_index(
+                bindings, index_depth=0, mib_load_failed=True
+            )
 
     def test_mixed_resolved_and_unresolved_auto_refuses(self):
         """One unresolved key poisons auto grouping — refuse, don't guess."""
