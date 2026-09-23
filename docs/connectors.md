@@ -402,7 +402,7 @@ Polls SNMP agents via GET or WALK. Batch mode. Requires `pip install tram[snmp]`
 | `mib_modules` | `[]` | MIB module names to pre-load |
 | `yield_rows` | `false` | `true` = one record per table row (use with walk) |
 | `index_depth` | `0` | `0` = auto; `>0` = last N OID components form row index |
-| `classify` | `false` | Split fields into `_metrics` / `_labels` (v1.4.5; requires `tram[snmp]`) |
+| `classify` | `false` | Split fields into `_metrics` / `_labels` (INTEGER layering v1.4.5) |
 | `metric_patterns` | `[]` | INTEGER globs that force a metric (extend the code defaults; win over label patterns) |
 | `label_patterns` | `[]` | INTEGER globs that force a label (extend the code defaults `*Id`, `*ID`, `*Index`, `*Port`) |
 
