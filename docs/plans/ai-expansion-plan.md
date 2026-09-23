@@ -14,13 +14,13 @@
 | Item | Status | Evidence (HEAD) |
 |---|---|---|
 | A1 async + timeouts | ✅ shipped v1.4.1 | `asyncio.to_thread(_call_ai …)` — `ai.py:605` |
-| A2 key-wipe fix | ✅ shipped v1.4.1 | three-state config semantics (memory #119) |
+| A2 key-wipe fix | ✅ shipped v1.4.1 | three-state config semantics — `ai_save_config`: absent/blank = keep, null = clear (`ai.py`; refined v1.4.2) |
 | A3 validated output | ✅ shipped v1.4.1 | `yaml.safe_load + load_pipeline_from_yaml` check — `ai.py:389-398` |
 | A4 secret redaction | ✅ shipped v1.4.1 | `_redact_yaml` — `ai.py:498`; applied in explain/fix/modify (`ai.py:749,768,785`) |
 | A5 undo AI change | ✅ shipped v1.4.1 | commit d8d051e |
 | A8 docs/Helm/label sync | ✅ shipped v1.4.1 | changelog `[1.4.1]` |
-| A10 audit trail | ✅ shipped v1.4.2 | `_run_ai_call` audit + `ai_usage` — `ai.py:550-588` |
-| A11 base_url policy | ✅ shipped v1.4.2 | `_base_url_allowed` — `ai.py:185,689` |
+| A10 audit trail | ✅ shipped v1.4.1 | `_run_ai_call` audit + `ai_usage` — `ai.py:550-588` |
+| A11 base_url policy | ✅ shipped v1.4.1 | `_base_url_allowed` — `ai.py:185,689` |
 | #24 Option A schema identity | ✅ shipped v1.4.3 | `schema_version()` — `config_schema.py:246-249`; embedded `ai.py:592,623`; registry↔union cross-check; `melt` union member restored (`pipeline.py:660`) |
 | #26 core bug (hardcoded pills) | ✅ shipped v1.4.2 | pills now rendered from `/api/plugins` — `editor.js:464-471` into empty containers (`editor.html` `id="ref-transforms"` etc.) |
 | #27 partial (metadata merge + snippet) | ✅ shipped v1.4.2 | `_enrichedFields` merges choices/secret/multiline client-side (`plugins.js:162`); auto-generated YAML snippet + copy (`plugins.js:172-200, 309-321`) |
