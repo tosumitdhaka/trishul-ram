@@ -3,7 +3,9 @@
 //      QUOTED in the review YAML (`password: "12345"`, `name: "123"`), while
 //      genuine integer fields stay unquoted (`port: 42`).
 //   2. Navigating away during init's schema load must not start the 60s
-//      schema poll (verified by counting /api/config/schema fetches).
+//      schema poll (verified by counting /api/config/schema fetches — the
+//      poll interval is stubbed to 3s via window.__TRAM_TEST_SCHEMA_POLL_MS__
+//      so the guard can be proven in seconds, not a 61.5s wait).
 //   3. `#wizard` redirects to `#create`.
 // The static server has no backend — API calls are stubbed at the network
 // level from tests/browser/fixtures, shaped like the kind cluster's schema.
@@ -44,6 +46,11 @@ await installFixtures(page, {
     return false
   },
 })
+
+// Stub the schema poll to 3s so the page-leave guard below is proven in
+// seconds (addInitScript runs before the first document load and the key
+// persists on the window for the whole SPA session).
+await page.addInitScript(() => { window.__TRAM_TEST_SCHEMA_POLL_MS__ = 3000 })
 
 const holdOn = () => page.evaluate(() => fetch('/api/__test/hold-on').then((r) => r.json()))
 const release = () => page.evaluate(() => fetch('/api/__test/release').then((r) => r.json()))
@@ -109,12 +116,12 @@ await page.waitForTimeout(500)
 await release()
 await page.waitForTimeout(1200) // init resumes; _startSchemaPoll would run here if unguarded
 const fetchesAfterRelease = schemaFetches
-await page.waitForTimeout(61500) // one full poll interval + margin
+await page.waitForTimeout(3500) // one stubbed 3s poll interval + margin
 const fetchesAfterPollWindow = schemaFetches
-check('no stray 60s schema poll after page-leave during init', fetchesAfterPollWindow === fetchesAfterRelease, `fetches after release=${fetchesAfterRelease}, after 61s=${fetchesAfterPollWindow}`)
+check('no stray schema poll after page-leave during init', fetchesAfterPollWindow === fetchesAfterRelease, `fetches after release=${fetchesAfterRelease}, after 3s=${fetchesAfterPollWindow}`)
 
 console.log('SCHEMA_FETCHES_AFTER_RELEASE:', fetchesAfterRelease)
-console.log('SCHEMA_FETCHES_AFTER_61S:', fetchesAfterPollWindow)
+console.log('SCHEMA_FETCHES_AFTER_3S:', fetchesAfterPollWindow)
 console.log('PAGE ERRORS:', pageErrors.length ? pageErrors : 'NONE')
 console.log('CONSOLE ERRORS:', consoleErrors.length ? consoleErrors : 'NONE')
 

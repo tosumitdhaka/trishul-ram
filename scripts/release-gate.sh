@@ -58,18 +58,22 @@ else
   record FAIL "clean working tree" "commit or stash $(git status --porcelain | wc -l) change(s) first"
 fi
 
-# 2. version consistency across pyproject, Helm chart, and UI package
+# 2. version consistency across pyproject, Helm chart, UI package, and the
+#    browser smoke meta fixture (the boot check asserts the shell shows the
+#    fixture's version — fixture drift would otherwise pass silently)
 CHART_VERSION="$(grep -oP '(?<=^version: ).+' helm/Chart.yaml | tr -d '"')"
 CHART_APPVERSION="$(grep -oP '(?<=^appVersion: ").+(?=")' helm/Chart.yaml)"
 UI_VERSION="$(grep -oP '(?<=^  "version": ").*(?=")' tram/ui/package.json)"
+META_FIXTURE_VERSION="$(grep -oP '(?<="version":")[^"]*(?=")' tests/browser/fixtures/meta.json)"
 mismatch=""
 [ "$CHART_VERSION" = "$VERSION" ] || mismatch="helm/Chart.yaml version=$CHART_VERSION"
 [ "$CHART_APPVERSION" = "$VERSION" ] || mismatch="${mismatch:+$mismatch; }helm/Chart.yaml appVersion=$CHART_APPVERSION"
 [ "$UI_VERSION" = "$VERSION" ] || mismatch="${mismatch:+$mismatch; }tram/ui/package.json=$UI_VERSION"
+[ "$META_FIXTURE_VERSION" = "$VERSION" ] || mismatch="${mismatch:+$mismatch; }tests/browser/fixtures/meta.json=$META_FIXTURE_VERSION"
 if [ -z "$mismatch" ]; then
-  record PASS "version consistency (pyproject/chart/ui)"
+  record PASS "version consistency (pyproject/chart/ui/meta fixture)"
 else
-  record FAIL "version consistency (pyproject/chart/ui)" "$mismatch"
+  record FAIL "version consistency (pyproject/chart/ui/meta fixture)" "$mismatch"
 fi
 
 # 3. version not already tagged (meaningless on the CI tag itself)

@@ -6,11 +6,22 @@
 //
 // Run under node >= 20. The static server + fixture stubs come from run.mjs
 // (or set TRAM_BROWSER_BASE to point at any tram/ui/dist server).
+import { readFileSync } from 'node:fs'
+import { dirname, join } from 'node:path'
+import { fileURLToPath } from 'node:url'
 import { chromium } from '../lib/playwright.mjs'
 import { installFixtures } from '../lib/stub.mjs'
 import { check, failureCount } from '../lib/check.mjs'
 
 const BASE = process.env.TRAM_BROWSER_BASE || 'http://127.0.0.1:8899'
+
+// The version under gate comes from tram/ui/package.json, not a hardcoded
+// string — a stale fixtures/meta.json then fails the boot check instead of
+// drifting silently alongside the assertion (the v1.4.3→1.4.6 drift class).
+const here = dirname(fileURLToPath(import.meta.url))
+const UI_PACKAGE = JSON.parse(readFileSync(join(here, '..', '..', '..', 'tram', 'ui', 'package.json'), 'utf8'))
+const EXPECTED_VERSION = UI_PACKAGE.version
+const META_FIXTURE = JSON.parse(readFileSync(join(here, '..', 'fixtures', 'meta.json'), 'utf8'))
 
 const browser = await chromium.launch({ headless: true, args: ['--no-sandbox', '--disable-dev-shm-usage'] })
 const page = await browser.newPage()
@@ -41,8 +52,9 @@ await page.waitForFunction(
 const brandVersion = await page.evaluate(() => document.getElementById("brand-ver")?.textContent.trim())
 const hcVersion = await page.evaluate(() => document.getElementById('hc-version')?.textContent.trim())
 check('shell visible (auth-disabled boot path)', await page.evaluate(() => document.getElementById('app-shell')?.hidden === false))
-check('brand version renders', brandVersion === 'v1.4.3', `got ${JSON.stringify(brandVersion)} (fixture meta.json)`)
-check('health card shows the same version', hcVersion === '1.4.3', `got ${JSON.stringify(hcVersion)}`)
+check('fixture meta.json version matches tram/ui/package.json', META_FIXTURE.version === EXPECTED_VERSION, `fixture=${META_FIXTURE.version}, package.json=${EXPECTED_VERSION}`)
+check('brand version renders', brandVersion === `v${EXPECTED_VERSION}`, `got ${JSON.stringify(brandVersion)} (fixture meta.json, expected v${EXPECTED_VERSION})`)
+check('health card shows the same version', hcVersion === EXPECTED_VERSION, `got ${JSON.stringify(hcVersion)} (expected ${EXPECTED_VERSION})`)
 check('no errors at boot', errorsSoFar() === 0)
 
 // ── Every main page route ────────────────────────────────────────────────────

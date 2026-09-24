@@ -19,6 +19,16 @@ import { bindDataActions, esc, setStatusMessage, toast } from '../utils.js'
 const WIZARD_PREFILL_KEY = 'tram_wizard_prefill'
 const SCHEMA_POLL_MS = 60000
 
+// Test-only override honored at the poll read site: the browser smoke suite
+// (tests/browser/checks/yaml-quote.mjs) sets window.__TRAM_TEST_SCHEMA_POLL_MS__
+// to observe the stale-schema poll in seconds instead of a real 60s wait.
+// The key is absent outside tests, so production behavior is byte-identical
+// to the SCHEMA_POLL_MS default.
+function _schemaPollMs() {
+  const testMs = Number(window.__TRAM_TEST_SCHEMA_POLL_MS__)
+  return Number.isInteger(testMs) && testMs > 0 ? testMs : SCHEMA_POLL_MS
+}
+
 let _step = 1
 let _plugins = {}
 let _schema = { sources: {}, sinks: {}, serializers: {}, transforms: {} }
@@ -200,7 +210,7 @@ function _startSchemaPoll() {
   if (_pageLeft) return // init may resume after the operator already left (page-leave fired during the load awaits)
   if (_schemaTimer) clearInterval(_schemaTimer)
   if (_schemaVersion === null) return // backend without schema_version — nothing to compare
-  _schemaTimer = setInterval(() => { void _checkSchemaFreshness() }, SCHEMA_POLL_MS)
+  _schemaTimer = setInterval(() => { void _checkSchemaFreshness() }, _schemaPollMs())
 }
 
 function _stopSchemaPoll() {
