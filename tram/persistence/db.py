@@ -25,6 +25,11 @@ from tram.core.context import RunResult, RunStatus
 
 logger = logging.getLogger(__name__)
 
+# Review B9: bounded retries for the save_pipeline_version (name, version)
+# race — the unique constraint converts a lost race into IntegrityError, and
+# the retry mints a fresh version instead of failing the caller.
+_VERSION_SAVE_RETRIES = 3
+
 
 # ── Engine factory ────────────────────────────────────────────────────────────
 
@@ -57,15 +62,44 @@ def _build_engine(url: str = "") -> Engine:
 # ── Schema migration ──────────────────────────────────────────────────────────
 
 
+def _is_duplicate_column_error(exc: Exception) -> bool:
+    """True when the exception is the dialect's 'column already exists' error.
+
+    Only that error is ignorable in ``_add_column_if_missing`` — a locked or
+    disk-full DB must surface loudly instead of being indistinguishable from
+    "column exists" (code review B8). Message matching avoids hard driver
+    imports (pymysql/psycopg2 may not be installed).
+    """
+    msg = str(exc).lower()
+    return "duplicate column name" in msg or "duplicate column" in msg
+
+
+def _is_duplicate_index_error(exc: Exception) -> bool:
+    """True when the exception is the dialect's 'index already exists' error.
+
+    MySQL has no ``CREATE INDEX IF NOT EXISTS``, so the unique-index migration
+    for pre-existing databases is wrapped and only the duplicate-index error is
+    ignored (review B9); anything else raises loudly (B8 philosophy).
+    """
+    msg = str(exc).lower()
+    return (
+        "already exists" in msg
+        or "duplicate key name" in msg
+        or "1061" in msg  # MySQL ER_DUP_KEYNAME
+    )
+
+
 def _add_column_if_missing(conn, dialect: str, table: str, column: str, typedef: str) -> None:
-    """Add a column to an existing table, ignoring errors if it already exists."""
+    """Add a column to an existing table, ignoring only the duplicate-column error."""
     if dialect == "postgresql":
         conn.execute(text(f"ALTER TABLE {table} ADD COLUMN IF NOT EXISTS {column} {typedef}"))
-    else:
-        try:
-            conn.execute(text(f"ALTER TABLE {table} ADD COLUMN {column} {typedef}"))
-        except Exception:
-            pass  # column already exists (SQLite has no IF NOT EXISTS for ADD COLUMN)
+        return
+    try:
+        conn.execute(text(f"ALTER TABLE {table} ADD COLUMN {column} {typedef}"))
+    except Exception as exc:
+        if _is_duplicate_column_error(exc):
+            return  # column already exists (SQLite has no IF NOT EXISTS for ADD COLUMN)
+        raise  # anything else (lock, disk full, ...) is loud — review B8
 
 
 def _create_tables(engine: Engine) -> None:
@@ -81,7 +115,8 @@ def _create_tables(engine: Engine) -> None:
                 version      INTEGER NOT NULL,
                 yaml_content TEXT NOT NULL,
                 created_at   TEXT NOT NULL,
-                is_active    INTEGER NOT NULL DEFAULT 1
+                is_active    INTEGER NOT NULL DEFAULT 1,
+                UNIQUE (name, version)
             )
         """))
 
@@ -116,6 +151,25 @@ def _create_tables(engine: Engine) -> None:
         conn.execute(text(
             "CREATE INDEX IF NOT EXISTS idx_pv_name ON pipeline_versions(name)"
         ))
+        # Review B9: unique (name, version) so two concurrent saves can never
+        # mint the same version number (SELECT MAX + INSERT race). Fresh
+        # databases get the UNIQUE constraint inline in CREATE TABLE; existing
+        # databases get the unique index here. "Already exists" is the only
+        # ignorable failure (MySQL has no CREATE INDEX IF NOT EXISTS).
+        try:
+            if dialect in ("sqlite", "postgresql"):
+                conn.execute(text(
+                    "CREATE UNIQUE INDEX IF NOT EXISTS uq_pv_name_version "
+                    "ON pipeline_versions(name, version)"
+                ))
+            else:
+                conn.execute(text(
+                    "CREATE UNIQUE INDEX uq_pv_name_version "
+                    "ON pipeline_versions(name, version)"
+                ))
+        except Exception as exc:
+            if not _is_duplicate_index_error(exc):
+                raise
         conn.execute(text(
             "CREATE INDEX IF NOT EXISTS idx_rh_pipeline ON run_history(pipeline_name)"
         ))
@@ -522,7 +576,24 @@ class TramDB:
         """Save a new pipeline version unless it matches the active version.
 
         Returns the active/new version number.
+
+        Two processes sharing a database can race the ``MAX(version)+1``
+        computation; the unique ``(name, version)`` constraint (review B9)
+        turns that race into an ``IntegrityError``, which is retried with a
+        fresh computation instead of surfacing as a 500.
         """
+        for attempt in range(_VERSION_SAVE_RETRIES):
+            try:
+                return self._save_pipeline_version_once(name, yaml_content)
+            except IntegrityError:
+                if attempt >= _VERSION_SAVE_RETRIES - 1:
+                    raise
+                logger.warning(
+                    "Pipeline version save raced another writer — retrying",
+                    extra={"pipeline": name, "attempt": attempt + 1},
+                )
+
+    def _save_pipeline_version_once(self, name: str, yaml_content: str) -> int:
         with self._engine.begin() as conn:
             active = conn.execute(
                 text(

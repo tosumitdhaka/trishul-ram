@@ -14,8 +14,10 @@ from __future__ import annotations
 import hashlib
 import logging
 import os
+import random
 import socket
 import threading
+import time
 from contextlib import asynccontextmanager
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
@@ -31,6 +33,15 @@ if TYPE_CHECKING:
     from tram.models.pipeline import PipelineConfig
 
 logger = logging.getLogger(__name__)
+
+# Review D2 (GH #55): the run-complete callback must not be a single
+# fire-and-forget POST — a transient manager outage would otherwise lose the
+# completion record and the reconciler would later synthesize a phantom
+# FAILED run for a run that succeeded. Bounded retry with short backoff (the
+# callback runs on the run thread that is already exiting); exhausted retries
+# still swallow the error and let the reconciler adoption path take over.
+_RUN_COMPLETE_RETRIES = 3
+_RUN_COMPLETE_BACKOFF_BASE_S = 0.5
 
 # Consecutive stats-POST failures per worker_id, surfaced in the WARNING log
 # so an operator can tell a one-off blip from a persistent manager outage.
@@ -156,7 +167,14 @@ def _post_run_complete(
     finished_at: str | None = None,
     api_key: str = "",
 ) -> None:
-    """POST run-complete to the manager. Errors are logged and swallowed."""
+    """POST run-complete to the manager with bounded retry (review D2).
+
+    A transient manager outage must not lose the completion record: up to
+    ``_RUN_COMPLETE_RETRIES`` attempts with exponential backoff. Exhausted
+    retries still log and swallow — never raise — so the reconciler's
+    lost/adopted-run path remains the degraded fallback. The manager's
+    duplicate-callback guard (existing-run check) makes retries idempotent.
+    """
     if not callback_url:
         return
     payload = {
@@ -175,19 +193,43 @@ def _post_run_complete(
         "finished_at": finished_at,
     }
     headers = {"X-API-Key": api_key} if api_key else None
-    try:
-        with httpx.Client(timeout=10) as client:
-            resp = client.post(callback_url, json=payload, headers=headers)
-            resp.raise_for_status()
-        logger.debug(
-            "run-complete callback sent",
-            extra={"run_id": run_id, "status": status},
-        )
-    except Exception as exc:
-        logger.warning(
-            "run-complete callback failed",
-            extra={"callback_url": callback_url, "run_id": run_id, "error": str(exc)},
-        )
+    last_exc: Exception | None = None
+    for attempt in range(_RUN_COMPLETE_RETRIES):
+        try:
+            with httpx.Client(timeout=10) as client:
+                resp = client.post(callback_url, json=payload, headers=headers)
+                resp.raise_for_status()
+            logger.debug(
+                "run-complete callback sent",
+                extra={"run_id": run_id, "status": status},
+            )
+            return
+        except Exception as exc:
+            last_exc = exc
+            if attempt < _RUN_COMPLETE_RETRIES - 1:
+                delay = _RUN_COMPLETE_BACKOFF_BASE_S * (2 ** attempt) + random.uniform(0, 0.25)
+                logger.warning(
+                    "run-complete callback failed, retrying",
+                    extra={
+                        "callback_url": callback_url,
+                        "run_id": run_id,
+                        "attempt": attempt + 1,
+                        "retries": _RUN_COMPLETE_RETRIES - 1,
+                        "delay": delay,
+                        "error": str(exc),
+                    },
+                )
+                time.sleep(delay)
+    logger.warning(
+        "run-complete callback failed after all retries — reconciler adoption "
+        "path will take over",
+        extra={
+            "callback_url": callback_url,
+            "run_id": run_id,
+            "attempts": _RUN_COMPLETE_RETRIES,
+            "error": str(last_exc),
+        },
+    )
 
 
 def _post_stats(stats_url: str, payload: dict, api_key: str = "") -> None:

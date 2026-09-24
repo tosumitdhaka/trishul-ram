@@ -3,7 +3,13 @@
 from __future__ import annotations
 
 import threading
+from collections import deque
 from dataclasses import dataclass, field
+
+# Review B7: the per-window error tail must stay bounded between 30s
+# snapshots. An error-storm stream at 1K rec/s previously accumulated
+# ~300K strings between snapshots; a maxlen deque caps the tail.
+_ERRORS_WINDOW_MAXLEN = 100
 
 
 @dataclass
@@ -20,7 +26,9 @@ class PipelineStats:
     error_count: int = 0
     bytes_in: int = 0
     bytes_out: int = 0
-    errors_last_window: list[str] = field(default_factory=list)
+    errors_last_window: deque[str] = field(
+        default_factory=lambda: deque(maxlen=_ERRORS_WINDOW_MAXLEN)
+    )
     _lock: threading.Lock = field(default_factory=threading.Lock, compare=False, repr=False)
 
     def increment(

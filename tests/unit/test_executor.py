@@ -819,6 +819,43 @@ class TestPipelineExecutorBatchRun:
         collect.assert_called_once_with()
         trim.assert_called_once_with()
 
+    def test_sink_finalize_failure_degrades_run_not_fails(self):
+        """B11 (GH #55): a sink finalize (staged-file rename) failure after all
+        chunks were written must not flip the run to FAILED — the run stays
+        SUCCESS with the finalize error recorded."""
+        config = _make_pipeline()
+        executor = PipelineExecutor()
+
+        records = [{"id": "1", "val": "hello"}]
+        mock_source = MagicMock()
+        mock_source.read.return_value = iter([
+            (json.dumps(records).encode(), {"source_filename": "file.json"}),
+        ])
+
+        mock_sink = MagicMock()
+        # The rename fails AFTER the write succeeded.
+        mock_sink.finalize_source.side_effect = RuntimeError("rename failed: EACCES")
+        mock_ser_in = MagicMock()
+        mock_ser_in.parse.return_value = records
+        mock_ser_out = MagicMock()
+        mock_ser_out.serialize.return_value = json.dumps(records).encode()
+
+        with (
+            patch.object(executor, "_build_source", return_value=mock_source),
+            patch.object(executor, "_build_sinks", return_value=[(mock_sink, None, [])]),
+            patch.object(executor, "_build_serializer_in", return_value=mock_ser_in),
+            patch.object(executor, "_build_serializer_out", return_value=mock_ser_out),
+            patch.object(executor, "_build_transforms", return_value=[]),
+        ):
+            result = executor.batch_run(config)
+
+        assert result.status == RunStatus.SUCCESS, (
+            "a finalize failure must not fail a run whose data was already written"
+        )
+        assert result.records_out == 1
+        assert any("Sink finalize failed" in e for e in result.errors)
+        mock_sink.write.assert_called_once()
+
 
 class TestPipelineExecutorStreamRun:
     """Stream lifecycle: sinks/source must close on every exit path and the

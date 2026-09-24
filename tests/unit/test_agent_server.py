@@ -5,6 +5,7 @@ import hashlib
 import logging
 import threading
 import time
+from collections import deque
 from datetime import UTC, datetime
 from unittest.mock import MagicMock, patch
 
@@ -180,6 +181,57 @@ class TestPostRunComplete:
 
             # Must not raise
             _post_run_complete("http://bad-host/run-complete", "r", "p", "w0", "error", 0, 0, 0, 0, "boom")
+
+    def test_retries_on_transient_failure_then_succeeds(self):
+        """D2 (GH #55): a transient manager outage must not lose the
+        completion record — the callback retries with backoff."""
+        posts = {"count": 0}
+        captured = {}
+
+        def _flaky_post(url, **kwargs):
+            posts["count"] += 1
+            if posts["count"] == 1:
+                raise ConnectionError("manager restarting")
+            captured["json"] = kwargs.get("json")
+            resp = MagicMock()
+            resp.raise_for_status = MagicMock()
+            return resp
+
+        with patch("httpx.Client") as mock_client_cls, patch("tram.agent.server.time.sleep"):
+            mock_client = MagicMock()
+            mock_client.__enter__ = lambda s: mock_client
+            mock_client.__exit__ = MagicMock(return_value=False)
+            mock_client.post.side_effect = _flaky_post
+            mock_client_cls.return_value = mock_client
+
+            _post_run_complete(
+                "http://manager/api/internal/run-complete",
+                "run-42", "my-pipe", "worker-7", "success", 10, 8, 1024, 768, None,
+            )
+
+        assert posts["count"] == 2
+        assert captured["json"]["run_id"] == "run-42"
+
+    def test_exhausted_retries_swallow_and_log(self, caplog):
+        """D2: exhausted retries still swallow the error (never raise) and log
+        that the reconciler adoption path will take over."""
+        import logging
+
+        with patch("httpx.Client") as mock_client_cls, patch("tram.agent.server.time.sleep"):
+            mock_client = MagicMock()
+            mock_client.__enter__ = lambda s: mock_client
+            mock_client.__exit__ = MagicMock(return_value=False)
+            mock_client.post.side_effect = ConnectionError("manager down")
+            mock_client_cls.return_value = mock_client
+
+            with caplog.at_level(logging.WARNING, logger="tram.agent.server"):
+                _post_run_complete(
+                    "http://manager/api/internal/run-complete",
+                    "run-42", "my-pipe", "worker-7", "error", 0, 0, 0, 0, "boom",
+                )
+
+        assert mock_client.post.call_count == 3  # initial + 2 retries
+        assert "reconciler adoption" in caplog.text
 
 
 # ── _post_stats unit tests (plan D.6) ──────────────────────────────────────
@@ -659,7 +711,7 @@ class TestStatsHelpers:
         assert captured["json"]["run_id"] == "run-1"
         assert captured["json"]["records_in"] == 5
         assert captured["json"]["error_count"] == 1
-        assert run.stats.errors_last_window == []
+        assert run.stats.errors_last_window == deque()
 
     def test_emit_stats_once_sends_api_key_header(self):
         state = WorkerState(worker_id="w0", manager_url="http://manager", api_key="secret")

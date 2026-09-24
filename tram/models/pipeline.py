@@ -853,6 +853,9 @@ class SFTPSinkConfig(FileSinkConfigMixin):
     retry_count: int = 0
     retry_delay_seconds: float = 1.0
     circuit_breaker_threshold: int = 0
+    # How long the breaker stays open after tripping (review D3); the 60s
+    # default matches the pre-configurable behavior.
+    circuit_breaker_window_seconds: float = Field(default=60.0, gt=0)
     serializer_out: SerializerConfig | None = None  # per-sink override; None = use global
 
     @model_validator(mode="after")
@@ -872,6 +875,9 @@ class LocalSinkConfig(FileSinkConfigMixin):
     retry_count: int = 0
     retry_delay_seconds: float = 1.0
     circuit_breaker_threshold: int = 0
+    # How long the breaker stays open after tripping (review D3); the 60s
+    # default matches the pre-configurable behavior.
+    circuit_breaker_window_seconds: float = Field(default=60.0, gt=0)
     serializer_out: SerializerConfig | None = None  # per-sink override; None = use global
 
 
@@ -895,6 +901,9 @@ class RestSinkConfig(BaseModel):
     retry_count: int = 0
     retry_delay_seconds: float = 1.0
     circuit_breaker_threshold: int = 0
+    # How long the breaker stays open after tripping (review D3); the 60s
+    # default matches the pre-configurable behavior.
+    circuit_breaker_window_seconds: float = Field(default=60.0, gt=0)
     serializer_out: SerializerConfig | None = None  # per-sink override; None = use global
 
 
@@ -915,6 +924,9 @@ class KafkaSinkConfig(BaseModel):
     retry_count: int = 0
     retry_delay_seconds: float = 1.0
     circuit_breaker_threshold: int = 0
+    # How long the breaker stays open after tripping (review D3); the 60s
+    # default matches the pre-configurable behavior.
+    circuit_breaker_window_seconds: float = Field(default=60.0, gt=0)
     serializer_out: SerializerConfig | None = None  # per-sink override; None = use global
 
 
@@ -936,6 +948,9 @@ class OpenSearchSinkConfig(BaseModel):
     retry_count: int = 0
     retry_delay_seconds: float = 1.0
     circuit_breaker_threshold: int = 0
+    # How long the breaker stays open after tripping (review D3); the 60s
+    # default matches the pre-configurable behavior.
+    circuit_breaker_window_seconds: float = Field(default=60.0, gt=0)
     serializer_out: SerializerConfig | None = None  # per-sink override; None = use global
 
 
@@ -953,6 +968,9 @@ class FtpSinkConfig(BaseModel):
     retry_count: int = 0
     retry_delay_seconds: float = 1.0
     circuit_breaker_threshold: int = 0
+    # How long the breaker stays open after tripping (review D3); the 60s
+    # default matches the pre-configurable behavior.
+    circuit_breaker_window_seconds: float = Field(default=60.0, gt=0)
     serializer_out: SerializerConfig | None = None  # per-sink override; None = use global
 
 
@@ -974,6 +992,9 @@ class VesSinkConfig(BaseModel):
     retry_count: int = 0
     retry_delay_seconds: float = 1.0
     circuit_breaker_threshold: int = 0
+    # How long the breaker stays open after tripping (review D3); the 60s
+    # default matches the pre-configurable behavior.
+    circuit_breaker_window_seconds: float = Field(default=60.0, gt=0)
     serializer_out: SerializerConfig | None = None  # per-sink override; None = use global
 
 
@@ -991,6 +1012,9 @@ class S3SinkConfig(BaseModel):
     retry_count: int = 0
     retry_delay_seconds: float = 1.0
     circuit_breaker_threshold: int = 0
+    # How long the breaker stays open after tripping (review D3); the 60s
+    # default matches the pre-configurable behavior.
+    circuit_breaker_window_seconds: float = Field(default=60.0, gt=0)
     serializer_out: SerializerConfig | None = None  # per-sink override; None = use global
 
 
@@ -1027,6 +1051,9 @@ class SnmpTrapSinkConfig(BaseModel):
     retry_count: int = 0
     retry_delay_seconds: float = 1.0
     circuit_breaker_threshold: int = 0
+    # How long the breaker stays open after tripping (review D3); the 60s
+    # default matches the pre-configurable behavior.
+    circuit_breaker_window_seconds: float = Field(default=60.0, gt=0)
     serializer_out: SerializerConfig | None = None  # per-sink override; None = use global
 
 
@@ -1046,6 +1073,9 @@ class MqttSinkConfig(BaseModel):
     retry_count: int = 0
     retry_delay_seconds: float = 1.0
     circuit_breaker_threshold: int = 0
+    # How long the breaker stays open after tripping (review D3); the 60s
+    # default matches the pre-configurable behavior.
+    circuit_breaker_window_seconds: float = Field(default=60.0, gt=0)
     serializer_out: SerializerConfig | None = None  # per-sink override; None = use global
 
 
@@ -1060,6 +1090,9 @@ class AmqpSinkConfig(BaseModel):
     retry_count: int = 0
     retry_delay_seconds: float = 1.0
     circuit_breaker_threshold: int = 0
+    # How long the breaker stays open after tripping (review D3); the 60s
+    # default matches the pre-configurable behavior.
+    circuit_breaker_window_seconds: float = Field(default=60.0, gt=0)
     serializer_out: SerializerConfig | None = None  # per-sink override; None = use global
 
 
@@ -1073,6 +1106,9 @@ class NatsSinkConfig(BaseModel):
     retry_count: int = 0
     retry_delay_seconds: float = 1.0
     circuit_breaker_threshold: int = 0
+    # How long the breaker stays open after tripping (review D3); the 60s
+    # default matches the pre-configurable behavior.
+    circuit_breaker_window_seconds: float = Field(default=60.0, gt=0)
     serializer_out: SerializerConfig | None = None  # per-sink override; None = use global
 
 
@@ -1087,6 +1123,9 @@ class SqlSinkConfig(BaseModel):
     retry_count: int = 0
     retry_delay_seconds: float = 1.0
     circuit_breaker_threshold: int = 0
+    # How long the breaker stays open after tripping (review D3); the 60s
+    # default matches the pre-configurable behavior.
+    circuit_breaker_window_seconds: float = Field(default=60.0, gt=0)
     serializer_out: SerializerConfig | None = None  # per-sink override; None = use global
 
 
@@ -1105,6 +1144,9 @@ class InfluxDbSinkConfig(BaseModel):
     retry_count: int = 0
     retry_delay_seconds: float = 1.0
     circuit_breaker_threshold: int = 0
+    # How long the breaker stays open after tripping (review D3); the 60s
+    # default matches the pre-configurable behavior.
+    circuit_breaker_window_seconds: float = Field(default=60.0, gt=0)
     serializer_out: SerializerConfig | None = None  # per-sink override; None = use global
 
 
@@ -1122,6 +1164,9 @@ class RedisSinkConfig(BaseModel):
     retry_count: int = 0
     retry_delay_seconds: float = 1.0
     circuit_breaker_threshold: int = 0
+    # How long the breaker stays open after tripping (review D3); the 60s
+    # default matches the pre-configurable behavior.
+    circuit_breaker_window_seconds: float = Field(default=60.0, gt=0)
     serializer_out: SerializerConfig | None = None  # per-sink override; None = use global
 
 
@@ -1136,6 +1181,9 @@ class GcsSinkConfig(BaseModel):
     retry_count: int = 0
     retry_delay_seconds: float = 1.0
     circuit_breaker_threshold: int = 0
+    # How long the breaker stays open after tripping (review D3); the 60s
+    # default matches the pre-configurable behavior.
+    circuit_breaker_window_seconds: float = Field(default=60.0, gt=0)
     serializer_out: SerializerConfig | None = None  # per-sink override; None = use global
 
 
@@ -1153,6 +1201,9 @@ class AzureBlobSinkConfig(BaseModel):
     retry_count: int = 0
     retry_delay_seconds: float = 1.0
     circuit_breaker_threshold: int = 0
+    # How long the breaker stays open after tripping (review D3); the 60s
+    # default matches the pre-configurable behavior.
+    circuit_breaker_window_seconds: float = Field(default=60.0, gt=0)
     serializer_out: SerializerConfig | None = None  # per-sink override; None = use global
 
 
@@ -1168,6 +1219,9 @@ class WebSocketSinkConfig(BaseModel):
     retry_count: int = 0
     retry_delay_seconds: float = 1.0
     circuit_breaker_threshold: int = 0
+    # How long the breaker stays open after tripping (review D3); the 60s
+    # default matches the pre-configurable behavior.
+    circuit_breaker_window_seconds: float = Field(default=60.0, gt=0)
     serializer_out: SerializerConfig | None = None  # per-sink override; None = use global
 
 
@@ -1188,6 +1242,9 @@ class ElasticsearchSinkConfig(BaseModel):
     retry_count: int = 0
     retry_delay_seconds: float = 1.0
     circuit_breaker_threshold: int = 0
+    # How long the breaker stays open after tripping (review D3); the 60s
+    # default matches the pre-configurable behavior.
+    circuit_breaker_window_seconds: float = Field(default=60.0, gt=0)
     serializer_out: SerializerConfig | None = None  # per-sink override; None = use global
 
 
@@ -1208,6 +1265,9 @@ class ClickHouseSinkConfig(BaseModel):
     retry_count: int = 0
     retry_delay_seconds: float = 1.0
     circuit_breaker_threshold: int = 0
+    # How long the breaker stays open after tripping (review D3); the 60s
+    # default matches the pre-configurable behavior.
+    circuit_breaker_window_seconds: float = Field(default=60.0, gt=0)
     serializer_out: SerializerConfig | None = None  # per-sink override; None = use global
     # Batching — accumulate rows before flushing to prevent ClickHouse "too many parts"
     batch_size: int = 5000

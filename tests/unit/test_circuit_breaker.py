@@ -13,11 +13,12 @@ def _ctx(name="cb-test"):
     return PipelineRunContext(pipeline_name=name)
 
 
-def _sink_tuple(sink, threshold=0, retry_count=0):
+def _sink_tuple(sink, threshold=0, retry_count=0, window=60.0):
     cfg = MagicMock()
     cfg.retry_count = retry_count
     cfg.retry_delay_seconds = 0.0
     cfg.circuit_breaker_threshold = threshold
+    cfg.circuit_breaker_window_seconds = window
     return (sink, None, [], cfg)
 
 
@@ -101,4 +102,47 @@ class TestCircuitBreaker:
             executor._process_chunk(b"[]", {}, ser, [], ser, sinks, ctx, "continue")
 
         # Write should have been attempted again
+        assert sink.write.call_count == 2
+
+    def test_circuit_open_window_is_configurable(self):
+        """D3 (GH #55): the open window comes from the sink config, not a
+        hardcoded 60s."""
+        executor = PipelineExecutor()
+        sink = MagicMock()
+        sink.write.side_effect = RuntimeError("fail")
+        sinks = [_sink_tuple(sink, threshold=1, window=0.2)]
+        ser = _ser()
+
+        # Trip the circuit with a 0.2s window.
+        executor._process_chunk(b"[]", {}, ser, [], ser, sinks, _ctx(), "continue")
+        assert sink.write.call_count == 1
+
+        # Well before a 60s window would have expired, but past 0.2s, the
+        # breaker must be closed again.
+        sink.write.side_effect = [None]
+        with patch("time.monotonic", return_value=time.monotonic() + 0.5):
+            executor._process_chunk(b"[]", {}, ser, [], ser, sinks, _ctx(), "continue")
+
+        assert sink.write.call_count == 2
+
+    def test_default_window_remains_60s(self):
+        """D3: without a configured window the 60s default is unchanged."""
+        executor = PipelineExecutor()
+        sink = MagicMock()
+        sink.write.side_effect = RuntimeError("fail")
+        sinks = [_sink_tuple(sink, threshold=1)]  # window defaults to 60.0
+        ser = _ser()
+
+        executor._process_chunk(b"[]", {}, ser, [], ser, sinks, _ctx(), "continue")
+        assert sink.write.call_count == 1
+
+        # Still open after 10s...
+        sink.write.side_effect = [None]
+        with patch("time.monotonic", return_value=time.monotonic() + 10):
+            executor._process_chunk(b"[]", {}, ser, [], ser, sinks, _ctx(), "continue")
+        assert sink.write.call_count == 1
+
+        # ...closed after 60s.
+        with patch("time.monotonic", return_value=time.monotonic() + 61):
+            executor._process_chunk(b"[]", {}, ser, [], ser, sinks, _ctx(), "continue")
         assert sink.write.call_count == 2

@@ -6,13 +6,17 @@ import base64
 import gc
 import json
 import logging
+import os
 import queue as _queue
 import random
+import re
 import threading
 import time
+import uuid
 from collections import OrderedDict, deque
 from concurrent.futures import Future, ThreadPoolExecutor
 from datetime import UTC, datetime
+from pathlib import Path
 from typing import TYPE_CHECKING
 
 from tram.connectors.file_sink_common import extract_field_paths, validate_template_tokens
@@ -141,6 +145,67 @@ def _partition_records_for_template(
     return [(entry["field_values"], entry["records"]) for entry in grouped.values()]
 
 
+def _dlq_spool_dir() -> str:
+    """Directory for spooled DLQ envelopes (review D1 fallback).
+
+    The primary DLQ sink usually fails for the same reason the primary sink
+    did (a shared network partition), so a remote DLQ is not a safe last
+    resort. When the DLQ write itself fails, the envelope is durably spooled
+    to local disk instead of being dropped. Configurable via
+    ``TRAM_DLQ_SPOOL_DIR``; defaults under ``~/.tram`` alongside the SQLite
+    fallback DB.
+    """
+    return os.environ.get("TRAM_DLQ_SPOOL_DIR", "~/.tram/dlq-spool")
+
+
+def _spool_dlq_envelope(
+    envelope: dict,
+    ctx: PipelineRunContext,
+    error: str,
+) -> str | None:
+    """Write a failed DLQ envelope to the local disk spool (review D1).
+
+    Returns the spool file path on success, or ``None`` when even the spool
+    failed (then the record is genuinely lost and the failure is logged at
+    ERROR with the ``DLQ_WRITE_FAILED`` counter incremented — the loud path,
+    never a silent drop).
+    """
+    from tram.metrics.registry import DLQ_WRITE_FAILED
+
+    safe_name = re.sub(r"[^A-Za-z0-9_.-]", "_", ctx.pipeline_name)
+    filename = (
+        f"{safe_name}-{ctx.run_id}-"
+        f"{datetime.now(UTC).strftime('%Y%m%dT%H%M%S%f')}-{uuid.uuid4().hex[:8]}.json"
+    )
+    payload = dict(envelope)
+    payload["_dlq_sink_error"] = str(error)
+    try:
+        spool_dir = Path(_dlq_spool_dir()).expanduser()
+        spool_dir.mkdir(parents=True, exist_ok=True)
+        path = spool_dir / filename
+        path.write_text(json.dumps(payload))
+        logger.error(
+            "DLQ write failed — envelope spooled to disk",
+            extra={
+                "pipeline": ctx.pipeline_name,
+                "spool_path": str(path),
+                "error": str(error),
+            },
+        )
+        return str(path)
+    except Exception as spool_exc:
+        DLQ_WRITE_FAILED.labels(pipeline=ctx.pipeline_name).inc()
+        logger.error(
+            "DLQ write failed and local spool failed — envelope lost",
+            extra={
+                "pipeline": ctx.pipeline_name,
+                "error": str(error),
+                "spool_error": str(spool_exc),
+            },
+        )
+        return None
+
+
 def _write_dlq_envelope(
     dlq_sink,
     ctx: PipelineRunContext,
@@ -150,7 +215,13 @@ def _write_dlq_envelope(
     record=None,
     raw: bytes | None = None,
 ) -> None:
-    """Write a DLQ envelope to the DLQ sink. Errors are logged and swallowed."""
+    """Write a DLQ envelope to the DLQ sink.
+
+    A DLQ sink write failure never silently discards the record (review D1):
+    the envelope is spooled to local disk as a durable fallback (replayable
+    JSON file), or — when even the spool fails — surfaced via ERROR logs and
+    the ``DLQ_WRITE_FAILED`` counter.
+    """
     envelope: dict = {
         "_error": error,
         "_stage": stage,
@@ -164,10 +235,7 @@ def _write_dlq_envelope(
     try:
         dlq_sink.write(json.dumps(envelope).encode(), {})
     except Exception as dlq_exc:
-        logger.error(
-            "DLQ write failed",
-            extra={"pipeline": ctx.pipeline_name, "error": str(dlq_exc)},
-        )
+        _spool_dlq_envelope(envelope, ctx, error=str(dlq_exc))
 
 
 def _try_trim_process_heap() -> bool:
@@ -494,12 +562,41 @@ class PipelineExecutor:
         return f"{config.name}:{sink_type}:{index}"
 
     @staticmethod
-    def _finalize_source_for_sinks(sinks: list[tuple], meta: dict, *, success: bool) -> None:
+    def _finalize_source_for_sinks(
+        sinks: list[tuple],
+        meta: dict,
+        *,
+        success: bool,
+        ctx: PipelineRunContext | None = None,
+    ) -> None:
+        """Run each sink's ``finalize_source`` hook, degrading on failure.
+
+        A sink finalize failure (e.g. a staged-file rename) after all chunks
+        were drained must NOT flip the whole run to FAILED (review B11): the
+        data is already written, so the error is logged loudly and recorded on
+        the run context as a note — the run stays on its decided result with
+        the error attached, consistent with the at-least-once story.
+        """
         for sink_tuple in sinks:
             sink_instance = sink_tuple[0]
             finalize = getattr(sink_instance, "finalize_source", None)
-            if callable(finalize):
+            if not callable(finalize):
+                continue
+            try:
                 finalize(meta, success)
+            except Exception as exc:
+                msg = f"Sink finalize failed: {exc}"
+                logger.error(
+                    msg,
+                    extra={
+                        "sink_type": type(sink_instance).__name__,
+                        "success": success,
+                        "source_path": meta.get("source_path"),
+                        "source_filename": meta.get("source_filename"),
+                    },
+                )
+                if ctx is not None:
+                    ctx.note_skip(msg)
 
     @staticmethod
     def _close_sinks(sinks: list[tuple], dlq_sink=None) -> None:
@@ -744,10 +841,19 @@ class PipelineExecutor:
                             failures, _ = self._cb_state.get(sink_key, (0, 0.0))
                             failures += 1
                             if failures >= cb_threshold:
-                                open_until = time.monotonic() + 60.0
+                                cb_window = float(
+                                    getattr(sink_cfg, "circuit_breaker_window_seconds", 60.0)
+                                    or 60.0
+                                )
+                                open_until = time.monotonic() + cb_window
                                 logger.warning(
-                                    "Circuit breaker tripped — disabling sink for 60s",
-                                    extra={"pipeline": ctx.pipeline_name, "failures": failures},
+                                    "Circuit breaker tripped — disabling sink "
+                                    f"for {cb_window:g}s",
+                                    extra={
+                                        "pipeline": ctx.pipeline_name,
+                                        "failures": failures,
+                                        "window_seconds": cb_window,
+                                    },
                                 )
                             else:
                                 open_until = 0.0
@@ -1205,7 +1311,9 @@ class PipelineExecutor:
                 if source_key is not None:
                     meta["enable_safe_finalize"] = True
                     if current_source_key is not None and source_key != current_source_key:
-                        self._finalize_source_for_sinks(sinks, current_source_meta, success=True)
+                        self._finalize_source_for_sinks(
+                            sinks, current_source_meta, success=True, ctx=ctx
+                        )
                         source.finalize(current_source_meta, success=True)
                         current_source_key = None
                         current_source_meta = None
@@ -1235,12 +1343,16 @@ class PipelineExecutor:
                     break
         except Exception:
             if current_source_meta is not None:
-                self._finalize_source_for_sinks(sinks, current_source_meta, success=False)
+                self._finalize_source_for_sinks(
+                    sinks, current_source_meta, success=False, ctx=ctx
+                )
                 source.finalize(current_source_meta, success=False)
             raise
         else:
             if current_source_meta is not None:
-                self._finalize_source_for_sinks(sinks, current_source_meta, success=True)
+                self._finalize_source_for_sinks(
+                    sinks, current_source_meta, success=True, ctx=ctx
+                )
                 if not stopped_early:
                     # On a batch_size stop the source generator was abandoned
                     # mid-file; the current file must stay unmarked so the next

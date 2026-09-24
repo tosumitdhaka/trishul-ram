@@ -13,6 +13,13 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - `on_error: abort` is now honored for per-record transform failures — the run FAILS instead of silently degrading to continue (parity with parse/sink abort paths) (#48)
 - `record_chunk_size` is honored on the threaded batch path — large `split_path` fan-outs stream incrementally instead of full eager materialization when `thread_workers > 1` (#48)
 - Unexpected (non-TramError) exceptions in parallel-sink fan-out are converted to `TramError` so `on_error` handling applies instead of escaping the taxonomy and exploding the run (#48)
+- Worker→manager run-complete callbacks now retry with bounded backoff (3 attempts) before falling back to the reconciler adoption path — a transient manager outage no longer loses the completion record (D2) (#55)
+- A DLQ sink write failure no longer silently drops the record — the envelope is spooled locally (`TRAM_DLQ_SPOOL_DIR`, default `~/.tram/dlq-spool`) for manual replay; even a spool failure is counted in metrics and logged as ERROR (D1) (#55)
+- The per-sink circuit-breaker open window is configurable (`circuit_breaker_window_seconds`, default 60s unchanged) (D3) (#55)
+- `errors_last_window` is bounded (deque, maxlen 100) between snapshots (B7) (#55)
+- `_add_column_if_missing` swallows only the duplicate-column error per dialect — locks/disk-full and other real failures now raise loudly (B8) (#55)
+- `save_pipeline_version` version races are resolved by a `UNIQUE(name, version)` constraint (fresh DBs) plus an idempotent unique-index migration for existing DBs and an IntegrityError retry (B9) (#55)
+- A `finalize_source` rename failure after all chunks drained no longer flips a fully-written run to FAILED — it degrades to a recorded error note on the run (B11) (#55)
 - Browser-smoke version assertions now derive from `tram/ui/package.json` and cross-check `tests/browser/fixtures/meta.json` — fixture drift fails the check instead of passing silently; release-gate check 2 validates the fixture against the pyproject version (#50)
 - The yaml-quote browser check stubs the schema-poll interval (`window.__TRAM_TEST_SCHEMA_POLL_MS__` override) — the hardcoded 61.5s wall-clock wait is gone (check now ~11s) (#50)
 

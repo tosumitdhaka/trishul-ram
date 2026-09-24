@@ -353,6 +353,54 @@ class TestTriggerDeleteRace:
         assert wp.dispatch_with_result.call_count == 1
         ctrl.stop()
 
+    def test_update_during_dispatch_drops_lease_for_replaced_config(self):
+        """B5 (GH #55): a dispatch that started under the OLD config and
+        completes after an update() must not be tracked as a lease for the
+        replaced pipeline — the stale-config run is bounded by at-least-once
+        (the worker runs the YAML it received; run-complete records its
+        outcome; no manager-side lease pins it)."""
+        wp = MagicMock()
+        dispatch_gate = threading.Event()
+        dispatch_entered = threading.Event()
+        dispatch_done = threading.Event()
+
+        def _dispatch(**kwargs):
+            dispatch_entered.set()
+            assert dispatch_gate.wait(timeout=10)
+            try:
+                return DispatchOutcome(
+                    worker_url="http://worker-0:8766", outcome=DISPATCH_ACCEPTED,
+                )
+            finally:
+                dispatch_done.set()
+
+        wp.dispatch_with_result.side_effect = _dispatch
+        ctrl = _make_controller(worker_pool=wp, manager_url="http://manager:8765")
+        ctrl.manager.register(
+            load_pipeline_from_yaml(_MANUAL_YAML), yaml_text=_MANUAL_YAML
+        )
+        ctrl.manager.set_status("my-manual", "scheduled")
+
+        ctrl.trigger_run("my-manual")
+        assert dispatch_entered.wait(timeout=5)
+
+        # Update the pipeline while the old-config dispatch is in flight.
+        updated = _MANUAL_YAML + "description: v2\n"
+        ctrl.update("my-manual", updated)
+
+        # Let the dispatch finish; the post-dispatch CAS must refuse to track
+        # a lease for the replaced config.
+        dispatch_gate.set()
+        assert dispatch_done.wait(timeout=5)
+
+        assert ctrl.manager.exists("my-manual")
+        assert ctrl.manager.get("my-manual").config.description == "v2"
+        assert ctrl.get_active_batch_runs() == [], (
+            "a lease was recorded for a dispatch that completed under a "
+            "replaced (stale) config"
+        )
+        ctrl.stop()
+
 
 class TestDuplicateWorkerCallbackRace:
     """D2-adjacent: concurrent duplicate run-complete callbacks record once."""

@@ -1212,6 +1212,32 @@ class TestPipelineWorkersPrune:
 
         assert "pipe-a" not in pool._pipeline_workers
 
+    def test_worker_id_churn_replaces_mapping_and_reap_still_prunes(self):
+        """D8 identity churn: a worker restart reuses the URL with a new
+        hostname-based worker_id. The stale id must be replaced in the
+        mapping, and the _pipeline_workers entry must still prune once the
+        run completes (no unbounded growth from restarted workers)."""
+        pool = _pool("http://w0:8766")
+        pool._assignments["r1"] = "http://w0:8766"
+        pool._run_pipelines["r1"] = "pipe-a"
+        pool._pipeline_workers["pipe-a"] = ["http://w0:8766"]
+        pool._worker_ids["w0"] = "http://w0:8766"
+        pool._url_to_worker_id["http://w0:8766"] = "w0"
+
+        # Worker restarts and reports a new id on the same URL.
+        mock_client = _mock_httpx_client({
+            "http://w0:8766/agent/health": {"ok": True, "active_runs": 0, "worker_id": "w0-new"},
+        })
+        with patch("httpx.Client", return_value=mock_client):
+            pool._poll_all()
+
+        assert pool._url_to_worker_id["http://w0:8766"] == "w0-new"
+        assert "w0" not in pool._worker_ids
+        assert pool._worker_ids["w0-new"] == "http://w0:8766"
+
+        pool.on_run_complete("r1")
+        assert "pipe-a" not in pool._pipeline_workers
+
 
 # ── Reap bookkeeping on worker death (D.2 review) ───────────────────────────
 
