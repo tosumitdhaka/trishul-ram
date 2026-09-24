@@ -14,6 +14,11 @@ _SKIP_FIELDS = {"type", "condition", "transforms", "serializer_out"}
 # Fields that are internal plumbing injected by the executor at runtime
 _INTERNAL_PREFIX = "_"
 
+# Substrings that mark a connector field as secret-bearing. Shared with the AI
+# router's outbound-prompt redaction (tram/api/routers/ai.py) so the schema
+# cache and prompt masking can never drift apart.
+SECRET_NAME_TOKENS = ("password", "token", "secret", "api_key")
+
 
 def _type_name(annotation) -> str:
     """Return a compact human-readable type string for a Pydantic field annotation."""
@@ -157,7 +162,7 @@ def _model_to_field_descriptors(model_cls) -> list[dict]:
                 "choices": choices or [],
                 "required": field_info.is_required(),
                 "default": _serialize_default(field_info.default),
-                "secret": any(token in name for token in ("password", "token", "secret")),
+                "secret": any(token in name for token in SECRET_NAME_TOKENS),
                 "multiline": name in {"query", "body"} or name.endswith("_template"),
             }
         )

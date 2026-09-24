@@ -479,6 +479,29 @@ class TestAiSaveConfig:
         assert "provider" in r.json()["detail"].lower()
         db.set_setting.assert_not_called()
 
+    def test_non_string_api_key_rejected_with_400(self):
+        # Issue #43 ride-along: JSON booleans/numbers must be rejected, not
+        # str()-coerced ("True"), and nothing may be persisted.
+        db = _make_db()
+        app = _make_app(db=db)
+        client = TestClient(app)
+        r = client.post("/api/ai/config", json={"api_key": True})
+        assert r.status_code == 400
+        assert "api_key" in r.json()["detail"]
+        db.set_setting.assert_not_called()
+        db.delete_setting.assert_not_called()
+
+    def test_later_field_rejection_leaves_earlier_fields_unsaved(self):
+        # Issue #43 ride-along: the whole body is validated before persistence
+        # — a 400 on a later field must not leave an earlier valid field saved.
+        db = _make_db()
+        app = _make_app(db=db)
+        client = TestClient(app)
+        r = client.post("/api/ai/config", json={"provider": "openai", "api_key": True})
+        assert r.status_code == 400
+        db.set_setting.assert_not_called()
+        db.delete_setting.assert_not_called()
+
 
 # ── /api/ai/test endpoint ──────────────────────────────────────────────────
 
@@ -813,9 +836,38 @@ class TestRedactYaml:
         assert "add_field" in redacted      # transforms survive masking
         assert "serializer_out" in redacted
 
-    def test_unparseable_yaml_returned_unchanged(self):
+    def test_unparseable_yaml_raises_value_error(self):
+        # A4/Issue #43: redaction fails closed — unparseable YAML may still
+        # hold live secrets mid-edit, so it must raise, never pass through.
         raw = "name: [unclosed\n  source:\n    type: sftp\n    password: keepme"
-        assert _redact_yaml(raw) == raw
+        with pytest.raises(ValueError, match="YAML syntax"):
+            _redact_yaml(raw)
+
+    def test_non_dict_top_level_raises_value_error(self):
+        # A bare list can still carry secret-bearing mappings — fail closed.
+        raw = "- name: pipe\n  source:\n    type: sftp\n    password: keepme"
+        with pytest.raises(ValueError, match="mapping at the top level"):
+            _redact_yaml(raw)
+
+    def test_masks_api_key_connector_fields(self):
+        # Issue #43: api_key fields on REST/ES sources and sinks were not
+        # matched by the password/token/secret heuristic.
+        yaml_text = (
+            "name: pipe\n"
+            "schedule:\n  type: manual\n"
+            "source:\n  type: rest\n  url: https://es.example.com\n"
+            "  api_key: rest-source-key\n"
+            "serializer_in:\n  type: json\n"
+            "sinks:\n"
+            "  - type: elasticsearch\n"
+            "    url: https://es.example.com\n"
+            "    api_key: es-sink-key\n"
+        )
+        redacted = _redact_yaml(yaml_text)
+        assert "rest-source-key" not in redacted
+        assert "es-sink-key" not in redacted
+        assert "***redacted***" in redacted
+        assert "url: https://es.example.com" in redacted   # non-secret intact
 
     def test_masks_singular_sink_block(self):
         # Backward-compat singular `sink:` (PipelineConfig.sink) carries the
@@ -1019,16 +1071,42 @@ class TestAiPromptRedaction:
         assert "${SFTP_PASSWORD}" in captured["user"]
         assert "***redacted***" not in captured["user"]
 
-    def test_unparseable_yaml_sent_unchanged(self, monkeypatch):
-        # Mid-edit YAML that won't parse is sent as-is so explain/fix still work.
+    def test_fix_mode_redacts_api_key_fields(self, monkeypatch):
+        # Issue #43: api_key values in REST/ES connector configs must not
+        # reach the provider prompt.
+        monkeypatch.setenv("TRAM_AI_API_KEY", "sk-test")
+        client = TestClient(_make_app())
+        yaml_with_api_key = (
+            "name: pipe\n"
+            "schedule:\n  type: manual\n"
+            "source:\n  type: rest\n  url: https://es.example.com\n"
+            "  api_key: rest-source-key\n"
+            "serializer_in:\n  type: json\n"
+            "sinks:\n"
+            "  - type: elasticsearch\n"
+            "    url: https://es.example.com\n"
+            "    api_key: es-sink-key\n"
+        )
+        r, captured = self._capture(monkeypatch, client, {
+            "mode": "fix", "yaml": yaml_with_api_key, "error": "boom",
+        })
+        assert r.status_code == 200
+        assert "rest-source-key" not in captured["user"]
+        assert "es-sink-key" not in captured["user"]
+        assert "***redacted***" in captured["user"]
+        assert "https://es.example.com" in captured["user"]   # non-secret intact
+
+    def test_unparseable_yaml_refused_with_400(self, monkeypatch):
+        # Issue #43: redaction fails closed — unparseable YAML returns 400 and
+        # never reaches the provider, even though it may hold live secrets.
         monkeypatch.setenv("TRAM_AI_API_KEY", "sk-test")
         client = TestClient(_make_app())
         raw = "name: [unclosed\n  source:\n    type: sftp\n    password: keepme"
-        r, captured = self._capture(monkeypatch, client, {
-            "mode": "explain", "yaml": raw, "error": "boom",
-        })
-        assert r.status_code == 200
-        assert "keepme" in captured["user"]
+        with patch("tram.api.routers.ai._call_ai") as mock_call:
+            r = self._post(client, {"mode": "explain", "yaml": raw, "error": "boom"})
+        assert r.status_code == 400
+        assert "YAML" in r.json()["detail"]
+        mock_call.assert_not_called()
 
 
 # ── A11: base_url scheme enforcement + allowlist ────────────────────────────
@@ -1254,6 +1332,35 @@ class TestBaseUrlAllowlist:
         assert _base_url_allowed("http://localhost:11435", allowed) is False
         assert _base_url_allowed("http://localhost", allowed) is False
         assert _base_url_allowed("", allowed) is False
+
+    def test_non_matching_rejected_at_call(self, monkeypatch):
+        # Issue #43: the allowlist is enforced in _call_ai too — a base_url
+        # that passed the scheme check but is not allowlisted must raise
+        # before any SDK client is constructed (and the API key attached).
+        monkeypatch.setenv("TRAM_AI_ALLOWED_BASE_URLS", "https://llm.example.com")
+        mock_oai = MagicMock()
+        cfg = {"provider": "openai", "api_key": "k", "model": "",
+               "base_url": "https://attacker.example.com"}
+        with patch.dict(sys.modules, {"openai": mock_oai}):
+            with pytest.raises(RuntimeError, match="ALLOWED_BASE_URLS"):
+                _call_ai("sys", "usr", 10, cfg)
+        mock_oai.OpenAI.assert_not_called()
+
+    def test_matching_accepted_at_call(self, monkeypatch):
+        # Allowlisted base_urls still reach the provider at call time.
+        monkeypatch.setenv("TRAM_AI_ALLOWED_BASE_URLS", "https://llm.example.com/v1")
+        mock_oai = MagicMock()
+        mock_resp = MagicMock()
+        mock_resp.choices = [MagicMock(message=MagicMock(content="ok"))]
+        mock_oai.OpenAI.return_value.chat.completions.create.return_value = mock_resp
+        mock_oai.AuthenticationError = type("AuthenticationError", (Exception,), {})
+        mock_oai.APIConnectionError = type("APIConnectionError", (Exception,), {})
+        mock_oai.RateLimitError = type("RateLimitError", (Exception,), {})
+        mock_oai.APIStatusError = type("APIStatusError", (Exception,), {})
+        with patch.dict(sys.modules, {"openai": mock_oai}):
+            result = _call_ai("sys", "usr", 10, {"provider": "openai", "api_key": "k",
+                                                 "model": "", "base_url": "https://llm.example.com/v1"})
+        assert result.text == "ok"
 
 
 # ── A10: per-call audit log ─────────────────────────────────────────────────
