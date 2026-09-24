@@ -4,6 +4,8 @@ from __future__ import annotations
 import time
 from unittest.mock import MagicMock
 
+import pytest
+
 from tram.core.context import PipelineRunContext
 from tram.pipeline.executor import PipelineExecutor
 
@@ -35,6 +37,16 @@ def test_rate_limit_sleeps_when_empty():
     # Should sleep roughly 1/rps = 0.1s
     assert elapsed >= 0.05, f"Expected ~0.1s sleep, got {elapsed:.3f}s"
     assert elapsed < 0.5, f"Slept too long: {elapsed:.3f}s"
+
+
+def test_rate_limit_rejects_non_positive_rps():
+    """GH #48 §2.4: a non-positive rate fails as a configuration error
+    (ValueError) — never a raw ZeroDivisionError from the token math."""
+    executor = PipelineExecutor()
+    with pytest.raises(ValueError, match="rate_limit_rps"):
+        executor._rate_limit(0.0)
+    with pytest.raises(ValueError, match="rate_limit_rps"):
+        executor._rate_limit(-1.0)
 
 
 def test_process_chunk_with_rate_limit():

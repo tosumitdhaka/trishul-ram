@@ -225,7 +225,13 @@ class PipelineExecutor:
         Thread-safe: _tokens and _last_refill are protected by _rate_lock.
         Note: rate_limit_rps is approximate when thread_workers > 1 because
         the sleep happens outside the lock to avoid holding it during sleep.
+
+        A non-positive *rps* is a configuration error (rejected by the model's
+        ``gt=0`` constraint) — fail loudly as such rather than with a raw
+        ZeroDivisionError from the token math.
         """
+        if rps is None or rps <= 0:
+            raise ValueError(f"rate_limit_rps must be > 0, got {rps!r}")
         with self._rate_lock:
             now = time.monotonic()
             elapsed = now - self._last_refill
@@ -580,6 +586,10 @@ class PipelineExecutor:
                         processed = t.apply(processed)
                     surviving_records.extend(processed)
                 except Exception as exc:
+                    if on_error == "abort":
+                        # GH #48 §2.9: abort must fail the run like the parse
+                        # and sink-write abort paths, not silently DLQ+continue.
+                        raise TramError(f"Transform error: {exc}") from exc
                     if dlq_sink is not None:
                         _write_dlq_envelope(
                             dlq_sink, ctx,
@@ -777,6 +787,14 @@ class PipelineExecutor:
                             written_counts.append(f.result())
                         except TramError:
                             raise
+                        except Exception as exc:
+                            # GH #48 §2.16: unexpected exceptions from
+                            # _write_one_sink (e.g. a serializer bug outside
+                            # the per-partition retry loop) escape the error
+                            # taxonomy and would bypass on_error=retry. Fold
+                            # them into TramError so the retry/abort paths in
+                            # the run loop apply, preserving the cause.
+                            raise TramError(f"Sink write error: {exc}") from exc
             else:
                 written_counts = [
                     _write_one_sink(sink_tuple, records, i)
@@ -1260,6 +1278,7 @@ class PipelineExecutor:
         on_error = config.on_error
         cap = _batch_inflight_cap(config.thread_workers)
         parallel_sinks = getattr(config, "parallel_sinks", False)
+        record_chunk_size = getattr(config, "record_chunk_size", None)
 
         in_flight: deque[tuple[Future, tuple | None, dict]] = deque()
         # Source units in submission order; each entry:
@@ -1267,12 +1286,27 @@ class PipelineExecutor:
         units: deque[list] = deque()
 
         def _submit(raw: bytes, meta: dict) -> None:
-            fut = pool.submit(
-                self._process_chunk,
-                raw, meta, serializer_in, transforms,
-                serializer_out, sinks, ctx, on_error,
-                config.rate_limit_rps, dlq_sink, parallel_sinks, sink_cb_keys, stats,
-            )
+            if record_chunk_size:
+                # GH #48 §2.10: honor record_chunk_size on the threaded path
+                # too — parse_chunks bounds the fan-out per chunk instead of
+                # materializing the whole split (asn1) in one parse(). The
+                # in-flight cap is unchanged (futures are what get bounded);
+                # batch_size truncation stays approximate like the sequential
+                # path's accepted over-submission.
+                fut = pool.submit(
+                    self._process_chunk_incrementally,
+                    raw, meta, serializer_in, transforms,
+                    serializer_out, sinks, ctx, on_error,
+                    record_chunk_size, batch_size, config.rate_limit_rps,
+                    dlq_sink, parallel_sinks, sink_cb_keys, stats,
+                )
+            else:
+                fut = pool.submit(
+                    self._process_chunk,
+                    raw, meta, serializer_in, transforms,
+                    serializer_out, sinks, ctx, on_error,
+                    config.rate_limit_rps, dlq_sink, parallel_sinks, sink_cb_keys, stats,
+                )
             key = _source_unit_key(meta)
             if key is not None:
                 if units and units[-1][0] == key:

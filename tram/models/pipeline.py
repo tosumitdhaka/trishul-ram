@@ -494,6 +494,13 @@ class AggregateTransformConfig(BaseModel):
 # the linter's stateful+broadcast warning.
 _STATEFUL_TRANSFORM_TYPES = ("counter_delta", "window_aggregate")
 
+# Transforms that read per-chunk runtime metadata written onto the SHARED
+# instance via set_runtime_meta() right before apply() (executor
+# _set_transform_runtime_meta). With thread_workers > 1 the write/read pair
+# races across chunk threads — a record can carry another file's metadata —
+# so they are gated to thread_workers == 1 exactly like stateful transforms.
+_META_AWARE_TRANSFORM_TYPES = ("inject_meta",)
+
 
 class CounterDeltaTransformConfig(BaseModel):
     """Per-key counter deltas with Counter32/64 wrap correction and rates (F.1 §4/§7).
@@ -1467,7 +1474,9 @@ class PipelineConfig(BaseModel):
     dlq: SinkConfig | None = None
 
     # Rate limiting
-    rate_limit_rps: float | None = None
+    # gt=0: a zero/negative value would divide by zero inside the token-bucket
+    # limiter (historical A5) — reject it at validation, not at runtime.
+    rate_limit_rps: float | None = Field(default=None, gt=0)
 
     # Parallelism
     thread_workers: int = 1   # intra-node worker threads per pipeline run
@@ -1526,9 +1535,9 @@ class PipelineConfig(BaseModel):
         if ser.type == "asn1" and getattr(ser, "split_path", None) and not self.record_chunk_size:
             raise ValueError(
                 "serializer_in.split_path requires record_chunk_size > 0 "
-                "to chunk the record fan-out (note: chunking bounds memory "
-                "only on sequential runs — thread_workers > 1 applies the "
-                "split eagerly)"
+                "to chunk the record fan-out (the chunking bound applies on "
+                "both sequential and threaded runs; threaded runs bound "
+                "~2x thread_workers chunks in flight)"
             )
         return self
 
@@ -1539,6 +1548,30 @@ class PipelineConfig(BaseModel):
                 self.workers = WorkersConfig(count="all")
             else:
                 self.workers = WorkersConfig(count=1)
+        return self
+
+    @model_validator(mode="after")
+    def check_meta_aware_transforms(self) -> PipelineConfig:
+        """Mode gating for meta-aware transforms (GH #48 §2.5).
+
+        Mirrors ``check_stateful_transforms``: transforms that read per-chunk
+        runtime metadata (``inject_meta``) hold that metadata in a single
+        shared instance field written immediately before each ``apply()``.
+        With ``thread_workers > 1`` concurrent chunk threads race that
+        write/read pair, so a record can be stamped with another file's
+        source_filename. Sink-level uses are safe (each sink builds its own
+        transform instances, so no instance is shared across threads).
+        """
+        top_level_meta_aware = [
+            t.type for t in self.transforms if t.type in _META_AWARE_TRANSFORM_TYPES
+        ]
+        if top_level_meta_aware and self.thread_workers > 1:
+            raise ValueError(
+                "meta-aware transforms cannot be used with thread_workers > 1: "
+                "runtime metadata is written onto the shared transform instance "
+                "before apply(), so concurrent chunk threads race it "
+                f"({', '.join(top_level_meta_aware)})"
+            )
         return self
 
     @model_validator(mode="after")
