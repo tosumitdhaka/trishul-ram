@@ -194,6 +194,19 @@ unconfirmed work lives in the backlog at the bottom.
 ### Extensibility
 - [ ] **Hot-loadable custom logic** — Starlark/execd-equivalent per-vendor quirk handling without redeploys (G1 in `docs/ideas/tram-improvements.md`; also the telecom review's vendor-quirk residual)
 
+### Design Follow-ups (from shipped-feature design docs)
+- [ ] **Queue depth >1 for manual runs** — one queued run per pipeline today (re-trigger is idempotent, returns the same run_id); decide deeper-queue semantics (E.2 design Q5, `docs/plans/e2-queued-manual-runs-design.md`)
+- [ ] **Stateful-transform state-blob compaction at fleet scale** — per-pipeline state blobs grow with key cardinality (F.1 design Q2, `docs/plans/f1-counter-delta-design.md`)
+- [ ] **`align_timezone` knob for window alignment** — revisit trigger already met (F.4 `source_timezone` shipped) (F.1 design Q3)
+- [ ] **`max_gap_seconds` default tuning** — confirm the default against real stream feedback (F.1 design Q4)
+- [ ] **Dispatch-affinity escape hatch** — pinning a count=1 stateful pipeline to a specific worker for cache locality (F.1 design Q5)
+- (E.2 design Q3 — partial unique index for `queued_runs` — is tied to B9 and rides GH #55)
+
+### Open Decisions
+- [ ] **treq AI provider-layer vendor decision** — vendor `treq/_providers/` into TRAM (~3 days; adaptation list in `docs/ideas/treq-ai-reuse-feasibility.md`); gates AI streaming (A9) and B3–B6 of the AI expansion cycle
+- [ ] **SNMP library migration (tsmi/tsmp)** — blocked on upstream SNMPv1 support + v3 crypto parity; options B (parallel connector behind flag) / C (fix upstream first, then full swap) — `docs/ideas/trishul-smi-snmp-migration-feasibility.md`
+- [ ] **Flip `TRAM_INTERNAL_AUTH_MODE=enforce`** — ops task, not development: after all clients carry keys, flip `warn` → `enforce` per `docs/deployment.md` (v1.4.6 adds the misconfiguration startup warning)
+
 > Architectural positions, not backlog items: thread-based execution (G2), no CRD/operator (G4), at-least-once without exactly-once (G5) — deliberate trade-offs documented in `docs/ideas/tram-improvements.md` and `docs/ideas/tram-vs-telegraf-comparison.md`. G3 (plugin catalog) is covered by the Connector Fixes section above; G6/G7/G8 already appear above as Manager HA, RBAC, and DLQ viewer/live log streaming.
 
 ---

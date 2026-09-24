@@ -59,12 +59,13 @@ One branch + one PR per version, progress table in the PR body (same model as PR
 | #49 | UI modal backdrop orphan on Back + deep-link aggravator + stale brand literal | review §4.1/4.6/N1 |
 | #51 | Helm: sharedStorage PVC orphan, `admin:admin123` + `postgres: tram` weak defaults, compose EACCES trap | review §4.3–4.5/4.7 |
 | #52 | Minor cleanup batch: config validation holes, watcher stem assumption, NITs (fix opportunistically when files are touched) | review §2.14/2.15/NITs |
+| D5/D7/E1/E3/E4 | Code-review design + boilerplate items, opportunistic alongside #52: Postgres recommendation + SQLite busy-timeout hardening (D5), SFTP/FTP sink connection pooling (D7), sink-config field-block dedup ×20 (E1), file-sink rolling-writer extraction (E3), connector config-extraction helper (E4) | `docs/reviews/code-review.md` §D/§E |
 | AI A.1–A.3 | Per-field descriptions, plugin docstrings, curated examples (data layer for #42) | ai-expansion-plan Wave A |
 | AI C.1–C.3 | Plugins detail cards, editor ref-panel upgrade, optional autocomplete | ai-expansion-plan Wave C |
 
 **Entry criteria:** v1.4.7 tagged; AI data layer (A.1–A.3) lands before C.1–C.3 consumes it.
 **Exit criteria:** #49/#51 closed (browser smoke includes the modal-Back check from #49's Notes); A.1–A.3 + C.1–C.3 shipped per ai-expansion-plan; #42's remaining scope (if any) re-triaged; gate green.
-**Note:** #52 is a grab-bag — items close opportunistically across v1.4.7/v1.4.8 as their files are touched; the issue must be empty (or explicitly re-triaged) before v1.4.8 tags.
+**Note:** #52 is a grab-bag — items close opportunistically across v1.4.7/v1.4.8 as their files are touched; the issue must be empty (or explicitly re-triaged) before v1.4.8 tags. The D5/D7/E1/E3/E4 batch follows the same rule (no separate GH issue — close opportunistically or explicitly re-triage before tagging).
 
 ---
 
