@@ -5,6 +5,20 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ---
 
+## [Unreleased]
+
+### Fixed
+- `rate_limit_rps: 0` no longer crashes every chunk with `ZeroDivisionError` — rejected at config validation (`gt=0`) plus a defense-in-depth executor guard (historical review finding A5) (#48)
+- Top-level `inject_meta` with `thread_workers > 1` is now rejected at config validation — the shared transform instance could annotate records with another file's `source_filename`/`source_path` under concurrent chunks (same gating pattern as stateful transforms; sink-level uses stay allowed) (#48)
+- `on_error: abort` is now honored for per-record transform failures — the run FAILS instead of silently degrading to continue (parity with parse/sink abort paths) (#48)
+- `record_chunk_size` is honored on the threaded batch path — large `split_path` fan-outs stream incrementally instead of full eager materialization when `thread_workers > 1` (#48)
+- Unexpected (non-TramError) exceptions in parallel-sink fan-out are converted to `TramError` so `on_error` handling applies instead of escaping the taxonomy and exploding the run (#48)
+- Browser-smoke version assertions now derive from `tram/ui/package.json` and cross-check `tests/browser/fixtures/meta.json` — fixture drift fails the check instead of passing silently; release-gate check 2 validates the fixture against the pyproject version (#50)
+- The yaml-quote browser check stubs the schema-poll interval (`window.__TRAM_TEST_SCHEMA_POLL_MS__` override) — the hardcoded 61.5s wall-clock wait is gone (check now ~11s) (#50)
+
+### Added
+- **[worker mode] `skip_processed` idempotency via a manager-routed tracker** (follow-up to #39): new internal endpoints `POST /api/internal/processed-files/check` and `/mark` (batch-friendly, namespaced by pipeline + source key + filepath, X-API-Key-authenticated) back a worker-side `HttpFileTracker` passed to the worker executor — a file processed once is not reprocessed across runs or worker failover. If the manager is unreachable the run fails loud (ERROR + run-history degradation note, once per run) and reprocesses; the v1.4.6 fail-loud path is now the fallback only (#54)
+
 ## [1.4.6] - 2026-09-24
 
 ### Fixed
