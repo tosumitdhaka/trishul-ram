@@ -1004,6 +1004,32 @@ class PipelineController:
                 # the queued manual run runs when capacity returns.
                 logger.warning("Batch job: previous run still active or queued, skipping",
                                extra={"pipeline": pipeline_name})
+                # Trigger/claim TOCTOU (GH #47): a manual trigger whose claim
+                # races a concurrent run (e.g. a scheduled fire) already returned
+                # TriggerResult(run_id, "dispatched") to the client. Record a
+                # FAILED row under that run_id so the client's run_id resolves
+                # instead of 404ing forever. Scheduled fires keep the bounded-loss
+                # silence (no client holds their run_id). The row is recorded
+                # without the status transition: the winning run is genuinely
+                # active, so flipping the pipeline to "error" would be wrong.
+                if origin == "manual" and run_id is not None:
+                    now = datetime.now(UTC)
+                    result = RunResult(
+                        run_id=run_id,
+                        pipeline_name=pipeline_name,
+                        status=RunStatus.FAILED,
+                        started_at=now,
+                        finished_at=now,
+                        records_in=0,
+                        records_out=0,
+                        records_skipped=0,
+                        error=(
+                            "Manual run skipped: previous run still active or "
+                            f"queued (status={state.status})"
+                        ),
+                        node_id=self._node_id,
+                    )
+                    self.manager.record_run(pipeline_name, result)
                 return
 
             self.manager.set_status(pipeline_name, "running")
@@ -1093,7 +1119,12 @@ class PipelineController:
                 # CAS: re-check under the lock — the pipeline may have been
                 # deleted (or re-registered with a new config) while the
                 # dispatch HTTP call was in flight. Refuse to track a lease for
-                # a pipeline/config that no longer matches the claim.
+                # a pipeline/config that no longer matches the claim. A run
+                # already recorded (fast worker that finished and posted
+                # run-complete before this dispatch thread re-acquired the
+                # lock) must also be skipped: a stale lease would make the
+                # BatchReconciler probe is_run_active() → False and mark a
+                # succeeded run as lost (GH #47).
                 with self._lock:
                     if not self.manager.exists(pipeline_name):
                         logger.warning(
@@ -1104,6 +1135,12 @@ class PipelineController:
                     if self.manager.get(pipeline_name).config is not config:
                         logger.warning(
                             "Batch dispatch completed for replaced pipeline — not tracked",
+                            extra={"pipeline": pipeline_name, "run_id": run_id},
+                        )
+                        return
+                    if self.manager.get_run(run_id) is not None:
+                        logger.info(
+                            "Batch dispatch completed after run-complete callback — not tracked",
                             extra={"pipeline": pipeline_name, "run_id": run_id},
                         )
                         return

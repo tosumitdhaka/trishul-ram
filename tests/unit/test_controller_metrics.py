@@ -72,6 +72,9 @@ def test_batch_dispatch_accepted_increments_counter():
     state.status = "scheduled"
     ctrl.manager.exists.return_value = True
     ctrl.manager.get.return_value = state
+    # Real manager.get_run returns None for a run that has not been recorded
+    # yet (the post-dispatch CAS consults it to skip stale leases, GH #47).
+    ctrl.manager.get_run.return_value = None
     worker_pool.dispatch_with_result.return_value = DispatchOutcome(
         worker_url="http://w0:8766", outcome=DISPATCH_ACCEPTED,
     )
