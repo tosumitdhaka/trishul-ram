@@ -179,6 +179,23 @@ unconfirmed work lives in the backlog at the bottom.
 - [ ] **Graceful worker drain** — `POST /api/workers/{id}/drain`; Helm pre-stop hook
 - [x] **Coverage target increase** — CI threshold raised to 75%; current coverage ~80%
 
+### Telecom Domain Hardening (from `docs/reviews/telecom-domain-review.md`)
+- [ ] **SNMP trap community-string verification** — trap source does not verify the community string (spoofing vector)
+- [ ] **SNMPv3 trap privacy handling** — undecryptable v3 traps surfaced/handled explicitly
+- [ ] **Counter64 varbind in SNMP trap sink** — trap sink lacks Counter64 varbind support
+- [ ] **Timezone-aware scheduling** — APScheduler is UTC-only and `misfire_grace_time` is hardcoded 60s; make both configurable
+- [ ] **Missed-window backfill for poll pipelines** — downtime windows are skipped, not backfilled
+- [ ] **CORBA Notification Service** — source remains DII-only (no Notification Service / typed args)
+- [ ] **KPI/unit library** — shared telecom KPI definitions and unit normalization
+- [ ] **FM alarm lifecycle model** — alarm state machine (raise/clear/correlate) for fault pipelines
+- [ ] **3GPP JSON PM output** — TS 28.550 output format for PM pipelines
+- [ ] **CDR sustained-throughput benchmarks** — reproducible benchmark suite for CDR ingestion rates
+
+### Extensibility
+- [ ] **Hot-loadable custom logic** — Starlark/execd-equivalent per-vendor quirk handling without redeploys (G1 in `docs/ideas/tram-improvements.md`; also the telecom review's vendor-quirk residual)
+
+> Architectural positions, not backlog items: thread-based execution (G2), no CRD/operator (G4), at-least-once without exactly-once (G5) — deliberate trade-offs documented in `docs/ideas/tram-improvements.md` and `docs/ideas/tram-vs-telegraf-comparison.md`. G3 (plugin catalog) is covered by the Connector Fixes section above; G6/G7/G8 already appear above as Manager HA, RBAC, and DLQ viewer/live log streaming.
+
 ---
 
 ## Released

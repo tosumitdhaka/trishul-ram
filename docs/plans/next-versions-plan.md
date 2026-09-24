@@ -38,13 +38,14 @@ One branch + one PR per version, progress table in the PR body (same model as PR
 | #48 | Per-record correctness: `inject_meta` thread race, `on_error: abort` for transforms, `rate_limit_rps=0` (A5), threaded `record_chunk_size` | review §2.4/2.5/2.9/2.10/2.16 |
 | #50 | Browser smoke stale fixture (asserts v1.4.3 vs release), gate validation of `fixtures/meta.json`, 61.5s wait removal | review §4.2/4.9 |
 | #54 | Manager-routed `ProcessedFileTracker` — real `skip_processed` idempotency in worker mode (follow-up to #39; HIGH data integrity — duplicate CDRs are wrong billing records) | GH #54 |
+| #55 | Code-review backlog bugs: DLQ spool (D1), callback retry (D2), breaker window (D3), parked-table items (B5/B7/B8/B9/B11), D8 close-out verification | GH #55 |
 | AI B.1 (A7) | Fix-mode iteration loop (validate + one retry) | ai-expansion-plan Wave B |
 | AI B.2 (B1) | Run-failure triage: `mode: "triage"` + "Explain this run" UI on the run-detail page | ai-expansion-plan Wave B |
 | AI B.3 (A6) | Template-grounded generation (few-shot from `/api/templates`) | ai-expansion-plan Wave B |
 | AI A.4 | Server-side payload merge (templates + config schema) | ai-expansion-plan Wave A |
 
 **Entry criteria:** v1.4.6 tagged; **treq vendor decision made** (gates A6 quality and all later streaming/AI work — see `docs/ideas/treq-ai-reuse-feasibility.md`).
-**Exit criteria:** #48/#50 closed with tests; browser smoke asserts the live version from `tram/ui/package.json`; AI Wave B items validated against real provider round-trips (mirror the 122-test AI suite pattern); gate green.
+**Exit criteria:** #48/#50/#54 closed with tests; #55 closed or its opportunistic items explicitly re-triaged to v1.4.8; browser smoke asserts the live version from `tram/ui/package.json`; AI Wave B items validated against real provider round-trips (mirror the 122-test AI suite pattern); gate green.
 **Lane rule:** the B.1 UI piece and any `tram/ui/src/` changes are one single UI lane (no concurrent UI edits).
 
 ---
