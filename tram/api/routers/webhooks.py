@@ -5,6 +5,7 @@ from __future__ import annotations
 import hmac
 import logging
 import os
+import queue
 
 from fastapi import APIRouter, HTTPException, Request, Response, status
 
@@ -89,8 +90,8 @@ async def receive_webhook(path: str, request: Request) -> Response:
 
     try:
         q.put_nowait((body, meta))
-    except Exception as exc:
-        logger.warning("Webhook queue full for path %s: %s", path, exc)
+    except queue.Full:
+        logger.warning("Webhook queue full for path %s", path)
         raise HTTPException(status_code=503, detail="Webhook queue full")
 
     return Response(status_code=202)

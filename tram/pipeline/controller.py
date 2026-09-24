@@ -707,7 +707,17 @@ class PipelineController:
         """dispatching → dispatched + CAS: re-check pipeline exists under the
         lock, record the _active_batch_runs lease (schedule_type from current
         config), set pipeline status 'running', db.mark_queued_run_dispatched,
-        MGR_DISPATCH_TOTAL{accepted} + MGR_QUEUE_DISPATCHED_TOTAL + wait histogram."""
+        MGR_DISPATCH_TOTAL{accepted} + MGR_QUEUE_DISPATCHED_TOTAL + wait histogram.
+
+        Fast-run race (GH #47, same defect class as the _run_batch post-dispatch
+        CAS): a sub-second worker run can complete and post run-complete before
+        this commit re-acquires the lock. When the run is already recorded, the
+        lease is SKIPPED — recording it would make the BatchReconciler probe
+        is_run_active() → False and mark the succeeded run as lost — and the
+        pipeline status is not flipped to 'running' (the post-run transition
+        already ran). The queued row still transitions dispatching → dispatched
+        so the drain loop never re-claims a completed run.
+        """
         with self._lock:
             if self._db is None or self._worker_pool is None:
                 return False
@@ -722,14 +732,16 @@ class PipelineController:
             if not self.manager.exists(name):
                 return False  # deleted mid-dispatch — the stale result is discarded
             state = self.manager.get(name)
-            self._active_batch_runs[name] = _ActiveBatchRun(
-                run_id=run_id,
-                pipeline_name=name,
-                worker_url=worker_url,
-                schedule_type=state.config.schedule.type,
-                started_at=datetime.now(UTC),
-            )
-            self.manager.set_status(name, "running")
+            run_already_completed = self.manager.get_run(run_id) is not None
+            if not run_already_completed:
+                self._active_batch_runs[name] = _ActiveBatchRun(
+                    run_id=run_id,
+                    pipeline_name=name,
+                    worker_url=worker_url,
+                    schedule_type=state.config.schedule.type,
+                    started_at=datetime.now(UTC),
+                )
+                self.manager.set_status(name, "running")
             self._db.mark_queued_run_dispatched(run_id, datetime.now(UTC))
             wait = (datetime.now(UTC) - row["requested_at"]).total_seconds()
             from tram.metrics.registry import (
@@ -745,8 +757,13 @@ class PipelineController:
             self._set_queued_depth(name)
             logger.info(
                 "Queued manual run dispatched",
-                extra={"pipeline": name, "run_id": run_id, "worker": worker_url,
-                       "wait_seconds": round(wait, 1)},
+                extra={
+                    "pipeline": name,
+                    "run_id": run_id,
+                    "worker": worker_url,
+                    "wait_seconds": round(wait, 1),
+                    "lease_recorded": not run_already_completed,
+                },
             )
             return True
 
@@ -1004,6 +1021,32 @@ class PipelineController:
                 # the queued manual run runs when capacity returns.
                 logger.warning("Batch job: previous run still active or queued, skipping",
                                extra={"pipeline": pipeline_name})
+                # Trigger/claim TOCTOU (GH #47): a manual trigger whose claim
+                # races a concurrent run (e.g. a scheduled fire) already returned
+                # TriggerResult(run_id, "dispatched") to the client. Record a
+                # FAILED row under that run_id so the client's run_id resolves
+                # instead of 404ing forever. Scheduled fires keep the bounded-loss
+                # silence (no client holds their run_id). The row is recorded
+                # without the status transition: the winning run is genuinely
+                # active, so flipping the pipeline to "error" would be wrong.
+                if origin == "manual" and run_id is not None:
+                    now = datetime.now(UTC)
+                    result = RunResult(
+                        run_id=run_id,
+                        pipeline_name=pipeline_name,
+                        status=RunStatus.FAILED,
+                        started_at=now,
+                        finished_at=now,
+                        records_in=0,
+                        records_out=0,
+                        records_skipped=0,
+                        error=(
+                            "Manual run skipped: previous run still active or "
+                            f"queued (status={state.status})"
+                        ),
+                        node_id=self._node_id,
+                    )
+                    self.manager.record_run(pipeline_name, result)
                 return
 
             self.manager.set_status(pipeline_name, "running")
@@ -1093,7 +1136,12 @@ class PipelineController:
                 # CAS: re-check under the lock — the pipeline may have been
                 # deleted (or re-registered with a new config) while the
                 # dispatch HTTP call was in flight. Refuse to track a lease for
-                # a pipeline/config that no longer matches the claim.
+                # a pipeline/config that no longer matches the claim. A run
+                # already recorded (fast worker that finished and posted
+                # run-complete before this dispatch thread re-acquired the
+                # lock) must also be skipped: a stale lease would make the
+                # BatchReconciler probe is_run_active() → False and mark a
+                # succeeded run as lost (GH #47).
                 with self._lock:
                     if not self.manager.exists(pipeline_name):
                         logger.warning(
@@ -1106,6 +1154,18 @@ class PipelineController:
                             "Batch dispatch completed for replaced pipeline — not tracked",
                             extra={"pipeline": pipeline_name, "run_id": run_id},
                         )
+                        return
+                    if self.manager.get_run(run_id) is not None:
+                        logger.info(
+                            "Batch dispatch completed after run-complete callback — not tracked",
+                            extra={"pipeline": pipeline_name, "run_id": run_id},
+                        )
+                        # C7: the dispatch WAS accepted (a fast worker ran the
+                        # run) — count it like the normal path and the queued
+                        # drain path, which kept its accepted increment even
+                        # when the lease was skipped.
+                        from tram.metrics.registry import MGR_DISPATCH_TOTAL
+                        MGR_DISPATCH_TOTAL.labels(pipeline=pipeline_name, result="accepted").inc()
                         return
                     self._active_batch_runs[pipeline_name] = _ActiveBatchRun(
                         run_id=run_id,

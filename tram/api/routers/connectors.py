@@ -7,7 +7,9 @@ import time
 from concurrent.futures import ThreadPoolExecutor
 from concurrent.futures import TimeoutError as FuturesTimeout
 
-from fastapi import APIRouter, Request
+from fastapi import APIRouter, HTTPException, Request
+
+from tram.api.routers._net_checks import forbidden_target_reason
 
 router = APIRouter()
 
@@ -18,11 +20,15 @@ _TIMEOUT_S = 10
 async def test_connector(request: Request) -> dict:
     """Test connectivity for a single connector type + config.
 
-    Always returns HTTP 200. ``ok`` field indicates pass/fail.
+    Returns HTTP 200 with an ``ok`` field indicating pass/fail.
+    Targets that resolve to the daemon's own network position (loopback,
+    private, or link-local ranges) are rejected with 400 — the endpoint must
+    not act as a local-network port oracle (GH #44).
     """
     body = await request.json()
     conn_type = body.get("type", "")
     config = body.get("config", {})
+    _reject_forbidden_target(conn_type, config)
     return _do_test(conn_type, config)
 
 
@@ -72,6 +78,60 @@ async def test_pipeline_connectors(request: Request) -> dict:
 # ── Internal helpers ──────────────────────────────────────────────────────────
 
 
+def _reject_forbidden_target(conn_type: str, config: dict) -> None:
+    """Raise 400 when the connector config points at a forbidden target.
+
+    Runs before the plugin test or TCP probe so neither can be used as a
+    local-network port oracle (GH #44).  Every entry of the multi-host fields
+    (``brokers``/``hosts``/``servers``) is inspected — a single private entry
+    in an otherwise-public list still gets rejected (F2).
+    """
+    for host in _iter_target_hosts(conn_type, config):
+        reason = forbidden_target_reason(host)
+        if reason:
+            raise HTTPException(status_code=400, detail=f"Target host rejected: {reason}")
+
+
+def _iter_target_hosts(conn_type: str, config: dict):
+    """Yield every candidate host from a connector config.
+
+    Includes the scalar ``host``, EVERY entry of ``brokers``/``hosts``/
+    ``servers`` (not just the first — F2), and the hostname of
+    ``url``/``base_url``.  The per-field normalization mirrors
+    ``_extract_host`` so the check covers exactly what a probe would target.
+    """
+    host = config.get("host")
+    if host:
+        yield host
+    for field, strip_schemes in (
+        ("brokers", ()),
+        ("hosts", ("https://", "http://")),
+        ("servers", ("nats://", "tcp://")),
+    ):
+        entries = config.get(field) or []
+        if not isinstance(entries, list):
+            entries = [entries]
+        for entry in entries:
+            yield _entry_host(entry, strip_schemes)
+    url = config.get("url") or config.get("base_url") or ""
+    if url:
+        try:
+            from urllib.parse import urlparse
+            parsed = urlparse(url)
+            if parsed.hostname:
+                yield parsed.hostname
+        except Exception:
+            pass
+
+
+def _entry_host(entry: str, strip_schemes: tuple[str, ...]) -> str:
+    """Normalize one list entry into its hostname (F2 helper)."""
+    h = entry
+    for scheme in strip_schemes:
+        h = h.replace(scheme, "")
+    return h.split(":")[0].split("/")[0]
+
+
 def _safe_get(future) -> dict:
     try:
         return future.result(timeout=_TIMEOUT_S + 1)
@@ -88,6 +148,15 @@ def _do_test(conn_type: str, config: dict) -> dict:
         import tram.connectors  # noqa: F401
     except Exception:
         pass
+
+    # The plugin test and the TCP probe below both connect out; refuse targets
+    # that resolve to the daemon's own network position (GH #44).  All list
+    # entries are checked — a private entry anywhere in the config is refused
+    # (F2).
+    for host in _iter_target_hosts(conn_type, config):
+        reason = forbidden_target_reason(host)
+        if reason:
+            return {"ok": False, "latency_ms": None, "error": f"Target host rejected: {reason}"}
 
     from tram.registry.registry import _sinks, _sources
 

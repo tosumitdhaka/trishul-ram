@@ -1,10 +1,13 @@
-"""Tests for PipelineExecutor — batch and dry run modes."""
+"""Tests for PipelineExecutor — batch, stream, and dry run modes."""
 
 from __future__ import annotations
 
 import json
 import textwrap
+import threading
 from unittest.mock import MagicMock, patch
+
+import pytest
 
 from tram.core.context import RunStatus
 from tram.pipeline.executor import PipelineExecutor
@@ -84,6 +87,73 @@ class TestPipelineExecutorDryRun:
 
         assert result["valid"] is False
         assert any("unknown_token" in issue for issue in result["issues"])
+
+    def test_dry_run_closes_built_sinks_and_source_on_success(self):
+        """dry_run builds real sink instances (e.g. ClickHouse) — they must be
+        closed so a per-request executor does not leak flush timers/connections."""
+        config = _make_pipeline(
+            "dlq:\n"
+            "            type: local\n"
+            "            path: /data/dlq\n"
+        )
+        executor = PipelineExecutor()
+        mock_source = MagicMock()
+        mock_sink = MagicMock()
+        mock_dlq = MagicMock()
+
+        with (
+            patch.object(executor, "_build_source", return_value=mock_source),
+            patch.object(executor, "_build_sinks", return_value=[(mock_sink, None, [])]),
+            patch.object(executor, "_build_serializer_in", return_value=MagicMock()),
+            patch.object(executor, "_build_serializer_out", return_value=MagicMock()),
+            patch.object(executor, "_build_transforms", return_value=[]),
+            patch.object(executor, "_build_dlq_sink", return_value=mock_dlq),
+        ):
+            result = executor.dry_run(config)
+
+        assert result["valid"] is True
+        mock_sink.close.assert_called_once()
+        mock_dlq.close.assert_called_once()
+        mock_source.close.assert_called_once()
+
+    def test_dry_run_closes_built_sinks_when_source_validation_fails(self):
+        """On a validation-failure path, previously built instances are still
+        closed — a broken source must not leak the built sinks."""
+        config = _make_pipeline()
+        executor = PipelineExecutor()
+        mock_sink = MagicMock()
+
+        with (
+            patch.object(executor, "_build_source", side_effect=RuntimeError("bad source")),
+            patch.object(executor, "_build_sinks", return_value=[(mock_sink, None, [])]),
+            patch.object(executor, "_build_serializer_in", return_value=MagicMock()),
+            patch.object(executor, "_build_serializer_out", return_value=MagicMock()),
+            patch.object(executor, "_build_transforms", return_value=[]),
+        ):
+            result = executor.dry_run(config)
+
+        assert result["valid"] is False
+        assert any("source" in issue for issue in result["issues"])
+        mock_sink.close.assert_called_once()
+
+    def test_dry_run_closes_built_source_when_sink_validation_fails(self):
+        """A failing sink constructor must not leak the already-built source."""
+        config = _make_pipeline()
+        executor = PipelineExecutor()
+        mock_source = MagicMock()
+
+        with (
+            patch.object(executor, "_build_source", return_value=mock_source),
+            patch.object(executor, "_build_sinks", side_effect=RuntimeError("bad sink")),
+            patch.object(executor, "_build_serializer_in", return_value=MagicMock()),
+            patch.object(executor, "_build_serializer_out", return_value=MagicMock()),
+            patch.object(executor, "_build_transforms", return_value=[]),
+        ):
+            result = executor.dry_run(config)
+
+        assert result["valid"] is False
+        assert any("sinks" in issue for issue in result["issues"])
+        mock_source.close.assert_called_once()
 
 
 class TestPipelineExecutorBatchRun:
@@ -560,6 +630,66 @@ class TestPipelineExecutorBatchRun:
         assert result.records_in == 3  # final attempt only
         assert stats.snapshot()["records_in"] == 3  # live == final, no accumulation
 
+    def test_retry_rebuild_preserves_run_id(self):
+        """The retry rebuild must keep the ORIGINAL run_id so the final
+        RunResult (and the worker run-complete callback) carry the run_id the
+        trigger returned — otherwise the client's run_id 404s and the manager's
+        duplicate-callback dedupe misses (GH #47)."""
+        from tram.core.exceptions import TramError
+
+        config = _make_pipeline(
+            "on_error: retry\n"
+            "          retry_count: 1\n"
+            "          retry_delay_seconds: 0"
+        )
+        executor = PipelineExecutor()
+
+        with (
+            patch.object(executor, "_build_source", side_effect=[MagicMock(), MagicMock()]),
+            patch.object(executor, "_build_sinks", side_effect=[
+                [(MagicMock(), None, [])],
+                [(MagicMock(), None, [])],
+            ]),
+            patch.object(executor, "_build_serializer_in", return_value=MagicMock()),
+            patch.object(executor, "_build_serializer_out", return_value=MagicMock()),
+            patch.object(executor, "_build_transforms", return_value=[]),
+            patch.object(executor, "_run_batch_chunks", side_effect=[TramError("boom"), None]),
+            patch("time.sleep"),
+        ):
+            result = executor.batch_run(config, run_id="orig-run-1")
+
+        assert result.status == RunStatus.SUCCESS
+        assert result.run_id == "orig-run-1"
+
+    def test_retry_exhausted_preserves_run_id(self):
+        """Even when every retry attempt fails, the final FAILED RunResult
+        carries the original run_id (GH #47)."""
+        from tram.core.exceptions import TramError
+
+        config = _make_pipeline(
+            "on_error: retry\n"
+            "          retry_count: 1\n"
+            "          retry_delay_seconds: 0"
+        )
+        executor = PipelineExecutor()
+
+        with (
+            patch.object(executor, "_build_source", side_effect=[MagicMock(), MagicMock()]),
+            patch.object(executor, "_build_sinks", side_effect=[
+                [(MagicMock(), None, [])],
+                [(MagicMock(), None, [])],
+            ]),
+            patch.object(executor, "_build_serializer_in", return_value=MagicMock()),
+            patch.object(executor, "_build_serializer_out", return_value=MagicMock()),
+            patch.object(executor, "_build_transforms", return_value=[]),
+            patch.object(executor, "_run_batch_chunks", side_effect=[TramError("boom"), TramError("boom2")]),
+            patch("time.sleep"),
+        ):
+            result = executor.batch_run(config, run_id="orig-run-2")
+
+        assert result.status == RunStatus.FAILED
+        assert result.run_id == "orig-run-2"
+
     def test_post_batch_cleanup_ignores_missing_trim_support(self):
         config = _make_pipeline()
 
@@ -571,6 +701,141 @@ class TestPipelineExecutorBatchRun:
 
         collect.assert_called_once_with()
         trim.assert_called_once_with()
+
+
+class TestPipelineExecutorStreamRun:
+    """Stream lifecycle: sinks/source must close on every exit path and the
+    stop-watcher must not leak on the crash path (GH #46)."""
+
+    def _patched(self, executor, mock_source, mock_sink, mock_dlq=None):
+        """Context manager that starts/stops the build patches around a
+        stream_run call (mirrors the batch tests' parenthesized form)."""
+        from contextlib import contextmanager
+
+        @contextmanager
+        def _manager():
+            patches = (
+                patch.object(executor, "_build_source", return_value=mock_source),
+                patch.object(executor, "_build_sinks", return_value=[(mock_sink, None, [])]),
+                patch.object(executor, "_build_serializer_in", return_value=MagicMock()),
+                patch.object(executor, "_build_serializer_out", return_value=MagicMock()),
+                patch.object(executor, "_build_transforms", return_value=[]),
+                patch.object(executor, "_build_dlq_sink", return_value=mock_dlq),
+            )
+            for p in patches:
+                p.start()
+            try:
+                yield
+            finally:
+                for p in reversed(patches):
+                    p.stop()
+
+        return _manager()
+
+    @staticmethod
+    def _rescheduling_timer_sink():
+        """ClickHouse-style sink: a self-rescheduling timer stopped only by
+        close(). The timer is daemon so a failed assertion cannot keep the
+        pytest interpreter alive."""
+
+        class ReschedulingTimerSink:
+            def __init__(self):
+                self._alive = True
+                self._timer: threading.Timer | None = None
+                self._reschedule()
+                self.closed = False
+
+            def _reschedule(self) -> None:
+                if not self._alive:
+                    return
+                timer = threading.Timer(3600.0, self._reschedule)
+                timer.daemon = True
+                self._timer = timer
+                timer.start()
+
+            def write(self, records, meta):
+                pass
+
+            def close(self) -> None:
+                self._alive = False
+                if self._timer is not None:
+                    self._timer.cancel()
+                self.closed = True
+
+        return ReschedulingTimerSink()
+
+    def test_stream_run_stop_closes_sinks_and_source(self):
+        """A graceful stream stop must close sinks (and the DLQ sink) like the
+        batch finally does — the old code leaked e.g. ClickHouse flush timers."""
+        config = _make_pipeline()
+        executor = PipelineExecutor()
+        mock_source = MagicMock()
+        mock_source.read.return_value = iter([])
+        mock_sink = MagicMock()
+        mock_dlq = MagicMock()
+
+        with self._patched(executor, mock_source, mock_sink, mock_dlq):
+            executor.stream_run(config, threading.Event())
+
+        mock_sink.close.assert_called_once()
+        mock_dlq.close.assert_called_once()
+        mock_source.close.assert_called_once()
+
+    def test_stream_run_crash_closes_sinks(self):
+        """A crashing stream (source raises) must still close sinks in the
+        finally — the exception path is the leak-prone one."""
+        config = _make_pipeline()
+        executor = PipelineExecutor()
+        mock_source = MagicMock()
+        mock_source.read.side_effect = RuntimeError("source exploded")
+        mock_sink = MagicMock()
+
+        watchers_before = [
+            t for t in threading.enumerate() if t.name == "tram-stop-watcher"
+        ]
+        with self._patched(executor, mock_source, mock_sink):
+            with pytest.raises(RuntimeError, match="source exploded"):
+                executor.stream_run(config, threading.Event())
+
+        mock_sink.close.assert_called_once()
+        # The stop-watcher must exit on the crash path too (stop_event never
+        # fires) — no leaked watcher thread per crash cycle.
+        watchers_after = [
+            t for t in threading.enumerate() if t.name == "tram-stop-watcher"
+        ]
+        assert len(watchers_after) == len(watchers_before)
+
+    def test_stream_run_stop_leaves_no_live_sink_timer(self):
+        """A sink with a self-rescheduling timer (ClickHouse-style) must have
+        its timer stopped by the executor's sink close on a graceful stop."""
+        sink = self._rescheduling_timer_sink()
+        config = _make_pipeline()
+        executor = PipelineExecutor()
+        mock_source = MagicMock()
+        mock_source.read.return_value = iter([])
+
+        with self._patched(executor, mock_source, sink):
+            executor.stream_run(config, threading.Event())
+
+        assert sink.closed is True
+        assert sink._timer is not None
+        assert not sink._timer.is_alive()
+
+    def test_stream_run_crash_leaves_no_live_sink_timer(self):
+        """The crash path must also stop the sink's self-rescheduling timer."""
+        sink = self._rescheduling_timer_sink()
+        config = _make_pipeline()
+        executor = PipelineExecutor()
+        mock_source = MagicMock()
+        mock_source.read.side_effect = RuntimeError("source exploded")
+
+        with self._patched(executor, mock_source, sink):
+            with pytest.raises(RuntimeError, match="source exploded"):
+                executor.stream_run(config, threading.Event())
+
+        assert sink.closed is True
+        assert sink._timer is not None
+        assert not sink._timer.is_alive()
 
 
 class TestTransformChain:

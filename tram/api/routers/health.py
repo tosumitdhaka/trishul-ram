@@ -70,15 +70,12 @@ async def readiness(request: Request) -> dict:
     if scheduler_status == "stopped":
         raise HTTPException(status_code=503, detail="Scheduler stopped")
 
-    # DB engine info
+    # DB engine info — the absolute db_path is intentionally NOT exposed
+    # (filesystem layout disclosure, GH #44).
     db_engine = "sqlite"
-    db_path = None
     if db is not None:
         dialect = db._engine.dialect.name
         db_engine = dialect
-        if dialect == "sqlite":
-            url_str = str(db._engine.url)
-            db_path = url_str.replace("sqlite:///", "").replace("sqlite://", "") or None
 
     # Uptime
     uptime = None
@@ -103,7 +100,6 @@ async def readiness(request: Request) -> dict:
         "status": "ready",
         "db": db_status,
         "db_engine": db_engine,
-        "db_path": db_path,
         "scheduler": scheduler_status,
         "pipelines_loaded": len(controller.list_all()),
         "uptime": uptime,

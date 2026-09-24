@@ -1077,6 +1077,77 @@ class TestWorkerDispatch:
         }]
         ctrl.stop()
 
+    def test_manual_claim_race_records_failed_row_under_submitted_run_id(self):
+        """Trigger/claim TOCTOU (GH #47): a manual trigger that loses the claim
+        race to a scheduled fire must leave a run-history row under the
+        SUBMITTED run_id (so the client's run_id resolves) instead of silence —
+        while the winning run's status is not clobbered to 'error'."""
+        ctrl = _started_controller()
+        config = load_pipeline_from_yaml(_INTERVAL_YAML)
+        ctrl.register(config, yaml_text=_INTERVAL_YAML)
+        # A scheduled fire claimed the run first.
+        ctrl.manager.set_status("my-interval", "running")
+
+        ctrl._run_batch("my-interval", run_id="manual-race-1", origin="manual")
+
+        result = ctrl.manager.get_run("manual-race-1")
+        assert result is not None
+        assert result.status == RunStatus.FAILED
+        assert result.pipeline_name == "my-interval"
+        assert "skipped" in (result.error or "")
+        # The winning run is genuinely active — status stays 'running'.
+        assert ctrl.manager.get("my-interval").status == "running"
+        ctrl.stop()
+
+    def test_scheduled_claim_race_stays_silent(self):
+        """Scheduled fires keep their bounded-loss behavior: no run-history
+        row is written for a skipped scheduled claim (no client holds its
+        run_id), only manual-origin claims get the FAILED row."""
+        ctrl = _started_controller()
+        config = load_pipeline_from_yaml(_INTERVAL_YAML)
+        ctrl.register(config, yaml_text=_INTERVAL_YAML)
+        ctrl.manager.set_status("my-interval", "queued")
+
+        ctrl._run_batch("my-interval", run_id="sched-race-1")  # origin defaults to scheduled
+
+        assert ctrl.manager.get_run("sched-race-1") is None
+        assert ctrl.manager.get("my-interval").status == "queued"
+        ctrl.stop()
+
+    def test_fast_dispatched_run_skips_stale_lease(self):
+        """Fast-run stale lease (GH #47): when the worker finishes and posts
+        run-complete before the dispatch thread re-acquires the lock, the CAS
+        must skip recording the lease — otherwise the BatchReconciler would
+        probe is_run_active() → False and mark a succeeded run as lost."""
+        wp = self._worker_pool()
+        ctrl = _started_controller(worker_pool=wp, manager_url="http://manager:8765")
+        config = load_pipeline_from_yaml(_INTERVAL_YAML)
+        ctrl.register(config, yaml_text=_INTERVAL_YAML)
+        ctrl.manager.set_status("my-interval", "scheduled")
+
+        def _dispatch_then_worker_completes(**kwargs):
+            # The worker finishes before the dispatch thread records the lease.
+            ctrl.on_worker_run_complete(
+                run_id=kwargs["run_id"],
+                pipeline_name="my-interval",
+                worker_id="tram-worker-0",
+                status="success",
+                records_in=3,
+                records_out=3,
+            )
+            return DispatchOutcome(worker_url="http://worker-0:8766", outcome=DISPATCH_ACCEPTED)
+
+        wp.dispatch_with_result.side_effect = _dispatch_then_worker_completes
+
+        ctrl._run_batch("my-interval", run_id="fast-1")
+
+        assert ctrl.get_active_batch_runs() == []  # no stale lease
+        state = ctrl.manager.get("my-interval")
+        assert state.status != "error"
+        assert state.run_history[0].run_id == "fast-1"
+        assert state.run_history[0].status == RunStatus.SUCCESS
+        ctrl.stop()
+
     def test_mark_active_batch_run_lost_records_failed_run(self):
         wp = self._worker_pool()
         wp.worker_id_for_url.return_value = "tram-worker-0"

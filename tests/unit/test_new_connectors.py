@@ -673,6 +673,71 @@ class TestRestSource:
         call_kwargs = mock_client.request.call_args[1]
         assert call_kwargs["headers"]["Authorization"] == "Bearer mytoken123"
 
+    # ── test_connection: no redirect following (F3) ────────────────────────
+
+    def test_no_redirect_handler_never_follows(self):
+        """The no-redirect handler is the crux of F3: redirect_request returns
+        None, so urllib surfaces the 3xx as an HTTPError instead of bouncing
+        the test into the Location target."""
+        from tram.connectors.rest.source import _NoRedirectHandler
+
+        handler = _NoRedirectHandler()
+        newurl = handler.redirect_request(
+            None, None, 302, "Found", {}, "http://169.254.169.254/latest"
+        )
+        assert newurl is None
+
+    def test_test_connection_does_not_follow_redirects(self):
+        """A redirecting URL must be a recorded, non-followed outcome — a
+        public URL can never 302 the test into an internal target (F3)."""
+        import urllib.error
+
+        from tram.connectors.rest.source import RestSource
+
+        redirect = urllib.error.HTTPError("http://example.com", 302, "Found", {}, None)
+        redirect.headers = {"Location": "http://169.254.169.254/latest"}
+        fake_opener = MagicMock()
+        fake_opener.open.side_effect = redirect
+        source = RestSource({"url": "http://example.com"})
+
+        with patch("urllib.request.build_opener", return_value=fake_opener):
+            result = source.test_connection()
+
+        assert result["ok"] is False
+        assert "Redirect 302 not followed" in result["error"]
+        assert "169.254.169.254" in result["error"]
+
+    def test_test_connection_uses_no_redirect_opener(self):
+        from tram.connectors.rest.source import RestSource, _NoRedirectHandler
+
+        fake_opener = MagicMock()
+        fake_opener.open.side_effect = ConnectionError("down")
+        source = RestSource({"url": "http://example.com"})
+
+        with patch("urllib.request.build_opener", return_value=fake_opener) as mock_build:
+            with pytest.raises(ConnectionError):
+                source.test_connection()
+
+        handler = mock_build.call_args.args[0]
+        assert isinstance(handler, _NoRedirectHandler)
+
+    def test_test_connection_200_recorded(self):
+        from tram.connectors.rest.source import RestSource
+
+        fake_opener = MagicMock()
+        fake_resp = MagicMock()
+        fake_resp.status = 200
+        fake_resp.__enter__ = lambda s: s
+        fake_resp.__exit__ = MagicMock(return_value=False)
+        fake_opener.open.return_value = fake_resp
+        source = RestSource({"url": "http://example.com"})
+
+        with patch("urllib.request.build_opener", return_value=fake_opener):
+            result = source.test_connection()
+
+        assert result["ok"] is True
+        assert result["detail"].startswith("HTTP 200")
+
 
 # ── RestSink ───────────────────────────────────────────────────────────────
 

@@ -9,9 +9,9 @@ from collections.abc import Generator
 from tram.interfaces.base_source import BaseSource
 from tram.registry.registry import register_source
 
-# Global registry: path -> SimpleQueue
+# Global registry: path -> bounded Queue
 # The FastAPI webhook router looks up this dict.
-_WEBHOOK_REGISTRY: dict[str, queue.SimpleQueue] = {}
+_WEBHOOK_REGISTRY: dict[str, queue.Queue] = {}
 _REGISTRY_LOCK = threading.Lock()
 
 
@@ -22,7 +22,8 @@ class WebhookSource(BaseSource):
     Config:
         path (str): URL path segment to listen on (e.g. "my-events").
         secret (str, optional): Bearer token required in Authorization header.
-        max_queue_size (int): Max queued messages before blocking. Default 1000.
+        max_queue_size (int): Max queued messages before the router rejects
+            with 503 (memory bound). Default 1000.
     """
 
     def __init__(self, config: dict) -> None:
@@ -43,7 +44,10 @@ class WebhookSource(BaseSource):
     def read(self) -> Generator[tuple[bytes, dict]]:
         from tram.connectors.webhook import _WEBHOOK_SECRETS
 
-        q: queue.SimpleQueue = queue.SimpleQueue()
+        # Bounded queue: put_nowait raises queue.Full once max_queue_size
+        # messages are buffered, which the webhook router turns into a 503 —
+        # a slow sink can never grow process memory without bound (GH #45).
+        q: queue.Queue = queue.Queue(maxsize=self.max_queue_size)
         self._stop_event.clear()
 
         with _REGISTRY_LOCK:

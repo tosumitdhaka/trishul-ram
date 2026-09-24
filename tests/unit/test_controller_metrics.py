@@ -72,6 +72,39 @@ def test_batch_dispatch_accepted_increments_counter():
     state.status = "scheduled"
     ctrl.manager.exists.return_value = True
     ctrl.manager.get.return_value = state
+    # Real manager.get_run returns None for a run that has not been recorded
+    # yet (the post-dispatch CAS consults it to skip stale leases, GH #47).
+    ctrl.manager.get_run.return_value = None
+    worker_pool.dispatch_with_result.return_value = DispatchOutcome(
+        worker_url="http://w0:8766", outcome=DISPATCH_ACCEPTED,
+    )
+
+    counter = MagicMock()
+    counter.labels.return_value = counter
+
+    with patch("tram.metrics.registry.MGR_DISPATCH_TOTAL", counter):
+        ctrl._run_batch("my-batch")
+
+    counter.labels.assert_called_with(pipeline="my-batch", result="accepted")
+    counter.inc.assert_called_once()
+
+
+def test_batch_dispatch_fast_run_increments_accepted_counter():
+    """C7: the post-dispatch CAS fast-run early return (the run completed
+    before the lease was recorded) must still count an accepted dispatch —
+    previously that early return skipped the MGR_DISPATCH_TOTAL{accepted}
+    increment, making fast runs invisible in the dispatch metrics."""
+    ctrl, worker_pool = _make_manager_controller()
+    config = load_pipeline_from_yaml(_BATCH_YAML)
+    state = MagicMock()
+    state.config = config
+    state.yaml_text = _BATCH_YAML
+    state.status = "scheduled"
+    ctrl.manager.exists.return_value = True
+    ctrl.manager.get.return_value = state
+    # The worker completed the run before the dispatch thread re-acquired the
+    # lock — the CAS sees the run already recorded and skips the lease.
+    ctrl.manager.get_run.return_value = MagicMock()
     worker_pool.dispatch_with_result.return_value = DispatchOutcome(
         worker_url="http://w0:8766", outcome=DISPATCH_ACCEPTED,
     )

@@ -1027,3 +1027,280 @@ class TestStatefulTransformWiring:
         assert partial["window_complete"] is False
         assert partial["mean_rate"] == 100.0
         assert partial["_index"] == "1"
+
+
+# ── GH #39: skip_processed fail-loud in worker mode ─────────────────────────
+
+
+_SKIP_PROCESSED_YAML = """\
+name: skip-pipe
+schedule:
+  type: manual
+source:
+  type: local
+  path: /tmp/in
+  skip_processed: true
+serializer_in:
+  type: json
+sinks:
+  - type: local
+    path: /tmp/out
+"""
+
+
+class TestWorkerSkipProcessedFailLoud:
+    """GH #39 / code-review A1: the worker agent is a stateless executor with
+    no per-worker DB, so its PipelineExecutor is built without a
+    ProcessedFileTracker and skip_processed cannot be honored. Construction
+    with a pipeline that requests skip_processed must fail loud — an ERROR log
+    plus a degradation marker carried into the run-complete payload so the
+    manager's run_history row records it — never a silent disable."""
+
+    @staticmethod
+    def _mock_result(records_in=5, records_out=5):
+        from tram.core.context import RunResult, RunStatus
+
+        return RunResult(
+            run_id="r1",
+            pipeline_name="skip-pipe",
+            status=RunStatus.SUCCESS,
+            started_at=datetime.now(UTC),
+            finished_at=datetime.now(UTC),
+            records_in=records_in,
+            records_out=records_out,
+            records_skipped=0,
+            error=None,
+        )
+
+    def _dispatch(self, client, yaml_text, run_id, schedule_type="batch"):
+        return client.post("/agent/run", json={
+            "pipeline_name": "skip-pipe",
+            "yaml_text": yaml_text,
+            "run_id": run_id,
+            "schedule_type": schedule_type,
+        })
+
+    def _wait_for(self, collected, n=1, timeout=3.0):
+        deadline = time.time() + timeout
+        while time.time() < deadline and len(collected) < n:
+            time.sleep(0.02)
+        assert len(collected) >= n
+
+    def test_executor_built_without_file_tracker(self):
+        """Pin construction: the worker-mode executor is built with
+        file_tracker=None (no per-worker DB exists) — the exact condition the
+        fail-loud guard keys on."""
+        captured = {}
+
+        def _fake_init(self, file_tracker=None, state_store=None):
+            captured["file_tracker"] = file_tracker
+
+        with patch("tram.pipeline.executor.PipelineExecutor.__init__", _fake_init), \
+             patch("tram.agent.assets.sync_assets"), \
+             patch("tram.pipeline.executor.PipelineExecutor.batch_run",
+                   return_value=self._mock_result()):
+            client = _make_client(worker_id="w0", manager_url="")
+            resp = self._dispatch(client, _SKIP_PROCESSED_YAML, "r-sp-ctor")
+            assert resp.status_code == 202
+            self._wait_for(captured)
+
+        assert captured["file_tracker"] is None
+
+    def test_skip_processed_source_logs_loud_error(self, caplog):
+        """Executor construction with skip_processed: true logs an ERROR — the
+        degradation is loud, never silent."""
+        with caplog.at_level(logging.ERROR, logger="tram.agent.server"), \
+             patch("tram.pipeline.executor.PipelineExecutor.__init__",
+                   lambda self, **kw: None), \
+             patch("tram.agent.assets.sync_assets"), \
+             patch("tram.pipeline.executor.PipelineExecutor.batch_run",
+                   return_value=self._mock_result()):
+            client = _make_client(worker_id="w0", manager_url="")
+            resp = self._dispatch(client, _SKIP_PROCESSED_YAML, "r-sp-log")
+            assert resp.status_code == 202
+
+        errors = [r for r in caplog.records if r.levelno == logging.ERROR]
+        assert len(errors) == 1
+        rec = errors[0]
+        assert "skip_processed" in rec.message
+        assert rec.pipeline == "skip-pipe"
+        assert rec.run_id == "r-sp-log"
+        assert rec.source == "local"
+
+    def test_run_complete_payload_records_skip_processed_marker(self):
+        """The degradation rides the run-complete payload errors so the
+        manager's run_history row (errors_json) records it."""
+        captured = []
+
+        def _fake_callback(url, **kwargs):
+            captured.append(kwargs.get("json", {}))
+            resp = MagicMock()
+            resp.raise_for_status = MagicMock()
+            return resp
+
+        with patch("tram.pipeline.executor.PipelineExecutor.__init__",
+                   lambda self, **kw: None), \
+             patch("tram.agent.assets.sync_assets"), \
+             patch("tram.pipeline.executor.PipelineExecutor.batch_run",
+                   return_value=self._mock_result()), \
+             patch("httpx.Client") as mock_client_cls:
+            mock_client = MagicMock()
+            mock_client.__enter__ = lambda s: mock_client
+            mock_client.__exit__ = MagicMock(return_value=False)
+            mock_client.post.side_effect = _fake_callback
+            mock_client_cls.return_value = mock_client
+
+            client = _make_client(worker_id="w0", manager_url="http://manager")
+            resp = self._dispatch(client, _SKIP_PROCESSED_YAML, "r-sp-payload")
+            assert resp.status_code == 202
+            self._wait_for(captured, n=2)  # final-stats payload + run-complete
+
+        complete = [c for c in captured if c.get("status") == "success"]
+        assert len(complete) == 1
+        assert any("skip_processed" in e for e in complete[0]["errors"])
+
+    def test_no_fail_loud_without_skip_processed(self, caplog):
+        """A source without skip_processed stays quiet — no ERROR, no marker."""
+        captured = []
+
+        def _fake_callback(url, **kwargs):
+            captured.append(kwargs.get("json", {}))
+            resp = MagicMock()
+            resp.raise_for_status = MagicMock()
+            return resp
+
+        with caplog.at_level(logging.ERROR, logger="tram.agent.server"), \
+             patch("tram.pipeline.executor.PipelineExecutor.__init__",
+                   lambda self, **kw: None), \
+             patch("tram.agent.assets.sync_assets"), \
+             patch("tram.pipeline.executor.PipelineExecutor.batch_run",
+                   return_value=self._mock_result()), \
+             patch("httpx.Client") as mock_client_cls:
+            mock_client = MagicMock()
+            mock_client.__enter__ = lambda s: mock_client
+            mock_client.__exit__ = MagicMock(return_value=False)
+            mock_client.post.side_effect = _fake_callback
+            mock_client_cls.return_value = mock_client
+
+            client = _make_client(worker_id="w0", manager_url="http://manager")
+            resp = self._dispatch(client, _MINIMAL_YAML, "r-sp-none")
+            assert resp.status_code == 202
+            self._wait_for(captured, n=2)
+
+        assert not any(
+            "skip_processed" in r.getMessage() for r in caplog.records
+        )
+        complete = [c for c in captured if c.get("status") == "success"]
+        assert len(complete) == 1
+        assert complete[0]["errors"] == []
+
+    def test_no_fail_loud_when_skip_processed_false(self, caplog):
+        """Explicit skip_processed: false is the connector default — stays quiet."""
+        yaml_text = _SKIP_PROCESSED_YAML.replace(
+            "skip_processed: true", "skip_processed: false"
+        )
+        with caplog.at_level(logging.ERROR, logger="tram.agent.server"), \
+             patch("tram.pipeline.executor.PipelineExecutor.__init__",
+                   lambda self, **kw: None), \
+             patch("tram.agent.assets.sync_assets"), \
+             patch("tram.pipeline.executor.PipelineExecutor.batch_run",
+                   return_value=self._mock_result()):
+            client = _make_client(worker_id="w0", manager_url="")
+            resp = self._dispatch(client, yaml_text, "r-sp-false")
+            assert resp.status_code == 202
+
+        assert not any(
+            "skip_processed" in r.getMessage() for r in caplog.records
+        )
+
+    def test_stream_run_records_skip_processed_marker(self):
+        """Stream dispatches fail loud too — the marker reaches the run-complete
+        payload of a stream run."""
+        stopped = threading.Event()
+
+        def _fake_stream_run(config, stop_event, stats=None, config_sha256=""):
+            stop_event.wait(timeout=5)
+            stopped.set()
+
+        captured = []
+
+        def _fake_callback(url, **kwargs):
+            captured.append(kwargs.get("json", {}))
+            resp = MagicMock()
+            resp.raise_for_status = MagicMock()
+            return resp
+
+        with patch("tram.pipeline.executor.PipelineExecutor.__init__",
+                   lambda self, **kw: None), \
+             patch("tram.agent.assets.sync_assets"), \
+             patch("tram.pipeline.executor.PipelineExecutor.stream_run",
+                   side_effect=_fake_stream_run), \
+             patch("httpx.Client") as mock_client_cls:
+            mock_client = MagicMock()
+            mock_client.__enter__ = lambda s: mock_client
+            mock_client.__exit__ = MagicMock(return_value=False)
+            mock_client.post.side_effect = _fake_callback
+            mock_client_cls.return_value = mock_client
+
+            client = _make_client(worker_id="w0", manager_url="http://manager")
+            resp = self._dispatch(client, _SKIP_PROCESSED_YAML, "r-sp-stream",
+                                  schedule_type="stream")
+            assert resp.status_code == 202
+            client.post("/agent/stop", json={
+                "pipeline_name": "skip-pipe",
+                "run_id": "r-sp-stream",
+            })
+            assert stopped.wait(timeout=3)
+            self._wait_for(captured)
+
+        complete = [c for c in captured if c.get("status") == "success"]
+        assert len(complete) == 1
+        assert any("skip_processed" in e for e in complete[0]["errors"])
+
+    def test_worker_executor_reprocesses_file_without_tracker(self, tmp_path):
+        """Functional pin (GH #39): with no per-worker tracker, the same file
+        is processed by BOTH runs of the same worker executor — skip_processed
+        is not silently applied — and each run fails loud with the ERROR log
+        plus the run-history marker."""
+        import json as _json
+
+        src = tmp_path / "in"
+        dst = tmp_path / "out"
+        src.mkdir()
+        (src / "data.json").write_text(_json.dumps([{"x": 1}]))
+
+        yaml_text = f"""\
+name: skip-pipe
+schedule:
+  type: manual
+source:
+  type: local
+  path: {src}
+  skip_processed: true
+serializer_in:
+  type: json
+sinks:
+  - type: local
+    path: {dst}
+    filename_template: "skip-pipe_{{epoch_ms}}.bin"
+"""
+        completed = []
+        with patch("tram.agent.server._post_run_complete",
+                   side_effect=lambda *a, **k: completed.append(a)), \
+             patch("tram.agent.server._post_stats"):
+            client = _make_client(worker_id="w0", manager_url="")
+            for i in range(2):
+                resp = self._dispatch(client, yaml_text, f"r-sp-fn-{i}")
+                assert resp.status_code == 202
+            self._wait_for(completed, n=2, timeout=5.0)
+
+        assert len(completed) == 2
+        for args in completed:
+            # _post_run_complete positional order: callback_url, run_id,
+            # pipeline_name, worker_id, status, records_in, records_out,
+            # bytes_in, bytes_out, error, records_skipped, errors, ...
+            assert args[4] == "success"
+            assert args[5] == 1           # the file WAS processed (not skipped)
+            assert any("skip_processed" in e for e in args[11])
+        # One output file per run — the same source file was reprocessed.
+        assert len(list(dst.glob("skip-pipe_*.bin"))) == 2

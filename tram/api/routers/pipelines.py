@@ -9,6 +9,7 @@ from fastapi.concurrency import run_in_threadpool
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel
 
+from tram.api.routers._errors import internal_error_detail
 from tram.api.routers._stream_views import build_placement_view
 from tram.core.exceptions import (
     ConfigError,
@@ -257,7 +258,10 @@ async def update_pipeline(name: str, request: Request) -> dict:
     try:
         new_state = controller.update(name, yaml_text)
     except Exception as exc:
-        raise HTTPException(status_code=500, detail=str(exc))
+        raise HTTPException(
+            status_code=500,
+            detail=internal_error_detail(logger, exc, message="Failed to update pipeline"),
+        )
 
     return new_state.to_dict()
 
@@ -274,7 +278,10 @@ async def delete_pipeline(name: str, request: Request) -> Response:
     try:
         controller.delete(name)
     except Exception as exc:
-        raise HTTPException(status_code=500, detail=str(exc))
+        raise HTTPException(
+            status_code=500,
+            detail=internal_error_detail(logger, exc, message="Failed to delete pipeline"),
+        )
 
     return Response(status_code=204)
 
@@ -306,7 +313,10 @@ async def start_pipeline(name: str, request: Request) -> dict:
     try:
         start_status = controller.start_pipeline(name)
     except Exception as exc:
-        raise HTTPException(status_code=500, detail=str(exc))
+        raise HTTPException(
+            status_code=500,
+            detail=internal_error_detail(logger, exc, message="Failed to start pipeline"),
+        )
 
     state = controller.get(name)
     if start_status == "disabled":
@@ -340,7 +350,10 @@ async def stop_pipeline(name: str, request: Request) -> dict:
     try:
         controller.stop_pipeline(name)
     except Exception as exc:
-        raise HTTPException(status_code=500, detail=str(exc))
+        raise HTTPException(
+            status_code=500,
+            detail=internal_error_detail(logger, exc, message="Failed to stop pipeline"),
+        )
 
     return {"name": name, "status": "stopped"}
 
@@ -362,7 +375,10 @@ async def restart_pipeline(name: str, request: Request) -> dict:
     try:
         controller.restart_pipeline(name)
     except Exception as exc:
-        raise HTTPException(status_code=500, detail=str(exc))
+        raise HTTPException(
+            status_code=500,
+            detail=internal_error_detail(logger, exc, message="Failed to restart pipeline"),
+        )
 
     return {"name": name, "status": "restarting"}
 
@@ -385,7 +401,10 @@ async def trigger_run(
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc))
     except Exception as exc:
-        raise HTTPException(status_code=500, detail=str(exc))
+        raise HTTPException(
+            status_code=500,
+            detail=internal_error_detail(logger, exc, message="Failed to trigger run"),
+        )
 
     if isinstance(result, str):
         # Legacy/mocked path: a plain run_id means the run was submitted.

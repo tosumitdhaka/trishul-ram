@@ -91,8 +91,9 @@ env:
   # TRAM_SMTP_PORT: "587"
   # TRAM_SMTP_TLS: "true"
   # TRAM_SMTP_FROM: tram@localhost
-  # TRAM_RATE_LIMIT: "0"
+  # TRAM_RATE_LIMIT: "50"
   # TRAM_RATE_LIMIT_WINDOW: "60"
+  # TRAM_DOCS_ENABLED: "true"
   # TRAM_AUTH_SECRET: ""
   # TRAM_OTEL_ENDPOINT: ""
   # TRAM_OTEL_SERVICE: tram

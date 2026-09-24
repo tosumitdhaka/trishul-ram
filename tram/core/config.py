@@ -147,6 +147,9 @@ class AppConfig:
     stateful_transforms: bool = True  # "1" (default) enabled / "0" disabled (rollback)
     # F.1 (§3.2b): body-size cap for the internal transform-state PUT (20 MiB default)
     state_max_bytes: int = _STATE_MAX_BYTES_DEFAULT
+    # GH #44: serve /docs, /redoc, /openapi.json (default on for dev; the
+    # production recommendation is to disable via TRAM_DOCS_ENABLED=false)
+    docs_enabled: bool = True
 
     @classmethod
     def from_env(cls) -> AppConfig:
@@ -185,7 +188,7 @@ class AppConfig:
             db_url=os.environ.get("TRAM_DB_URL", ""),
             shutdown_timeout=_env_int("TRAM_SHUTDOWN_TIMEOUT_SECONDS", 30),
             api_key=os.environ.get("TRAM_API_KEY", ""),
-            rate_limit=_env_int("TRAM_RATE_LIMIT", 0),
+            rate_limit=_env_int("TRAM_RATE_LIMIT", 50),
             rate_limit_window=_env_int("TRAM_RATE_LIMIT_WINDOW", 60),
             tls_certfile=os.environ.get("TRAM_TLS_CERTFILE", ""),
             tls_keyfile=os.environ.get("TRAM_TLS_KEYFILE", ""),
@@ -208,6 +211,7 @@ class AppConfig:
             queue_ttl_seconds=_env_int("TRAM_QUEUE_TTL_SECONDS", 900),
             stateful_transforms=stateful_transforms_enabled(),
             state_max_bytes=state_max_bytes(),
+            docs_enabled=os.environ.get("TRAM_DOCS_ENABLED", "true").lower() == "true",
             worker_urls=os.environ.get("TRAM_WORKER_URLS", ""),
             worker_replicas=_env_int("TRAM_WORKER_REPLICAS", 0),
             worker_service=os.environ.get("TRAM_WORKER_SERVICE", "tram-worker"),

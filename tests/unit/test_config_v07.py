@@ -64,3 +64,29 @@ def test_worker_ingress_port_from_env(monkeypatch):
     monkeypatch.setenv("TRAM_WORKER_INGRESS_PORT", "9001")
     config = cfg_mod.AppConfig.from_env()
     assert config.worker_ingress_port == 9001
+
+
+def test_rate_limit_default_positive(monkeypatch):
+    """GH #44: default rate limit is a sane positive value (was 0 = disabled)."""
+    monkeypatch.delenv("TRAM_RATE_LIMIT", raising=False)
+    config = cfg_mod.AppConfig.from_env()
+    assert config.rate_limit == 50
+
+
+def test_rate_limit_from_env(monkeypatch):
+    monkeypatch.setenv("TRAM_RATE_LIMIT", "10")
+    config = cfg_mod.AppConfig.from_env()
+    assert config.rate_limit == 10
+
+
+def test_docs_enabled_default(monkeypatch):
+    """GH #44: docs on by default (dev-friendly), disabled via TRAM_DOCS_ENABLED=false."""
+    monkeypatch.delenv("TRAM_DOCS_ENABLED", raising=False)
+    config = cfg_mod.AppConfig.from_env()
+    assert config.docs_enabled is True
+
+
+def test_docs_enabled_from_env(monkeypatch):
+    monkeypatch.setenv("TRAM_DOCS_ENABLED", "false")
+    config = cfg_mod.AppConfig.from_env()
+    assert config.docs_enabled is False

@@ -46,16 +46,130 @@ class TestTestConnector:
         assert data["ok"] is True
         assert "No test available" in data["detail"]
 
-    def test_tcp_probe_failure_returns_ok_false(self):
+    def test_public_dns_target_still_allowed(self):
+        """Unresolvable-by-classification DNS names are not rejected."""
         app = _make_app()
         client = TestClient(app)
-        # Point at a port that should be closed
+        resp = client.post("/api/connectors/test", json={
+            "type": "unknown_type",
+            "config": {"host": "example.com", "port": 80},
+        })
+        assert resp.status_code == 200
+
+    # ── SSRF rejection (GH #44) ─────────────────────────────────────────────
+
+    def test_loopback_target_rejected_with_400(self):
+        app = _make_app()
+        client = TestClient(app)
         resp = client.post("/api/connectors/test", json={
             "type": "clickhouse",
-            "config": {"host": "127.0.0.1", "port": 19999},  # unlikely to be open
+            "config": {"host": "127.0.0.1", "port": 9440},
         })
-        data = resp.json()
-        assert data["ok"] is False
+        assert resp.status_code == 400
+        assert "Target host rejected" in resp.json()["detail"]
+
+    def test_localhost_name_rejected_with_400(self):
+        app = _make_app()
+        client = TestClient(app)
+        resp = client.post("/api/connectors/test", json={
+            "type": "clickhouse",
+            "config": {"host": "localhost", "port": 9440},
+        })
+        assert resp.status_code == 400
+
+    def test_private_target_rejected_with_400(self):
+        app = _make_app()
+        client = TestClient(app)
+        resp = client.post("/api/connectors/test", json={
+            "type": "clickhouse",
+            "config": {"host": "10.0.0.5", "port": 9000},
+        })
+        assert resp.status_code == 400
+
+    def test_link_local_target_rejected_with_400(self):
+        """169.254.0.0/16 (cloud-metadata) is rejected even though the ai.py
+        allowlist deliberately excludes it — the probe must not reach it."""
+        app = _make_app()
+        client = TestClient(app)
+        resp = client.post("/api/connectors/test", json={
+            "type": "clickhouse",
+            "config": {"host": "169.254.169.254", "port": 80},
+        })
+        assert resp.status_code == 400
+
+    def test_url_based_loopback_target_rejected_with_400(self):
+        app = _make_app()
+        client = TestClient(app)
+        resp = client.post("/api/connectors/test", json={
+            "type": "amqp",
+            "config": {"url": "amqp://127.0.0.1:5672/vhost"},
+        })
+        assert resp.status_code == 400
+
+    def test_brokers_based_private_target_rejected_with_400(self):
+        app = _make_app()
+        client = TestClient(app)
+        resp = client.post("/api/connectors/test", json={
+            "type": "kafka",
+            "config": {"brokers": ["192.168.1.10:9092"]},
+        })
+        assert resp.status_code == 400
+
+    def test_do_test_rejects_forbidden_target_for_pipeline_path(self):
+        """test-pipeline surfaces the rejection as ok:false (no 400) since it
+        reports per-connector results instead of raising HTTP errors."""
+        from tram.api.routers.connectors import _do_test
+        result = _do_test("clickhouse", {"host": "127.0.0.1", "port": 9440})
+        assert result["ok"] is False
+        assert "Target host rejected" in result["error"]
+
+    # ── F2: every list entry is checked, not just the first ────────────────
+
+    def test_mixed_public_and_private_brokers_rejected(self):
+        """One private entry in an otherwise-public broker list is rejected."""
+        app = _make_app()
+        client = TestClient(app)
+        resp = client.post("/api/connectors/test", json={
+            "type": "kafka",
+            "config": {"brokers": ["public.example.com:9092", "10.0.0.5:9092"]},
+        })
+        assert resp.status_code == 400
+        assert "Target host rejected" in resp.json()["detail"]
+
+    def test_mixed_public_and_private_hosts_rejected(self):
+        app = _make_app()
+        client = TestClient(app)
+        resp = client.post("/api/connectors/test", json={
+            "type": "opensearch",
+            "config": {"hosts": ["https://pub.example.com:9200", "http://192.168.1.9:9200"]},
+        })
+        assert resp.status_code == 400
+
+    def test_private_entry_hidden_behind_public_first_all_rejected(self):
+        """The private entry comes after the public first entry — the scan
+        must not stop at entry zero (the old first-entry-only check)."""
+        app = _make_app()
+        client = TestClient(app)
+        resp = client.post("/api/connectors/test", json={
+            "type": "kafka",
+            "config": {"brokers": ["public.example.com:9092", "172.16.0.7:9092"]},
+        })
+        assert resp.status_code == 400
+
+    def test_all_public_multi_host_allowed(self):
+        app = _make_app()
+        client = TestClient(app)
+        resp = client.post("/api/connectors/test", json={
+            "type": "unknown_type",
+            "config": {"brokers": ["kafka1.example.com:9092", "kafka2.example.com:9092"]},
+        })
+        assert resp.status_code == 200
+
+    def test_do_test_rejects_mixed_brokers_for_pipeline_path(self):
+        from tram.api.routers.connectors import _do_test
+        result = _do_test("kafka", {"brokers": ["public.example.com:9092", "10.0.0.5:9092"]})
+        assert result["ok"] is False
+        assert "Target host rejected" in result["error"]
 
 
 class TestTestPipeline:

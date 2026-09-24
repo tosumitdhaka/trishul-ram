@@ -5,6 +5,39 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ---
 
+## [1.4.6] - 2026-09-24
+
+### Fixed
+- **[security]** AI prompt redaction masks connector `api_key` fields (REST/ES source+sink) via one shared `SECRET_NAME_TOKENS` constant (`config_schema.py` ↔ `ai.py` can no longer drift) — real keys previously shipped unmasked to LLM providers (#43)
+- **[security]** `TRAM_AI_ALLOWED_BASE_URLS` is enforced at call time in `_call_ai` (was save-time only — a stored API key could be sent to any https host set via `/api/ai/config`); with the allowlist set the **effective** endpoint is checked — `base_url` if configured, else the provider's fixed default endpoint (bedrock has no fixed default and requires an allowlisted `base_url`) (#43)
+- AI prompt redaction fails closed on unparseable or list-shaped YAML (400 "fix your YAML syntax" instead of passing raw text with live secrets) (#43)
+- `ai_save_config` is atomic and type-checked (Pydantic `str | None` body; a later-field 400 no longer leaves earlier fields persisted; booleans/numbers rejected) (#43)
+- **[security]** Webhook source queue is bounded by `max_queue_size` (was an unbounded `SimpleQueue`; the "queue full" 503 was dead code) — closes the unauthenticated memory-exhaustion DoS on `/webhooks/` (#45, supersedes review finding A8)
+- **[security]** Rate limiting covers `/webhooks/`, and the >500-IP window sweep no longer swaps per-IP locks out from under queued requests; `/api/internal/*` is exempt (worker callbacks carry the machine key and a 429 has no retry) (#45)
+- **[security]** Internal endpoints (`/api/internal/*`) require the bearer token in `auth_users`-only deployments even without `TRAM_API_KEY` (was fully unauthenticated regardless of `TRAM_INTERNAL_AUTH_MODE`) (#44)
+- **[security]** `/api/connectors/test` rejects **IP-literal** private/loopback/link-local targets across ALL `brokers`/`hosts`/`servers` entries (was: first entry only), and the REST source `test_connection` never follows redirects — a public URL cannot 302 the probe into an internal target. Hostnames that resolve to internal space are a documented residual: names are deliberately never resolved (DNS-rebinding safe) (#44)
+- **[security]** Schema-registry proxy strips `x-api-key`/`authorization`/`cookie` from forwarded headers and injects the configured registry credentials (#44)
+- 500/502 responses no longer leak raw exception strings (generic detail + correlation id; full error logged server-side) (#44)
+- `/api/ready` no longer discloses the absolute `db_path` (#44)
+- Stream runs close their sinks on stop/crash (was: ClickHouse flush timers + SFTP/AMQP/NATS connections leaked permanently on every stream restart) (#46)
+- `dry_run` best-effort closes built sinks/sources (was: one leaked 2s flush timer per dry-run of a ClickHouse-sink pipeline) (#46)
+- Stream stop-watcher thread exits when a crashed stream ends (was: one leaked thread per crash cycle) (#46)
+- Batch retry rebuild carries the original `run_id` (was: fresh random run_id breaking the trigger→`queued_runs`→`run_history` contract and the duplicate-callback dedupe) (#47)
+- A manual trigger that loses the claim race records a FAILED row under the submitted run_id (was: silent skip — the client's run_id 404ed forever) (#47)
+- Fast dispatched runs no longer record a stale lease (was: `BatchReconciler` could mark a completed run FAILED, flipping pipeline status to error) (#47)
+- The same fast-run lease race is closed on the queued-run drain path: `commit_queued_dispatch` skips the lease when the run already completed while still transitioning the queued row `dispatching → dispatched` (no re-drain, no duplicate execution, no spurious FAILED) (#47)
+- Worker mode fails loud when `skip_processed` cannot be honored (stateless workers have no per-worker tracker — verified against the stateless-worker architecture): ERROR log + degradation marker recorded on the run (was: silent reprocessing/duplicate CDRs) (#39)
+
+### Added
+- `TRAM_DOCS_ENABLED` (default true) gates `/docs`/`/redoc`/`/openapi.json` — set `false` in production (#44)
+- Startup warnings for fully-disabled auth and for `TRAM_INTERNAL_AUTH_MODE=enforce` without `TRAM_API_KEY` (#44)
+- `ActiveRun.degradation_notes` on worker runs, surfaced in run-complete `errors` (#39)
+
+### Changed
+- **[migration]** `TRAM_RATE_LIMIT` default 0 (disabled) → 50 requests per 60s window, applying to `/api/` (excluding `/api/internal/*`) and `/webhooks/`; deployments relying on unlimited local access must set `TRAM_RATE_LIMIT=0` explicitly (#44)
+- **[migration]** Config-schema `secret` metadata now derives from the shared `SECRET_NAME_TOKENS`; `schema_version` hash rotates (`dfcc2f98ad48` → `0efb15fc2863`) — an identity token, existing AI rows keep their recorded hash (#43)
+- Helm values, `.env.example`, and `docs/deployment.md` updated for the new/changed knobs (#44)
+
 ## [1.4.5] - 2026-09-23
 
 ### Fixed

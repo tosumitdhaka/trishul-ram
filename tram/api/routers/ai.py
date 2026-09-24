@@ -13,8 +13,9 @@ from urllib.parse import urlsplit
 
 import yaml
 from fastapi import APIRouter, HTTPException, Request
+from pydantic import BaseModel, ValidationError
 
-from tram.api.config_schema import SCHEMA_FIELDS, schema_version
+from tram.api.config_schema import SCHEMA_FIELDS, SECRET_NAME_TOKENS, schema_version
 from tram.api.routers.ai_docs import build_ai_context
 from tram.core.config import ai_audit_enabled
 from tram.core.exceptions import ConfigError
@@ -46,6 +47,21 @@ _DEFAULT_MODELS = {
     "openai": _OPENAI_DEFAULT_MODEL,
     "bedrock": _BEDROCK_DEFAULT_MODEL,
 }
+
+# Fixed default endpoints used when no base_url is configured (the SDK
+# defaults). Bedrock has no fixed default — an explicit base_url is required.
+_PROVIDER_DEFAULT_ENDPOINTS = {
+    "anthropic": "https://api.anthropic.com",
+    "openai": "https://api.openai.com/v1",
+}
+
+
+def _provider_default_endpoint(provider: str) -> str | None:
+    """Fixed default endpoint for *provider* when no base_url is configured.
+
+    ``None`` for providers without a fixed default (bedrock requires an
+    explicit base_url)."""
+    return _PROVIDER_DEFAULT_ENDPOINTS.get(provider)
 
 
 def _resolve_model(cfg: dict) -> str:
@@ -259,10 +275,34 @@ def _call_ai(system: str, user: str, max_tokens: int, cfg: dict) -> _AiResult:
 
     # A11 defense-in-depth: also enforced at save time in ai_save_config, but
     # env-var-configured base_urls bypass the config endpoint, so re-check
-    # here before any provider path attaches the API key.
+    # both the scheme and the allowlist here before any provider path attaches
+    # the API key.  With TRAM_AI_ALLOWED_BASE_URLS set, the EFFECTIVE endpoint
+    # must be allowlisted: base_url if set, else the provider's fixed default
+    # (C6) — bedrock has no fixed default, so an allowlisted base_url is
+    # required there.
     if base_url:
         if problem := _base_url_problem(base_url):
             raise RuntimeError(problem)
+    if allowed := _allowed_base_urls():
+        effective_endpoint = base_url or _provider_default_endpoint(provider)
+        if effective_endpoint is None:
+            raise RuntimeError(
+                "TRAM_AI_ALLOWED_BASE_URLS is set, but the bedrock provider has "
+                "no fixed default endpoint and no base_url is configured — set "
+                "an allowlisted base_url explicitly"
+            )
+        if not _base_url_allowed(effective_endpoint, allowed):
+            if base_url:
+                raise RuntimeError(
+                    "base_url not allowed by TRAM_AI_ALLOWED_BASE_URLS: "
+                    f"{base_url!r} — it must match the origin and directory "
+                    f"boundary of one of {allowed}"
+                )
+            raise RuntimeError(
+                f"provider default endpoint {effective_endpoint!r} is not allowed "
+                f"by TRAM_AI_ALLOWED_BASE_URLS: {allowed} — set an allowlisted "
+                "base_url"
+            )
 
     if provider == "anthropic":
         try:
@@ -429,15 +469,14 @@ def _yaml_mode_result(result: _AiResult) -> dict:
 # ── Secret redaction for outbound prompts (A4) ─────────────────────────────
 
 _MASK_VALUE = "***redacted***"
-_SECRET_NAME_TOKENS = ("password", "token", "secret")
 _HEADER_FIELD_NAMES = ("headers", "extra_headers")
 
 
 def _is_secret_key(name: str) -> bool:
     """Same heuristic the schema cache uses to compute ``secret`` metadata
-    (config_schema.py) — also masks keys of connector types outside the
-    schema cache (e.g. plugin connectors)."""
-    return any(token in name for token in _SECRET_NAME_TOKENS)
+    (``SECRET_NAME_TOKENS`` in config_schema.py) — also masks keys of
+    connector types outside the schema cache (e.g. plugin connectors)."""
+    return any(token in name for token in SECRET_NAME_TOKENS)
 
 
 def _mask_dict_values(mapping: dict) -> bool:
@@ -498,12 +537,18 @@ def _mask_alert_webhooks(alerts: list) -> bool:
 def _redact_yaml(yaml_text: str) -> str:
     """Return a copy of the pipeline YAML with secret field values masked, for
     use in outbound AI prompts. The operator's pipeline on disk is never
-    touched. When the YAML cannot be parsed (e.g. mid-edit in the editor), the
-    input is returned unchanged so explain/fix still work.
+    touched.
+
+    Fails closed: when the YAML cannot be parsed, or the top-level document is
+    a sequence (a bare list — which can still carry secret-bearing mappings),
+    a ValueError is raised so callers return a 400 "fix your YAML syntax
+    first" instead of sending possibly secret-bearing text verbatim to the
+    provider. Scalar documents (e.g. a single string or number) have no
+    structured secrets and pass through unchanged, as does empty input.
 
     Known limitation: masking covers scalar secret fields (schema ``secret``
-    metadata + the password/token/secret name heuristic), every value of
-    ``headers``/``extra_headers`` dicts, and ``alerts[].webhook_url``.
+    metadata + the password/token/secret/api_key name heuristic), every value
+    of ``headers``/``extra_headers`` dicts, and ``alerts[].webhook_url``.
     Arbitrary dict-valued fields (e.g. ``metadata``) and ``${VAR}`` env
     references are intentionally left untouched — env refs are substituted at
     load time and are not secrets in the file.
@@ -512,15 +557,26 @@ def _redact_yaml(yaml_text: str) -> str:
         return yaml_text
     try:
         data = yaml.safe_load(yaml_text)
-    except yaml.YAMLError:
-        return yaml_text
+    except yaml.YAMLError as exc:
+        raise ValueError(
+            "Pipeline YAML does not parse — fix the YAML syntax first before "
+            f"using AI explain/fix/modify (yaml error: {exc})"
+        ) from exc
     if not isinstance(data, dict):
-        return yaml_text
+        if isinstance(data, list):
+            raise ValueError(
+                "Pipeline YAML must be a mapping at the top level — fix the "
+                "YAML syntax first before using AI explain/fix/modify"
+            )
+        return yaml_text  # scalar documents carry no structured secrets
 
     wrapped = isinstance(data.get("pipeline"), dict)
     root = data["pipeline"] if wrapped else data
     if not isinstance(root, dict):
-        return yaml_text
+        raise ValueError(
+            "Pipeline YAML must be a mapping at the top level — fix the YAML "
+            "syntax first before using AI explain/fix/modify"
+        )
 
     def mask(category: str, block) -> bool:
         return _mask_block(block, category) if isinstance(block, dict) else False
@@ -640,6 +696,17 @@ async def ai_get_config(request: Request) -> dict:
     }
 
 
+class _AiConfigBody(BaseModel):
+    """Validated /api/ai/config request body. ``str | None`` fields reject
+    non-string JSON values (booleans, numbers) instead of ``str()`` coercion;
+    only an explicit JSON ``null`` clears a stored setting."""
+
+    provider: str | None = None
+    api_key: str | None = None
+    model: str | None = None
+    base_url: str | None = None
+
+
 @router.post("/api/ai/config", tags=["ai"])
 async def ai_save_config(request: Request) -> dict:
     """Persist AI configuration to the DB (overrides env vars).
@@ -654,24 +721,42 @@ async def ai_save_config(request: Request) -> dict:
     - explicit JSON ``null``: clears the setting (delete_setting), reverting
       to the env-var / default. Use this to deliberately clear a stored key,
       provider, model, or base URL without editing the DB by hand.
+
+    The whole body is validated before anything is persisted, so a rejected
+    field leaves earlier fields untouched (no partial saves).
     """
     db = getattr(request.app.state, "db", None)
     if db is None:
         raise HTTPException(status_code=503, detail="Database not available")
     body = await request.json()
+    try:
+        data = _AiConfigBody.model_validate(body)
+    except ValidationError as exc:
+        fields = ", ".join(
+            str(err["loc"][0]) if err["loc"] else "body"
+            for err in exc.errors()
+        )
+        raise HTTPException(
+            status_code=400,
+            detail=f"Invalid AI config: {fields} must be strings or null",
+        ) from exc
+
+    # Validate everything first — no DB writes yet, so a 400 mid-way can never
+    # leave earlier fields saved.
+    actions: list[tuple[str, str | None]] = []  # (setting, value); None = clear
     for field, setting in (
         ("provider", "ai.provider"),
         ("api_key", "ai.api_key"),
         ("model", "ai.model"),
         ("base_url", "ai.base_url"),
     ):
-        if field not in body:
+        if field not in data.model_fields_set:
             continue                      # absent → keep (no change)
-        value = body[field]
+        value = getattr(data, field)
         if value is None:
-            db.delete_setting(setting)    # explicit null → clear
+            actions.append((setting, None))  # explicit null → clear
             continue
-        value = str(value).strip()
+        value = value.strip()
         if not value:
             continue                      # blank → keep (no change)
         if field == "provider":
@@ -691,10 +776,18 @@ async def ai_save_config(request: Request) -> dict:
                         status_code=400,
                         detail=(
                             "base_url not allowed by TRAM_AI_ALLOWED_BASE_URLS: "
-                            f"{value!r} — it must prefix-match one of {allowed}"
+                            f"{value!r} — it must match the origin and directory "
+                            f"boundary of one of {allowed}"
                         ),
                     )
-        db.set_setting(setting, value)
+        actions.append((setting, value))
+
+    # Persist the validated body in one pass.
+    for setting, value in actions:
+        if value is None:
+            db.delete_setting(setting)
+        else:
+            db.set_setting(setting, value)
     return {"ok": True}
 
 
@@ -733,6 +826,15 @@ async def ai_suggest(request: Request) -> dict:
 
     prompt = body.get("prompt", "")
 
+    # Redaction fails closed: unparseable/malformed YAML is a client error
+    # (400) — never send raw, possibly secret-bearing text to the provider.
+    redacted_yaml: str | None = None
+    if mode in ("explain", "fix", "modify"):
+        try:
+            redacted_yaml = _redact_yaml(body.get("yaml", ""))
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc))
+
     if mode == "generate":
         plugins = body.get("plugins", {})
         system = _GENERATE_SYSTEM.format(
@@ -746,7 +848,6 @@ async def ai_suggest(request: Request) -> dict:
         return _yaml_mode_result(result)
 
     elif mode == "explain":
-        redacted_yaml = _redact_yaml(body.get("yaml", ""))
         user = (
             f"TRAM pipeline YAML:\n{redacted_yaml}\n\n"
             f"Dry-run error: {body.get('error', '')}\n\n"
@@ -765,7 +866,6 @@ async def ai_suggest(request: Request) -> dict:
 
     elif mode == "fix":
         plugins = body.get("plugins", {})
-        redacted_yaml = _redact_yaml(body.get("yaml", ""))
         system = _GENERATE_SYSTEM.format(
             pipeline_structure = _PIPELINE_STRUCTURE,
             connector_schema   = build_ai_context(redacted_yaml + " " + body.get("error", ""), plugins),
@@ -782,7 +882,6 @@ async def ai_suggest(request: Request) -> dict:
 
     elif mode == "modify":
         plugins = body.get("plugins", {})
-        redacted_yaml = _redact_yaml(body.get("yaml", ""))
         system = _GENERATE_SYSTEM.format(
             pipeline_structure = _PIPELINE_STRUCTURE,
             connector_schema   = build_ai_context(redacted_yaml + " " + body.get("instruction", ""), plugins),

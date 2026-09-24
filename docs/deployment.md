@@ -41,8 +41,9 @@ All configuration is via environment variables (12-factor).
 | `TRAM_WEBHOOK_MAX_BODY_BYTES` | `10485760` | Maximum accepted webhook request body size in bytes; oversized payloads are rejected with 413 (v1.4.0) |
 | `TRAM_AUTH_USERS` | _(empty)_ | Comma-separated `user:password` pairs for browser UI login (v1.0.8); issues 8-hour HMAC session tokens; coexists with `TRAM_API_KEY` |
 | `TRAM_AUTH_SECRET` | _(random)_ | Shared HMAC signing secret for session tokens (v1.0.8); **required in cluster mode** — without a shared secret each pod signs tokens independently and cross-pod requests return 401 |
-| `TRAM_RATE_LIMIT` | `0` | Max requests per minute per IP for `/api/*`; 0 = disabled |
+| `TRAM_RATE_LIMIT` | `50` | Max requests per sliding window per IP for `/api/*` (excluding `/api/internal/*`) and `/webhooks/*`; `0` = disabled. Default `50` since v1.4.6 (previously `0` = disabled) — lower it for sensitive surfaces or raise it for high-traffic webhook ingress / multi-tab NOC usage |
 | `TRAM_RATE_LIMIT_WINDOW` | `60` | Sliding window in seconds for rate limiting |
+| `TRAM_DOCS_ENABLED` | `true` | Serve interactive API docs (`/docs`, `/redoc`, `/openapi.json`). Default `true` for development; **set to `false` in production** so the complete API map is not exposed to unauthenticated callers (v1.4.6, GH #44) |
 | `TRAM_TLS_CERTFILE` | _(empty)_ | Path to TLS certificate file for HTTPS |
 | `TRAM_TLS_KEYFILE` | _(empty)_ | Path to TLS key file for HTTPS |
 | `TRAM_OTEL_ENDPOINT` | _(empty)_ | OTLP gRPC endpoint (e.g. `http://jaeger:4317`) for OpenTelemetry traces |
@@ -63,7 +64,7 @@ All configuration is via environment variables (12-factor).
 | `TRAM_AI_API_KEY` | _(empty)_ | API key/token for AI assist; empty disables AI endpoints in practice |
 | `TRAM_AI_MODEL` | provider default | Optional AI model override; defaults to `claude-haiku-4-5-20251001`, `gpt-4o-mini`, or `us.anthropic.claude-sonnet-4-6` depending on provider |
 | `TRAM_AI_BASE_URL` | _(empty)_ | Optional base URL override for the selected provider endpoint (for example an OpenAI-compatible gateway, Anthropic-compatible endpoint, or Bedrock proxy) |
-| `TRAM_AI_ALLOWED_BASE_URLS` | _(empty)_ | Optional comma-separated allowlist of base URL prefixes accepted by `POST /api/ai/config` (v1.4.1). Entries and submitted URLs are normalized (scheme + host lowercased, trailing slashes stripped) and matched by prefix; when unset, no allowlist restriction applies. Scheme enforcement is always on: `base_url` must be `https`, except `http` for loopback/private-range hosts (local Ollama/LiteLLM) — rejected at config save and at call time |
+| `TRAM_AI_ALLOWED_BASE_URLS` | _(empty)_ | Optional comma-separated allowlist of base URL prefixes accepted by `POST /api/ai/config` (v1.4.1). Entries and submitted URLs are normalized (scheme + host lowercased, trailing slashes stripped) and matched by origin + directory boundary; when unset, no allowlist restriction applies. When set, the **effective** endpoint must be allowlisted at call time too: `base_url` if configured, else the provider's fixed default endpoint (`https://api.anthropic.com` / `https://api.openai.com/v1`; bedrock has no fixed default and requires an allowlisted `base_url`). Scheme enforcement is always on: `base_url` must be `https`, except `http` for loopback/private-range hosts (local Ollama/LiteLLM) — rejected at config save and at call time |
 | `TRAM_AI_AUDIT` | `1` | AI usage audit (v1.4.1). Per-call `tram.ai` log lines (mode, client host, provider, model, tokens in/out when reported, duration, outcome) are always emitted; `1` (default) also appends one row per AI call to the `ai_usage` table (`id`, `ts`, `mode`, `client`, `provider`, `model`, `tokens_in`, `tokens_out`, `ok`). `0` disables only the DB rows. An unrecognized value is logged at WARNING and fails open (feature ON) |
 | `TRAM_MODE` | `standalone` | Deployment mode: `standalone` \| `manager` \| `worker` (v1.2.0) |
 | `TRAM_WORKER_URLS` | _(empty)_ | Explicit comma-separated worker agent URLs; when set, manager uses this list instead of replica-based headless DNS discovery (v1.2.0) |
@@ -201,6 +202,24 @@ Exempt paths (no key needed): `/api/health`, `/api/ready`, `/agent/health`, `/me
 
 When `TRAM_API_KEY` is empty (default), all requests pass through without authentication.
 
+> Rate limiting is **not** an auth mechanism: `TRAM_RATE_LIMIT` (default 50 per window)
+> applies to `/api/*` and `/webhooks/*` for every client IP regardless of the auth
+> posture above. `/api/internal/*` is exempt — worker callbacks carry the machine key
+> and a 429 has no retry, so throttling that surface would reintroduce lost-run
+> failures (GH #47).
+>
+> **Multi-tab / NOC usage:** the web UI polls roughly once per open tab (~18 requests/min
+> per tab), so several operators with multiple tabs can exceed the default 50/window from
+> one egress IP. Raise `TRAM_RATE_LIMIT` (or set it to `0` for trusted networks) when the
+> UI reports "Too Many Requests" for NOC/multi-tab usage.
+>
+> **Connector-test target check (GH #44, residual):** `/api/connectors/test` rejects
+> IP-literal targets in private/loopback/link-local ranges (every `brokers`/`hosts`/
+> `servers` entry, not just the first) and REST `test_connection` never follows redirects.
+> Hostnames that resolve to internal space are **not** rejected — names are deliberately
+> never resolved at validation time (DNS-rebinding safe), so a hostname pointing at an
+> internal address is an accepted, documented residual.
+
 ### Internal machine-to-machine surfaces (`/api/internal/*`, `/agent/*`)
 
 The manager's `/api/internal/*` endpoints (worker run-complete/stats callbacks) and the
@@ -222,8 +241,15 @@ then set `TRAM_INTERNAL_AUTH_MODE=warn` and watch the WARNING logs for clients t
 miss the key, then flip to `enforce`. The default is `warn`, so nothing 401s a working
 deployment at any point in this sequence.
 
-**Fail-closed guidance:** if `TRAM_API_KEY` is unset, authentication is entirely disabled —
-anyone with network reach can call `/api/*`, `/api/internal/*`, and `/agent/*`. Production
+**Without a machine key (`auth_users`-only deployments):** internal surfaces fall back to
+the browser Bearer-token check with the same mode knob — `enforce` closes `/api/internal/*`
+to callers without a valid session token even though `TRAM_API_KEY` is unset (v1.4.6, GH #44).
+`warn` still logs-and-serves so the rollout sequence above remains non-breaking. Setting
+`enforce` without a `TRAM_API_KEY` logs a loud startup warning.
+
+**Fail-closed guidance:** if `TRAM_API_KEY` is unset and `TRAM_AUTH_USERS` is also unset,
+authentication is entirely disabled (the daemon logs a loud startup warning) — anyone with
+network reach can call `/api/*`, `/api/internal/*`, and `/agent/*`. Production
 deployments must set a real secret (not the old committed `tram-internal-2026` default) via
 the `apiKey` Helm value or `envSecret.TRAM_API_KEY`, and set `TRAM_INTERNAL_AUTH_MODE=enforce`
 after the rollout window. Workers automatically receive the same key from the chart

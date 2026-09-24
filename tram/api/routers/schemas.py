@@ -14,6 +14,7 @@ Endpoints:
 
 from __future__ import annotations
 
+import base64
 import logging
 import os
 
@@ -21,6 +22,7 @@ from fastapi import APIRouter, File, HTTPException, Query, Request, UploadFile
 from fastapi.responses import PlainTextResponse, Response
 
 from tram.api.config_schema import build_config_schema_payload, schema_version
+from tram.api.routers._errors import internal_error_detail
 
 logger = logging.getLogger(__name__)
 
@@ -121,9 +123,21 @@ async def schema_registry_proxy(path: str, request: Request) -> Response:
     if request.query_params:
         target += f"?{request.query_params}"
 
-    # Forward headers; skip hop-by-hop and host so httpx fills them correctly
-    _skip_req = {"host", "accept-encoding", "content-length", "transfer-encoding", "connection"}
+    # Forward headers; skip hop-by-hop, host, and caller credentials so the
+    # caller's X-API-Key / Authorization / Cookie are never leaked to the
+    # external registry (GH #44).  When registry credentials are configured,
+    # they are injected as Basic auth instead.
+    _skip_req = {
+        "host", "accept-encoding", "content-length", "transfer-encoding",
+        "connection", "x-api-key", "authorization", "cookie",
+    }
     forward_headers = {k: v for k, v in request.headers.items() if k.lower() not in _skip_req}
+
+    registry_username = os.environ.get("TRAM_SCHEMA_REGISTRY_USERNAME", "")
+    if registry_username:
+        registry_password = os.environ.get("TRAM_SCHEMA_REGISTRY_PASSWORD", "")
+        token = base64.b64encode(f"{registry_username}:{registry_password}".encode()).decode()
+        forward_headers["Authorization"] = f"Basic {token}"
 
     body = await request.body()
 
@@ -139,7 +153,11 @@ async def schema_registry_proxy(path: str, request: Request) -> Response:
     except Exception as exc:
         raise HTTPException(
             status_code=502,
-            detail=f"Schema registry proxy error ({registry_url}): {exc}",
+            detail=internal_error_detail(
+                logger,
+                exc,
+                message=f"Schema registry proxy error ({registry_url})",
+            ),
         )
 
     _skip_resp = {"transfer-encoding", "content-encoding", "connection"}
@@ -210,7 +228,10 @@ def get_schema(filepath: str) -> PlainTextResponse:
     try:
         content = open(full, encoding="utf-8", errors="replace").read()
     except Exception as exc:
-        raise HTTPException(status_code=500, detail=f"Could not read schema: {exc}")
+        raise HTTPException(
+            status_code=500,
+            detail=internal_error_detail(logger, exc, message="Could not read schema"),
+        )
 
     return PlainTextResponse(content=content, media_type="text/plain; charset=utf-8")
 
@@ -299,7 +320,10 @@ async def upload_schema(
             os.unlink(tmp_path)
         except OSError:
             pass
-        raise HTTPException(status_code=500, detail=f"Write failed: {exc}")
+        raise HTTPException(
+            status_code=500,
+            detail=internal_error_detail(logger, exc, message="Schema write failed"),
+        )
 
     rel_path = os.path.relpath(dest_path, base)
     logger.info(

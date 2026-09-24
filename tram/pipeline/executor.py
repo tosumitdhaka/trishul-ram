@@ -1091,7 +1091,10 @@ class PipelineExecutor:
                         # Reset counters and rebuild ALL components for a clean retry.
                         # Rebuilding only the source on retry would reuse a potentially
                         # broken sink connection that caused the original failure.
-                        ctx = PipelineRunContext(pipeline_name=config.name)
+                        # Keep the ORIGINAL run_id across the rebuild so the final
+                        # RunResult (and the worker run-complete callback) carry the
+                        # run_id the trigger returned (E.2 §4.1 contract).
+                        ctx = PipelineRunContext(pipeline_name=config.name, run_id=ctx.run_id)
                         if stats is not None:
                             # Retry parity: the context is rebuilt for the new
                             # attempt, so the stats accumulator must be reset
@@ -1375,8 +1378,17 @@ class PipelineExecutor:
 
         # Watcher: when the APScheduler stop_event fires, also call source.stop()
         # so that blocking sources (e.g. WebhookSource.read()) unblock immediately.
+        # The local stream_exit event ends the watcher when the stream run exits
+        # any other way (crash/exception path), so a crash-looping stream never
+        # accumulates one leaked watcher thread per cycle.
+        stream_exit = threading.Event()
+
         def _stop_watcher() -> None:
-            stop_event.wait()
+            while not stream_exit.is_set():
+                if stop_event.wait(0.5):
+                    break
+            if stream_exit.is_set():
+                return
             if hasattr(source, "stop"):
                 try:
                     source.stop()
@@ -1437,6 +1449,12 @@ class PipelineExecutor:
             )
             raise
         finally:
+            # End the stop-watcher as early as possible: on the crash path the
+            # stop_event never fires, so without this the watcher thread would
+            # leak (one per crash cycle). On the graceful path the controller
+            # already set stop_event and the source was unblocked, so the
+            # watcher has nothing left to do.
+            stream_exit.set()
             # Graceful stop: close hooks honoring each stateful transform's
             # flush_on_close field (window_aggregate emits its open windows as
             # partials, then the final state blob reflects the cleared windows
@@ -1461,7 +1479,14 @@ class PipelineExecutor:
                     dlq_sink=dlq_sink, sink_cb_keys=sink_cb_keys,
                 )
             self._save_state_to_store(config, transforms, config_sha256, ctx.run_id)
+            # Close sinks AFTER flush-record routing (the flush writes ride the
+            # same sink instances) and BEFORE the source — mirrors the batch
+            # finally. Releases run-scoped resources (ClickHouse flush
+            # timer/buffer, SFTP/AMQP/NATS connections) that a stopped or
+            # crashed stream would otherwise pin for the process lifetime.
+            self._close_sinks(sinks, dlq_sink)
             self._close_source(source)
+            watcher.join(timeout=1)
             logger.info(
                 "Stream run ended",
                 extra={
@@ -1570,41 +1595,58 @@ class PipelineExecutor:
     # ── Dry run ─────────────────────────────────────────────────────────────
 
     def dry_run(self, config: PipelineConfig) -> dict:
-        """Validate pipeline wiring without performing any I/O."""
+        """Validate pipeline wiring without performing any I/O.
+
+        Successfully built source/sink instances are closed best-effort before
+        returning (in a finally), so a dry-run of e.g. a ClickHouse-sink
+        pipeline does not leak its self-rescheduling flush timer — the API
+        router builds a fresh PipelineExecutor per request.
+        """
         issues = []
+        built_source = None
+        built_sinks: list[tuple] = []
+        built_dlq = None
 
         try:
-            self._build_source(config)
-        except Exception as exc:
-            issues.append(f"source: {exc}")
-
-        try:
-            self._build_sinks(config)
-        except Exception as exc:
-            issues.append(f"sinks: {exc}")
-
-        try:
-            self._build_serializer_in(config)
-        except Exception as exc:
-            issues.append(f"serializer_in: {exc}")
-
-        try:
-            self._build_serializer_out(config)
-        except Exception as exc:
-            issues.append(f"serializer_out: {exc}")
-
-        try:
-            self._build_transforms(config)
-        except Exception as exc:
-            issues.append(f"transforms: {exc}")
-
-        if config.dlq is not None:
             try:
-                self._build_dlq_sink(config)
+                built_source = self._build_source(config)
             except Exception as exc:
-                issues.append(f"dlq: {exc}")
+                issues.append(f"source: {exc}")
 
-        issues.extend(self._validate_sink_templates(config))
+            try:
+                built_sinks = self._build_sinks(config)
+            except Exception as exc:
+                issues.append(f"sinks: {exc}")
+
+            try:
+                self._build_serializer_in(config)
+            except Exception as exc:
+                issues.append(f"serializer_in: {exc}")
+
+            try:
+                self._build_serializer_out(config)
+            except Exception as exc:
+                issues.append(f"serializer_out: {exc}")
+
+            try:
+                self._build_transforms(config)
+            except Exception as exc:
+                issues.append(f"transforms: {exc}")
+
+            if config.dlq is not None:
+                try:
+                    built_dlq = self._build_dlq_sink(config)
+                except Exception as exc:
+                    issues.append(f"dlq: {exc}")
+
+            issues.extend(self._validate_sink_templates(config))
+        finally:
+            # Best-effort close of successfully built instances only — a
+            # constructor failure leaves the variable None/[] and close errors
+            # are swallowed, so cleanup never masks the validation result.
+            self._close_sinks(built_sinks, built_dlq)
+            if built_source is not None:
+                self._close_source(built_source)
 
         return {"valid": len(issues) == 0, "issues": issues}
 
