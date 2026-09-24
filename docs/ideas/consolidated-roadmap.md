@@ -3,7 +3,7 @@
 **Date:** 2026-09-18
 **Purpose:** single planning view over ALL pending work — findings from both 2026-09-17 reviews, all improvement proposals, open GitHub issues, and the treq reuse feasibility — grouped by cross-cutting pattern and assigned to releases. All releases stay in the 1.4.x patch series per maintainers' preference (themed waves, not majors).
 
-> **Status (2026-09-23):** this is the living plan. **v1.4.1, v1.4.2, and v1.4.3 shipped as planned** (sections below marked ✅ SHIPPED). **v1.4.4** shipped as an unplanned wizard AI-assist fix pass (operator-reported; see `docs/changelog.md` `[1.4.4]`). **v1.4.5** shipped as an unplanned SNMP data-integrity pass (GH #32/#33/#35/#36; see `docs/changelog.md` `[1.4.5]`). The AI-expansion block is now unscheduled — the next AI release waits on the treq vendor decision plus A6/A7/B1.
+> **Status (2026-09-24):** this is the living plan. **v1.4.1, v1.4.2, and v1.4.3 shipped as planned** (sections below marked ✅ SHIPPED). **v1.4.4** shipped as an unplanned wizard AI-assist fix pass (operator-reported; see `docs/changelog.md` `[1.4.4]`). **v1.4.5** shipped as an unplanned SNMP data-integrity pass (GH #32/#33/#35/#36; see `docs/changelog.md` `[1.4.5]`). The 2026-09-24 independent full-repo review (`docs/reviews/independent-review-2026-09-24.md`) produced 59 findings, now tracked as GH #43–#52; **the next three releases are planned in `docs/plans/next-versions-plan.md`** (v1.4.6 security & integrity fixes → v1.4.7 execution correctness + AI Wave B → v1.4.8 UX/deploy polish + AI A.1 + Wave C — the AI-expansion cut points shift one version each, fixes first per maintainer decision).
 
 **Inputs consolidated:**
 
@@ -99,13 +99,10 @@ L5 may slip to the next release without breaking anything else.
 
 > Shipped as an unplanned pass out of an operator data-integrity report: GH #32 (tuple-space WALK subtree boundaries), #33 (refuse instead of silently collapsing classify rows), #35 (layered INTEGER classification; `*Vdom` code-default removed with migration), #36 (structured index grouping). See `docs/changelog.md` `[1.4.5]`.
 
-### AI expansion — unscheduled (next AI release)
+### AI expansion — sequenced into v1.4.7/v1.4.8 (per `docs/plans/next-versions-plan.md`)
 
 Theme: convert the AI feature from editor tooling into operator tooling, on top of a hardened base.
-**Not scheduled** — starts only when AI is prioritized; the treq vendor decision (whether to vendor
-`treq/_providers/`) is the gate, and A6/A7/B1 remain the standing next items.
-
-Theme: convert the AI feature from editor tooling into operator tooling, on top of a hardened base.
+**Sequenced behind the v1.4.6 fix release** (maintainer decision 2026-09-24): Wave B (A6/A7/B1) + A.4 ride v1.4.7; A.1 + Wave C ride v1.4.8. The treq vendor decision (whether to vendor `treq/_providers/`) remains the gate for the AI rows — it does not block the fix issues in those versions.
 
 | Item | What | Effort | Note |
 |---|---|---|---|
@@ -144,6 +141,6 @@ Theme: convert the AI feature from editor tooling into operator tooling, on top 
 
 ## 5. Open items & triggers
 
-- **Trigger — AI expansion (unscheduled):** maintainer prioritizes AI tooling; the treq vendor decision (`docs/ideas/treq-ai-reuse-feasibility.md`) gates the next AI release, with A6/A7/B1 as the standing next items.
+- **Trigger — AI expansion (sequenced into v1.4.7/v1.4.8):** the treq vendor decision (`docs/ideas/treq-ai-reuse-feasibility.md`) gates the AI rows of those versions (not the fix issues); A6/A7/B1 remain the standing next items — see `docs/plans/next-versions-plan.md`.
 - **SNMP library migration decision (open):** the trishul-smi/trishul-snmp swap remains blocked on SNMPv1 + v3 crypto breadth (`docs/ideas/trishul-smi-snmp-migration-feasibility.md`). v1.4.5 shipped the SNMP data-integrity work on pysnmp; the migration decision is unaffected.
 - **Resolved during the plan's execution:** L2 path choice (decided by the #24 study → structured creation wizard, shipped v1.4.3); L5 slip tolerance (no slip — shipped v1.4.3).

@@ -86,11 +86,11 @@ unconfirmed work lives in the backlog at the bottom.
 
 > Depends on v1.3.0 TCP path being validated end-to-end.
 
-- [ ] **`workers.count: N` runtime** — logical slot model (slot number ≠ worker assignment); `PlacementReconciler` spare-worker gap fill; slot reassignment on failover; `WorkerPool.resolve()` + `multi_dispatch()` N-worker paths
-- [ ] **`workers.list: [...]` runtime** — named-worker placement; per-slot pinned re-dispatch on recovery
-- [ ] **Dynamic K8s Service provisioning** — `kubernetes:` pipeline block; manager creates/deletes NodePort Services via K8s API; RBAC Role + RoleBinding; `tram[k8s]` optional extra
+- [x] **`workers.count: N` runtime** — logical slot model (slot number ≠ worker assignment); `PlacementReconciler` spare-worker gap fill; slot reassignment on failover; `WorkerPool.resolve()` + `multi_dispatch()` N-worker paths *(shipped v1.3.1)*
+- [x] **`workers.list: [...]` runtime** — named-worker placement; per-slot pinned re-dispatch on recovery *(shipped v1.3.1, incl. dedicated-Services Endpoints repatching on scale-down)*
+- [x] **Dynamic K8s Service provisioning** — `kubernetes:` pipeline block; manager creates/deletes NodePort Services via K8s API; RBAC Role + RoleBinding; `tram[k8s]` optional extra *(shipped v1.3.1 for push streams; UDP sources via v1.3.2)*
 - [x] **`source_stem` / `source_suffix` filename tokens** (issue #9) — added to all 6 file-based sinks
-- [ ] **Migrate SNMP to pysnmp 7.x** (issue #10) — update import paths; `pysmi` migration
+- [x] **Migrate SNMP to pysnmp 7.x** (issue #10) — update import paths; `pysmi` migration *(shipped v1.3.1 — `pysnmp>=7,<8` with 7.x HLAPI compatibility helpers)*
 
 ---
 
@@ -137,14 +137,14 @@ unconfirmed work lives in the backlog at the bottom.
 ## Backlog (unversioned)
 
 ### Connector Fixes (deferred from v1.2.4–v1.2.7)
-- [ ] **Kafka source** — reconnect, offset commit, consumer group edge cases
+- [ ] **Kafka source** — reconnect, offset commit, consumer group edge cases *(stop + lag and `enable_auto_commit=false` default shipped v1.4.0; reconnect/offset/consumer-group open)*
 - [ ] **Kafka sink** — producer error handling, retry, serializer integration
 - [ ] **OpenSearch sink** — bulk write, index template, auth, retry on 429
 - [ ] **ClickHouse source/sink** — query execution, batch insert, type coercion
 - [ ] **InfluxDB source/sink** — line protocol, bucket/org resolution, token auth
 - [ ] **REST source/sink** — auth types, pagination, retry, SSL verify
-- [ ] **gNMI source** — subscription modes, path encoding, TLS
-- [ ] **SFTP source/sink** — file glob, move-after-read, skip_processed, key auth
+- [ ] **gNMI source** — subscription modes, path encoding, TLS *(subscription modes + reconnect shipped v1.4.0; TLS/client certs open)*
+- [ ] **SFTP source/sink** — file glob, move-after-read, skip_processed, key auth *(file-done guards shipped v1.4.0; remaining items open)*
 - [ ] **FTP source/sink** — passive mode, directory listing, file write
 - [ ] **S3 source/sink** — bucket/prefix, multipart upload, credential chain
 - [ ] **MQTT source/sink** — QoS levels, reconnect, topic wildcards
