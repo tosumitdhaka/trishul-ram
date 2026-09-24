@@ -41,8 +41,9 @@ All configuration is via environment variables (12-factor).
 | `TRAM_WEBHOOK_MAX_BODY_BYTES` | `10485760` | Maximum accepted webhook request body size in bytes; oversized payloads are rejected with 413 (v1.4.0) |
 | `TRAM_AUTH_USERS` | _(empty)_ | Comma-separated `user:password` pairs for browser UI login (v1.0.8); issues 8-hour HMAC session tokens; coexists with `TRAM_API_KEY` |
 | `TRAM_AUTH_SECRET` | _(random)_ | Shared HMAC signing secret for session tokens (v1.0.8); **required in cluster mode** — without a shared secret each pod signs tokens independently and cross-pod requests return 401 |
-| `TRAM_RATE_LIMIT` | `0` | Max requests per minute per IP for `/api/*`; 0 = disabled |
+| `TRAM_RATE_LIMIT` | `50` | Max requests per sliding window per IP for `/api/*` and `/webhooks/*`; `0` = disabled. Default `50` since v1.4.6 (previously `0` = disabled) — lower it for sensitive surfaces or raise it for high-traffic webhook ingress |
 | `TRAM_RATE_LIMIT_WINDOW` | `60` | Sliding window in seconds for rate limiting |
+| `TRAM_DOCS_ENABLED` | `true` | Serve interactive API docs (`/docs`, `/redoc`, `/openapi.json`). Default `true` for development; **set to `false` in production** so the complete API map is not exposed to unauthenticated callers (v1.4.6, GH #44) |
 | `TRAM_TLS_CERTFILE` | _(empty)_ | Path to TLS certificate file for HTTPS |
 | `TRAM_TLS_KEYFILE` | _(empty)_ | Path to TLS key file for HTTPS |
 | `TRAM_OTEL_ENDPOINT` | _(empty)_ | OTLP gRPC endpoint (e.g. `http://jaeger:4317`) for OpenTelemetry traces |
@@ -201,6 +202,10 @@ Exempt paths (no key needed): `/api/health`, `/api/ready`, `/agent/health`, `/me
 
 When `TRAM_API_KEY` is empty (default), all requests pass through without authentication.
 
+> Rate limiting is **not** an auth mechanism: `TRAM_RATE_LIMIT` (default 50 per window)
+> applies to `/api/*` and `/webhooks/*` for every client IP regardless of the auth
+> posture above.
+
 ### Internal machine-to-machine surfaces (`/api/internal/*`, `/agent/*`)
 
 The manager's `/api/internal/*` endpoints (worker run-complete/stats callbacks) and the
@@ -222,8 +227,15 @@ then set `TRAM_INTERNAL_AUTH_MODE=warn` and watch the WARNING logs for clients t
 miss the key, then flip to `enforce`. The default is `warn`, so nothing 401s a working
 deployment at any point in this sequence.
 
-**Fail-closed guidance:** if `TRAM_API_KEY` is unset, authentication is entirely disabled —
-anyone with network reach can call `/api/*`, `/api/internal/*`, and `/agent/*`. Production
+**Without a machine key (`auth_users`-only deployments):** internal surfaces fall back to
+the browser Bearer-token check with the same mode knob — `enforce` closes `/api/internal/*`
+to callers without a valid session token even though `TRAM_API_KEY` is unset (v1.4.6, GH #44).
+`warn` still logs-and-serves so the rollout sequence above remains non-breaking. Setting
+`enforce` without a `TRAM_API_KEY` logs a loud startup warning.
+
+**Fail-closed guidance:** if `TRAM_API_KEY` is unset and `TRAM_AUTH_USERS` is also unset,
+authentication is entirely disabled (the daemon logs a loud startup warning) — anyone with
+network reach can call `/api/*`, `/api/internal/*`, and `/agent/*`. Production
 deployments must set a real secret (not the old committed `tram-internal-2026` default) via
 the `apiKey` Helm value or `envSecret.TRAM_API_KEY`, and set `TRAM_INTERNAL_AUTH_MODE=enforce`
 after the rollout window. Workers automatically receive the same key from the chart

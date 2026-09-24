@@ -140,6 +140,19 @@ class TestReadiness:
         assert r.json()["db"] == "ok"
         assert r.json()["db_engine"] == "sqlite"
 
+    def test_ready_does_not_expose_db_path(self):
+        """The absolute db_path is not disclosed via /api/ready (GH #44)."""
+        db = MagicMock()
+        db.health_check.return_value = True
+        db._engine.dialect.name = "sqlite"
+        db._engine.url = MagicMock()
+        db._engine.url.__str__ = lambda _: "sqlite:////data/tram.db"
+        app = _make_health_app(db=db)
+        client = TestClient(app)
+        r = client.get("/api/ready")
+        assert r.status_code == 200
+        assert "db_path" not in r.json()
+
     def test_uptime_shown_when_started_at_set(self):
         started_at = datetime(2026, 4, 1, 0, 0, 0, tzinfo=UTC)
         app = _make_health_app(started_at=started_at)

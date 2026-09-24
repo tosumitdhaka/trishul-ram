@@ -39,6 +39,11 @@ class APIKeyMiddleware(BaseHTTPMiddleware):
     rollout flips this to ``enforce`` without code changes. An invalid
     ``TRAM_INTERNAL_AUTH_MODE`` value is logged at WARNING and falls back to
     ``warn``.
+
+    When no machine key is configured (``auth_users``-only deployments), the
+    internal surfaces fall back to the browser Bearer-token check and the same
+    mode knob applies — ``enforce`` closes ``/api/internal/*`` without a
+    ``TRAM_API_KEY`` instead of leaving it open (GH #44).
     """
 
     EXEMPT = {"/api/health", "/api/ready", "/agent/health", "/metrics", "/", "/api/auth/login",
@@ -64,6 +69,15 @@ class APIKeyMiddleware(BaseHTTPMiddleware):
     def _is_internal(self, path: str) -> bool:
         return any(path.startswith(p) for p in self._internal_prefixes)
 
+    def _log_internal_auth_failure(self, path: str, request: Request, *, bearer: bool = False) -> None:
+        credential = "bearer token" if bearer else "API key"
+        remote = request.client.host if request.client else "unknown"
+        logger.warning(
+            "Internal endpoint request with missing or invalid %s",
+            credential,
+            extra={"path": path, "remote": remote},
+        )
+
     async def dispatch(self, request: Request, call_next):
         settings = self._settings
 
@@ -76,12 +90,6 @@ class APIKeyMiddleware(BaseHTTPMiddleware):
             return await call_next(request)
 
         is_internal = self._is_internal(path)
-
-        # Internal machine-to-machine surfaces need a shared machine key; without
-        # one there is nothing to validate, so they pass through untouched
-        # (enforcement requires TRAM_API_KEY on the server).
-        if is_internal and not settings.api_key:
-            return await call_next(request)
 
         # Machine-to-machine: X-API-Key header. The legacy ?api_key= query param
         # was removed — keys in URLs end up in access/proxy logs and history.
@@ -100,11 +108,7 @@ class APIKeyMiddleware(BaseHTTPMiddleware):
                 if self._mode == "enforce":
                     return JSONResponse({"detail": "Unauthorized"}, status_code=401)
                 if self._mode == "warn":
-                    remote = request.client.host if request.client else "unknown"
-                    logger.warning(
-                        "Internal endpoint request with missing or invalid API key",
-                        extra={"path": path, "remote": remote},
-                    )
+                    self._log_internal_auth_failure(path, request)
                 return await call_next(request)
 
         # Browser session: Bearer token
@@ -113,38 +117,58 @@ class APIKeyMiddleware(BaseHTTPMiddleware):
             token = extract_bearer(request)
             if token and verify_token(token):
                 return await call_next(request)
+            if is_internal:
+                # No machine key configured (auth_users-only deployment):
+                # internal surfaces fall back to the bearer check and still
+                # honor the auth-mode knob for rollout semantics — enforce
+                # closes /api/internal/* without a TRAM_API_KEY (GH #44).
+                if self._mode == "enforce":
+                    return JSONResponse({"detail": "Unauthorized"}, status_code=401)
+                if self._mode == "warn":
+                    self._log_internal_auth_failure(path, request, bearer=True)
+                return await call_next(request)
 
         return JSONResponse({"detail": "Unauthorized"}, status_code=401)
 
 
 class RateLimitMiddleware(BaseHTTPMiddleware):
-    """Sliding-window rate limiter for /api/* endpoints.
+    """Sliding-window rate limiter for /api/* and /webhooks/ endpoints.
 
     Uses a per-IP deque of request timestamps.  Entries older than
     ``window_seconds`` are discarded before each check.
 
-    Only applies to /api/* paths (not /metrics or /webhooks/).
-
     Thread safety: each IP slot is guarded by its own ``asyncio.Lock`` so
     concurrent coroutines for the same client cannot both pass the limit check
     before either records the timestamp (TOCTOU race).
+
+    Memory bound: once the tracked set exceeds 500 IPs, slots idle for longer
+    than twice the window (min 60 s) are evicted.  Eviction only touches slots
+    with no in-flight request (``_inflight``), so a coroutine awaiting the
+    per-IP lock can never be bypassed by a fresh lock/window — the previous
+    wholesale dict rebuild outside any lock could strand such a coroutine and
+    undercount the window (GH #45).
     """
 
     def __init__(self, app, rate_limit: int = 0, window_seconds: int = 60) -> None:
         super().__init__(app)
         self._rate_limit = rate_limit
         self._window = window_seconds
+        self._evict_after = max(window_seconds * 2, 60)
         # {client_ip: deque[float]}  — timestamps of recent requests
         self._windows: dict[str, deque] = {}
         # {client_ip: asyncio.Lock}  — one lock per IP to prevent TOCTOU races
         self._locks: dict[str, asyncio.Lock] = {}
+        # {client_ip: float}  — monotonic time of the slot's last request
+        self._last_seen: dict[str, float] = {}
+        # {client_ip: int}  — in-flight dispatches (entered, slot not yet exited)
+        self._inflight: dict[str, int] = {}
 
     async def dispatch(self, request: Request, call_next):
         if self._rate_limit <= 0:
             return await call_next(request)
 
         path = request.url.path
-        if not path.startswith("/api/"):
+        if not path.startswith(("/api/", "/webhooks/")):
             return await call_next(request)
 
         client_ip = request.client.host if request.client else "unknown"
@@ -153,35 +177,61 @@ class RateLimitMiddleware(BaseHTTPMiddleware):
         # single-thread event loop, but we guard it anyway for clarity).
         if client_ip not in self._locks:
             self._locks[client_ip] = asyncio.Lock()
+        # Mark the slot in-flight before the (possibly awaiting) lock acquire so
+        # the eviction sweep can never drop a lock a coroutine is waiting on.
+        self._inflight[client_ip] = self._inflight.get(client_ip, 0) + 1
 
-        async with self._locks[client_ip]:
-            now = time.monotonic()
+        try:
+            async with self._locks[client_ip]:
+                now = time.monotonic()
 
-            if client_ip not in self._windows:
-                self._windows[client_ip] = deque()
+                if client_ip not in self._windows:
+                    self._windows[client_ip] = deque()
 
-            window = self._windows[client_ip]
+                window = self._windows[client_ip]
 
-            # Expire old entries
-            cutoff = now - self._window
-            while window and window[0] < cutoff:
-                window.popleft()
+                # Expire old entries
+                cutoff = now - self._window
+                while window and window[0] < cutoff:
+                    window.popleft()
 
-            if len(window) >= self._rate_limit:
-                return JSONResponse(
-                    {"detail": "Too Many Requests"},
-                    status_code=429,
-                    headers={"Retry-After": str(self._window)},
-                )
+                if len(window) >= self._rate_limit:
+                    return JSONResponse(
+                        {"detail": "Too Many Requests"},
+                        status_code=429,
+                        headers={"Retry-After": str(self._window)},
+                    )
 
-            window.append(now)
-
-        # Periodically evict idle client entries (empty deques whose last request
-        # fell outside the window) to prevent unbounded dict growth under
-        # high-cardinality client traffic.  Done outside the lock since it only
-        # replaces the dict reference and does not mutate individual deques.
-        if len(self._windows) > 500:
-            self._windows = {k: v for k, v in self._windows.items() if v}
-            self._locks = {k: v for k, v in self._locks.items() if k in self._windows}
+                window.append(now)
+                self._last_seen[client_ip] = now
+        finally:
+            remaining = self._inflight.get(client_ip, 0) - 1
+            if remaining > 0:
+                self._inflight[client_ip] = remaining
+            else:
+                self._inflight.pop(client_ip, None)
+            self._evict_if_large()
 
         return await call_next(request)
+
+    def _evict_if_large(self) -> None:
+        """Drop long-idle per-IP slots once the tracked set grows large.
+
+        Runs synchronously (no awaits) inside one dispatch, and only touches
+        slots with no in-flight request — so no coroutine can be waiting on an
+        evicted lock.  A slot idle for ``_evict_after`` seconds has a fully
+        expired window, so its replacement starts from a clean slate without
+        losing any in-window counts.
+        """
+        if len(self._windows) <= 500:
+            return
+        cutoff = time.monotonic() - self._evict_after
+        stale = [
+            ip
+            for ip in list(self._locks)
+            if self._inflight.get(ip, 0) == 0 and self._last_seen.get(ip, 0) < cutoff
+        ]
+        for ip in stale:
+            self._locks.pop(ip, None)
+            self._windows.pop(ip, None)
+            self._last_seen.pop(ip, None)

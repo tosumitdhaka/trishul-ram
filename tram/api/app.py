@@ -244,11 +244,18 @@ def create_app(config: AppConfig | None = None) -> FastAPI:
     # Convenience alias — routers that still reference app.state.manager continue to work
     manager = controller.manager
 
+    # GH #44: /docs, /redoc and /openapi.json are gated behind TRAM_DOCS_ENABLED
+    # (default on for development; disable in production to avoid handing over
+    # the complete API map to unauthenticated callers).
+    docs_enabled = config.docs_enabled
     app = FastAPI(
         title="TRAM",
         description="Trishul Real-time Aggregation & Mediation",
         version=__version__,
         lifespan=lifespan,
+        docs_url="/docs" if docs_enabled else None,
+        redoc_url="/redoc" if docs_enabled else None,
+        openapi_url="/openapi.json" if docs_enabled else None,
     )
 
     # Store shared state
@@ -275,6 +282,21 @@ def create_app(config: AppConfig | None = None) -> FastAPI:
             window_seconds=config.rate_limit_window,
         )
     app.add_middleware(APIKeyMiddleware)
+
+    # GH #44: loud startup warnings about the effective auth posture.
+    if not config.api_key and not config.auth_users:
+        logger.warning(
+            "API authentication is fully disabled — neither TRAM_API_KEY nor "
+            "TRAM_AUTH_USERS is set; every /api/* endpoint is open to any "
+            "network caller. Set a key (helm .Values.apiKey or "
+            "envSecret.TRAM_API_KEY) for any shared/production deployment."
+        )
+    elif not config.api_key and os.environ.get("TRAM_INTERNAL_AUTH_MODE", "warn").lower() == "enforce":
+        logger.warning(
+            "TRAM_INTERNAL_AUTH_MODE=enforce is set but TRAM_API_KEY is not — "
+            "internal surfaces fall back to browser bearer-token auth; set "
+            "TRAM_API_KEY for full machine-key enforcement of /api/internal/*."
+        )
 
     # Register routers
     app.include_router(health.router)

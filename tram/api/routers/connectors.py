@@ -7,7 +7,9 @@ import time
 from concurrent.futures import ThreadPoolExecutor
 from concurrent.futures import TimeoutError as FuturesTimeout
 
-from fastapi import APIRouter, Request
+from fastapi import APIRouter, HTTPException, Request
+
+from tram.api.routers._net_checks import forbidden_target_reason
 
 router = APIRouter()
 
@@ -18,11 +20,15 @@ _TIMEOUT_S = 10
 async def test_connector(request: Request) -> dict:
     """Test connectivity for a single connector type + config.
 
-    Always returns HTTP 200. ``ok`` field indicates pass/fail.
+    Returns HTTP 200 with an ``ok`` field indicating pass/fail.
+    Targets that resolve to the daemon's own network position (loopback,
+    private, or link-local ranges) are rejected with 400 — the endpoint must
+    not act as a local-network port oracle (GH #44).
     """
     body = await request.json()
     conn_type = body.get("type", "")
     config = body.get("config", {})
+    _reject_forbidden_target(conn_type, config)
     return _do_test(conn_type, config)
 
 
@@ -72,6 +78,20 @@ async def test_pipeline_connectors(request: Request) -> dict:
 # ── Internal helpers ──────────────────────────────────────────────────────────
 
 
+def _reject_forbidden_target(conn_type: str, config: dict) -> None:
+    """Raise 400 when the connector config points at a forbidden target.
+
+    Runs before the plugin test or TCP probe so neither can be used as a
+    local-network port oracle (GH #44).
+    """
+    host = _extract_host(conn_type, config)
+    if not host:
+        return
+    reason = forbidden_target_reason(host)
+    if reason:
+        raise HTTPException(status_code=400, detail=f"Target host rejected: {reason}")
+
+
 def _safe_get(future) -> dict:
     try:
         return future.result(timeout=_TIMEOUT_S + 1)
@@ -88,6 +108,14 @@ def _do_test(conn_type: str, config: dict) -> dict:
         import tram.connectors  # noqa: F401
     except Exception:
         pass
+
+    # The plugin test and the TCP probe below both connect out; refuse targets
+    # that resolve to the daemon's own network position (GH #44).
+    host = _extract_host(conn_type, config)
+    if host:
+        reason = forbidden_target_reason(host)
+        if reason:
+            return {"ok": False, "latency_ms": None, "error": f"Target host rejected: {reason}"}
 
     from tram.registry.registry import _sinks, _sources
 
@@ -108,7 +136,6 @@ def _do_test(conn_type: str, config: dict) -> dict:
                 return {"ok": False, "latency_ms": None, "error": str(exc)}
 
     # Generic TCP probe
-    host = _extract_host(conn_type, config)
     port = _extract_port(conn_type, config)
     if host and port:
         return _tcp_probe(host, port)

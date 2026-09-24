@@ -8,7 +8,9 @@ from unittest.mock import patch
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
+from tram.api.app import create_app
 from tram.api.middleware import APIKeyMiddleware, RateLimitMiddleware
+from tram.core.config import AppConfig
 
 # ── Helpers ────────────────────────────────────────────────────────────────
 
@@ -239,11 +241,37 @@ class TestAPIKeyMiddleware:
         r = client.get("/api/internal/test", headers={"X-API-Key": "secret"})
         assert r.status_code == 200
 
-    def test_internal_passes_when_no_api_key_configured(self, monkeypatch):
-        """Without a machine key configured, internal surfaces stay open."""
+    # ── auth_users-only deployments (no machine key) ────────────────────────
+
+    def test_internal_requires_bearer_when_auth_users_only_enforce(self, monkeypatch):
+        """auth_users-only + enforce: /api/internal/* requires a Bearer token —
+        previously the no-api-key early return left it completely open (GH #44)."""
         client = _client_with_auth(monkeypatch, api_key="", auth_users="admin:pass", mode="enforce")
         r = client.get("/api/internal/test")
+        assert r.status_code == 401
+
+    def test_internal_bearer_passes_when_auth_users_only_enforce(self, monkeypatch):
+        client = _client_with_auth(monkeypatch, api_key="", auth_users="admin:pass", mode="enforce")
+        with patch("tram.api.auth.extract_bearer", return_value="tok"), \
+             patch("tram.api.auth.verify_token", return_value=True):
+            r = client.get("/api/internal/test", headers={"Authorization": "Bearer tok"})
         assert r.status_code == 200
+
+    def test_internal_warn_mode_serves_missing_bearer_and_logs(self, monkeypatch, caplog):
+        """Warn mode keeps the rollout semantics for bearer fallback too:
+        missing token on /api/internal/* is served and logged."""
+        caplog.set_level(logging.WARNING, logger="tram.api.middleware")
+        client = _client_with_auth(monkeypatch, api_key="", auth_users="admin:pass", mode="warn")
+        r = client.get("/api/internal/test")
+        assert r.status_code == 200
+        assert any("missing or invalid bearer token" in rec.getMessage() for rec in caplog.records)
+
+    def test_public_surface_still_requires_bearer_when_auth_users_only(self, monkeypatch):
+        """Non-internal /api/* still 401s without a valid token in auth_users-only mode."""
+        client = _client_with_auth(monkeypatch, api_key="", auth_users="admin:pass", mode="enforce")
+        with patch("tram.api.auth.extract_bearer", return_value=None):
+            r = client.get("/api/data")
+        assert r.status_code == 401
 
     def test_probe_always_exempt_in_enforce_mode(self, monkeypatch):
         """Probe endpoints are exempt regardless of auth mode."""
@@ -339,3 +367,54 @@ class TestRateLimitMiddleware:
         r = client.get("/api/data")
         assert r.status_code == 429
         assert "Too Many Requests" in r.json()["detail"]
+
+
+# ── App factory (create_app) — docs gating + auth-posture warnings ──────────
+
+
+class TestAppFactory:
+    """GH #44: /docs|/redoc|/openapi.json gated by TRAM_DOCS_ENABLED, and loud
+    startup warnings when authentication is disabled or misconfigured."""
+
+    def _config(self, monkeypatch) -> AppConfig:
+        # In-memory sqlite so create_app's DB init never touches $HOME.
+        monkeypatch.setenv("TRAM_DB_URL", "sqlite://")
+        monkeypatch.setenv("TRAM_RELOAD_ON_START", "false")
+        return AppConfig.from_env()
+
+    def test_docs_enabled_by_default(self, monkeypatch):
+        monkeypatch.delenv("TRAM_DOCS_ENABLED", raising=False)
+        app = create_app(self._config(monkeypatch))
+        assert app.docs_url == "/docs"
+        assert app.redoc_url == "/redoc"
+        assert app.openapi_url == "/openapi.json"
+
+    def test_docs_disabled_removes_schema_endpoints(self, monkeypatch):
+        monkeypatch.setenv("TRAM_DOCS_ENABLED", "false")
+        app = create_app(self._config(monkeypatch))
+        assert app.docs_url is None
+        assert app.redoc_url is None
+        assert app.openapi_url is None
+        client = TestClient(app)
+        assert client.get("/docs").status_code == 404
+        assert client.get("/redoc").status_code == 404
+        assert client.get("/openapi.json").status_code == 404
+
+    def test_create_app_warns_when_auth_fully_disabled(self, monkeypatch, caplog):
+        monkeypatch.delenv("TRAM_API_KEY", raising=False)
+        monkeypatch.delenv("TRAM_AUTH_USERS", raising=False)
+        caplog.set_level(logging.WARNING, logger="tram.api.app")
+        create_app(self._config(monkeypatch))
+        assert any(
+            "authentication is fully disabled" in rec.getMessage() for rec in caplog.records
+        )
+
+    def test_create_app_warns_enforce_without_api_key(self, monkeypatch, caplog):
+        monkeypatch.delenv("TRAM_API_KEY", raising=False)
+        monkeypatch.setenv("TRAM_AUTH_USERS", "admin:pass")
+        monkeypatch.setenv("TRAM_INTERNAL_AUTH_MODE", "enforce")
+        caplog.set_level(logging.WARNING, logger="tram.api.app")
+        create_app(self._config(monkeypatch))
+        assert any(
+            "TRAM_INTERNAL_AUTH_MODE=enforce" in rec.getMessage() for rec in caplog.records
+        )

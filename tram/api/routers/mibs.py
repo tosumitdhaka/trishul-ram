@@ -10,6 +10,7 @@ import tempfile
 from fastapi import APIRouter, File, HTTPException, Query, UploadFile
 from pydantic import BaseModel
 
+from tram.api.routers._errors import internal_error_detail
 from tram.core.mib_compiler import (
     SUPPORTED_MIB_SOURCE_FILE_HINT,
     MibCompileFailure,
@@ -252,8 +253,12 @@ async def upload_mib(
         except MibSupportUnavailable as exc:
             raise HTTPException(status_code=501, detail=str(exc))
         except MibCompileFailure as exc:
-            logger.error("MIB compilation failed for %s: %s", mib_name, exc)
-            raise HTTPException(status_code=500, detail=f"Compilation failed: {exc}")
+            raise HTTPException(
+                status_code=500,
+                detail=internal_error_detail(
+                    logger, exc, message=f"MIB compilation failed for {mib_name}"
+                ),
+            )
 
     compiled_after = available_compiled_mibs(mib_dir)
     available_after = compiled_after | available_source_mibs(source_dir)
@@ -328,8 +333,12 @@ def download_mibs(body: MibDownloadRequest) -> dict:
     except MibSupportUnavailable as exc:
         raise HTTPException(status_code=501, detail=str(exc))
     except MibCompileFailure as exc:
-        logger.error("MIB download/compilation failed: %s", exc)
-        raise HTTPException(status_code=500, detail=f"Download/compilation failed: {exc}")
+        raise HTTPException(
+            status_code=500,
+            detail=internal_error_detail(
+                logger, exc, message="MIB download/compilation failed"
+            ),
+        )
 
     logger.info("MIBs downloaded", extra={"requested": body.names, "compiled": compile_result.compiled})
     return {

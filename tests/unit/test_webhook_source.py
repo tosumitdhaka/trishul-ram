@@ -1,8 +1,13 @@
 """Tests for WebhookSource (v0.5.0)."""
 from __future__ import annotations
 
+import queue
 import threading
 import time
+
+import pytest
+from fastapi import FastAPI
+from fastapi.testclient import TestClient
 
 from tram.connectors.webhook import _WEBHOOK_SECRETS
 from tram.connectors.webhook.source import _REGISTRY_LOCK, _WEBHOOK_REGISTRY, WebhookSource
@@ -108,3 +113,76 @@ def test_webhook_source_config_defaults():
     assert source.path == "my/path"  # leading slash stripped
     assert source.secret is None
     assert source.max_queue_size == 1000
+
+
+# ── Bounded queue (GH #45) ────────────────────────────────────────────────────
+
+
+def test_webhook_source_queue_is_bounded():
+    """read() registers a queue.Queue(maxsize=max_queue_size), so the config
+    knob actually bounds memory — put_nowait raises Full once it fills."""
+    source = WebhookSource({"type": "webhook", "path": "bounded-test", "max_queue_size": 3})
+    seen: dict = {}
+
+    def consume():
+        gen = source.read()
+        try:
+            body, _meta = next(gen)  # registers, then blocks until a message arrives
+            seen["body"] = body
+        except StopIteration:
+            pass
+        gen.close()
+
+    t = threading.Thread(target=consume, daemon=True)
+    t.start()
+
+    q = None
+    for _ in range(200):
+        with _REGISTRY_LOCK:
+            q = _WEBHOOK_REGISTRY.get("bounded-test")
+        if q is not None:
+            break
+        time.sleep(0.005)
+    assert q is not None, "webhook source did not register its queue"
+    seen["q"] = q
+
+    # Unblock the consumer with a sentinel.
+    q.put((b"sentinel", {}))
+    t.join(timeout=2.0)
+    assert seen.get("body") == b"sentinel"
+
+    # The bounded knob is honored: maxsize set, and put_nowait raises Full
+    # once the queue is full (memory bound, GH #45).
+    assert q.maxsize == 3
+    q.put_nowait((b"1", {}))
+    q.put_nowait((b"2", {}))
+    q.put_nowait((b"3", {}))
+    with pytest.raises(queue.Full):
+        q.put_nowait((b"4", {}))
+    assert q.qsize() == 3
+
+
+def test_webhook_router_returns_503_when_queue_full():
+    """The router's put_nowait → queue.Full → 503 path is live once the source
+    queue is bounded (was dead with the unbounded SimpleQueue)."""
+    from tram.api.routers.webhooks import router
+
+    q = queue.Queue(maxsize=1)
+    with _REGISTRY_LOCK:
+        _WEBHOOK_REGISTRY["full-test"] = q
+    try:
+        app = FastAPI()
+        app.include_router(router)
+        client = TestClient(app)
+
+        r1 = client.post("/webhooks/full-test", content=b"first")
+        assert r1.status_code == 202
+
+        r2 = client.post("/webhooks/full-test", content=b"second")
+        assert r2.status_code == 503
+        assert "queue full" in r2.json()["detail"].lower()
+        # The rejected payload never entered the queue.
+        assert q.qsize() == 1
+    finally:
+        with _REGISTRY_LOCK:
+            _WEBHOOK_REGISTRY.pop("full-test", None)

@@ -191,11 +191,13 @@ env:
   # --- Security (v1.0.0) ---
   # Note: API key is preferably set via .Values.apiKey (injected as TRAM_API_KEY automatically)
   # or via envSecret to avoid storing secrets in values.yaml.
-  # TRAM_RATE_LIMIT: "0"          # requests/minute per client IP; 0 = disabled
+  # TRAM_RATE_LIMIT: "50"         # requests per window per client IP for /api/* + /webhooks/*; 0 = disabled
   # TRAM_INTERNAL_AUTH_MODE: "warn"  # off|warn|enforce — how /api/internal/* (manager)
   #                               # and /agent/* (worker) treat missing/invalid keys.
   #                               # warn (default) logs and serves; enforce rejects with 401.
   # TRAM_WEBHOOK_MAX_BODY_BYTES: "10485760"  # max webhook body size; oversized → 413
+  # TRAM_DOCS_ENABLED: "true"     # serve /docs, /redoc, /openapi.json; set "false" in
+  #                               # production so the API map is not exposed (GH #44)
   # --- Browser auth (v1.0.8) ---
   # TRAM_AUTH_SECRET: ""          # Shared HMAC signing secret for session tokens.
   #                               # REQUIRED in cluster mode — without it each pod

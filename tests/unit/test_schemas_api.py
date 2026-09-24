@@ -2,9 +2,11 @@
 
 from __future__ import annotations
 
+import base64
 import io
 import os
 from pathlib import Path
+from unittest.mock import patch
 
 import pytest
 from fastapi import FastAPI
@@ -256,3 +258,95 @@ class TestDeleteSchema:
         with pytest.raises(_HTTPException) as exc_info:
             _safe_join("/schemas", "../../etc/passwd")
         assert exc_info.value.status_code == 400
+
+
+# ── Schema Registry proxy (GH #44) ─────────────────────────────────────────────
+
+
+class TestRegistryProxyCredentials:
+    def test_strips_caller_credentials_and_injects_basic_auth(self, monkeypatch):
+        """x-api-key / authorization / cookie are never forwarded; the configured
+        registry credentials are injected as Basic auth instead."""
+        monkeypatch.setenv("TRAM_SCHEMA_REGISTRY_URL", "http://registry:8081")
+        monkeypatch.setenv("TRAM_SCHEMA_REGISTRY_USERNAME", "alice")
+        monkeypatch.setenv("TRAM_SCHEMA_REGISTRY_PASSWORD", "s3cret")
+
+        captured: dict = {}
+
+        class FakeResp:
+            status_code = 200
+            headers = {"content-type": "application/vnd.schemaregistry.v1+json"}
+            content = b"{}"
+
+        class FakeAsyncClient:
+            def __init__(self, *args, **kwargs):
+                pass
+
+            async def __aenter__(self):
+                return self
+
+            async def __aexit__(self, *args):
+                return False
+
+            async def request(self, method, url, headers, content):
+                captured["headers"] = headers
+                captured["url"] = url
+                return FakeResp()
+
+        with patch("httpx.AsyncClient", FakeAsyncClient):
+            app = FastAPI()
+            app.include_router(router)
+            client = TestClient(app)
+            resp = client.post(
+                "/api/schemas/registry/subjects",
+                headers={
+                    "X-API-Key": "caller-key",
+                    "Authorization": "Bearer caller-token",
+                    "Cookie": "session=abc",
+                },
+                json={"schema": "{}"},
+            )
+
+        assert resp.status_code == 200
+        fwd = {k.lower(): v for k, v in captured["headers"].items()}
+        assert "x-api-key" not in fwd
+        assert "cookie" not in fwd
+        expected_basic = "Basic " + base64.b64encode(b"alice:s3cret").decode()
+        assert fwd.get("authorization") == expected_basic
+        assert captured["url"] == "http://registry:8081/subjects"
+
+    def test_no_basic_auth_injected_when_username_unset(self, monkeypatch):
+        monkeypatch.setenv("TRAM_SCHEMA_REGISTRY_URL", "http://registry:8081")
+        monkeypatch.delenv("TRAM_SCHEMA_REGISTRY_USERNAME", raising=False)
+        monkeypatch.delenv("TRAM_SCHEMA_REGISTRY_PASSWORD", raising=False)
+
+        captured: dict = {}
+
+        class FakeResp:
+            status_code = 200
+            headers = {}
+            content = b"{}"
+
+        class FakeAsyncClient:
+            def __init__(self, *args, **kwargs):
+                pass
+
+            async def __aenter__(self):
+                return self
+
+            async def __aexit__(self, *args):
+                return False
+
+            async def request(self, method, url, headers, content):
+                captured["headers"] = headers
+                return FakeResp()
+
+        with patch("httpx.AsyncClient", FakeAsyncClient):
+            app = FastAPI()
+            app.include_router(router)
+            client = TestClient(app)
+            resp = client.get("/api/schemas/registry/subjects")
+
+        assert resp.status_code == 200
+        fwd = {k.lower(): v for k, v in captured["headers"].items()}
+        assert "authorization" not in fwd
