@@ -19,6 +19,7 @@ import threading
 from contextlib import asynccontextmanager
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
+from typing import TYPE_CHECKING
 
 import httpx
 from fastapi import FastAPI, HTTPException
@@ -26,12 +27,38 @@ from pydantic import BaseModel
 
 from tram.agent.metrics import PipelineStats
 
+if TYPE_CHECKING:
+    from tram.models.pipeline import PipelineConfig
+
 logger = logging.getLogger(__name__)
 
 # Consecutive stats-POST failures per worker_id, surfaced in the WARNING log
 # so an operator can tell a one-off blip from a persistent manager outage.
 _STATS_MISS_LOCK = threading.Lock()
 _CONSECUTIVE_STATS_MISSES: dict[str, int] = {}
+
+# GH #39 (code-review A1): the worker agent is a stateless executor with no
+# per-worker DB, so a ProcessedFileTracker cannot be constructed here — file
+# sources with ``skip_processed: true`` would silently reprocess every file on
+# every run. Fail loud instead: log at executor construction and record the
+# degradation on the run so the manager's run_history row carries it via the
+# run-complete payload errors, rather than silently disabling the feature.
+_SKIP_PROCESSED_DISABLED_NOTE = (
+    "skip_processed: true requested but worker mode has no processed-file "
+    "tracker (stateless worker, no per-worker DB) — already-seen files will "
+    "be reprocessed on every run; duplicate records possible"
+)
+
+
+def _source_requests_skip_processed(config: PipelineConfig) -> bool:
+    """True when the pipeline's source requests skip_processed semantics.
+
+    Only the file/object-storage sources (sftp, local, ftp, s3, gcs,
+    azure_blob) and the CORBA dedupe source define a ``skip_processed``
+    attribute; the getattr default keeps every other source type (kafka,
+    syslog, http, ...) out of the check.
+    """
+    return bool(getattr(config.source, "skip_processed", False))
 
 
 # ── Request / response models ──────────────────────────────────────────────
@@ -69,6 +96,9 @@ class ActiveRun:
     stats: PipelineStats | None = None
     stop_event: threading.Event = field(default_factory=threading.Event)
     thread: threading.Thread | None = field(default=None, compare=False)
+    # GH #39: degradation notes (e.g. skip_processed unhonored) merged into the
+    # run-complete payload errors so the manager's run_history row records them.
+    degradation_notes: list[str] = field(default_factory=list)
 
     def __post_init__(self) -> None:
         if self.started_at_dt is None:
@@ -410,6 +440,26 @@ def create_worker_app(worker_id: str = "", manager_url: str = "", stats_interval
         )
         executor = PipelineExecutor(state_store=state_store)
 
+        # GH #39 (A1): the worker is stateless — no per-worker DB exists, so
+        # the executor is built without a processed-file tracker. A pipeline
+        # whose source requests skip_processed would silently reprocess every
+        # file on every run; fail loud instead and record the degradation on
+        # the run so the manager's run_history row carries it.
+        if (
+            _source_requests_skip_processed(config)
+            and getattr(executor, "_file_tracker", None) is None
+        ):
+            logger.error(
+                "skip_processed cannot be honored in worker mode — no "
+                "processed-file tracker (stateless worker, no per-worker DB)",
+                extra={
+                    "pipeline": req.pipeline_name,
+                    "run_id": req.run_id,
+                    "source": config.source.type,
+                },
+            )
+            active_run.degradation_notes.append(_SKIP_PROCESSED_DISABLED_NOTE)
+
         data_dir = os.environ.get("TRAM_DATA_DIR", "/data")
         api_key  = os.environ.get("TRAM_API_KEY", "")
 
@@ -432,7 +482,8 @@ def create_worker_app(worker_id: str = "", manager_url: str = "", stats_interval
                         int(stats_snapshot["bytes_out"]),
                         None,
                         int(stats_snapshot["records_skipped"]),
-                        list(stats_snapshot["errors_last_window"]),
+                        list(stats_snapshot["errors_last_window"])
+                        + active_run.degradation_notes,
                         started_at=active_run.started_at,
                         finished_at=datetime.now(UTC).isoformat(),
                         api_key=state.api_key,
@@ -497,7 +548,7 @@ def create_worker_app(worker_id: str = "", manager_url: str = "", stats_interval
                         result.bytes_out,
                         result.error,
                         result.records_skipped,
-                        result.errors,
+                        list(result.errors or []) + active_run.degradation_notes,
                         result.started_at.isoformat(),
                         result.finished_at.isoformat(),
                         api_key=state.api_key,
