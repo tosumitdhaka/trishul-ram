@@ -10,7 +10,6 @@ const CATEGORY_META = {
 }
 const _openState = {}
 let _pluginDetails = null
-let _fieldMeta = null      // {sources: {type: {fields: [...]}}} from /api/config/schema — best-effort
 const _sampleCache = new Map()
 
 function _normalizeDetails(plugins) {
@@ -36,16 +35,9 @@ function _normalizeDetails(plugins) {
 
 const controller = createPageController({
   page: 'plugins',
-  fetch: async () => {
-    const plugins = await api.plugins()
-    // Field metadata is best-effort: the list view works without it.
-    let schema = null
-    try { schema = await api.configSchema.get() } catch { schema = null }
-    return { plugins, schema }
-  },
-  render: ({ plugins, schema }) => {
+  fetch: () => api.plugins(),
+  render: (plugins) => {
     _pluginDetails = _normalizeDetails(plugins)
-    _fieldMeta = schema
     _render()
   },
   onError: (e) => {
@@ -159,17 +151,8 @@ function _renderSectionRows(items, key) {
     </div>`
 }
 
-// Merge /api/config/schema metadata (choices, secret, multiline) into the
-// plugin's field descriptors so rows can show enum values and mask secrets.
-function _enrichedFields(key, item) {
-  const fields = item.fields || []
-  const metaFields = _fieldMeta?.[key]?.[item.name]?.fields
-  if (!Array.isArray(metaFields)) return fields
-  const byName = new Map(metaFields.map(f => [f.name, f]))
-  return fields.map(f => ({ ...f, ...byName.get(f.name) }))
-}
-
-// A copy-pasteable YAML fragment built from the plugin's schema fields.
+// Field metadata (choices, secret, multiline) ships inline with /api/plugins
+// now — no second /api/config/schema fetch is needed for the field tables.
 function _yamlFragment(key, item, fields) {
   const indent = (key === 'sinks' || key === 'transforms') ? '    ' : '  '
   const lines = []
@@ -257,7 +240,7 @@ function _chipLine(label, values) {
 }
 
 function _renderFieldDetails(key, item) {
-  const fields = _enrichedFields(key, item)
+  const fields = item.fields || []
   if (!fields.length) {
     return '<div class="text-secondary">No schema-backed fields available.</div>'
   }
@@ -306,7 +289,7 @@ function _renderDefault(field) {
 
 function _renderSample(key, item) {
   const stateKey = `${key}:${item.name}`
-  const sample = _yamlFragment(key, item, _enrichedFields(key, item))
+  const sample = _yamlFragment(key, item, item.fields || [])
   _sampleCache.set(stateKey, sample)
   return `
     <div class="plugins-sample">

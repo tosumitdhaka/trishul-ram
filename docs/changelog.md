@@ -25,6 +25,10 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Added
 - **[worker mode] `skip_processed` idempotency via a manager-routed tracker** (follow-up to #39): new internal endpoints `POST /api/internal/processed-files/check` and `/mark` (batch-friendly, namespaced by pipeline + source key + filepath, X-API-Key-authenticated) back a worker-side `HttpFileTracker` passed to the worker executor — a file processed once is not reprocessed across runs or worker failover. If the manager is unreachable the run fails loud (ERROR + run-history degradation note, once per run) and reprocesses; the v1.4.6 fail-loud path is now the fallback only (#54)
+- **AI generate is template-grounded (A6):** when bundled templates match the requested source/sink types, up to 3 curated examples (name + YAML, size-bounded) are appended to the generation prompt; ungrounded generation is unchanged when nothing matches (#41)
+- **AI fix retries once on invalid output (A7):** validation failures feed back into a single retry; the response carries `retried`/`attempts`, and the retry attempt is audited (`retried=True` on the second `tram.ai` log line) (#41)
+- **AI run-failure triage (B1):** `POST /api/ai/suggest` `mode: "triage"` with `run_id` — the server assembles the run's failure context (counters, top-level error, grouped skip reasons, redacted pipeline YAML, fails closed by omitting unredactable YAML) and returns `{explanation, run_id, pipeline, status}`; audited with `mode="triage"`. The run-detail page (`#runs/:id`) gains an "Explain this run" button, gated on AI being configured like the editor/wizard (#41)
+- **Server-side plugin field metadata (A.4):** `/api/plugins` field descriptors now carry `kind`/`choices`/`secret`/`multiline` from the config schema; the plugins page's client-side dual-fetch + `_enrichedFields` merge is deleted (#42 data-layer foundation)
 
 ## [1.4.6] - 2026-09-24
 

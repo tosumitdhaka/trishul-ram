@@ -39,6 +39,56 @@ def test_plugins_endpoint_returns_legacy_lists_and_details():
     assert any(field["name"] == "ensure_ascii" for field in json_serializer["fields"])
 
 
+def test_plugins_endpoint_fields_carry_schema_metadata():
+    """A.4: /api/plugins field descriptors fold the full schema metadata
+    (kind/choices/secret/multiline) so the UI's field tables and sample YAML
+    no longer need a second /api/config/schema fetch to enrich them. Each
+    field must carry the exact metadata SCHEMA_FIELDS computed."""
+    import tram.connectors  # noqa: F401
+    import tram.serializers  # noqa: F401
+    import tram.transforms  # noqa: F401
+
+    app = FastAPI()
+    app.include_router(router)
+    client = TestClient(app)
+
+    data = client.get("/api/plugins").json()
+    for category, payload_key in (
+        ("source", "sources"),
+        ("sink", "sinks"),
+        ("serializer", "serializers"),
+        ("transform", "transforms"),
+    ):
+        for item in data["details"][payload_key]:
+            schema_fields = {
+                field["name"]: field
+                for field in cs.SCHEMA_FIELDS[category].get(item["name"], [])
+                if field["name"] not in {"condition", "serializer_out", "transforms"}
+            }
+            for field in item["fields"]:
+                schema_field = schema_fields[field["name"]]
+                assert field["kind"] == schema_field["kind"]
+                assert field["choices"] == schema_field["choices"]
+                assert field["secret"] == schema_field["secret"]
+                assert field["multiline"] == schema_field["multiline"]
+
+
+def test_plugins_endpoint_flags_sftp_password_secret():
+    """The secret/multiline/choices metadata must survive the payload fold for
+    representative fields (sftp password → secret)."""
+    import tram.connectors  # noqa: F401
+
+    app = FastAPI()
+    app.include_router(router)
+    client = TestClient(app)
+
+    data = client.get("/api/plugins").json()
+    sftp_source = next(item for item in data["details"]["sources"] if item["name"] == "sftp")
+    fields_by_name = {field["name"]: field for field in sftp_source["fields"]}
+    assert fields_by_name["password"]["secret"] is True
+    assert set(fields_by_name["password"].keys()) >= {"kind", "choices", "secret", "multiline"}
+
+
 # ── Issue #24 / Option A: schema_version + registry↔union cross-check ──────
 
 

@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import logging
 import sys
+from datetime import UTC, datetime
 from unittest.mock import MagicMock, call, patch
 
 import pytest
@@ -14,13 +15,16 @@ from tram.api.routers.ai import (
     _AiResult,
     _base_url_allowed,
     _base_url_problem,
+    _build_triage_context,
     _call_ai,
     _get_ai_cfg,
+    _group_skip_reasons,
     _redact_yaml,
     _strip_fences,
     _yaml_mode_result,
     router,
 )
+from tram.core.context import RunResult, RunStatus
 
 # ── App factory ────────────────────────────────────────────────────────────
 
@@ -1575,3 +1579,344 @@ class TestAiUsagePersistence:
         with patch("tram.api.routers.ai._call_ai", return_value=_AiResult("OK", None)):
             r = client.post("/api/ai/test")
         assert r.status_code == 200  # audit failure must not break the AI call
+
+
+# ── A6: template-grounded generation ─────────────────────────────────────────
+
+
+class TestTemplateGroundedGeneration:
+    """A6: generate-mode few-shot grounding from the bundled template library."""
+
+    def _template(self, name, source, sinks, yaml_text):
+        return {
+            "id": name,
+            "name": name,
+            "description": "",
+            "tags": [source] + sinks + ["interval"],
+            "source_type": source,
+            "sink_types": sinks,
+            "schedule_type": "interval",
+            "yaml": yaml_text,
+        }
+
+    def _capture_system(self, client, payload):
+        captured = {}
+
+        def fake_call_ai(system, user, max_tokens, cfg):
+            captured["system"] = system
+            return _AiResult(_VALID_PIPELINE_YAML, "end_turn")
+
+        with patch("tram.api.routers.ai._call_ai", side_effect=fake_call_ai):
+            r = client.post("/api/ai/suggest", json=payload)
+        return r, captured
+
+    def test_generate_embeds_best_matching_template(self, monkeypatch):
+        monkeypatch.setenv("TRAM_AI_API_KEY", "sk-test")
+        client = TestClient(_make_app())
+        templates = [
+            self._template("kafka-to-local", "kafka", ["local"], "name: kafka-to-local\n..."),
+            self._template("sftp-to-s3", "sftp", ["s3"], "name: sftp-to-s3\n..."),
+        ]
+
+        async def fake_templates(request):
+            return templates
+
+        with patch("tram.api.routers.ai._bundled_templates", side_effect=fake_templates):
+            r, captured = self._capture_system(client, {
+                "mode": "generate", "prompt": "read from kafka write to local",
+            })
+        assert r.status_code == 200
+        assert r.json()["valid"] is True
+        assert "WORKED TEMPLATE EXAMPLES" in captured["system"]
+        assert "### Template: kafka-to-local" in captured["system"]
+        assert "### Template: sftp-to-s3" not in captured["system"]  # no tag match
+
+    def test_generate_without_templates_is_ungrounded(self, monkeypatch):
+        monkeypatch.setenv("TRAM_AI_API_KEY", "sk-test")
+        # No app.state.config → _bundled_templates returns [] → no grounding,
+        # and the call still succeeds (best-effort).
+        client = TestClient(_make_app())
+        r, captured = self._capture_system(client, {"mode": "generate", "prompt": "kafka to local"})
+        assert r.status_code == 200
+        assert "WORKED TEMPLATE EXAMPLES" not in captured["system"]
+
+    def test_generate_grounding_is_bounded(self, monkeypatch):
+        monkeypatch.setenv("TRAM_AI_API_KEY", "sk-test")
+        client = TestClient(_make_app())
+        big = "name: big\n" + ("# pad\n" * 800)  # ~4 KB per template
+        templates = [self._template(f"t{i}", "kafka", ["local"], big) for i in range(6)]
+
+        async def fake_templates(request):
+            return templates
+
+        with patch("tram.api.routers.ai._bundled_templates", side_effect=fake_templates):
+            r, captured = self._capture_system(client, {"mode": "generate", "prompt": "kafka local"})
+        assert r.status_code == 200
+        assert "WORKED TEMPLATE EXAMPLES" in captured["system"]
+        # count capped at 3, per-template content truncated
+        assert captured["system"].count("### Template:") <= 3
+        assert "… (truncated)" in captured["system"]
+
+
+# ── A7: fix-mode validate-and-retry loop ─────────────────────────────────────
+
+
+class TestFixRetryLoop:
+    """A7: fix mode validates the model output and retries at most once."""
+
+    _INVALID = "name: broken\n"  # parses but fails load_pipeline_from_yaml
+
+    def _client(self, monkeypatch):
+        monkeypatch.setenv("TRAM_AI_API_KEY", "sk-test")
+        return TestClient(_make_app())
+
+    def _post(self, client):
+        return client.post("/api/ai/suggest", json={
+            "mode": "fix", "yaml": _VALID_PIPELINE_YAML, "error": "sink write failed",
+        })
+
+    def test_valid_first_attempt_does_not_retry(self, monkeypatch):
+        client = self._client(monkeypatch)
+        with patch("tram.api.routers.ai._call_ai",
+                   return_value=_AiResult(_VALID_PIPELINE_YAML, "end_turn")) as mock_call:
+            r = self._post(client)
+        assert r.status_code == 200
+        data = r.json()
+        assert data["valid"] is True
+        assert data["retried"] is False
+        assert data["attempts"] == 1
+        mock_call.assert_called_once()
+
+    def test_invalid_first_attempt_retries_once_and_recovers(self, monkeypatch):
+        client = self._client(monkeypatch)
+        calls = []
+
+        def fake_call_ai(system, user, max_tokens, cfg):
+            calls.append(user)
+            return _AiResult(_VALID_PIPELINE_YAML if len(calls) == 2 else self._INVALID, "end_turn")
+
+        with patch("tram.api.routers.ai._call_ai", side_effect=fake_call_ai):
+            r = self._post(client)
+        assert r.status_code == 200
+        data = r.json()
+        assert data["valid"] is True
+        assert data["retried"] is True
+        assert data["attempts"] == 2
+        assert len(calls) == 2
+        # the retry prompt feeds the validation error back into the model
+        assert "failed TRAM validation" in calls[1]
+        assert "validation errors" in calls[1]
+
+    def test_retry_still_invalid_surfaces_final_issues(self, monkeypatch):
+        client = self._client(monkeypatch)
+        with patch("tram.api.routers.ai._call_ai",
+                   return_value=_AiResult(self._INVALID, "end_turn")) as mock_call:
+            r = self._post(client)
+        assert r.status_code == 200
+        data = r.json()
+        assert data["valid"] is False
+        assert data["retried"] is True
+        assert data["attempts"] == 2
+        assert data["issues"]
+        assert mock_call.call_count == 2  # never loops more than once
+
+    def test_retry_attempt_is_audited_with_retried_flag(self, monkeypatch, caplog):
+        client = self._client(monkeypatch)
+        calls = []
+
+        def fake_call_ai(system, user, max_tokens, cfg):
+            calls.append(user)
+            return _AiResult(_VALID_PIPELINE_YAML if len(calls) == 2 else self._INVALID, "end_turn")
+
+        with caplog.at_level(logging.INFO, logger="tram.ai"):
+            with patch("tram.api.routers.ai._call_ai", side_effect=fake_call_ai):
+                r = self._post(client)
+        assert r.status_code == 200
+        records = [rec for rec in caplog.records if rec.name == "tram.ai"]
+        assert len(records) == 2
+        assert [rec.retried for rec in records] == [False, True]
+        assert all(rec.mode == "fix" for rec in records)
+        assert all(rec.ok is True for rec in records)
+
+
+# ── B1: run-failure triage mode ──────────────────────────────────────────────
+
+
+def _failed_run(**kw):
+    """A realistic failed RunResult for triage tests."""
+    defaults = dict(
+        run_id="run-abc",
+        pipeline_name="kafka-pipe",
+        status=RunStatus.FAILED,
+        started_at=datetime(2026, 9, 24, 1, 0, 0, tzinfo=UTC),
+        finished_at=datetime(2026, 9, 24, 1, 0, 45, tzinfo=UTC),
+        records_in=50000,
+        records_out=100,
+        records_skipped=49800,
+        bytes_in=512000,
+        bytes_out=4096,
+        error="Sink write failed: connection reset by peer",
+        dlq_count=120,
+        errors=[
+            "Invalid record: bad timestamp",
+            "Invalid record: bad timestamp",
+            "Invalid record: bad timestamp",
+            "Transform failed: division by zero",
+        ],
+    )
+    defaults.update(kw)
+    return RunResult(**defaults)
+
+
+class TestGroupSkipReasons:
+    def test_groups_and_counts_descending(self):
+        errors = ["a", "b", "a", "a", "b", "c"]
+        assert _group_skip_reasons(errors) == [("a", 3), ("b", 2), ("c", 1)]
+
+    def test_caps_groups_and_truncates_reasons(self):
+        errors = [f"reason-{i}-" + "x" * 500 for i in range(10)]
+        groups = _group_skip_reasons(errors, max_groups=3, max_reason_chars=10)
+        assert len(groups) == 3
+        assert all(len(reason) <= 10 for reason, _ in groups)
+
+    def test_non_string_errors_coerced(self):
+        assert _group_skip_reasons([1, 1, "a"]) == [("1", 2), ("a", 1)]
+
+
+class TestBuildTriageContext:
+    def test_includes_counters_error_and_redacted_yaml(self):
+        run = _failed_run().to_dict()
+        ctx = _build_triage_context(run, "name: kafka-pipe\n")
+        assert "Pipeline: kafka-pipe" in ctx
+        assert "Status: failed" in ctx
+        assert "Records skipped: 49800" in ctx
+        assert "DLQ count: 120" in ctx
+        assert "Sink write failed: connection reset by peer" in ctx
+        assert "3x Invalid record: bad timestamp" in ctx
+        assert "1x Transform failed: division by zero" in ctx
+        assert "Pipeline YAML (secrets redacted):\nname: kafka-pipe" in ctx
+
+    def test_omits_yaml_when_none(self):
+        run = _failed_run().to_dict()
+        ctx = _build_triage_context(run, None)
+        assert "Pipeline YAML" not in ctx
+        assert "Records skipped: 49800" in ctx
+
+
+class TestTriageMode:
+    """B1: mode='triage' explains a failed run from its run-history row."""
+
+    def _make_controller(self, run=None, pipeline_yaml=None, pipeline_registered=True):
+        controller = MagicMock()
+        controller.get_run.return_value = run
+        if pipeline_registered:
+            state = MagicMock()
+            state.yaml_text = pipeline_yaml
+            controller.get.return_value = state
+        else:
+            controller.get.return_value = None
+        return controller
+
+    def _client(self, monkeypatch, controller, db=None):
+        monkeypatch.setenv("TRAM_AI_API_KEY", "sk-test")
+        app = _make_app(db=db)
+        app.state.controller = controller
+        return TestClient(app)
+
+    def _capture(self, client, payload):
+        captured = {}
+
+        def fake_call_ai(system, user, max_tokens, cfg):
+            captured["system"] = system
+            captured["user"] = user
+            return _AiResult("The sink connection failed, so records were skipped.", None)
+
+        with patch("tram.api.routers.ai._call_ai", side_effect=fake_call_ai):
+            r = client.post("/api/ai/suggest", json=payload)
+        return r, captured
+
+    def test_missing_run_id_returns_400(self, monkeypatch):
+        client = self._client(monkeypatch, self._make_controller(run=None))
+        r = client.post("/api/ai/suggest", json={"mode": "triage"})
+        assert r.status_code == 400
+        assert "run_id" in r.json()["detail"]
+
+    def test_unknown_run_id_returns_404(self, monkeypatch):
+        client = self._client(monkeypatch, self._make_controller(run=None))
+        r = client.post("/api/ai/suggest", json={"mode": "triage", "run_id": "nope"})
+        assert r.status_code == 404
+        assert "nope" in r.json()["detail"]
+
+    def test_no_controller_returns_503(self, monkeypatch):
+        monkeypatch.setenv("TRAM_AI_API_KEY", "sk-test")
+        client = TestClient(_make_app())  # app.state.controller unset
+        r = client.post("/api/ai/suggest", json={"mode": "triage", "run_id": "run-abc"})
+        assert r.status_code == 503
+
+    def test_builds_context_and_redacts_yaml(self, monkeypatch):
+        controller = self._make_controller(
+            run=_failed_run(), pipeline_yaml=_SECRET_BEARING_YAML,
+        )
+        client = self._client(monkeypatch, controller)
+        r, captured = self._capture(client, {"mode": "triage", "run_id": "run-abc"})
+        assert r.status_code == 200
+        data = r.json()
+        assert data["explanation"]
+        assert data["run_id"] == "run-abc"
+        assert data["pipeline"] == "kafka-pipe"
+        assert data["status"] == "failed"
+        user = captured["user"]
+        assert "Records skipped: 49800" in user
+        assert "DLQ count: 120" in user
+        assert "Sink write failed: connection reset by peer" in user
+        assert "3x Invalid record: bad timestamp" in user
+        assert "1x Transform failed: division by zero" in user
+        # A4 redaction discipline: pipeline secrets never reach the provider
+        assert "supersecret123" not in user
+        assert "***redacted***" in user
+        assert "example.com" in user  # non-secret config intact
+
+    def test_unregistered_pipeline_omits_yaml_still_triages(self, monkeypatch):
+        controller = self._make_controller(
+            run=_failed_run(), pipeline_yaml=None, pipeline_registered=False,
+        )
+        client = self._client(monkeypatch, controller)
+        r, captured = self._capture(client, {"mode": "triage", "run_id": "run-abc"})
+        assert r.status_code == 200
+        assert "Pipeline YAML" not in captured["user"]
+        assert "Records skipped: 49800" in captured["user"]
+
+    def test_unredactable_yaml_omitted_fails_closed(self, monkeypatch):
+        controller = self._make_controller(
+            run=_failed_run(), pipeline_yaml="name: [unclosed\n  password: secret\n",
+        )
+        client = self._client(monkeypatch, controller)
+        r, captured = self._capture(client, {"mode": "triage", "run_id": "run-abc"})
+        assert r.status_code == 200
+        assert "Pipeline YAML" not in captured["user"]  # never sent unredacted
+        assert "password" not in captured["user"]
+
+    def test_audit_row_records_mode_triage(self, monkeypatch):
+        monkeypatch.setenv("TRAM_AI_AUDIT", "1")
+        db = _make_db()
+        controller = self._make_controller(
+            run=_failed_run(), pipeline_yaml=None, pipeline_registered=False,
+        )
+        client = self._client(monkeypatch, controller, db=db)
+        with patch("tram.api.routers.ai._call_ai", return_value=_AiResult("ctx", None)):
+            r = client.post("/api/ai/suggest", json={"mode": "triage", "run_id": "run-abc"})
+        assert r.status_code == 200
+        assert db.append_ai_usage.call_count == 1
+        kwargs = db.append_ai_usage.call_args.kwargs
+        assert kwargs["mode"] == "triage"
+        assert kwargs["ok"] is True
+        assert kwargs["schema_version"] == schema_version()
+
+    def test_provider_error_returns_502(self, monkeypatch):
+        controller = self._make_controller(
+            run=_failed_run(), pipeline_yaml=None, pipeline_registered=False,
+        )
+        client = self._client(monkeypatch, controller)
+        with patch("tram.api.routers.ai._call_ai", side_effect=RuntimeError("API down")):
+            r = client.post("/api/ai/suggest", json={"mode": "triage", "run_id": "run-abc"})
+        assert r.status_code == 502
