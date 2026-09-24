@@ -137,6 +137,10 @@ class RateLimitMiddleware(BaseHTTPMiddleware):
     Uses a per-IP deque of request timestamps.  Entries older than
     ``window_seconds`` are discarded before each check.
 
+    ``/api/internal/*`` is exempt: worker callbacks carry the machine key and
+    a 429 has no retry, so limiting that surface reintroduces the GH #47
+    failure class (C5).
+
     Thread safety: each IP slot is guarded by its own ``asyncio.Lock`` so
     concurrent coroutines for the same client cannot both pass the limit check
     before either records the timestamp (TOCTOU race).
@@ -168,6 +172,10 @@ class RateLimitMiddleware(BaseHTTPMiddleware):
             return await call_next(request)
 
         path = request.url.path
+        # /api/internal/* carries the machine key and has no retry on a 429 —
+        # exempt it so worker callbacks are never throttled (C5).
+        if path.startswith("/api/internal/"):
+            return await call_next(request)
         if not path.startswith(("/api/", "/webhooks/")):
             return await call_next(request)
 

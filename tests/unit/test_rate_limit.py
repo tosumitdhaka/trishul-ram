@@ -63,6 +63,19 @@ class TestRateLimitMiddleware:
         assert second.status_code == 429
 
     @pytest.mark.asyncio
+    async def test_internal_paths_not_rate_limited(self):
+        """/api/internal/* is exempt from rate limiting (C5): worker callbacks
+        carry the machine key and a 429 has no retry — throttling that surface
+        would reintroduce the GH #47 failure class."""
+        from fastapi import FastAPI
+        app = FastAPI()
+        mw = RateLimitMiddleware(app, rate_limit=1, window_seconds=60)
+        req = _make_request("/api/internal/run-complete")
+        for _ in range(3):
+            response = await mw.dispatch(req, _call_next)
+        assert response.status_code == 200
+
+    @pytest.mark.asyncio
     async def test_allows_requests_within_limit(self):
         """Requests within limit should pass through."""
         from fastapi import FastAPI

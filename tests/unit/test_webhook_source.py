@@ -115,6 +115,30 @@ def test_webhook_source_config_defaults():
     assert source.max_queue_size == 1000
 
 
+# ── max_queue_size validation (F1) ────────────────────────────────────────────
+
+
+def test_webhook_max_queue_size_rejects_zero_and_negative():
+    """queue.Queue treats maxsize<=0 as "infinite" — validation must reject it
+    so the unbounded-memory DoS cannot silently reopen (F1)."""
+    from pydantic import ValidationError
+
+    from tram.models.pipeline import WebhookSourceConfig
+
+    with pytest.raises(ValidationError):
+        WebhookSourceConfig(type="webhook", path="x", max_queue_size=0)
+    with pytest.raises(ValidationError):
+        WebhookSourceConfig(type="webhook", path="x", max_queue_size=-5)
+
+
+def test_webhook_max_queue_size_positive_accepted():
+    from tram.models.pipeline import WebhookSourceConfig
+
+    cfg = WebhookSourceConfig(type="webhook", path="x", max_queue_size=1)
+    assert cfg.max_queue_size == 1
+    assert WebhookSourceConfig(type="webhook", path="x").max_queue_size == 1000
+
+
 # ── Bounded queue (GH #45) ────────────────────────────────────────────────────
 
 

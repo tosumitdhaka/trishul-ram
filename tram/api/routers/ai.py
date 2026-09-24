@@ -48,6 +48,21 @@ _DEFAULT_MODELS = {
     "bedrock": _BEDROCK_DEFAULT_MODEL,
 }
 
+# Fixed default endpoints used when no base_url is configured (the SDK
+# defaults). Bedrock has no fixed default — an explicit base_url is required.
+_PROVIDER_DEFAULT_ENDPOINTS = {
+    "anthropic": "https://api.anthropic.com",
+    "openai": "https://api.openai.com/v1",
+}
+
+
+def _provider_default_endpoint(provider: str) -> str | None:
+    """Fixed default endpoint for *provider* when no base_url is configured.
+
+    ``None`` for providers without a fixed default (bedrock requires an
+    explicit base_url)."""
+    return _PROVIDER_DEFAULT_ENDPOINTS.get(provider)
+
 
 def _resolve_model(cfg: dict) -> str:
     """Effective model for *cfg*: the configured one, else the provider default."""
@@ -261,16 +276,33 @@ def _call_ai(system: str, user: str, max_tokens: int, cfg: dict) -> _AiResult:
     # A11 defense-in-depth: also enforced at save time in ai_save_config, but
     # env-var-configured base_urls bypass the config endpoint, so re-check
     # both the scheme and the allowlist here before any provider path attaches
-    # the API key.
+    # the API key.  With TRAM_AI_ALLOWED_BASE_URLS set, the EFFECTIVE endpoint
+    # must be allowlisted: base_url if set, else the provider's fixed default
+    # (C6) — bedrock has no fixed default, so an allowlisted base_url is
+    # required there.
     if base_url:
         if problem := _base_url_problem(base_url):
             raise RuntimeError(problem)
-        if allowed := _allowed_base_urls():
-            if not _base_url_allowed(base_url, allowed):
+    if allowed := _allowed_base_urls():
+        effective_endpoint = base_url or _provider_default_endpoint(provider)
+        if effective_endpoint is None:
+            raise RuntimeError(
+                "TRAM_AI_ALLOWED_BASE_URLS is set, but the bedrock provider has "
+                "no fixed default endpoint and no base_url is configured — set "
+                "an allowlisted base_url explicitly"
+            )
+        if not _base_url_allowed(effective_endpoint, allowed):
+            if base_url:
                 raise RuntimeError(
                     "base_url not allowed by TRAM_AI_ALLOWED_BASE_URLS: "
-                    f"{base_url!r} — it must prefix-match one of {allowed}"
+                    f"{base_url!r} — it must match the origin and directory "
+                    f"boundary of one of {allowed}"
                 )
+            raise RuntimeError(
+                f"provider default endpoint {effective_endpoint!r} is not allowed "
+                f"by TRAM_AI_ALLOWED_BASE_URLS: {allowed} — set an allowlisted "
+                "base_url"
+            )
 
     if provider == "anthropic":
         try:
@@ -744,7 +776,8 @@ async def ai_save_config(request: Request) -> dict:
                         status_code=400,
                         detail=(
                             "base_url not allowed by TRAM_AI_ALLOWED_BASE_URLS: "
-                            f"{value!r} — it must prefix-match one of {allowed}"
+                            f"{value!r} — it must match the origin and directory "
+                            f"boundary of one of {allowed}"
                         ),
                     )
         actions.append((setting, value))

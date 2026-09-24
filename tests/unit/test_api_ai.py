@@ -1363,6 +1363,89 @@ class TestBaseUrlAllowlist:
         assert result.text == "ok"
 
 
+class TestAllowlistDefaultEndpoint:
+    """C6: with TRAM_AI_ALLOWED_BASE_URLS set, the EFFECTIVE endpoint must be
+    allowlisted — base_url if set, else the provider's fixed default endpoint.
+    Previously the check ran only when base_url was set, so an unset base_url
+    bypassed the allowlist entirely."""
+
+    def test_default_endpoint_not_listed_rejected_before_client(self, monkeypatch):
+        # anthropic's default endpoint is not on the allowlist → RuntimeError
+        # before any SDK client is constructed (and the API key attached).
+        monkeypatch.setenv("TRAM_AI_ALLOWED_BASE_URLS", "https://llm.example.com")
+        mock_ant = MagicMock()
+        cfg = {"provider": "anthropic", "api_key": "k", "model": "", "base_url": ""}
+        with patch.dict(sys.modules, {"anthropic": mock_ant}):
+            with pytest.raises(RuntimeError, match="ALLOWED_BASE_URLS"):
+                _call_ai("sys", "usr", 10, cfg)
+        mock_ant.Anthropic.assert_not_called()
+
+    def test_default_endpoint_listed_proceeds(self, monkeypatch):
+        monkeypatch.setenv("TRAM_AI_ALLOWED_BASE_URLS", "https://api.anthropic.com")
+        mock_ant = MagicMock()
+        mock_msg = MagicMock()
+        mock_msg.content = [MagicMock(text="ok")]
+        mock_ant.Anthropic.return_value.messages.create.return_value = mock_msg
+        with patch.dict(sys.modules, {"anthropic": mock_ant}):
+            result = _call_ai("sys", "usr", 10,
+                              {"provider": "anthropic", "api_key": "k", "model": "", "base_url": ""})
+        assert result.text == "ok"
+
+    def test_openai_default_endpoint_not_listed_rejected(self, monkeypatch):
+        monkeypatch.setenv("TRAM_AI_ALLOWED_BASE_URLS", "https://api.anthropic.com")
+        mock_oai = MagicMock()
+        cfg = {"provider": "openai", "api_key": "k", "model": "", "base_url": ""}
+        with patch.dict(sys.modules, {"openai": mock_oai}):
+            with pytest.raises(RuntimeError, match="ALLOWED_BASE_URLS"):
+                _call_ai("sys", "usr", 10, cfg)
+        mock_oai.OpenAI.assert_not_called()
+
+    def test_openai_default_endpoint_listed_proceeds(self, monkeypatch):
+        monkeypatch.setenv("TRAM_AI_ALLOWED_BASE_URLS", "https://api.openai.com/v1")
+        mock_oai = MagicMock()
+        mock_resp = MagicMock()
+        mock_resp.choices = [MagicMock(message=MagicMock(content="ok"))]
+        mock_oai.OpenAI.return_value.chat.completions.create.return_value = mock_resp
+        with patch.dict(sys.modules, {"openai": mock_oai}):
+            result = _call_ai("sys", "usr", 10,
+                              {"provider": "openai", "api_key": "k", "model": "", "base_url": ""})
+        assert result.text == "ok"
+
+    def test_bedrock_without_base_url_rejected_naming_provider(self, monkeypatch):
+        # Bedrock has no fixed default endpoint — an allowlisted base_url is
+        # required when the allowlist is active.
+        monkeypatch.setenv("TRAM_AI_ALLOWED_BASE_URLS", "https://api.anthropic.com")
+        cfg = {"provider": "bedrock", "api_key": "k", "model": "", "base_url": ""}
+        with pytest.raises(RuntimeError, match="bedrock"):
+            _call_ai("sys", "usr", 10, cfg)
+
+    def test_bedrock_with_allowlisted_base_url_proceeds(self, monkeypatch):
+        import json
+
+        monkeypatch.setenv("TRAM_AI_ALLOWED_BASE_URLS", "https://bedrock-proxy")
+        mock_resp = MagicMock()
+        mock_resp.read.return_value = json.dumps({"content": [{"text": "yaml"}]}).encode()
+        mock_resp.__enter__ = lambda s: s
+        mock_resp.__exit__ = MagicMock(return_value=False)
+        with patch("urllib.request.urlopen", return_value=mock_resp):
+            result = _call_ai("sys", "usr", 10, {
+                "provider": "bedrock", "api_key": "k", "model": "",
+                "base_url": "https://bedrock-proxy",
+            })
+        assert result.text == "yaml"
+
+    def test_base_url_still_checked_when_set(self, monkeypatch):
+        # Explicit base_urls keep the existing behavior: scheme + allowlist.
+        monkeypatch.setenv("TRAM_AI_ALLOWED_BASE_URLS", "https://llm.example.com")
+        mock_oai = MagicMock()
+        cfg = {"provider": "openai", "api_key": "k", "model": "",
+               "base_url": "https://other.example.com"}
+        with patch.dict(sys.modules, {"openai": mock_oai}):
+            with pytest.raises(RuntimeError, match="ALLOWED_BASE_URLS"):
+                _call_ai("sys", "usr", 10, cfg)
+        mock_oai.OpenAI.assert_not_called()
+
+
 # ── A10: per-call audit log ─────────────────────────────────────────────────
 
 

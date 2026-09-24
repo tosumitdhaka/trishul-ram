@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+import urllib.request
 from collections.abc import Iterator
 
 from tram.core.exceptions import SourceError
@@ -10,6 +11,19 @@ from tram.interfaces.base_source import BaseSource
 from tram.registry.registry import register_source
 
 logger = logging.getLogger(__name__)
+
+
+class _NoRedirectHandler(urllib.request.HTTPRedirectHandler):
+    """Never follow a redirect in the connector test.
+
+    A public URL that 302s to an internal target (e.g. 169.254.169.254) must
+    not be followed — urllib's default redirect-following would defeat the
+    target check in ``/api/connectors/test`` (F3).  Returning None makes
+    urllib surface the 3xx as an HTTPError instead.
+    """
+
+    def redirect_request(self, req, fp, code, msg, headers, newurl):
+        return None
 
 
 def _extract_nested(data, path: str):
@@ -128,7 +142,6 @@ class RestSource(BaseSource):
 
     def test_connection(self) -> dict:
         import time
-        import urllib.request
         t0 = time.monotonic()
         url = self.config.get("url") or self.config.get("base_url", "")
         if not url:
@@ -136,13 +149,21 @@ class RestSource(BaseSource):
         req = urllib.request.Request(url, method="HEAD")
         for k, v in (self.config.get("headers") or {}).items():
             req.add_header(k, str(v))
+        # No redirects: a 302 must never bounce the test into an internal
+        # target (F3). Runtime read() behavior is unchanged.
+        opener = urllib.request.build_opener(_NoRedirectHandler())
         try:
-            with urllib.request.urlopen(req, timeout=8) as resp:
+            with opener.open(req, timeout=8) as resp:
                 latency = int((time.monotonic() - t0) * 1000)
                 return {"ok": True, "latency_ms": latency, "detail": f"HTTP {resp.status} {url}"}
         except urllib.error.HTTPError as e:
+            latency = int((time.monotonic() - t0) * 1000)
+            if 300 <= e.code < 400:
+                headers = getattr(e, "headers", None)  # absent when fp is None
+                location = headers.get("Location") if headers else ""
+                return {"ok": False, "latency_ms": latency,
+                        "error": f"Redirect {e.code} not followed (location={location or 'unknown'})"}
             if e.code < 500:
-                latency = int((time.monotonic() - t0) * 1000)
                 return {"ok": True, "latency_ms": latency, "detail": f"HTTP {e.code} {url}"}
             raise RuntimeError(f"HTTP {e.code}: {e.reason}")
 

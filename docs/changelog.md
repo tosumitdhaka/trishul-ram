@@ -9,13 +9,13 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Fixed
 - **[security]** AI prompt redaction masks connector `api_key` fields (REST/ES source+sink) via one shared `SECRET_NAME_TOKENS` constant (`config_schema.py` ↔ `ai.py` can no longer drift) — real keys previously shipped unmasked to LLM providers (#43)
-- **[security]** `TRAM_AI_ALLOWED_BASE_URLS` is enforced at call time in `_call_ai` (was save-time only — a stored API key could be sent to any https host set via `/api/ai/config`) (#43)
+- **[security]** `TRAM_AI_ALLOWED_BASE_URLS` is enforced at call time in `_call_ai` (was save-time only — a stored API key could be sent to any https host set via `/api/ai/config`); with the allowlist set the **effective** endpoint is checked — `base_url` if configured, else the provider's fixed default endpoint (bedrock has no fixed default and requires an allowlisted `base_url`) (#43)
 - AI prompt redaction fails closed on unparseable or list-shaped YAML (400 "fix your YAML syntax" instead of passing raw text with live secrets) (#43)
 - `ai_save_config` is atomic and type-checked (Pydantic `str | None` body; a later-field 400 no longer leaves earlier fields persisted; booleans/numbers rejected) (#43)
 - **[security]** Webhook source queue is bounded by `max_queue_size` (was an unbounded `SimpleQueue`; the "queue full" 503 was dead code) — closes the unauthenticated memory-exhaustion DoS on `/webhooks/` (#45, supersedes review finding A8)
-- **[security]** Rate limiting covers `/webhooks/`, and the >500-IP window sweep no longer swaps per-IP locks out from under queued requests (#45)
+- **[security]** Rate limiting covers `/webhooks/`, and the >500-IP window sweep no longer swaps per-IP locks out from under queued requests; `/api/internal/*` is exempt (worker callbacks carry the machine key and a 429 has no retry) (#45)
 - **[security]** Internal endpoints (`/api/internal/*`) require the bearer token in `auth_users`-only deployments even without `TRAM_API_KEY` (was fully unauthenticated regardless of `TRAM_INTERNAL_AUTH_MODE`) (#44)
-- **[security]** `/api/connectors/test` rejects loopback/private/link-local targets (closes the SSRF/port-scan oracle; DNS-rebinding safe — names other than `*.localhost` are never resolved) (#44)
+- **[security]** `/api/connectors/test` rejects **IP-literal** private/loopback/link-local targets across ALL `brokers`/`hosts`/`servers` entries (was: first entry only), and the REST source `test_connection` never follows redirects — a public URL cannot 302 the probe into an internal target. Hostnames that resolve to internal space are a documented residual: names are deliberately never resolved (DNS-rebinding safe) (#44)
 - **[security]** Schema-registry proxy strips `x-api-key`/`authorization`/`cookie` from forwarded headers and injects the configured registry credentials (#44)
 - 500/502 responses no longer leak raw exception strings (generic detail + correlation id; full error logged server-side) (#44)
 - `/api/ready` no longer discloses the absolute `db_path` (#44)
@@ -34,7 +34,7 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - `ActiveRun.degradation_notes` on worker runs, surfaced in run-complete `errors` (#39)
 
 ### Changed
-- **[migration]** `TRAM_RATE_LIMIT` default 0 (disabled) → 50 req/s, now applying to `/api/` and `/webhooks/`; deployments relying on unlimited local access must set `TRAM_RATE_LIMIT=0` explicitly (#44)
+- **[migration]** `TRAM_RATE_LIMIT` default 0 (disabled) → 50 requests per 60s window, applying to `/api/` (excluding `/api/internal/*`) and `/webhooks/`; deployments relying on unlimited local access must set `TRAM_RATE_LIMIT=0` explicitly (#44)
 - **[migration]** Config-schema `secret` metadata now derives from the shared `SECRET_NAME_TOKENS`; `schema_version` hash rotates (`dfcc2f98ad48` → `0efb15fc2863`) — an identity token, existing AI rows keep their recorded hash (#43)
 - Helm values, `.env.example`, and `docs/deployment.md` updated for the new/changed knobs (#44)
 

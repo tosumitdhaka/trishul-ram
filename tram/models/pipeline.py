@@ -317,7 +317,9 @@ class WebhookSourceConfig(BaseModel):
     type: Literal["webhook"]
     path: str
     secret: str | None = None
-    max_queue_size: int = 1000
+    # ge=1: queue.Queue treats maxsize<=0 as "infinite", silently reopening the
+    # unbounded-memory DoS (F1).
+    max_queue_size: int = Field(default=1000, ge=1)
 
 
 class WebSocketSourceConfig(BaseModel):

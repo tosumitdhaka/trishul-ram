@@ -1160,6 +1160,12 @@ class PipelineController:
                             "Batch dispatch completed after run-complete callback — not tracked",
                             extra={"pipeline": pipeline_name, "run_id": run_id},
                         )
+                        # C7: the dispatch WAS accepted (a fast worker ran the
+                        # run) — count it like the normal path and the queued
+                        # drain path, which kept its accepted increment even
+                        # when the lease was skipped.
+                        from tram.metrics.registry import MGR_DISPATCH_TOTAL
+                        MGR_DISPATCH_TOTAL.labels(pipeline=pipeline_name, result="accepted").inc()
                         return
                     self._active_batch_runs[pipeline_name] = _ActiveBatchRun(
                         run_id=run_id,

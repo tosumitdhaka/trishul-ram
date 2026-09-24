@@ -123,6 +123,54 @@ class TestTestConnector:
         assert result["ok"] is False
         assert "Target host rejected" in result["error"]
 
+    # ── F2: every list entry is checked, not just the first ────────────────
+
+    def test_mixed_public_and_private_brokers_rejected(self):
+        """One private entry in an otherwise-public broker list is rejected."""
+        app = _make_app()
+        client = TestClient(app)
+        resp = client.post("/api/connectors/test", json={
+            "type": "kafka",
+            "config": {"brokers": ["public.example.com:9092", "10.0.0.5:9092"]},
+        })
+        assert resp.status_code == 400
+        assert "Target host rejected" in resp.json()["detail"]
+
+    def test_mixed_public_and_private_hosts_rejected(self):
+        app = _make_app()
+        client = TestClient(app)
+        resp = client.post("/api/connectors/test", json={
+            "type": "opensearch",
+            "config": {"hosts": ["https://pub.example.com:9200", "http://192.168.1.9:9200"]},
+        })
+        assert resp.status_code == 400
+
+    def test_private_entry_hidden_behind_public_first_all_rejected(self):
+        """The private entry comes after the public first entry — the scan
+        must not stop at entry zero (the old first-entry-only check)."""
+        app = _make_app()
+        client = TestClient(app)
+        resp = client.post("/api/connectors/test", json={
+            "type": "kafka",
+            "config": {"brokers": ["public.example.com:9092", "172.16.0.7:9092"]},
+        })
+        assert resp.status_code == 400
+
+    def test_all_public_multi_host_allowed(self):
+        app = _make_app()
+        client = TestClient(app)
+        resp = client.post("/api/connectors/test", json={
+            "type": "unknown_type",
+            "config": {"brokers": ["kafka1.example.com:9092", "kafka2.example.com:9092"]},
+        })
+        assert resp.status_code == 200
+
+    def test_do_test_rejects_mixed_brokers_for_pipeline_path(self):
+        from tram.api.routers.connectors import _do_test
+        result = _do_test("kafka", {"brokers": ["public.example.com:9092", "10.0.0.5:9092"]})
+        assert result["ok"] is False
+        assert "Target host rejected" in result["error"]
+
 
 class TestTestPipeline:
     def test_no_yaml_returns_error(self):
