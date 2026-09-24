@@ -5,7 +5,7 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ---
 
-## [Unreleased]
+## [1.4.6] - 2026-09-24
 
 ### Fixed
 - **[security]** AI prompt redaction masks connector `api_key` fields (REST/ES source+sink) via one shared `SECRET_NAME_TOKENS` constant (`config_schema.py` ↔ `ai.py` can no longer drift) — real keys previously shipped unmasked to LLM providers (#43)
