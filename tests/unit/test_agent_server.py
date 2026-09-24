@@ -1119,7 +1119,9 @@ class TestWorkerSkipProcessedFailLoud:
             resp = self._dispatch(client, _SKIP_PROCESSED_YAML, "r-sp-log")
             assert resp.status_code == 202
 
-        errors = [r for r in caplog.records if r.levelno == logging.ERROR]
+        errors = [r for r in caplog.records
+                  if r.levelno == logging.ERROR
+                  and getattr(r, "run_id", None) == "r-sp-log"]
         assert len(errors) == 1
         rec = errors[0]
         assert "skip_processed" in rec.message
@@ -1133,7 +1135,14 @@ class TestWorkerSkipProcessedFailLoud:
         captured = []
 
         def _fake_callback(url, **kwargs):
-            captured.append(kwargs.get("json", {}))
+            payload = kwargs.get("json", {})
+            # Scope to THIS run: on CI, a leaked daemon thread from an
+            # earlier test can post its delayed run-complete through this
+            # globally-patched httpx.Client (slow DNS failure stretches the
+            # thread past its own test's window). Stale payloads must not
+            # inflate the assertions below.
+            if payload.get("run_id") == "r-sp-payload":
+                captured.append(payload)
             resp = MagicMock()
             resp.raise_for_status = MagicMock()
             return resp
@@ -1164,7 +1173,10 @@ class TestWorkerSkipProcessedFailLoud:
         captured = []
 
         def _fake_callback(url, **kwargs):
-            captured.append(kwargs.get("json", {}))
+            payload = kwargs.get("json", {})
+            # Same CI stale-callback guard as the payload test above.
+            if payload.get("run_id") == "r-sp-none":
+                captured.append(payload)
             resp = MagicMock()
             resp.raise_for_status = MagicMock()
             return resp
@@ -1225,13 +1237,16 @@ class TestWorkerSkipProcessedFailLoud:
         captured = []
 
         def _fake_callback(url, **kwargs):
-            captured.append(kwargs.get("json", {}))
+            payload = kwargs.get("json", {})
+            # Same CI stale-callback guard as the payload test above.
+            if payload.get("run_id") == "r-sp-stream":
+                captured.append(payload)
             resp = MagicMock()
             resp.raise_for_status = MagicMock()
             return resp
 
         with patch("tram.pipeline.executor.PipelineExecutor.__init__",
-                   lambda self, **kw: None), \
+                    lambda self, **kw: None), \
              patch("tram.agent.assets.sync_assets"), \
              patch("tram.pipeline.executor.PipelineExecutor.stream_run",
                    side_effect=_fake_stream_run), \
@@ -1285,8 +1300,17 @@ sinks:
     filename_template: "skip-pipe_{{epoch_ms}}.bin"
 """
         completed = []
+
+        def _capture_run_complete(*args, **kwargs):
+            # Positional order: callback_url, run_id, ... — keep only this
+            # test's runs so a stale callback from a leaked earlier-test
+            # thread cannot inflate the count on CI. Keywords
+            # (started_at/finished_at/api_key) are accepted and ignored.
+            if len(args) > 1 and str(args[1]).startswith("r-sp-fn-"):
+                completed.append(args)
+
         with patch("tram.agent.server._post_run_complete",
-                   side_effect=lambda *a, **k: completed.append(a)), \
+                   side_effect=_capture_run_complete), \
              patch("tram.agent.server._post_stats"):
             client = _make_client(worker_id="w0", manager_url="")
             for i in range(2):
