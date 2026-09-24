@@ -37,12 +37,15 @@ logger = logging.getLogger(__name__)
 _STATS_MISS_LOCK = threading.Lock()
 _CONSECUTIVE_STATS_MISSES: dict[str, int] = {}
 
-# GH #39 (code-review A1): the worker agent is a stateless executor with no
-# per-worker DB, so a ProcessedFileTracker cannot be constructed here — file
-# sources with ``skip_processed: true`` would silently reprocess every file on
-# every run. Fail loud instead: log at executor construction and record the
-# degradation on the run so the manager's run_history row carries it via the
-# run-complete payload errors, rather than silently disabling the feature.
+# GH #39/#54: the worker agent is a stateless executor with no per-worker DB,
+# so a ProcessedFileTracker cannot be constructed here from a local DB. With a
+# manager URL the executor gets an HTTP-backed tracker (GH #54) routing
+# check/mark to the manager's internal API; without one — or when the manager
+# is unreachable at call time (the client fails loud itself) — the fail-loud
+# fallback applies: log at executor construction / first tracker failure and
+# record the degradation on the run so the manager's run_history row carries
+# it via the run-complete payload errors, rather than silently disabling the
+# feature.
 _SKIP_PROCESSED_DISABLED_NOTE = (
     "skip_processed: true requested but worker mode has no processed-file "
     "tracker (stateless worker, no per-worker DB) — already-seen files will "
@@ -438,13 +441,30 @@ def create_worker_app(worker_id: str = "", manager_url: str = "", stats_interval
             if state.manager_url
             else None
         )
-        executor = PipelineExecutor(state_store=state_store)
+        # GH #54: worker-mode skip_processed rides the manager's processed-file
+        # tracker through the internal API (the F.1 state-store availability
+        # envelope — a worker run cannot exist without a manager dispatch). No
+        # manager URL → no client, and the construction guard below fires.
+        from tram.agent.file_tracker_client import HttpFileTracker
 
-        # GH #39 (A1): the worker is stateless — no per-worker DB exists, so
-        # the executor is built without a processed-file tracker. A pipeline
-        # whose source requests skip_processed would silently reprocess every
-        # file on every run; fail loud instead and record the degradation on
-        # the run so the manager's run_history row carries it.
+        file_tracker = (
+            HttpFileTracker(
+                state.manager_url,
+                state.api_key,
+                on_degradation=active_run.degradation_notes.append,
+            )
+            if state.manager_url
+            else None
+        )
+        executor = PipelineExecutor(state_store=state_store, file_tracker=file_tracker)
+
+        # GH #39 (A1)/#54: the worker is stateless — no per-worker DB exists,
+        # so without a manager URL the executor is built without a
+        # processed-file tracker and a pipeline whose source requests
+        # skip_processed would silently reprocess every file on every run. Fail
+        # loud instead and record the degradation on the run (when a tracker
+        # client errors at call time, HttpFileTracker fails loud itself) so the
+        # manager's run_history row carries it.
         if (
             _source_requests_skip_processed(config)
             and getattr(executor, "_file_tracker", None) is None

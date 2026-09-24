@@ -115,6 +115,75 @@ class TransformStatePayload(BaseModel):
     run_id: str = ""                            # audit — stored as updated_by
 
 
+class ProcessedFileEntry(BaseModel):
+    """One file identity inside a processed-files check/mark request (GH #54)."""
+
+    source_key: str
+    filepath: str
+
+
+class ProcessedFilesPayload(BaseModel):
+    """POST body for the processed-files check/mark endpoints (GH #54).
+
+    Namespaced by ``pipeline_name`` — the same (pipeline_name, source_key,
+    filepath) key the manager-side ``ProcessedFileTracker`` uses.
+    """
+
+    pipeline_name: str
+    files: list[ProcessedFileEntry] = Field(default_factory=list)
+
+
+def _processed_files_db(request: Request):
+    """The DB handle backing the processed-files endpoints, or 503 when absent.
+
+    The manager app holds the ``TramDB`` (not the tracker wrapper) on
+    ``app.state.db``; the endpoints call the same ``is_processed`` /
+    ``mark_processed`` methods the manager-side tracker wraps.
+    """
+    db = request.app.state.db
+    if db is None:
+        raise HTTPException(status_code=503, detail="database unavailable")
+    return db
+
+
+@router.post("/api/internal/processed-files/check")
+async def check_processed_files(
+    payload: ProcessedFilesPayload, request: Request
+) -> dict:
+    """Worker → manager: which of these files has this pipeline already processed?
+
+    GH #54: worker-mode ``skip_processed`` dedup state lives in the manager's
+    ``processed_files`` table (workers are stateless by design). List-in /
+    list-out — ``processed`` aligns with the request's ``files`` order. Auth
+    rides the existing internal middleware (same as run-complete /
+    pipeline-stats). A DB error surfaces as a 5xx so the worker-side client
+    fails loud instead of silently reprocessing.
+    """
+    db = _processed_files_db(request)
+    processed = [
+        db.is_processed(payload.pipeline_name, f.source_key, f.filepath)
+        for f in payload.files
+    ]
+    return {"processed": processed}
+
+
+@router.post("/api/internal/processed-files/mark")
+async def mark_processed_files(
+    payload: ProcessedFilesPayload, request: Request
+) -> dict:
+    """Worker → manager: record these files as processed by this pipeline.
+
+    Insert-if-absent (duplicates ignored) — the same semantics as
+    ``ProcessedFileTracker.mark_processed``. Mark failures are logged
+    manager-side and swallowed by ``TramDB.mark_processed``, matching the
+    manager-side tracker posture.
+    """
+    db = _processed_files_db(request)
+    for f in payload.files:
+        db.mark_processed(payload.pipeline_name, f.source_key, f.filepath)
+    return {"ok": True}
+
+
 def _stateful_transforms_enabled(request: Request) -> bool:
     """Feature flag (F.1 §9): the internal endpoints 404 while the flag is off.
 
