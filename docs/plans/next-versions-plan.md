@@ -44,7 +44,7 @@ One branch + one PR per version, progress table in the PR body (same model as PR
 | AI B.3 (A6) | Template-grounded generation (few-shot from `/api/templates`) | ai-expansion-plan Wave B |
 | AI A.4 | Server-side payload merge (templates + config schema) | ai-expansion-plan Wave A |
 
-**Entry criteria:** v1.4.6 tagged; **treq vendor decision made** (gates A6 quality and all later streaming/AI work — see `docs/ideas/treq-ai-reuse-feasibility.md`).
+**Entry criteria:** v1.4.6 tagged ✓; **treq vendor decision (2026-09-24): proceed on the current `ai.py`** — vendoring deferred; Wave B + A.4 build on the existing layer, while A9 (streaming) and B3–B6 stay gated on a future revisit of `docs/ideas/treq-ai-reuse-feasibility.md`.
 **Exit criteria:** #48/#50/#54 closed with tests; #55 closed or its opportunistic items explicitly re-triaged to v1.4.8; browser smoke asserts the live version from `tram/ui/package.json`; AI Wave B items validated against real provider round-trips (mirror the 122-test AI suite pattern); gate green.
 **Lane rule:** the B.1 UI piece and any `tram/ui/src/` changes are one single UI lane (no concurrent UI edits).
 

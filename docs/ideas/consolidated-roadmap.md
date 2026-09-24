@@ -141,6 +141,6 @@ Theme: convert the AI feature from editor tooling into operator tooling, on top 
 
 ## 5. Open items & triggers
 
-- **Trigger — AI expansion (sequenced into v1.4.7/v1.4.8):** the treq vendor decision (`docs/ideas/treq-ai-reuse-feasibility.md`) gates the AI rows of those versions (not the fix issues); A6/A7/B1 remain the standing next items — see `docs/plans/next-versions-plan.md`.
+- **AI expansion (v1.4.7):** Wave B (A6/A7/B1) + A.4 implemented on the **current `ai.py`** — the treq vendor decision (2026-09-24, maintainer) was *defer*; A9 (streaming) and B3–B6 stay gated on a future vendor revisit (`docs/ideas/treq-ai-reuse-feasibility.md`). See `docs/plans/next-versions-plan.md`.
 - **SNMP library migration decision (open):** the trishul-smi/trishul-snmp swap remains blocked on SNMPv1 + v3 crypto breadth (`docs/ideas/trishul-smi-snmp-migration-feasibility.md`). v1.4.5 shipped the SNMP data-integrity work on pysnmp; the migration decision is unaffected.
 - **Resolved during the plan's execution:** L2 path choice (decided by the #24 study → structured creation wizard, shipped v1.4.3); L5 slip tolerance (no slip — shipped v1.4.3).
