@@ -707,7 +707,17 @@ class PipelineController:
         """dispatching → dispatched + CAS: re-check pipeline exists under the
         lock, record the _active_batch_runs lease (schedule_type from current
         config), set pipeline status 'running', db.mark_queued_run_dispatched,
-        MGR_DISPATCH_TOTAL{accepted} + MGR_QUEUE_DISPATCHED_TOTAL + wait histogram."""
+        MGR_DISPATCH_TOTAL{accepted} + MGR_QUEUE_DISPATCHED_TOTAL + wait histogram.
+
+        Fast-run race (GH #47, same defect class as the _run_batch post-dispatch
+        CAS): a sub-second worker run can complete and post run-complete before
+        this commit re-acquires the lock. When the run is already recorded, the
+        lease is SKIPPED — recording it would make the BatchReconciler probe
+        is_run_active() → False and mark the succeeded run as lost — and the
+        pipeline status is not flipped to 'running' (the post-run transition
+        already ran). The queued row still transitions dispatching → dispatched
+        so the drain loop never re-claims a completed run.
+        """
         with self._lock:
             if self._db is None or self._worker_pool is None:
                 return False
@@ -722,14 +732,16 @@ class PipelineController:
             if not self.manager.exists(name):
                 return False  # deleted mid-dispatch — the stale result is discarded
             state = self.manager.get(name)
-            self._active_batch_runs[name] = _ActiveBatchRun(
-                run_id=run_id,
-                pipeline_name=name,
-                worker_url=worker_url,
-                schedule_type=state.config.schedule.type,
-                started_at=datetime.now(UTC),
-            )
-            self.manager.set_status(name, "running")
+            run_already_completed = self.manager.get_run(run_id) is not None
+            if not run_already_completed:
+                self._active_batch_runs[name] = _ActiveBatchRun(
+                    run_id=run_id,
+                    pipeline_name=name,
+                    worker_url=worker_url,
+                    schedule_type=state.config.schedule.type,
+                    started_at=datetime.now(UTC),
+                )
+                self.manager.set_status(name, "running")
             self._db.mark_queued_run_dispatched(run_id, datetime.now(UTC))
             wait = (datetime.now(UTC) - row["requested_at"]).total_seconds()
             from tram.metrics.registry import (
@@ -745,8 +757,13 @@ class PipelineController:
             self._set_queued_depth(name)
             logger.info(
                 "Queued manual run dispatched",
-                extra={"pipeline": name, "run_id": run_id, "worker": worker_url,
-                       "wait_seconds": round(wait, 1)},
+                extra={
+                    "pipeline": name,
+                    "run_id": run_id,
+                    "worker": worker_url,
+                    "wait_seconds": round(wait, 1),
+                    "lease_recorded": not run_already_completed,
+                },
             )
             return True
 

@@ -25,6 +25,7 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - Batch retry rebuild carries the original `run_id` (was: fresh random run_id breaking the trigger→`queued_runs`→`run_history` contract and the duplicate-callback dedupe) (#47)
 - A manual trigger that loses the claim race records a FAILED row under the submitted run_id (was: silent skip — the client's run_id 404ed forever) (#47)
 - Fast dispatched runs no longer record a stale lease (was: `BatchReconciler` could mark a completed run FAILED, flipping pipeline status to error) (#47)
+- The same fast-run lease race is closed on the queued-run drain path: `commit_queued_dispatch` skips the lease when the run already completed while still transitioning the queued row `dispatching → dispatched` (no re-drain, no duplicate execution, no spurious FAILED) (#47)
 - Worker mode fails loud when `skip_processed` cannot be honored (stateless workers have no per-worker tracker — verified against the stateless-worker architecture): ERROR log + degradation marker recorded on the run (was: silent reprocessing/duplicate CDRs) (#39)
 
 ### Added

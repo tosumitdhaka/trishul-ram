@@ -861,6 +861,59 @@ class TestDrain:
         finally:
             ctrl.stop()
 
+    def test_drain_fast_completing_run_skips_lease_but_dispatches_row(self, db):
+        """Fast-run race (GH #47, queued-drain counterpart of the _run_batch
+        CAS fix): a worker that completes and posts run-complete before
+        commit_queued_dispatch records the lease must not get a stale lease
+        (the BatchReconciler would probe is_run_active → False and mark the
+        succeeded run lost), yet the queued row must still leave 'dispatching'
+        so the drain never re-claims a completed run."""
+        wp = MagicMock()
+        wp.healthy_workers.return_value = ["http://w0:8766"]
+        ctrl = _make_controller(db, wp)
+        _register_manual(ctrl)
+        try:
+            _enqueue(ctrl, db)
+
+            def _dispatch_and_complete(**kwargs):
+                # The worker finishes before the drain thread records the lease.
+                ctrl.on_worker_run_complete(
+                    run_id=kwargs["run_id"],
+                    pipeline_name="my-manual",
+                    worker_id="w0",
+                    status="success",
+                    records_in=2,
+                    records_out=2,
+                )
+                return DispatchOutcome(
+                    worker_url="http://w0:8766", outcome=DISPATCH_ACCEPTED,
+                )
+
+            wp.dispatch_with_result.side_effect = _dispatch_and_complete
+            BatchReconciler(ctrl, wp, interval=10).run_once()
+
+            # No stale lease — the reconciler would otherwise mark the run lost.
+            assert ctrl.get_active_batch_runs() == []
+            # The queued row still transitions dispatching → dispatched (terminal).
+            assert db.get_active_queued_runs() == []
+            assert db.get_active_queued_run_for_pipeline("my-manual") is None
+            with db._engine.connect() as conn:
+                raw = conn.execute(
+                    text("SELECT status FROM queued_runs WHERE run_id = 'r1'")
+                ).scalar()
+            assert raw == "dispatched"
+            # The run succeeded — no FAILED result under the queued run_id.
+            result = ctrl.get_run("r1")
+            assert result is not None
+            assert result.status == RunStatus.SUCCESS
+            # Post-run status, never 'error' (and not clobbered to 'running').
+            assert ctrl.manager.get("my-manual").status == "stopped"
+            # A second drain pass does not re-dispatch the completed run.
+            BatchReconciler(ctrl, wp, interval=10).run_once()
+            assert wp.dispatch_with_result.call_count == 1
+        finally:
+            ctrl.stop()
+
     def test_drain_single_claim(self, db):
         """The conditional UPDATE is the single-claim fence: a second claim on
         a dispatching row is None, and two concurrent drain passes dispatch
