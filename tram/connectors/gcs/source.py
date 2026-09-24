@@ -78,6 +78,12 @@ class GcsSource(BaseSource):
         logger.info("GCS source found blobs", extra={"bucket": self.bucket, "matched": len(matched)})
 
         source_key = f"gcs:{self.bucket}:{self.prefix}"
+        # C2 (v1.4.7): batch the run's whole candidate list into one check
+        # request when the tracker supports it (worker-mode HttpFileTracker);
+        # the per-blob is_processed calls below then hit the local cache.
+        prefetch = getattr(self._file_tracker, "prefetch_many", None)
+        if self.skip_processed and prefetch is not None:
+            prefetch(self._pipeline_name, source_key, [b.name for b in matched])
         for blob in matched:
             basename = blob.name.rsplit("/", 1)[-1]
             if self.skip_processed and self._file_tracker:

@@ -78,6 +78,13 @@ class FTPSource(BaseSource):
             )
 
             source_key = f"ftp:{self.host}:{self.remote_path}"
+            # C2 (v1.4.7): batch the run's whole candidate list into one
+            # check request when the tracker supports it (worker-mode
+            # HttpFileTracker); the per-file is_processed calls below then
+            # hit the local cache.
+            prefetch = getattr(self._file_tracker, "prefetch_many", None)
+            if self.skip_processed and prefetch is not None:
+                prefetch(self._pipeline_name, source_key, [full for full, _ in matching])
             for remote_file, filename in matching:
                 if self.skip_processed and self._file_tracker:
                     if self._file_tracker.is_processed(self._pipeline_name, source_key, remote_file):

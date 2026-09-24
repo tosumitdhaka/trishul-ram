@@ -198,6 +198,21 @@ def _post_run_complete(
         try:
             with httpx.Client(timeout=10) as client:
                 resp = client.post(callback_url, json=payload, headers=headers)
+                status_code = resp.status_code
+                if isinstance(status_code, int) and 400 <= status_code < 500:
+                    # Review N4: a 4xx is a permanent rejection (malformed
+                    # payload, auth, unknown route) — retrying cannot succeed,
+                    # so stop at the first attempt instead of burning the
+                    # bounded retries on a pointless loop.
+                    logger.warning(
+                        "run-complete callback rejected — not retrying (4xx)",
+                        extra={
+                            "callback_url": callback_url,
+                            "run_id": run_id,
+                            "status_code": status_code,
+                        },
+                    )
+                    return
                 resp.raise_for_status()
             logger.debug(
                 "run-complete callback sent",
@@ -262,6 +277,24 @@ def _post_stats(stats_url: str, payload: dict, api_key: str = "") -> None:
     worker_id = str(payload.get("worker_id", "") or "")
     with _STATS_MISS_LOCK:
         _CONSECUTIVE_STATS_MISSES.pop(worker_id, None)
+
+
+def _flush_file_tracker(file_tracker) -> None:
+    """Best-effort flush of buffered processed-file marks at run end (C2).
+
+    The worker-mode ``HttpFileTracker`` buffers per-file marks and emits them
+    in one batched request; this runs after ``executor.batch_run`` /
+    ``executor.stream_run`` return so the manager's ``processed_files`` table
+    is current when the next run's checks arrive. Never raises — a flush
+    failure degrades the tracker (already-recorded note) but must not break
+    the run-complete callback.
+    """
+    if file_tracker is None:
+        return
+    try:
+        file_tracker.close()
+    except Exception:
+        logger.exception("Processed-file tracker flush failed")
 
 
 def _derive_stats_url(callback_url: str, manager_url: str) -> str:
@@ -534,6 +567,9 @@ def create_worker_app(worker_id: str = "", manager_url: str = "", stats_interval
                         config, active_run.stop_event, stats=active_run.stats,
                         config_sha256=config_sha256,
                     )
+                    # C2: emit buffered processed-file marks (batched) before
+                    # the run-complete callback so the next run sees them.
+                    _flush_file_tracker(file_tracker)
                     stats_snapshot = _final_stats_snapshot(active_run)
                     _post_run_complete(
                         callback_url, req.run_id, req.pipeline_name, state.worker_id,
@@ -559,6 +595,9 @@ def create_worker_app(worker_id: str = "", manager_url: str = "", stats_interval
                             "error": str(exc),
                         },
                     )
+                    # C2: files finalized before the failure still get their
+                    # buffered marks flushed.
+                    _flush_file_tracker(file_tracker)
                     _post_run_complete(
                         callback_url, req.run_id, req.pipeline_name, state.worker_id,
                         "error", 0, 0, 0, 0, str(exc),
@@ -584,6 +623,9 @@ def create_worker_app(worker_id: str = "", manager_url: str = "", stats_interval
                         config_sha256=config_sha256,
                         flush=req.flush,
                     )
+                    # C2: emit buffered processed-file marks (batched) before
+                    # the run-complete callback so the next run sees them.
+                    _flush_file_tracker(file_tracker)
                     if active_run.stats is not None:
                         payload = {
                             "worker_id": state.worker_id,
@@ -624,6 +666,9 @@ def create_worker_app(worker_id: str = "", manager_url: str = "", stats_interval
                             "error": str(exc),
                         },
                     )
+                    # C2: files finalized before the failure still get their
+                    # buffered marks flushed.
+                    _flush_file_tracker(file_tracker)
                     _post_run_complete(
                         callback_url, req.run_id, req.pipeline_name, state.worker_id,
                         "error", 0, 0, 0, 0, str(exc),

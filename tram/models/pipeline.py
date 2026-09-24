@@ -1619,8 +1619,13 @@ class PipelineConfig(BaseModel):
         shared instance field written immediately before each ``apply()``.
         With ``thread_workers > 1`` concurrent chunk threads race that
         write/read pair, so a record can be stamped with another file's
-        source_filename. Sink-level uses are safe (each sink builds its own
-        transform instances, so no instance is shared across threads).
+        source_filename. Sink-level uses are gated under the same rule: the
+        executor builds per-sink transform instances once per run
+        (``_build_sinks``) and those instances are shared across the chunk
+        threads exactly like the top-level ones, so the race applies there
+        too. ``parallel_sinks`` without ``thread_workers > 1`` remains safe —
+        each sink's transform instances are only touched by that sink's own
+        fan-out thread.
         """
         top_level_meta_aware = [
             t.type for t in self.transforms if t.type in _META_AWARE_TRANSFORM_TYPES
@@ -1632,6 +1637,19 @@ class PipelineConfig(BaseModel):
                 "before apply(), so concurrent chunk threads race it "
                 f"({', '.join(top_level_meta_aware)})"
             )
+        for sink in self.sinks:
+            sink_meta_aware = [
+                t_cfg.type for t_cfg in getattr(sink, "transforms", [])
+                if t_cfg.type in _META_AWARE_TRANSFORM_TYPES
+            ]
+            if sink_meta_aware and self.thread_workers > 1:
+                raise ValueError(
+                    f"meta-aware transforms in sink '{sink.type}' cannot be "
+                    "used with thread_workers > 1: runtime metadata is written "
+                    "onto the shared per-sink transform instance before "
+                    "apply(), so concurrent chunk threads race it "
+                    f"({', '.join(sink_meta_aware)})"
+                )
         return self
 
     @model_validator(mode="after")

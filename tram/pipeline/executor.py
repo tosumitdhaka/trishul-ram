@@ -152,10 +152,19 @@ def _dlq_spool_dir() -> str:
     did (a shared network partition), so a remote DLQ is not a safe last
     resort. When the DLQ write itself fails, the envelope is durably spooled
     to local disk instead of being dropped. Configurable via
-    ``TRAM_DLQ_SPOOL_DIR``; defaults under ``~/.tram`` alongside the SQLite
-    fallback DB.
+    ``TRAM_DLQ_SPOOL_DIR``. In worker mode the default resolves under the
+    ``TRAM_DATA_DIR`` root (``<data_dir>/dlq-spool``, following the
+    ``TRAM_SCHEMA_DIR``/``TRAM_MIB_DIR`` pattern) so spooled envelopes land on
+    the mounted data volume instead of the container overlay; standalone and
+    manager mode default under ``~/.tram`` alongside the SQLite fallback DB.
     """
-    return os.environ.get("TRAM_DLQ_SPOOL_DIR", "~/.tram/dlq-spool")
+    configured = os.environ.get("TRAM_DLQ_SPOOL_DIR")
+    if configured:
+        return configured
+    if os.environ.get("TRAM_MODE", "standalone").lower() == "worker":
+        data_dir = os.environ.get("TRAM_DATA_DIR", "/data")
+        return str(Path(data_dir).expanduser() / "dlq-spool")
+    return "~/.tram/dlq-spool"
 
 
 def _spool_dlq_envelope(
@@ -736,6 +745,12 @@ class PipelineExecutor:
                         self._set_transform_runtime_meta(t, meta)
                         sink_records = t.apply(sink_records)
                     except Exception as exc:
+                        if on_error == "abort":
+                            # GH #48 §2.9 parity: a failing sink-level transform
+                            # under abort must fail the run like the global
+                            # transform and sink-write abort paths — not
+                            # silently DLQ and continue.
+                            raise TramError(f"Transform error: {exc}") from exc
                         if dlq_sink is not None:
                             _write_dlq_envelope(
                                 dlq_sink, ctx,

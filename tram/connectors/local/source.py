@@ -81,7 +81,14 @@ class LocalSource(BaseSource):
         )
 
         source_key = f"local:{self.path}"
-        for filepath in self._stable_candidates(files):
+        candidates = list(self._stable_candidates(files))
+        # C2 (v1.4.7): batch the run's whole candidate list into one check
+        # request when the tracker supports it (worker-mode HttpFileTracker);
+        # the per-file is_processed calls below then hit the local cache.
+        prefetch = getattr(self._file_tracker, "prefetch_many", None)
+        if self.skip_processed and prefetch is not None:
+            prefetch(self._pipeline_name, source_key, [str(f) for f in candidates])
+        for filepath in candidates:
             fp_str = str(filepath)
             if self.skip_processed and self._file_tracker:
                 if self._file_tracker.is_processed(self._pipeline_name, source_key, fp_str):

@@ -133,6 +133,29 @@ class ProcessedFilesPayload(BaseModel):
     files: list[ProcessedFileEntry] = Field(default_factory=list)
 
 
+# C5 (v1.4.7): bound the per-request file list so the internal endpoints stay
+# batch-friendly (the worker client sub-batches its marks) without letting a
+# runaway run send an unbounded payload to the manager.
+_MAX_PROCESSED_FILES_PER_REQUEST = 1000
+
+
+def _check_processed_files_cap(payload: ProcessedFilesPayload) -> None:
+    """Reject payloads above the per-request file bound with a 400.
+
+    The worker client bounds its own batches below this; an oversized request
+    is a client bug (or a runaway run) and is rejected loudly rather than
+    processed.
+    """
+    if len(payload.files) > _MAX_PROCESSED_FILES_PER_REQUEST:
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                f"too many files in one processed-files request: "
+                f"{len(payload.files)} > {_MAX_PROCESSED_FILES_PER_REQUEST}"
+            ),
+        )
+
+
 def _processed_files_db(request: Request):
     """The DB handle backing the processed-files endpoints, or 503 when absent.
 
@@ -160,6 +183,7 @@ async def check_processed_files(
     fails loud instead of silently reprocessing.
     """
     db = _processed_files_db(request)
+    _check_processed_files_cap(payload)
     processed = [
         db.is_processed(payload.pipeline_name, f.source_key, f.filepath)
         for f in payload.files
@@ -179,6 +203,7 @@ async def mark_processed_files(
     manager-side tracker posture.
     """
     db = _processed_files_db(request)
+    _check_processed_files_cap(payload)
     for f in payload.files:
         db.mark_processed(payload.pipeline_name, f.source_key, f.filepath)
     return {"ok": True}

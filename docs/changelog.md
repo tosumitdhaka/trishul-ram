@@ -20,6 +20,14 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - `_add_column_if_missing` swallows only the duplicate-column error per dialect — locks/disk-full and other real failures now raise loudly (B8) (#55)
 - `save_pipeline_version` version races are resolved by a `UNIQUE(name, version)` constraint (fresh DBs) plus an idempotent unique-index migration for existing DBs and an IntegrityError retry (B9) (#55)
 - A `finalize_source` rename failure after all chunks drained no longer flips a fully-written run to FAILED — it degrades to a recorded error note on the run (B11) (#55)
+- Sink-level `inject_meta` is gated to `thread_workers: 1` as well — sink transform instances are shared across chunk threads exactly like top-level ones (review follow-up to #48)
+- The `UNIQUE(name, version)` migration (B9) deduplicates legacy rows before creating the index — a legacy DB that already holds duplicate versions no longer fails manager startup on upgrade (review follow-up to #55)
+- `on_error: abort` is now honored for per-sink transform failures too — the last abort bypass is closed (review follow-up to #48)
+- Worker `HttpFileTracker` batches processed-file checks (one batched request per run, 500-file sub-batches) and marks (one flush per run), reuses a single connection, and short-circuits after the first manager connection failure — a blackholed manager costs one timeout per run, not per file (review follow-up to #54); list-based sources prefetch the run's candidate files against the tracker in one batch
+- `TRAM_DLQ_SPOOL_DIR` defaults under `TRAM_DATA_DIR` in worker mode and gets a Helm value (`worker.dlqSpoolDir`) — the spool lands on the worker PVC, not the container overlay (review follow-up to #55 D1)
+- The processed-files internal endpoints cap `files` at 1000 per request (400 on overflow) (review follow-up to #54)
+- Template examples embedded in AI generation prompts pass through redaction (fail-closed drop) (review follow-up to #41)
+- Run-complete callbacks skip retry on 4xx responses — network errors and 5xx/429 still retry (review follow-up to #55 D2)
 - Browser-smoke version assertions now derive from `tram/ui/package.json` and cross-check `tests/browser/fixtures/meta.json` — fixture drift fails the check instead of passing silently; release-gate check 2 validates the fixture against the pyproject version (#50)
 - The yaml-quote browser check stubs the schema-poll interval (`window.__TRAM_TEST_SCHEMA_POLL_MS__` override) — the hardcoded 61.5s wall-clock wait is gone (check now ~11s) (#50)
 

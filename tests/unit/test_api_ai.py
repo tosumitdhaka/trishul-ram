@@ -971,6 +971,48 @@ class TestRedactYaml:
         assert _redact_yaml("   \n") == "   \n"
 
 
+# ── N3 (v1.4.7): template examples are redacted before entering prompts ─────
+
+
+class TestRedactTemplateExamples:
+    def _template(self, name, yaml_text):
+        return {"id": name, "name": name, "yaml": yaml_text}
+
+    def test_secret_looking_template_field_is_masked(self):
+        from tram.api.routers.ai import _redact_template_examples
+
+        tpl = self._template("sftp-export", (
+            "name: sftp-export\n"
+            "schedule:\n  type: manual\n"
+            "source:\n  type: sftp\n"
+            "  host: ne.example.com\n"
+            "  username: collector\n"
+            "  password: hunter2\n"
+        ))
+        out = _redact_template_examples([tpl])
+        assert len(out) == 1
+        assert "hunter2" not in out[0]["yaml"]
+        assert "***redacted***" in out[0]["yaml"]
+
+    def test_unredactable_template_is_dropped_fail_closed(self):
+        from tram.api.routers.ai import _redact_template_examples
+
+        good = self._template("good", "name: good\n")
+        broken = self._template("broken", "source: [unclosed\n")
+        out = _redact_template_examples([good, broken])
+        assert len(out) == 1
+        assert out[0]["id"] == "good"
+        # The original template dicts are never mutated.
+        assert "source: [unclosed" in broken["yaml"]
+
+    def test_empty_and_blank_templates_pass_through(self):
+        from tram.api.routers.ai import _redact_template_examples
+
+        out = _redact_template_examples([self._template("empty", "")])
+        assert len(out) == 1
+        assert out[0]["yaml"] == ""
+
+
 class TestAiPromptRedaction:
     """Endpoint-level: what reaches the provider has secrets masked."""
 

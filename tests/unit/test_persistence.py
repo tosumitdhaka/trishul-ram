@@ -263,3 +263,102 @@ class TestPipelineVersionUniqueConstraint:
         ):
             with pytest.raises(IntegrityError):
                 db.save_pipeline_version("p", "yaml")
+
+    def test_legacy_duplicate_rows_deduped_before_unique_index(self, tmp_path):
+        """v1.4.7 review (B9 fix): a legacy DB already holding two rows with
+        the same (name, version) — the exact corruption the pre-B9 race could
+        produce — must not crash TramDB init. The newest row per group
+        survives (created_at, id tiebreak) and the unique index is created."""
+        import sqlite3
+
+        p = tmp_path / "legacy-dup.db"
+        legacy = sqlite3.connect(p)
+        legacy.execute("""
+            CREATE TABLE pipeline_versions (
+                id           TEXT PRIMARY KEY NOT NULL,
+                name         TEXT NOT NULL,
+                version      INTEGER NOT NULL,
+                yaml_content TEXT NOT NULL,
+                created_at   TEXT NOT NULL,
+                is_active    INTEGER NOT NULL DEFAULT 1
+            )
+        """)
+        legacy.executemany(
+            "INSERT INTO pipeline_versions "
+            "(id, name, version, yaml_content, created_at, is_active) "
+            "VALUES (?, ?, ?, ?, ?, ?)",
+            [
+                ("dup-old", "p", 1, "older", "2026-01-01T00:00:00+00:00", 1),
+                ("dup-new", "p", 1, "newer", "2026-01-02T00:00:00+00:00", 1),
+                ("q-1", "q", 1, "ok", "2026-01-01T00:00:00+00:00", 1),
+            ],
+        )
+        legacy.commit()
+        legacy.close()
+
+        d = TramDB(url=f"sqlite:///{p}")
+        try:
+            with d._engine.connect() as conn:
+                row = conn.execute(text(
+                    "SELECT name FROM sqlite_master "
+                    "WHERE type = 'index' AND name = 'uq_pv_name_version'"
+                )).fetchone()
+                assert row is not None  # init succeeded → index created
+                rows = conn.execute(text(
+                    "SELECT id, name, version, is_active FROM pipeline_versions "
+                    "ORDER BY name"
+                )).mappings().fetchall()
+                assert [(r["name"], r["version"]) for r in rows] == [("p", 1), ("q", 1)]
+                p_row = [r for r in rows if r["name"] == "p"][0]
+                assert p_row["id"] == "dup-new"    # newest row survives
+                assert p_row["is_active"] == 1     # group was active → survivor stays active
+                # the unique constraint now holds: a re-insert of (p, 1) fails
+                with pytest.raises(IntegrityError):
+                    conn.execute(text(
+                        "INSERT INTO pipeline_versions "
+                        "(id, name, version, yaml_content, created_at, is_active) "
+                        "VALUES ('dup-again', 'p', 1, 'x', '2026-01-03T00:00:00+00:00', 1)"
+                    ))
+        finally:
+            d.close()
+
+    def test_legacy_duplicate_dedup_is_idempotent(self, tmp_path):
+        """Re-initialising TramDB on an already-deduped DB is a no-op — the
+        dedup must be idempotent on clean data (no rows deleted, no error)."""
+        import sqlite3
+
+        p = tmp_path / "legacy-dup2.db"
+        legacy = sqlite3.connect(p)
+        legacy.execute("""
+            CREATE TABLE pipeline_versions (
+                id           TEXT PRIMARY KEY NOT NULL,
+                name         TEXT NOT NULL,
+                version      INTEGER NOT NULL,
+                yaml_content TEXT NOT NULL,
+                created_at   TEXT NOT NULL,
+                is_active    INTEGER NOT NULL DEFAULT 1
+            )
+        """)
+        legacy.executemany(
+            "INSERT INTO pipeline_versions "
+            "(id, name, version, yaml_content, created_at, is_active) "
+            "VALUES (?, ?, ?, ?, ?, ?)",
+            [
+                ("a1", "p", 1, "older", "2026-01-01T00:00:00+00:00", 1),
+                ("a2", "p", 1, "newer", "2026-01-02T00:00:00+00:00", 1),
+                ("b1", "p", 2, "v2", "2026-01-03T00:00:00+00:00", 0),
+            ],
+        )
+        legacy.commit()
+        legacy.close()
+
+        for _ in range(2):  # two TramDB inits on the same file
+            d = TramDB(url=f"sqlite:///{p}")
+            with d._engine.connect() as conn:
+                rows = conn.execute(text(
+                    "SELECT id, name, version, is_active FROM pipeline_versions "
+                    "ORDER BY name, version"
+                )).mappings().fetchall()
+                assert [(r["name"], r["version"]) for r in rows] == [("p", 1), ("p", 2)]
+                assert [r["id"] for r in rows] == ["a2", "b1"]  # newest per group
+            d.close()

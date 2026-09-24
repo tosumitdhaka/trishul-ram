@@ -156,6 +156,57 @@ def _create_tables(engine: Engine) -> None:
         # databases get the UNIQUE constraint inline in CREATE TABLE; existing
         # databases get the unique index here. "Already exists" is the only
         # ignorable failure (MySQL has no CREATE INDEX IF NOT EXISTS).
+        #
+        # A legacy database that ALREADY holds two rows with the same
+        # (name, version) — exactly the corruption the pre-B9 race could
+        # produce — would make the CREATE UNIQUE INDEX fail with an
+        # IntegrityError and crash TramDB init (manager cannot boot after
+        # upgrade). Dedup first, idempotently: for each (name, version) group
+        # keep the newest row (created_at, then id as the deterministic
+        # tiebreak) and delete the losers — the table is insert-only version
+        # history, so stale duplicates are safe to drop. If any row of a
+        # group was active, the survivor stays active so the "one active
+        # version" invariant holds. Clean databases have no groups with more
+        # than one row, so this is a no-op (a cheap COUNT probe gates it).
+        _dup_groups = conn.execute(text("""
+            SELECT COUNT(*) FROM (
+                SELECT name, version FROM pipeline_versions
+                GROUP BY name, version HAVING COUNT(*) > 1
+            )
+        """)).scalar()
+        if _dup_groups:
+            conn.execute(text("""
+                UPDATE pipeline_versions SET is_active = 1
+                WHERE id IN (
+                    SELECT keep_id FROM (
+                        SELECT
+                            p.id AS pid,
+                            (SELECT p2.id FROM pipeline_versions p2
+                             WHERE p2.name = p.name AND p2.version = p.version
+                             ORDER BY p2.created_at DESC, p2.id DESC LIMIT 1)
+                                AS keep_id,
+                            MAX(p.is_active) AS any_active
+                        FROM pipeline_versions p
+                        GROUP BY p.name, p.version
+                    ) grouped
+                    WHERE grouped.pid = grouped.keep_id
+                      AND grouped.any_active = 1
+                )
+            """))
+            conn.execute(text("""
+                DELETE FROM pipeline_versions
+                WHERE id IN (
+                    SELECT id FROM (
+                        SELECT id,
+                               ROW_NUMBER() OVER (
+                                   PARTITION BY name, version
+                                   ORDER BY created_at DESC, id DESC
+                               ) AS rn
+                        FROM pipeline_versions
+                    ) ranked
+                    WHERE rn > 1
+                )
+            """))
         try:
             if dialect in ("sqlite", "postgresql"):
                 conn.execute(text(

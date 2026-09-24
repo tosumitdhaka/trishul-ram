@@ -351,6 +351,26 @@ class TestProcessedFilesEndpoints:
         assert client.post("/api/internal/processed-files/check", content=b"").status_code == 422
         assert client.post("/api/internal/processed-files/mark", content=b"").status_code == 422
 
+    def test_oversized_batch_rejected_400(self, tmp_path):
+        """C5 (v1.4.7): a processed-files request above the per-request bound
+        is rejected with 400 — batch-friendly but bounded; the bound itself is
+        still accepted."""
+        from tram.api.routers.internal import _MAX_PROCESSED_FILES_PER_REQUEST
+
+        client = self._make_app(tmp_path)
+        too_big = self._payload(
+            "pipe-a",
+            [("local:/in", f"/in/f{i}.json") for i in range(_MAX_PROCESSED_FILES_PER_REQUEST + 1)],
+        )
+        assert client.post("/api/internal/processed-files/check", json=too_big).status_code == 400
+        assert client.post("/api/internal/processed-files/mark", json=too_big).status_code == 400
+
+        at_bound = self._payload(
+            "pipe-a",
+            [("local:/in", f"/in/f{i}.json") for i in range(_MAX_PROCESSED_FILES_PER_REQUEST)],
+        )
+        assert client.post("/api/internal/processed-files/check", json=at_bound).status_code == 200
+
     def test_not_in_openapi_schema(self, tmp_path):
         client = self._make_app(tmp_path)
         paths = client.get("/openapi.json").json().get("paths", {})

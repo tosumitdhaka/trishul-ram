@@ -86,6 +86,42 @@ class TestPipelineExecutorDryRun:
         )
         assert [t.type for t in config.transforms] == ["inject_meta"]
 
+    def test_pipeline_config_rejects_sink_level_inject_meta_with_thread_workers(self):
+        """v1.4.7 review: sink-level inject_meta races thread_workers > 1 the
+        same way the top-level one does — per-sink transform instances are
+        built once per run (executor _build_sinks) and shared across the
+        chunk threads, so the runtime-meta write/read pair races."""
+        from tram.core.exceptions import ConfigError
+
+        with pytest.raises(ConfigError, match="thread_workers"):
+            _make_pipeline(
+                "thread_workers: 2\n"
+                "          sinks:\n"
+                "            - type: local\n"
+                "              path: /tmp/out\n"
+                "              transforms:\n"
+                "                - type: inject_meta\n"
+                "                  fields:\n"
+                "                    source_filename: src_file"
+            )
+
+    def test_pipeline_config_accepts_sink_level_inject_meta_with_parallel_sinks(self):
+        """parallel_sinks without thread_workers > 1 stays allowed: each
+        sink's transform instances are only touched by that sink's own
+        fan-out thread, so no instance is shared across threads."""
+        config = _make_pipeline(
+            "parallel_sinks: true\n"
+            "          sinks:\n"
+            "            - type: local\n"
+            "              path: /tmp/out\n"
+            "              transforms:\n"
+            "                - type: inject_meta\n"
+            "                  fields:\n"
+            "                    source_filename: src_file"
+        )
+        assert config.parallel_sinks is True
+        assert config.sinks[0].transforms[0].type == "inject_meta"
+
     def test_pipeline_config_post_batch_cleanup_defaults_true(self):
         config = _make_pipeline()
         assert config.post_batch_cleanup is True
@@ -763,6 +799,43 @@ class TestPipelineExecutorBatchRun:
 
         assert result.status == RunStatus.FAILED
         assert "transform boom" in (result.error or "")
+        mock_sink.write.assert_not_called()
+
+    def test_batch_run_abort_fails_on_sink_transform_error(self):
+        """v1.4.7 review (C1): on_error=abort with a failing SINK-level
+        transform must fail the run like the global transform path — not
+        silently DLQ and continue."""
+        config = _make_pipeline("on_error: abort")
+
+        class BoomTransform:
+            def apply(self, records):
+                raise ValueError("sink transform boom")
+
+        executor = PipelineExecutor()
+        mock_source = MagicMock()
+        mock_source.read.return_value = iter([
+            (json.dumps([{"id": "1"}]).encode(), {"source_filename": "t.json"}),
+        ])
+        mock_sink = MagicMock()
+        mock_ser_in = MagicMock()
+        mock_ser_in.parse.return_value = [{"id": "1"}]
+        mock_ser_out = MagicMock()
+        mock_ser_out.serialize.return_value = b"[]"
+
+        with (
+            patch.object(executor, "_build_source", return_value=mock_source),
+            patch.object(
+                executor, "_build_sinks",
+                return_value=[(mock_sink, None, [BoomTransform()])],
+            ),
+            patch.object(executor, "_build_serializer_in", return_value=mock_ser_in),
+            patch.object(executor, "_build_serializer_out", return_value=mock_ser_out),
+            patch.object(executor, "_build_transforms", return_value=[]),
+        ):
+            result = executor.batch_run(config)
+
+        assert result.status == RunStatus.FAILED
+        assert "sink transform boom" in (result.error or "")
         mock_sink.write.assert_not_called()
 
     def test_parallel_sink_fanout_converts_raw_exception_to_tram_error(self):

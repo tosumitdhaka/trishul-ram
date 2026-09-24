@@ -8,7 +8,7 @@ import textwrap
 from unittest.mock import MagicMock, patch
 
 from tram.core.context import PipelineRunContext
-from tram.pipeline.executor import PipelineExecutor, _write_dlq_envelope
+from tram.pipeline.executor import PipelineExecutor, _dlq_spool_dir, _write_dlq_envelope
 from tram.pipeline.loader import load_pipeline_from_yaml
 
 
@@ -135,6 +135,31 @@ class TestDlqEnvelopeHelper:
 class TestDlqDiskSpool:
     """D1 (GH #55): a DLQ sink write failure must never silently discard the
     record — the envelope is spooled to local disk as a durable fallback."""
+
+    def test_worker_mode_default_resolves_under_data_dir(self, monkeypatch):
+        """C3 (v1.4.7): in worker mode the spool default resolves under
+        TRAM_DATA_DIR so envelopes land on the mounted data volume instead of
+        the container overlay (~/.tram)."""
+        monkeypatch.setenv("TRAM_MODE", "worker")
+        monkeypatch.setenv("TRAM_DATA_DIR", "/data")
+        assert _dlq_spool_dir() == "/data/dlq-spool"
+
+    def test_worker_mode_data_dir_override_is_honored(self, monkeypatch):
+        monkeypatch.setenv("TRAM_MODE", "worker")
+        monkeypatch.setenv("TRAM_DATA_DIR", "/mnt/spool-root")
+        assert _dlq_spool_dir() == "/mnt/spool-root/dlq-spool"
+
+    def test_standalone_and_manager_default_under_home(self, monkeypatch):
+        """Non-worker modes keep the ~/.tram default (alongside the SQLite
+        fallback DB); an explicit TRAM_DLQ_SPOOL_DIR always wins."""
+        monkeypatch.setenv("TRAM_MODE", "standalone")
+        monkeypatch.delenv("TRAM_DLQ_SPOOL_DIR", raising=False)
+        monkeypatch.delenv("TRAM_DATA_DIR", raising=False)
+        assert _dlq_spool_dir() == "~/.tram/dlq-spool"
+        monkeypatch.setenv("TRAM_MODE", "manager")
+        assert _dlq_spool_dir() == "~/.tram/dlq-spool"
+        monkeypatch.setenv("TRAM_DLQ_SPOOL_DIR", "/custom/spool")
+        assert _dlq_spool_dir() == "/custom/spool"
 
     def test_envelope_spooled_when_dlq_sink_write_fails(self, tmp_path, monkeypatch):
         monkeypatch.setenv("TRAM_DLQ_SPOOL_DIR", str(tmp_path))

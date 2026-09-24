@@ -279,6 +279,30 @@ async def _bundled_templates(request: Request) -> list[dict]:
         return []
 
 
+def _redact_template_examples(templates: list[dict]) -> list[dict]:
+    """Redact every template's YAML before it enters a generation prompt (N3).
+
+    The bundled library is curated, but operator-dropped templates can carry
+    real secrets, so each template's YAML goes through the same ``_redact_yaml``
+    used by explain/fix/modify. A template whose YAML cannot be redacted
+    safely is dropped (fail closed) — grounding is an enhancement and must
+    never become a secret-leak channel.
+    """
+    redacted: list[dict] = []
+    for tpl in templates:
+        raw = tpl.get("yaml") or ""
+        if not raw.strip():
+            redacted.append(tpl)
+            continue
+        try:
+            clean = dict(tpl)
+            clean["yaml"] = _redact_yaml(raw)
+        except ValueError:
+            continue
+        redacted.append(clean)
+    return redacted
+
+
 def _call_ai(system: str, user: str, max_tokens: int, cfg: dict) -> _AiResult:
     provider = cfg["provider"]
     api_key  = cfg["api_key"]
@@ -512,10 +536,10 @@ async def _run_fix_with_retry(request: Request, cfg: dict, system: str, user: st
         "YAML only:\n"
         + "\n".join(f"- {issue}" for issue in issues)
     )
-    retried = await _run_ai_call(
+    retry_result = await _run_ai_call(
         request, "fix", system, retry_user, max_tokens=1024, cfg=cfg, retried=True,
     )
-    return _fix_mode_result(retried, _strip_fences(retried.text), retried=True)
+    return _fix_mode_result(retry_result, _strip_fences(retry_result.text), retried=True)
 
 
 # ── B1: run-failure triage context ──────────────────────────────────────────
@@ -964,7 +988,12 @@ async def ai_suggest(request: Request) -> dict:
         )
         # A6: ground generation in the bundled template library when one
         # matches the prompt (bounded — never grows the prompt unboundedly).
-        template_examples = build_template_examples(await _bundled_templates(request), prompt)
+        # N3: template YAML is redacted before embedding (operator-dropped
+        # templates can carry real secrets); unredactable templates are
+        # dropped, never sent verbatim.
+        template_examples = build_template_examples(
+            _redact_template_examples(await _bundled_templates(request)), prompt
+        )
         if template_examples:
             system += "\n\n" + template_examples
         try:
