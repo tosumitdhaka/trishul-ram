@@ -37,6 +37,7 @@ One branch + one PR per version, progress table in the PR body (same model as PR
 |---|---|---|
 | #48 | Per-record correctness: `inject_meta` thread race, `on_error: abort` for transforms, `rate_limit_rps=0` (A5), threaded `record_chunk_size` | review §2.4/2.5/2.9/2.10/2.16 |
 | #50 | Browser smoke stale fixture (asserts v1.4.3 vs release), gate validation of `fixtures/meta.json`, 61.5s wait removal | review §4.2/4.9 |
+| #54 | Manager-routed `ProcessedFileTracker` — real `skip_processed` idempotency in worker mode (follow-up to #39; HIGH data integrity — duplicate CDRs are wrong billing records) | GH #54 |
 | AI B.1 (A7) | Fix-mode iteration loop (validate + one retry) | ai-expansion-plan Wave B |
 | AI B.2 (B1) | Run-failure triage: `mode: "triage"` + "Explain this run" UI on the run-detail page | ai-expansion-plan Wave B |
 | AI B.3 (A6) | Template-grounded generation (few-shot from `/api/templates`) | ai-expansion-plan Wave B |
