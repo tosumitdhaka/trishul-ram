@@ -5,7 +5,7 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ---
 
-## [Unreleased]
+## [1.4.7] - 2026-09-24
 
 ### Fixed
 - `rate_limit_rps: 0` no longer crashes every chunk with `ZeroDivisionError` — rejected at config validation (`gt=0`) plus a defense-in-depth executor guard (historical review finding A5) (#48)
