@@ -136,7 +136,7 @@ unconfirmed work lives in the backlog at the bottom.
 
 ## v1.5.0 — AI Provider Layer + SNMP Library Swap
 
-> Both scope-defining decisions made by the maintainer on 2026-09-25. Entry-gated: the SNMP swap starts only after upstream trishul-snmp #28 (SHA-2 HMAC tag length) ships and the smoke harness re-runs green.
+> Both scope-defining decisions made by the maintainer on 2026-09-25. **On hold (maintainer, 2026-09-25): v1.5.0 waits for an upstream tsmi/tsmp improvement round; the swap scope will include its output.** Entry-gated: the SNMP swap starts only after upstream trishul-snmp #28 (SHA-2 HMAC tag length) and #29 (DES-CBC priv) are resolved and the smoke harness re-runs green.
 
 - [ ] **treq `_providers/` vendoring (GH #71)** — copy the layer (no library extraction), adaptation list per `docs/ideas/treq-ai-reuse-feasibility.md`; preserve the v1.4.6 security properties (A10 audit, A11 base_url policy, redaction, three-state config) on the new call path
 - [ ] **AI Wave C on the vendored layer (GH #41)** — A9 streaming, B3–B6 per the ai-expansion-plan
