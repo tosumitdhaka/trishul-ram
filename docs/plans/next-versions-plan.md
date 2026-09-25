@@ -1,4 +1,6 @@
-# Next-Versions Plan — v1.4.6 → v1.4.8
+# Next-Versions Plan — v1.4.6 → v1.5.0
+
+> v1.4.6, v1.4.7, and v1.4.8 shipped (2026-09-24/25); their sections below are the release records. v1.5.0 is the active plan.
 
 **Date:** 2026-09-24
 **Provenance:** the 2026-09-24 independent full-repo review (`docs/reviews/independent-review-2026-09-24.md`, 59 findings) and open-items inventory (`docs/ideas/open-items-inventory-2026-09-24.md`). All review findings are now tracked as GH issues #43–#52 (clubbed by fix domain).
@@ -75,11 +77,28 @@ One branch + one PR per version, progress table in the PR body (same model as PR
 
 ---
 
+## v1.5.0 — AI Provider Layer + SNMP Library Swap
+
+> Both scope-defining decisions made by the maintainer on 2026-09-25: (1) vendor treq's `_providers/` layer, (2) option C for the SNMP library swap.
+
+| Item | Scope | Issue |
+|---|---|---|
+| treq `_providers/` vendoring | Copy the layer (~1,900 + ~5,400 test lines, no library extraction) with the adaptation list from the feasibility doc (decouple the openai global-settings import, parameterize the Rakuten hostname, add anthropic base_url, keep lazy optional SDK imports). The v1.4.6 security properties — A10 audit rows, A11 base_url policy incl. call-time effective-endpoint enforcement, redaction, three-state config semantics — must be proven to apply on the new call path | #71 |
+| AI Wave C — A9 | Streaming responses end-to-end on the vendored layer | #41 |
+| AI Wave C — B3–B6 | Structured output, tool use, batch, evals (scope per ai-expansion-plan) | #41 |
+| A.2/A.3 | Editor inline-validation UX + per-plugin examples (ungated; confirm scope at wave planning) | #42 |
+| SNMP swap — option C | Full pysnmp/pysmi → trishul-snmp/tsmp swap behind a feature flag (default off): poll + trap paths, v3 USM full crypto matrix, MIB compile/resolve via tsmi | #72 |
+
+**Entry criteria:** v1.4.8 tagged ✓; upstream trishul-snmp #28 (SHA-2 HMAC tag length) fixed and released + smoke harness re-run green (addendum in `docs/ideas/trishul-smi-snmp-migration-feasibility.md`). Wave C rows additionally require the vendored AI layer landed and reviewed.
+**Exit criteria:** flag-off path behavior-identical (full suite green on pysnmp) + flag-on live kind verification (v1/v2c/v3 roundtrips + trap paths) + vendored AI layer with the v1.4.6 security properties test-proven on the new call path + independent diff review + release gate green.
+
+---
+
 ## Standing rules & open decisions
 
-- **Sequencing:** v1.4.6 → v1.4.7 → v1.4.8 strictly; a version does not start before the previous one is tagged.
+- **Sequencing:** v1.4.6 → v1.4.7 → v1.4.8 shipped; v1.5.0 is next and starts only when its entry criteria are met (upstream SHA-2 fix + green harness re-run).
 - **Overlapping files:** lanes touching the same file queue or combine — never concurrent (repo rule).
-- **treq vendor decision** gates the AI rows of v1.4.7/v1.4.8 only; the fix issues (#48/#50, #49/#51/#52) are not blocked by it.
-- **SNMP library migration decision** (tsmi/tsmp) is unchanged and orthogonal — blocked on SNMPv1 + v3 crypto breadth upstream (`docs/ideas/trishul-smi-snmp-migration-feasibility.md`).
-- **#41 (AI expansion cycle) and #42 (authoring-UX)** remain the umbrella issues for the AI/UX rows above; close them when their last rows ship.
-- Not in these versions (stay in backlog): B3–B6 (behind Gate 0 + treq), roadmap.md Backlog items (manager HA, RBAC, DLQ viewer, new connectors), deferred design questions from `docs/ideas/open-items-inventory-2026-09-24.md` §2.
+- **treq vendor decision — DECIDED 2026-09-25:** vendor `_providers/` in v1.5.0 (GH #71); Wave C (A9, B3–B6) builds on the vendored layer.
+- **SNMP library migration — DECIDED 2026-09-25:** option C in v1.5.0 behind a feature flag (GH #72), gated on upstream trishul-snmp #28 + a green harness re-run.
+- **#41 (AI expansion cycle) and #42 (authoring-UX)** remain the umbrella issues for the AI/UX rows; close them when their last rows ship.
+- Not in these versions (stay in backlog): the roadmap backlog rows now tracked as GH #58–#70.

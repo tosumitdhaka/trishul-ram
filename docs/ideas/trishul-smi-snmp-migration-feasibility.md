@@ -220,3 +220,15 @@ Gaps and improvements filed as upstream issues (2026-09-21):
 - [#14 — Make the pysnmp .py output format's maintenance posture explicit: maintain it or formally deprecate it](https://github.com/tosumitdhaka/trishul-smi/issues/14)
 - [#15 — Emit the reserved 'cached' CompileResult status (cache-hit visibility for long-running compile services)](https://github.com/tosumitdhaka/trishul-smi/issues/15)
 - [#16 — Define and test the trishul-smi → trishul-snmp JSON bundle compatibility policy (producer/consumer version pairing)](https://github.com/tosumitdhaka/trishul-smi/issues/16)
+
+---
+
+## 12. Addendum — v0.5.1 re-validation (2026-09-25)
+
+Upstream v0.5.0/v0.5.1 closed both hard blockers (#8 SNMPv1, #10 USM crypto parity). A full harness re-run (tsmi/tsmp 0.5.1 + pysnmp 7.1.29, live wire; scripts, per-check JSON, and the root-cause debug chain preserved under `/tmp/opencode/tsmi-smoke-v05/`, `REPORT.md`) verified:
+
+**Green:** lib suites (650 + 571 passed) · MIB compile of the TRAM corpus (15 raw MIBs → JSON + manifest, re-run emits the cached status per tsmi #15) · SNMPv1 GET/GETNEXT/WALK + v1 trap send/receive + `decode_notification` · v2c GET/WALK/trap · v3 MD5/SHA-1 both directions on the wire · the full SHA-224/384/512 × AES-192/256/3DES matrix in-stack · walk boundaries (bulk + GETNEXT-loop, gap crossing, EndOfMibView) · cross-stack interop with pysnmp 7.1.29 (GET + v2c trap, both directions) · silent-drop counters (#9 fix verified live).
+
+**One blocking defect (new, wire-proven):** tsmp truncates every USM HMAC to 12 bytes (`_AUTH_TAG_LEN = 12`, `security/usm.py:28`; its suite pins this in `test_sha2_auth_tag_is_12_bytes`) while RFC 7860 requires 16/24/32/48-byte authParameters for SHA-224/256/384/512. All 17 SHA-2 × priv combinations were rejected by pysnmp and net-snmp snmpd (`usmStatsWrongDigests`), and the tsmp listener drops standard-compliant SHA-2 traps. Root cause isolated to the tag length — a rebuilt request with a correct 24-byte SHA-256 tag is accepted and decrypts cleanly (key derivation, localization, Reeder/3DES priv, and engine discovery are all RFC-correct). Upstream missed it because its cross-agent CI runs v2c-only. DES-CBC (#11) remains fail-fast unimplemented. Filed upstream as [trishul-snmp #28](https://github.com/tosumitdhaka/trishul-snmp/issues/28).
+
+**Verdict:** NO-GO for option C as of 0.5.1 — one upstream fix away from GO at the original ~2–3 week estimate. Maintainer decision (2026-09-25): option C scheduled for v1.5.0 behind a feature flag (GH #72), gated on the upstream fix + a green harness re-run.

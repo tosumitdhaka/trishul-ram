@@ -134,6 +134,17 @@ unconfirmed work lives in the backlog at the bottom.
 
 ---
 
+## v1.5.0 — AI Provider Layer + SNMP Library Swap
+
+> Both scope-defining decisions made by the maintainer on 2026-09-25. Entry-gated: the SNMP swap starts only after upstream trishul-snmp #28 (SHA-2 HMAC tag length) ships and the smoke harness re-runs green.
+
+- [ ] **treq `_providers/` vendoring (GH #71)** — copy the layer (no library extraction), adaptation list per `docs/ideas/treq-ai-reuse-feasibility.md`; preserve the v1.4.6 security properties (A10 audit, A11 base_url policy, redaction, three-state config) on the new call path
+- [ ] **AI Wave C on the vendored layer (GH #41)** — A9 streaming, B3–B6 per the ai-expansion-plan
+- [ ] **A.2/A.3 authoring-UX (GH #42)** — editor inline-validation UX + per-plugin examples (ungated; confirm scope at wave planning)
+- [ ] **SNMP swap, option C (GH #72)** — full pysnmp/pysmi → trishul-snmp/tsmp swap behind a feature flag (default off); flag-off path must remain behavior-identical
+
+---
+
 ## Backlog (unversioned)
 
 ### Connector Fixes (deferred from v1.2.4–v1.2.7)
@@ -203,8 +214,8 @@ unconfirmed work lives in the backlog at the bottom.
 - [x] **Partial unique index for `queued_runs`** (E.2 design Q3) — resolved via B9 in v1.4.7 (GH #55)
 
 ### Open Decisions
-- [ ] **treq provider-layer vendoring (revisit)** — decision made 2026-09-24: proceed on the current `ai.py`, vendoring deferred; Wave B (A6/A7/B1) + A.4 shipped v1.4.7 and A.1 shipped v1.4.8 on the existing layer. A future revisit still gates AI streaming (A9) and B3–B6 — `docs/ideas/treq-ai-reuse-feasibility.md`
-- [ ] **SNMP library migration (tsmi/tsmp)** — upstream blockers CLOSED: trishul-snmp #8 (SNMPv1) and #10 (USM crypto parity — SHA-224/384/512, AES-192/256, 3DES-EDE) shipped in v0.5.0; #9/#11 closed; latest release v0.5.1 (2026-09-24). Awaiting a direction call: option B (parallel connector behind a flag) vs option C (full swap behind a feature flag). The feasibility doc assessed v0.4.x — re-validate against v0.5.x before committing — `docs/ideas/trishul-smi-snmp-migration-feasibility.md`
+- [x] **treq provider-layer vendoring — DECIDED 2026-09-25: vendor in v1.5.0 (GH #71)** — supersedes the 2026-09-24 proceed-on-current-ai.py decision. Unblocks AI streaming (A9) and B3–B6 of the AI expansion cycle — `docs/ideas/treq-ai-reuse-feasibility.md`
+- [x] **SNMP library migration — DECIDED 2026-09-25: option C (full swap behind a feature flag) in v1.5.0 (GH #72), gated upstream** — the v0.5.1 re-validation confirmed the former blockers fixed (SNMPv1, crypto matrix in-stack, silent-drop, walk boundaries, cross-stack interop) but found one new wire-level defect: every USM HMAC is truncated to 12 bytes while RFC 7860 requires 16/24/32/48 for SHA-224/256/384/512 (filed as trishul-snmp #28 with the root-cause chain). The swap proceeds once that fix lands and the harness re-runs green — addendum in `docs/ideas/trishul-smi-snmp-migration-feasibility.md`
 - [ ] **Flip `TRAM_INTERNAL_AUTH_MODE=enforce`** — ops task, not development: after all clients carry keys, flip `warn` → `enforce` per `docs/deployment.md` (v1.4.6 adds the misconfiguration startup warning)
 
 > Architectural positions, not backlog items: thread-based execution (G2), no CRD/operator (G4), at-least-once without exactly-once (G5) — deliberate trade-offs documented in `docs/ideas/tram-improvements.md` and `docs/ideas/tram-vs-telegraf-comparison.md`. G3 (plugin catalog) is covered by the Connector Fixes section above; G6/G7/G8 already appear above as Manager HA, RBAC, and DLQ viewer/live log streaming.
