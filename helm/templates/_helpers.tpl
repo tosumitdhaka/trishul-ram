@@ -76,6 +76,17 @@ so a single-image deployment requires no extra configuration.
 {{- end }}
 
 {{/*
+Chart-managed PostgreSQL credential secret name (GH #51).
+Release-scoped (not fullname-scoped) so the tpl-evaluated default of
+postgresql.auth.existingSecret in values.yaml resolves identically from the
+Bitnami subchart context (which does not see the parent chart's
+nameOverride/fullnameOverride).
+*/}}
+{{- define "tram.postgresSecretName" -}}
+{{- printf "%s-postgres" .Release.Name -}}
+{{- end }}
+
+{{/*
 Create the name of the service account to use.
 */}}
 {{- define "tram.serviceAccountName" -}}

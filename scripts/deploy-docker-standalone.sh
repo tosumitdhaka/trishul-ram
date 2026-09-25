@@ -31,7 +31,7 @@ RESTART_POLICY="${RESTART_POLICY:-unless-stopped}"
 WAIT_TIMEOUT_SECONDS="${WAIT_TIMEOUT_SECONDS:-60}"
 LOG_TAIL="${LOG_TAIL:-200}"
 KEEP_IMAGES="${KEEP_IMAGES:-5}"
-DEFAULT_TRAM_AUTH_USERS="${TRAM_AUTH_USERS:-admin:admin123}"
+DEFAULT_TRAM_AUTH_USERS="${TRAM_AUTH_USERS:-}"
 SAMPLE_HEALTH_PIPELINE_NAME="sample-health.yaml"
 SAMPLE_HEALTH_PIPELINE_SOURCE="${ROOT_DIR}/helm/files/pipelines/${SAMPLE_HEALTH_PIPELINE_NAME}"
 
@@ -93,7 +93,7 @@ Defaults:
   Pipelines:    ${CONTAINER_PIPELINES_DIR} inside /data (host bind disabled by default)
   Data:         <default volume> -> /data
   Output:       /data/output inside /data (or bind-mounted with --output-dir)
-  UI login:     ${DEFAULT_TRAM_AUTH_USERS}
+  UI login:     disabled unless TRAM_AUTH_USERS is set (no default credential injected)
 
 Examples:
   ${SCRIPT_NAME} up
@@ -127,7 +127,10 @@ Notes:
     \`${SAMPLE_HEALTH_PIPELINE_NAME}\` so a fresh standalone deploy has a safe sample pipeline.
   - Advanced \`--env\` overrides can replace the script's default TRAM_* values, so keep them
     consistent with the mounted directories and published ports.
-  - Browser login bootstrap defaults to \`TRAM_AUTH_USERS=${DEFAULT_TRAM_AUTH_USERS}\`.
+  - Browser login bootstrap: no default credential is injected (the weak \`admin:admin123\`
+    default was removed, GH #51). Export \`TRAM_AUTH_USERS\`, use \`--env-file\`, or pass
+    \`--env 'TRAM_AUTH_USERS=admin:changeme123'\` to enable UI login — required for
+    published/\`--ghcr\` deployments.
   - Override browser login with exported \`TRAM_AUTH_USERS\`, \`--env-file\`, or \`--env TRAM_AUTH_USERS=...\`;
     quote the full value if the password contains shell-special characters.
   - The default Docker data volume persists \`/data/tram.db\`; any password changed later in the UI is
@@ -524,7 +527,11 @@ show_summary() {
   echo "Container: ${CONTAINER_NAME}"
   echo "Image:     ${IMAGE}"
   echo "UI/API:    http://localhost:${HOST_PORT}"
-  echo "UI login:  bootstrap via TRAM_AUTH_USERS (default: admin/admin123 unless overridden or stored in DB)"
+  if [[ -n "${DEFAULT_TRAM_AUTH_USERS}" ]]; then
+    echo "UI login:  TRAM_AUTH_USERS=${DEFAULT_TRAM_AUTH_USERS}"
+  else
+    echo "UI login:  disabled — set TRAM_AUTH_USERS via --env/--env-file/export to enable"
+  fi
   if [[ -n "${DATA_VOLUME}" ]]; then
     echo "Data:      volume ${DATA_VOLUME}"
   else
@@ -584,7 +591,7 @@ cmd_up() {
     -e "TRAM_SCHEMA_DIR=/data/schemas"
   )
 
-  if ! env_key_in_file "TRAM_AUTH_USERS" && ! env_key_in_extra_args "TRAM_AUTH_USERS"; then
+  if [[ -n "${DEFAULT_TRAM_AUTH_USERS}" ]] && ! env_key_in_file "TRAM_AUTH_USERS" && ! env_key_in_extra_args "TRAM_AUTH_USERS"; then
     args+=(-e "TRAM_AUTH_USERS=${DEFAULT_TRAM_AUTH_USERS}")
   fi
 

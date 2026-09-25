@@ -1,3 +1,13 @@
+# TRAM — docker compose dev profile.
+#
+# First-time setup (permission trap, GH #51): this file bind-mounts the
+# gitignored host dir ./output. Docker auto-creates a missing bind source as
+# root, while the containers run as uid 1000 — a fresh checkout hits EACCES on
+# startup. Create it yourself with the right ownership first:
+#
+#   mkdir -p output && sudo chown -R 1000:1000 output
+#
+# (uid 1000 is the tram user in the image and the sftp upload user below.)
 services:
 
   # ── TRAM daemon ────────────────────────────────────────────────────────────
@@ -21,6 +31,8 @@ services:
     volumes:
       - ./pipelines:/pipelines          # pipeline YAMLs (read-only at runtime; writable for dev)
       - tram_data:/data                 # SQLite DB + run history
+      # Bind source ./output must exist and be owned by uid 1000 (see header
+      # comment) or the container hits EACCES — Docker creates it root-owned.
       - ./output:/data/output           # bind-mount output dir for easy local inspection
       - tram_mibs:/data/mibs            # persisted MIBs downloaded via /api/mibs/download
 
@@ -123,6 +135,8 @@ services:
     ports:
       - "2222:22"
     volumes:
+      # Same bind-source permission trap as the tram service: ./output must
+      # exist and be owned by uid 1000 (see header comment) or sftp uploads fail.
       - ./output/sftp:/home/tram/upload   # SFTP uploads appear in ./output/sftp/ on host
     # <username>:<password>[:<uid>[:<gid>[:<homedir>]]]
     command: tram:tram123:1000
