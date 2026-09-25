@@ -5,6 +5,30 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ---
 
+## [Unreleased]
+
+### Fixed
+- Navigating with a modal open (browser Back, same-page route change) no longer leaves an orphaned backdrop/scroll-lock — the router closes all modals synchronously before every render swap; a pending `confirmAction()` settles as cancel on navigation instead of hanging forever (#49)
+- A Bootstrap mid-fade dispose race in the modal cleanup (uncaught `TypeError` ~150ms after route change) is closed — the pending show-transition callback is consumed on the intact instance before disposal (#49)
+- The hardcoded brand version literal in `index.html` is gone — the version renders from `/api/meta` (`v—` placeholder offline, real version once reachable) (#49)
+- `interval_seconds: 0` and malformed cron expressions are rejected at config validation; `thread_workers`, `batch_size`, `retry_count`, `retry_delay_seconds` bounds enforced (0 no longer silently means unlimited batch) (#52)
+- The file watcher deletes by pipeline name on file deletion (stem fallback only for never-loaded files) — no more misattribution on edge filenames (#52)
+- CSV export prefixes formula-leading characters (`= + - @`) — spreadsheet formula injection closed (#52)
+- Startup warns loudly when `TRAM_WORKERS > 1` runs without `TRAM_AUTH_SECRET` (#52)
+- New lint rule L014: kafka + `enable_auto_commit: false` + `thread_workers > 1` warns about the poll-batch commit race (#52)
+- SQLite connections get a 30s busy timeout (`PRAGMA busy_timeout`) — `database is locked` contention gets a retry grace window (D5) (#52)
+- SFTP/FTP sinks reuse one connection per run with a single reconnect attempt on transport failure, instead of a fresh connection per write (D7) (#52)
+
+### Changed
+- **[deployment]** The Helm chart no longer ships `postgres` as the default database password: credentials are chart-managed (explicit → existing-secret lookup → generated on first install), `TRAM_DB_URL` is wired via `secretKeyRef`, and unresolvable combinations fail the install with a clear message. The sharedStorage PVC only renders when actually mounted (no orphaned volume), and the standalone script no longer injects any default credentials (#51)
+- **[deployment]** docs/deployment.md now recommends PostgreSQL for production scale (SQLite concurrency caveats documented) and documents the compose `./output` bind-mount permission setup (#51, D5)
+- The 20× copy-pasted sink-config field block is a shared `SinkCommonFieldsMixin` (E1), the Local/SFTP rolling-writer logic is one `RollingWriter` (E3), and connector config extraction is a shared helper (E4) — behavior-identical; wizard form-field ORDER may shift because common fields now precede connector-specific ones (#52)
+- Field ordering note: `/api/config/schema` and `/api/plugins` field lists reflect the mixin reordering above (names/types/metadata unchanged) (#52)
+
+### Added
+- Every one of the 601 config-schema field descriptors carries an operator-facing `description` (surfaced in the wizard via `/api/config/schema` and on `/api/plugins`); `schema_version` identity hash rotates (`7b7a99657e20` → `03ea26d44e35`) (AI Wave A, A.1) (#42)
+- Browser smoke gains a `modal-nav` check — modal open + Back navigation, deep-link entry, same-page route change, confirm-dialog reset, brand-version rendering; the boot check now rejects the `v—` placeholder (formerly a vacuous non-empty wait) (#49, #50 follow-up)
+
 ## [1.4.7] - 2026-09-24
 
 ### Fixed
