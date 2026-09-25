@@ -199,3 +199,54 @@ class TestFTPSink:
 
         cmd = mock_ftp.storbinary.call_args[0][0]
         assert cmd == "STOR /out/input.csv"
+
+    # ── D7: run-scoped connection reuse + reconnect-once ────────────────────
+
+    def test_reuses_connection_across_writes_and_closes_on_close(self):
+
+        mock_ftp = MagicMock()
+        ftp_cls = MagicMock(return_value=mock_ftp)
+        with patch("ftplib.FTP", ftp_cls):
+            sink = FTPSink({
+                "host": "ftp.example.com",
+                "username": "user",
+                "password": "pass",
+                "remote_path": "/out",
+                "filename_template": "out.bin",
+            })
+            sink.write(b"one", {})
+            sink.write(b"two", {})
+
+        # One control connection for two writes — no login per chunk (review D7).
+        assert ftp_cls.call_count == 1
+        assert mock_ftp.storbinary.call_count == 2
+
+        sink.close()
+        assert sink._ftp is None
+        mock_ftp.quit.assert_called_once()
+        sink.close()  # idempotent
+        assert mock_ftp.quit.call_count == 1
+
+    def test_reconnect_exactly_once_on_stale_connection(self):
+
+        stale_ftp = MagicMock()
+        stale_ftp.storbinary.side_effect = OSError("control connection closed")
+        fresh_ftp = MagicMock()
+        ftp_cls = MagicMock(side_effect=[stale_ftp, fresh_ftp])
+        with patch("ftplib.FTP", ftp_cls):
+            sink = FTPSink({
+                "host": "ftp.example.com",
+                "username": "user",
+                "password": "pass",
+                "remote_path": "/out",
+                "filename_template": "out.bin",
+            })
+            sink.write(b"data", {})
+
+        # Exactly one reconnect, then the write lands on the fresh connection.
+        assert ftp_cls.call_count == 2
+        assert stale_ftp.storbinary.call_count == 1
+        assert fresh_ftp.storbinary.call_count == 1
+        stale_ftp.quit.assert_called_once()  # stale connection dropped
+        sink.close()
+        fresh_ftp.quit.assert_called_once()

@@ -7,6 +7,14 @@ import json
 import logging
 import warnings
 
+from tram.connectors.config_utils import (
+    cfg_float,
+    cfg_int,
+    cfg_list,
+    cfg_str,
+    prepend_system_mib_dirs,
+    snmpv3_usm,
+)
 from tram.core.exceptions import SinkError
 from tram.interfaces.base_sink import BaseSink
 from tram.registry.registry import register_sink
@@ -45,27 +53,23 @@ class SNMPTrapSink(BaseSink):
     def __init__(self, config: dict) -> None:
         super().__init__(config)
         self.host: str = config["host"]
-        self.port: int = int(config.get("port", 162))
+        self.port: int = cfg_int(config, "port", 162)
         self.community: str = config.get("community", "public")
-        self.version: str = str(config.get("version", "2c"))
+        self.version: str = cfg_str(config, "version", "2c")
         self.trap_oid: str = config.get("trap_oid") or config.get("enterprise_oid", "1.3.6.1.4.1.0")
-        self.timeout: float = float(config.get("timeout", 1.0))
-        self.retries: int = int(config.get("retries", 5))
-        self.mib_dirs: list[str] = list(config.get("mib_dirs", []))
-        self.mib_modules: list[str] = list(config.get("mib_modules", []))
-        self.varbinds: list[dict] = list(config.get("varbinds", []))
-        # Auto-prepend /mibs and TRAM_MIB_DIR
-        import os as _os
-        for _d in ["/mibs", _os.environ.get("TRAM_MIB_DIR", "")]:
-            if _d and _os.path.isdir(_d) and _d not in self.mib_dirs:
-                self.mib_dirs.insert(0, _d)
-        # SNMPv3 USM
-        self.security_name: str = config.get("security_name", "")
-        self.auth_protocol: str = config.get("auth_protocol", "SHA")
-        self.auth_key: str | None = config.get("auth_key")
-        self.priv_protocol: str = config.get("priv_protocol", "AES128")
-        self.priv_key: str | None = config.get("priv_key")
-        self.context_name: str = config.get("context_name", "")
+        self.timeout: float = cfg_float(config, "timeout", 1.0)
+        self.retries: int = cfg_int(config, "retries", 5)
+        self.mib_dirs: list[str] = prepend_system_mib_dirs(cfg_list(config, "mib_dirs"))
+        self.mib_modules: list[str] = cfg_list(config, "mib_modules")
+        self.varbinds: list[dict] = cfg_list(config, "varbinds")
+        # SNMPv3 USM (review E4 — shared helper)
+        usm = snmpv3_usm(config)
+        self.security_name: str = usm["security_name"]
+        self.auth_protocol: str = usm["auth_protocol"]
+        self.auth_key: str | None = usm["auth_key"]
+        self.priv_protocol: str = usm["priv_protocol"]
+        self.priv_key: str | None = usm["priv_key"]
+        self.context_name: str = usm["context_name"]
 
     def _build_var_binds(self, hlapi_mod, bindings_raw: dict) -> list:
         """Build ObjectType varbind list from the record dict."""

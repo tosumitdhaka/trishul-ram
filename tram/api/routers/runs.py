@@ -14,6 +14,20 @@ from sqlalchemy import text
 router = APIRouter(prefix="/api")
 
 
+def _csv_safe(value):
+    """Neutralize spreadsheet formula injection in a CSV cell (review §3.17).
+
+    Excel/LibreOffice execute cells that begin with ``=``, ``+``, ``-`` or
+    ``@`` as formulas. Run data (notably ``error`` and ``pipeline`` strings)
+    can be attacker-influenced, so prefix those leading characters with ``'``
+    to force text interpretation. Non-string cells (ints, None, lists) pass
+    through untouched.
+    """
+    if isinstance(value, str) and value.startswith(("=", "+", "-", "@")):
+        return "'" + value
+    return value
+
+
 def _queued_run_to_dict(row: dict) -> dict:
     """Shape a queued_runs row exactly like RunResult.to_dict() (E.2 §8.1).
 
@@ -109,7 +123,9 @@ async def list_runs(
             fieldnames = list(rows[0].keys())
             writer = csv.DictWriter(buf, fieldnames=fieldnames)
             writer.writeheader()
-            writer.writerows(rows)
+            writer.writerows(
+                {key: _csv_safe(value) for key, value in row.items()} for row in rows
+            )
             csv_content = buf.getvalue()
 
         return StreamingResponse(

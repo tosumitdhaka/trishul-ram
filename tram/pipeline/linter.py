@@ -56,6 +56,7 @@ def lint(
     findings.extend(_l011_risky_filename_partition_fields(config))
     findings.extend(_l012_udp_push_requires_kubernetes(config, resolved_mode))
     findings.extend(_l013_stateful_transform_with_broadcast_stream(config))
+    findings.extend(_l014_kafka_multi_worker_at_least_once(config))
 
     return findings
 
@@ -287,6 +288,33 @@ def _l013_stateful_transform_with_broadcast_stream(config: PipelineConfig) -> li
             "duplicated stream with no key affinity, so per-worker state "
             "computes silently wrong or duplicated values. Use workers "
             "count=1 or remove the stateful transform."
+        ),
+    )]
+
+
+def _l014_kafka_multi_worker_at_least_once(config: PipelineConfig) -> list[LintResult]:
+    """L014 — kafka at-least-once degrades with thread_workers > 1 (review §2.12).
+
+    With ``enable_auto_commit: false`` (the default) offsets are committed once
+    per poll batch after the batch is handed to the executor; the threaded path
+    keeps up to ``2 * thread_workers`` chunks in flight ahead of their sink
+    writes, so the commit can fire while messages are still queued — a crash in
+    that window loses them. Auto-commit (at-most-once) is already lossy, so the
+    warning only fires on the at-least-once path.
+    """
+    if config.source.type != "kafka" or config.thread_workers <= 1:
+        return []
+    if getattr(config.source, "enable_auto_commit", False):
+        return []
+    return [LintResult(
+        rule_id="L014",
+        severity="warning",
+        message=(
+            f"Pipeline '{config.name}': kafka source with thread_workers="
+            f"{config.thread_workers} and enable_auto_commit=false — the poll-batch "
+            "commit can fire while up to 2x thread_workers chunks are still queued, "
+            "so a crash in that window loses messages. Use thread_workers=1 for "
+            "strict at-least-once."
         ),
     )]
 

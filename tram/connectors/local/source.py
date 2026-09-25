@@ -8,6 +8,7 @@ import time
 from collections.abc import Iterator
 from pathlib import Path
 
+from tram.connectors.config_utils import cfg_bool, cfg_int
 from tram.core.exceptions import SourceError
 from tram.interfaces.base_source import BaseSource
 from tram.registry.registry import register_source
@@ -45,11 +46,11 @@ class LocalSource(BaseSource):
         self.move_after_read: Path | None = (
             Path(config["move_after_read"]) if config.get("move_after_read") else None
         )
-        self.delete_after_read: bool = bool(config.get("delete_after_read", False))
-        self.recursive: bool = bool(config.get("recursive", False))
-        self.skip_processed: bool = bool(config.get("skip_processed", False))
-        self.file_stability_seconds: int = int(config.get("file_stability_seconds", 0))
-        self.file_min_age_seconds: int = int(config.get("file_min_age_seconds", 0))
+        self.delete_after_read: bool = cfg_bool(config, "delete_after_read", False)
+        self.recursive: bool = cfg_bool(config, "recursive", False)
+        self.skip_processed: bool = cfg_bool(config, "skip_processed", False)
+        self.file_stability_seconds: int = cfg_int(config, "file_stability_seconds", 0)
+        self.file_min_age_seconds: int = cfg_int(config, "file_min_age_seconds", 0)
         self.file_done_suffix: str | None = config.get("file_done_suffix")
         self._pipeline_name: str = config.get("_pipeline_name", "")
         self._file_tracker = config.get("_file_tracker")

@@ -600,6 +600,76 @@ class TestSFTPSink:
         assert "/out/.rows.ndjson.tram-old-run.tmp" not in sftp.files
         assert sftp.files["/out/.rows.ndjson.tram-run-1.tmp"] == b'{"seq": 1}\n'
 
+    # ── D7: run-scoped connection reuse + reconnect-once ────────────────────
+
+    def _real_connect_sink(self):
+        """A sink whose _connect is NOT patched — the real pooled path."""
+        return SFTPSink({
+            "host": "example.com",
+            "username": "user",
+            "password": "pass",
+            "remote_path": "/out",
+            "filename_template": "out.bin",
+        })
+
+    def test_reuses_connection_across_writes_and_closes_on_close(self):
+        import paramiko
+
+        sftp = MagicMock()
+        transport = MagicMock()
+        transport_cls = MagicMock(return_value=transport)
+        with patch("paramiko.Transport", transport_cls), \
+                patch.object(paramiko.SFTPClient, "from_transport", return_value=sftp):
+            sink = self._real_connect_sink()
+            sink.write(b"one", {})
+            sink.write(b"two", {})
+
+        # One transport for two writes — no handshake per chunk (review D7).
+        assert transport_cls.call_count == 1
+        assert sftp.open.call_count == 2
+
+        # close() releases the pooled connection (idempotent).
+        sink.close()
+        assert sink._transport is None and sink._sftp is None
+        transport.close.assert_called_once()
+        sink.close()  # second close must be a no-op
+        assert transport.close.call_count == 1
+
+    def test_reconnect_exactly_once_on_stale_connection(self):
+        import paramiko
+
+        stale_sftp = MagicMock()
+        stale_sftp.open.side_effect = OSError("stale session")
+        fresh_sftp = MagicMock()
+        stale_transport = MagicMock()
+        fresh_transport = MagicMock()
+        transport_cls = MagicMock(side_effect=[stale_transport, fresh_transport])
+        with patch("paramiko.Transport", transport_cls), \
+                patch.object(
+                    paramiko.SFTPClient,
+                    "from_transport",
+                    side_effect=[stale_sftp, fresh_sftp],
+                ):
+            sink = self._real_connect_sink()
+            sink.write(b"data", {})
+
+        # One reconnect attempt after the stale write failed, then success.
+        assert transport_cls.call_count == 2
+        assert stale_sftp.open.call_count == 1
+        assert fresh_sftp.open.call_count == 1
+        stale_transport.close.assert_called_once()
+        stale_sftp.close.assert_called_once()
+        sink.close()
+        fresh_transport.close.assert_called_once()
+
+    def test_connect_failure_raises_sink_error_without_reconnect(self):
+        # A failed initial connect surfaces immediately (SinkError) — the
+        # reconnect guard only applies to stale mid-write failures.
+        with patch("paramiko.Transport", side_effect=OSError("refused")):
+            sink = self._real_connect_sink()
+            with pytest.raises(SinkError, match="SFTP connect failed"):
+                sink.write(b"data", {})
+
 
 # ── RestSource ─────────────────────────────────────────────────────────────
 
