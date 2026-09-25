@@ -171,6 +171,7 @@ def _field_descriptors(fields: list[dict]) -> list[dict]:
             "default": field.get("default"),
             "secret": bool(field.get("secret")),
             "multiline": bool(field.get("multiline")),
+            "description": field.get("description", ""),
         }
         for field in fields
         if field["name"] not in {"condition", "serializer_out", "transforms"}

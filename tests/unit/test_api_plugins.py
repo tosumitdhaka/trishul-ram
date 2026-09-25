@@ -40,10 +40,11 @@ def test_plugins_endpoint_returns_legacy_lists_and_details():
 
 
 def test_plugins_endpoint_fields_carry_schema_metadata():
-    """A.4: /api/plugins field descriptors fold the full schema metadata
-    (kind/choices/secret/multiline) so the UI's field tables and sample YAML
-    no longer need a second /api/config/schema fetch to enrich them. Each
-    field must carry the exact metadata SCHEMA_FIELDS computed."""
+    """A.4/A.1: /api/plugins field descriptors fold the full schema metadata
+    (kind/choices/secret/multiline plus the A.1 descriptions) so the UI's
+    field tables and sample YAML no longer need a second /api/config/schema
+    fetch to enrich them. Each field must carry the exact metadata
+    SCHEMA_FIELDS computed."""
     import tram.connectors  # noqa: F401
     import tram.serializers  # noqa: F401
     import tram.transforms  # noqa: F401
@@ -71,6 +72,8 @@ def test_plugins_endpoint_fields_carry_schema_metadata():
                 assert field["choices"] == schema_field["choices"]
                 assert field["secret"] == schema_field["secret"]
                 assert field["multiline"] == schema_field["multiline"]
+                assert field["description"] == schema_field["description"]
+                assert field["description"], f"{payload_key}/{item['name']}/{field['name']}"
 
 
 def test_plugins_endpoint_flags_sftp_password_secret():
