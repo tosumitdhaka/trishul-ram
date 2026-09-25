@@ -278,7 +278,7 @@ _COMMON_FIELD_DESCRIPTIONS: dict[str, str] = {
     "table": "Target table name",
     "upsert_keys": "Columns that define the upsert key for conflict resolution",
     "batch_size": "Records processed per batch operation",
-    "chunk_size": "Rows/documents processed per chunk (0 = all at once)",
+    "chunk_size": "Rows/documents sent per batch or chunk (positive integer)",
     "org": "InfluxDB organization name",
     "measurement": "InfluxDB measurement written to",
     "tag_fields": "Record fields written as InfluxDB tags",

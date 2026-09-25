@@ -106,10 +106,10 @@ single-writer deployments. At production scale use **PostgreSQL** — the Helm c
 Bitnami PostgreSQL subchart (`postgresql.enabled=true`, see the [PostgreSQL subchart
 section](#postgresql-subchart-v108)) or point `TRAM_DB_URL` at a managed database via
 `envSecret`. Concurrency caveat: the SQLite connection is opened with
-`check_same_thread=False` and no busy timeout is set today, so concurrent writers can hit
-`database is locked` under load; a code-side busy timeout is planned. Treat SQLite as a
-single-writer store and move to PostgreSQL when multiple writers or sustained throughput
-are expected.
+`check_same_thread=False`; since v1.4.8 every SQLite connection gets a 30s busy timeout
+(`PRAGMA busy_timeout`), so transient `database is locked` contention retries for up to
+30s instead of failing fast. Treat SQLite as a single-writer store and move to PostgreSQL
+when multiple writers or sustained throughput are expected.
 
 ## Manager + Worker Mode (v1.2.0)
 
@@ -783,10 +783,10 @@ helm install tram oci://ghcr.io/tosumitdhaka/charts/trishul-ram \
 single-writer deployments. For production scale use PostgreSQL — the Helm chart ships a
 Bitnami PostgreSQL subchart (enable it as above, or point `TRAM_DB_URL` at an external
 managed database via `envSecret`). Concurrency caveat: the SQLite driver is opened with
-`check_same_thread=False` and no busy timeout is configured today, so under concurrent
-load you can hit `database is locked` errors; a code-side busy timeout is planned.
-Treat SQLite as dev/small-scale and move to PostgreSQL once multiple writers or sustained
-throughput are expected.
+`check_same_thread=False`; since v1.4.8 every SQLite connection gets a 30s busy timeout
+(`PRAGMA busy_timeout`), so transient contention retries for up to 30s instead of failing
+fast. Treat SQLite as dev/small-scale and move to PostgreSQL once multiple writers or
+sustained throughput are expected.
 
 **Credentials (v1.4.8, GH #51):** the chart no longer ships a committed plaintext
 password. `postgresql.auth.password` defaults to `""` — on install the chart generates a

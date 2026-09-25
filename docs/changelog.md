@@ -17,7 +17,7 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - Startup warns loudly when `TRAM_WORKERS > 1` runs without `TRAM_AUTH_SECRET` (#52)
 - New lint rule L014: kafka + `enable_auto_commit: false` + `thread_workers > 1` warns about the poll-batch commit race (#52)
 - SQLite connections get a 30s busy timeout (`PRAGMA busy_timeout`) — `database is locked` contention gets a retry grace window (D5) (#52)
-- SFTP/FTP sinks reuse one connection per run with a single reconnect attempt on transport failure, instead of a fresh connection per write (D7) (#52)
+- SFTP/FTP sinks reuse one connection per run with a single reconnect attempt on transport failure, instead of a fresh connection per write (D7). Note: with `thread_workers > 1` the sink instance is shared across chunk threads and FTP control connections are not cross-thread safe — keep `thread_workers: 1` for SFTP/FTP sink pipelines (#52)
 
 ### Changed
 - **[deployment]** The Helm chart no longer ships `postgres` as the default database password: credentials are chart-managed (explicit → existing-secret lookup → generated on first install), `TRAM_DB_URL` is wired via `secretKeyRef`, and unresolvable combinations fail the install with a clear message. The sharedStorage PVC only renders when actually mounted (no orphaned volume), and the standalone script no longer injects any default credentials (#51)
@@ -26,7 +26,7 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - Field ordering note: `/api/config/schema` and `/api/plugins` field lists reflect the mixin reordering above (names/types/metadata unchanged) (#52)
 
 ### Added
-- Every one of the 601 config-schema field descriptors carries an operator-facing `description` (surfaced in the wizard via `/api/config/schema` and on `/api/plugins`); `schema_version` identity hash rotates (`7b7a99657e20` → `03ea26d44e35`) (AI Wave A, A.1) (#42)
+- Every one of the 601 config-schema field descriptors carries an operator-facing `description` (surfaced in the wizard via `/api/config/schema` and on `/api/plugins`); `schema_version` identity hash rotates (`7b7a99657e20` → `583465a50b4b`) (AI Wave A, A.1) (#42)
 - Browser smoke gains a `modal-nav` check — modal open + Back navigation, deep-link entry, same-page route change, confirm-dialog reset, brand-version rendering; the boot check now rejects the `v—` placeholder (formerly a vacuous non-empty wait) (#49, #50 follow-up)
 
 ## [1.4.7] - 2026-09-24
