@@ -17,7 +17,7 @@ import uuid
 from datetime import UTC, datetime
 from pathlib import Path
 
-from sqlalchemy import create_engine, text
+from sqlalchemy import create_engine, event, text
 from sqlalchemy.engine import Engine
 from sqlalchemy.exc import IntegrityError
 
@@ -29,6 +29,27 @@ logger = logging.getLogger(__name__)
 # race — the unique constraint converts a lost race into IntegrityError, and
 # the retry mints a fresh version instead of failing the caller.
 _VERSION_SAVE_RETRIES = 3
+
+# SQLite busy timeout (milliseconds) applied to every new connection via
+# PRAGMA. Without it, concurrent writers across APScheduler/API/stream threads
+# hit "database is locked" under load (code review D5); the driver default of
+# 5s is too short for bursty run-history writes. 30s gives contention a retry
+# grace window without pinning a busy database.
+_SQLITE_BUSY_TIMEOUT_MS = 30_000
+
+
+def _set_sqlite_busy_timeout(dbapi_connection, connection_record) -> None:
+    """Install ``PRAGMA busy_timeout`` on a freshly-opened SQLite connection.
+
+    Registered as a SQLAlchemy ``connect`` event so pooled/recycled
+    connections get the timeout too (review D5). A failure here surfaces
+    loudly — a connection that cannot set its own busy timeout is not usable.
+    """
+    cursor = dbapi_connection.cursor()
+    try:
+        cursor.execute(f"PRAGMA busy_timeout = {_SQLITE_BUSY_TIMEOUT_MS}")
+    finally:
+        cursor.close()
 
 
 # ── Engine factory ────────────────────────────────────────────────────────────
@@ -47,16 +68,21 @@ def _build_engine(url: str = "") -> Engine:
             kwargs["pool_pre_ping"] = True
             kwargs["pool_size"] = 5
             kwargs["max_overflow"] = 10
-        return create_engine(resolved, **kwargs)
+        engine = create_engine(resolved, **kwargs)
+        if is_sqlite:
+            event.listen(engine, "connect", _set_sqlite_busy_timeout)
+        return engine
 
     # Fallback: SQLite at TRAM_DB_PATH (or default)
     raw = os.environ.get("TRAM_DB_PATH", "~/.tram/tram.db")
     path = Path(raw).expanduser()
     path.parent.mkdir(parents=True, exist_ok=True)
-    return create_engine(
+    engine = create_engine(
         f"sqlite:///{path}",
         connect_args={"check_same_thread": False},
     )
+    event.listen(engine, "connect", _set_sqlite_busy_timeout)
+    return engine
 
 
 # ── Schema migration ──────────────────────────────────────────────────────────

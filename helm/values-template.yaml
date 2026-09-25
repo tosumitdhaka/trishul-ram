@@ -5,7 +5,7 @@
 image:
   registry: ""               # e.g. ghcr.io
   repository: OWNER/tram     # replace OWNER with your registry namespace
-  tag: "1.4.7"
+  tag: "1.4.8"
   pullPolicy: IfNotPresent
 
 ## Standalone mode: single-replica StatefulSet (replicaCount=1).
@@ -80,6 +80,11 @@ persistence:
   accessMode: ReadWriteOnce
 
 ## Shared ReadWriteMany storage for schemas and MIBs.
+## Standalone mode: mounted on every replica at /data. Manager+worker mode:
+## mounted on the manager only when manager.persistence.enabled=false — workers
+## sync assets from the manager (emptyDir + sync_assets()) and never mount it.
+## The chart does not render the PVC for the manager.persistence + sharedStorage
+## combination (it would be mounted nowhere — GH #51).
 sharedStorage:
   enabled: false
   size: 2Gi
@@ -165,8 +170,17 @@ postgresql:
   enabled: false
   auth:
     username: tram
-    password: tram
+    ## No committed plaintext default (GH #51): empty = the chart generates a
+    ## random 24-char password once and stores it in Secret <release>-postgres
+    ## (keys: password / postgres-password / dbUrl). The Bitnami subchart reads
+    ## POSTGRES_PASSWORD from that Secret via existingSecret (below); TRAM pods
+    ## read TRAM_DB_URL from the dbUrl key. Upgrades preserve the value via
+    ## lookup. Set a fixed value here for dev deployments.
+    password: ""
     database: tram
+    ## Chart-managed Secret (tpl-evaluated). Point at your own Secret only if it
+    ## carries the same keys; TRAM_DB_URL must then come via envSecret.
+    existingSecret: '{{ .Release.Name }}-postgres'
   primary:
     persistence:
       enabled: true

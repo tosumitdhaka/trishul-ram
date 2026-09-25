@@ -12,6 +12,15 @@ import socket
 import threading
 from collections.abc import Iterator
 
+from tram.connectors.config_utils import (
+    cfg_bool,
+    cfg_float,
+    cfg_int,
+    cfg_list,
+    cfg_str,
+    prepend_system_mib_dirs,
+    snmpv3_usm,
+)
 from tram.connectors.snmp.mib_utils import (
     close_snmp_engine,
     create_udp_transport_target,
@@ -102,23 +111,20 @@ class SNMPTrapSource(BaseSource):
     def __init__(self, config: dict) -> None:
         super().__init__(config)
         self.host: str = config.get("host", "0.0.0.0")
-        self.port: int = int(config.get("port", 162))
+        self.port: int = cfg_int(config, "port", 162)
         self.community: str = config.get("community", "public")
-        self.version: str = str(config.get("version", "2c"))
-        self.mib_dirs: list[str] = list(config.get("mib_dirs", []))
-        self.mib_modules: list[str] = list(config.get("mib_modules", []))
-        self.resolve_oids: bool = bool(config.get("resolve_oids", True))
-        # Auto-prepend /mibs and TRAM_MIB_DIR
-        for _d in ["/mibs", os.environ.get("TRAM_MIB_DIR", "")]:
-            if _d and os.path.isdir(_d) and _d not in self.mib_dirs:
-                self.mib_dirs.insert(0, _d)
-        # SNMPv3 USM
-        self.security_name: str = config.get("security_name", "")
-        self.auth_protocol: str = config.get("auth_protocol", "SHA")
-        self.auth_key: str | None = config.get("auth_key")
-        self.priv_protocol: str = config.get("priv_protocol", "AES128")
-        self.priv_key: str | None = config.get("priv_key")
-        self.context_name: str = config.get("context_name", "")
+        self.version: str = cfg_str(config, "version", "2c")
+        self.mib_dirs: list[str] = prepend_system_mib_dirs(cfg_list(config, "mib_dirs"))
+        self.mib_modules: list[str] = cfg_list(config, "mib_modules")
+        self.resolve_oids: bool = cfg_bool(config, "resolve_oids", True)
+        # SNMPv3 USM (review E4 — shared helper)
+        usm = snmpv3_usm(config)
+        self.security_name: str = usm["security_name"]
+        self.auth_protocol: str = usm["auth_protocol"]
+        self.auth_key: str | None = usm["auth_key"]
+        self.priv_protocol: str = usm["priv_protocol"]
+        self.priv_key: str | None = usm["priv_key"]
+        self.context_name: str = usm["context_name"]
         self._stop_event: threading.Event = threading.Event()
 
     def test_connection(self) -> dict:
@@ -269,19 +275,19 @@ class SNMPPollSource(BaseSource):
     def __init__(self, config: dict) -> None:
         super().__init__(config)
         self.host: str = config["host"]
-        self.port: int = int(config.get("port", 161))
+        self.port: int = cfg_int(config, "port", 161)
         self.community: str = config.get("community", "public")
-        self.version: str = str(config.get("version", "2c"))
-        self.oids: list[str] = list(config.get("oids", []))
+        self.version: str = cfg_str(config, "version", "2c")
+        self.oids: list[str] = cfg_list(config, "oids")
         self.operation: str = config.get("operation", "get").lower()
-        self.timeout: float = float(config.get("timeout", 1.0))
-        self.retries: int = int(config.get("retries", 5))
-        self.mib_dirs: list[str] = list(config.get("mib_dirs", []))
-        self.mib_modules: list[str] = list(config.get("mib_modules", []))
-        self.resolve_oids: bool = bool(config.get("resolve_oids", True))
-        self.yield_rows: bool = bool(config.get("yield_rows", False))
-        self.index_depth: int = int(config.get("index_depth", 0))
-        self.classify: bool = bool(config.get("classify", False))
+        self.timeout: float = cfg_float(config, "timeout", 1.0)
+        self.retries: int = cfg_int(config, "retries", 5)
+        self.mib_dirs: list[str] = prepend_system_mib_dirs(cfg_list(config, "mib_dirs"))
+        self.mib_modules: list[str] = cfg_list(config, "mib_modules")
+        self.resolve_oids: bool = cfg_bool(config, "resolve_oids", True)
+        self.yield_rows: bool = cfg_bool(config, "yield_rows", False)
+        self.index_depth: int = cfg_int(config, "index_depth", 0)
+        self.classify: bool = cfg_bool(config, "classify", False)
         # INTEGER classification globs (GH #35): env + pipeline layers EXTEND the
         # code defaults, never replace them. metric_patterns wins over everything.
         self.metric_patterns: tuple[str, ...] = _merge_patterns(
@@ -306,17 +312,14 @@ class SNMPPollSource(BaseSource):
         # auto-grouping refusal names the real cause instead of blaming
         # resolve_oids.
         self._mib_load_failed: bool = False
-        # Auto-prepend /mibs and TRAM_MIB_DIR
-        for _d in ["/mibs", os.environ.get("TRAM_MIB_DIR", "")]:
-            if _d and os.path.isdir(_d) and _d not in self.mib_dirs:
-                self.mib_dirs.insert(0, _d)
-        # SNMPv3 USM
-        self.security_name: str = config.get("security_name", "")
-        self.auth_protocol: str = config.get("auth_protocol", "SHA")
-        self.auth_key: str | None = config.get("auth_key")
-        self.priv_protocol: str = config.get("priv_protocol", "AES128")
-        self.priv_key: str | None = config.get("priv_key")
-        self.context_name: str = config.get("context_name", "")
+        # SNMPv3 USM (review E4 — shared helper)
+        usm = snmpv3_usm(config)
+        self.security_name: str = usm["security_name"]
+        self.auth_protocol: str = usm["auth_protocol"]
+        self.auth_key: str | None = usm["auth_key"]
+        self.priv_protocol: str = usm["priv_protocol"]
+        self.priv_key: str | None = usm["priv_key"]
+        self.context_name: str = usm["context_name"]
 
     @staticmethod
     def _numeric_part(part: int | str) -> int | str:

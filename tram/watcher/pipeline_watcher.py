@@ -72,6 +72,13 @@ class PipelineWatcher:
         controller = self._controller
 
         class _Handler(FileSystemEventHandler):
+            def __init__(self) -> None:
+                # Path → pipeline name, populated on every successful load.
+                # Deletion removes by NAME, not filename stem, so a YAML whose
+                # `name:` differs from its filename removes the right pipeline
+                # (review §2.15).
+                self._path_to_name: dict[str, str] = {}
+
             def _is_yaml(self, path: str) -> bool:
                 return path.endswith(".yaml") or path.endswith(".yml")
 
@@ -88,7 +95,12 @@ class PipelineWatcher:
             def on_deleted(self, event):
                 if event.is_directory or not self._is_yaml(event.src_path):
                     return
-                name = Path(event.src_path).stem
+                name = self._path_to_name.pop(event.src_path, None)
+                if name is None:
+                    # The file was never seen by this watcher (started after the
+                    # file existed, then deleted without a modify event) — the
+                    # filename stem is the best available guess.
+                    name = Path(event.src_path).stem
                 if not controller.exists(name):
                     return
                 try:
@@ -105,6 +117,11 @@ class PipelineWatcher:
                 from tram.pipeline.loader import load_pipeline
                 try:
                     config, yaml_text = load_pipeline(path)
+                    self._path_to_name[path] = config.name
+                    # Drop entries for files that no longer exist (renamed or
+                    # removed outside the watcher) so the mapping stays bounded.
+                    for stale in [p for p in self._path_to_name if not Path(p).exists()]:
+                        del self._path_to_name[stale]
                     if controller.exists(config.name):
                         controller.reload(config.name, yaml_text)
                     else:

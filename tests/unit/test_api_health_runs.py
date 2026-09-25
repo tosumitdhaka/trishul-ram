@@ -563,6 +563,32 @@ class TestListRuns:
         assert r.status_code == 200
         assert "run_id" in r.text  # CSV header
 
+    def test_csv_escapes_spreadsheet_formula_cells(self):
+        """§3.17: cells starting with =, +, - or @ must be prefixed with ' so
+        Excel/LibreOffice treat them as text, not formulas."""
+        app = _make_runs_app()
+        mock_run = _run_result_mock()
+        mock_run.to_dict.return_value = {
+            "run_id": "r1",
+            "pipeline": "=HYPERLINK(\"http://evil\",\"x\")",
+            "status": "failed",
+            "error": "+cmd|'/C calc'!A0",
+            "node": "@sum(1,1)",
+            "records_in": -1,  # numeric cells pass through untouched
+        }
+        app.state.controller.get_runs.return_value = [mock_run]
+        client = TestClient(app)
+        r = client.get("/api/runs?format=csv")
+        assert r.status_code == 200
+        # Each risky cell is prefixed with a single quote (csv quoting may add
+        # surrounding quotes for the delimiter).
+        assert "'=HYPERLINK" in r.text
+        assert "'+cmd" in r.text
+        assert "'@sum" in r.text
+        # Numeric cells are not touched.
+        assert ",-1" in r.text
+        assert "='@sum" not in r.text  # no double-prefix
+
 
 class TestCountRuns:
     def test_no_db_returns_null_total(self):

@@ -362,3 +362,12 @@ class TestPipelineVersionUniqueConstraint:
                 assert [(r["name"], r["version"]) for r in rows] == [("p", 1), ("p", 2)]
                 assert [r["id"] for r in rows] == ["a2", "b1"]  # newest per group
             d.close()
+
+
+def test_sqlite_connection_has_busy_timeout_pragma(db):
+    """D5: SQLite connections must carry a sane busy_timeout so concurrent
+    writers (APScheduler/API/stream threads) get a retry grace window instead
+    of immediate 'database is locked' failures."""
+    with db._engine.connect() as conn:
+        timeout_ms = conn.execute(text("PRAGMA busy_timeout")).scalar()
+    assert timeout_ms == 30_000

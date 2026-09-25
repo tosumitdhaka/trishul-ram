@@ -17,7 +17,9 @@ class BaseModel(PydanticBaseModel):
 
 class ScheduleConfig(BaseModel):
     type: Literal["interval", "cron", "stream", "manual"] = "manual"
-    interval_seconds: int | None = None
+    # gt=0: APScheduler's IntervalTrigger rejects zero/negative intervals at
+    # schedule time; reject them at `tram validate` time instead (review §2.14).
+    interval_seconds: int | None = Field(default=None, gt=0)
     cron: str | None = None
 
     @model_validator(mode="after")
@@ -26,6 +28,18 @@ class ScheduleConfig(BaseModel):
             raise ValueError("interval_seconds required when type=interval")
         if self.type == "cron" and self.cron is None:
             raise ValueError("cron expression required when type=cron")
+        if self.type == "cron":
+            # Parse with the same CronTrigger the controller schedules with, so
+            # a malformed expression fails at validate time, not at runtime
+            # (review §2.14).
+            from apscheduler.triggers.cron import CronTrigger
+
+            try:
+                CronTrigger.from_crontab(self.cron)
+            except ValueError as exc:
+                raise ValueError(
+                    f"invalid cron expression {self.cron!r}: {exc}"
+                ) from exc
         return self
 
 
@@ -839,7 +853,27 @@ class FileSinkConfigMixin(BaseModel):
         return self
 
 
-class SFTPSinkConfig(FileSinkConfigMixin):
+class SinkCommonFieldsMixin(BaseModel):
+    """Fields every sink config carries (review E1).
+
+    Previously copy-pasted verbatim into all 20 sink classes; the mixin
+    guarantees the fields never drift. Field names/types/defaults are exactly
+    what the per-class blocks declared — the discriminated SinkConfig union and
+    the /api/config/schema + /api/plugins field metadata depend on them.
+    """
+
+    condition: str | None = None
+    transforms: list[TransformConfig] = Field(default_factory=list)
+    retry_count: int = 0
+    retry_delay_seconds: float = 1.0
+    circuit_breaker_threshold: int = 0
+    # How long the breaker stays open after tripping (review D3); the 60s
+    # default matches the pre-configurable behavior.
+    circuit_breaker_window_seconds: float = Field(default=60.0, gt=0)
+    serializer_out: SerializerConfig | None = None  # per-sink override; None = use global
+
+
+class SFTPSinkConfig(FileSinkConfigMixin, SinkCommonFieldsMixin):
     type: Literal["sftp"]
     host: str
     port: int = 22
@@ -848,15 +882,6 @@ class SFTPSinkConfig(FileSinkConfigMixin):
     private_key_path: str | None = None
     remote_path: str
     filename_template: str = "{pipeline}_{timestamp}.bin"
-    condition: str | None = None
-    transforms: list[TransformConfig] = Field(default_factory=list)
-    retry_count: int = 0
-    retry_delay_seconds: float = 1.0
-    circuit_breaker_threshold: int = 0
-    # How long the breaker stays open after tripping (review D3); the 60s
-    # default matches the pre-configurable behavior.
-    circuit_breaker_window_seconds: float = Field(default=60.0, gt=0)
-    serializer_out: SerializerConfig | None = None  # per-sink override; None = use global
 
     @model_validator(mode="after")
     def check_auth(self) -> SFTPSinkConfig:
@@ -865,23 +890,14 @@ class SFTPSinkConfig(FileSinkConfigMixin):
         return self
 
 
-class LocalSinkConfig(FileSinkConfigMixin):
+class LocalSinkConfig(FileSinkConfigMixin, SinkCommonFieldsMixin):
     type: Literal["local"]
     path: str
     filename_template: str = "{pipeline}_{timestamp}.bin"
     overwrite: bool = True
-    condition: str | None = None
-    transforms: list[TransformConfig] = Field(default_factory=list)
-    retry_count: int = 0
-    retry_delay_seconds: float = 1.0
-    circuit_breaker_threshold: int = 0
-    # How long the breaker stays open after tripping (review D3); the 60s
-    # default matches the pre-configurable behavior.
-    circuit_breaker_window_seconds: float = Field(default=60.0, gt=0)
-    serializer_out: SerializerConfig | None = None  # per-sink override; None = use global
 
 
-class RestSinkConfig(BaseModel):
+class RestSinkConfig(SinkCommonFieldsMixin):
     type: Literal["rest"]
     url: str
     method: str = "POST"
@@ -896,18 +912,10 @@ class RestSinkConfig(BaseModel):
     timeout: int = 30
     verify_ssl: bool = True
     expected_status: list[int] = Field(default_factory=lambda: [200, 201, 202, 204])
-    condition: str | None = None
-    transforms: list[TransformConfig] = Field(default_factory=list)
-    retry_count: int = 0
-    retry_delay_seconds: float = 1.0
-    circuit_breaker_threshold: int = 0
-    # How long the breaker stays open after tripping (review D3); the 60s
-    # default matches the pre-configurable behavior.
-    circuit_breaker_window_seconds: float = Field(default=60.0, gt=0)
-    serializer_out: SerializerConfig | None = None  # per-sink override; None = use global
 
 
-class KafkaSinkConfig(BaseModel):
+
+class KafkaSinkConfig(SinkCommonFieldsMixin):
     type: Literal["kafka"]
     brokers: list[str]
     topic: str
@@ -919,18 +927,10 @@ class KafkaSinkConfig(BaseModel):
     ssl_cafile: str | None = None
     acks: str | int = "all"
     compression_type: str | None = None
-    condition: str | None = None
-    transforms: list[TransformConfig] = Field(default_factory=list)
-    retry_count: int = 0
-    retry_delay_seconds: float = 1.0
-    circuit_breaker_threshold: int = 0
-    # How long the breaker stays open after tripping (review D3); the 60s
-    # default matches the pre-configurable behavior.
-    circuit_breaker_window_seconds: float = Field(default=60.0, gt=0)
-    serializer_out: SerializerConfig | None = None  # per-sink override; None = use global
 
 
-class OpenSearchSinkConfig(BaseModel):
+
+class OpenSearchSinkConfig(SinkCommonFieldsMixin):
     type: Literal["opensearch"]
     hosts: list[str]
     index: str
@@ -943,18 +943,10 @@ class OpenSearchSinkConfig(BaseModel):
     timeout: int = 30
     chunk_size: int = 500
     refresh: str = "false"
-    condition: str | None = None
-    transforms: list[TransformConfig] = Field(default_factory=list)
-    retry_count: int = 0
-    retry_delay_seconds: float = 1.0
-    circuit_breaker_threshold: int = 0
-    # How long the breaker stays open after tripping (review D3); the 60s
-    # default matches the pre-configurable behavior.
-    circuit_breaker_window_seconds: float = Field(default=60.0, gt=0)
-    serializer_out: SerializerConfig | None = None  # per-sink override; None = use global
 
 
-class FtpSinkConfig(BaseModel):
+
+class FtpSinkConfig(SinkCommonFieldsMixin):
     type: Literal["ftp"]
     host: str
     port: int = 21
@@ -963,18 +955,10 @@ class FtpSinkConfig(BaseModel):
     remote_path: str = "/"
     filename_template: str = "{pipeline}_{timestamp}.bin"
     passive: bool = True
-    condition: str | None = None
-    transforms: list[TransformConfig] = Field(default_factory=list)
-    retry_count: int = 0
-    retry_delay_seconds: float = 1.0
-    circuit_breaker_threshold: int = 0
-    # How long the breaker stays open after tripping (review D3); the 60s
-    # default matches the pre-configurable behavior.
-    circuit_breaker_window_seconds: float = Field(default=60.0, gt=0)
-    serializer_out: SerializerConfig | None = None  # per-sink override; None = use global
 
 
-class VesSinkConfig(BaseModel):
+
+class VesSinkConfig(SinkCommonFieldsMixin):
     type: Literal["ves"]
     url: str
     domain: str = "other"
@@ -987,18 +971,10 @@ class VesSinkConfig(BaseModel):
     password: str = ""
     token: str = ""
     expected_status: list[int] = Field(default_factory=lambda: [202])
-    condition: str | None = None
-    transforms: list[TransformConfig] = Field(default_factory=list)
-    retry_count: int = 0
-    retry_delay_seconds: float = 1.0
-    circuit_breaker_threshold: int = 0
-    # How long the breaker stays open after tripping (review D3); the 60s
-    # default matches the pre-configurable behavior.
-    circuit_breaker_window_seconds: float = Field(default=60.0, gt=0)
-    serializer_out: SerializerConfig | None = None  # per-sink override; None = use global
 
 
-class S3SinkConfig(BaseModel):
+
+class S3SinkConfig(SinkCommonFieldsMixin):
     type: Literal["s3"]
     bucket: str
     key_template: str = "{pipeline}_{timestamp}.bin"
@@ -1007,15 +983,7 @@ class S3SinkConfig(BaseModel):
     aws_access_key_id: str = ""
     aws_secret_access_key: str = ""
     content_type: str = "application/json"
-    condition: str | None = None
-    transforms: list[TransformConfig] = Field(default_factory=list)
-    retry_count: int = 0
-    retry_delay_seconds: float = 1.0
-    circuit_breaker_threshold: int = 0
-    # How long the breaker stays open after tripping (review D3); the 60s
-    # default matches the pre-configurable behavior.
-    circuit_breaker_window_seconds: float = Field(default=60.0, gt=0)
-    serializer_out: SerializerConfig | None = None  # per-sink override; None = use global
+
 
 
 class VarbindConfig(BaseModel):
@@ -1026,7 +994,7 @@ class VarbindConfig(BaseModel):
     type: Literal["Integer32", "OctetString", "Counter32", "Gauge32", "TimeTicks"] = "OctetString"
 
 
-class SnmpTrapSinkConfig(BaseModel):
+class SnmpTrapSinkConfig(SinkCommonFieldsMixin):
     type: Literal["snmp_trap"]
     host: str
     port: int = 162
@@ -1046,18 +1014,10 @@ class SnmpTrapSinkConfig(BaseModel):
     priv_protocol: str = "AES128"
     priv_key: str | None = None
     context_name: str = ""
-    condition: str | None = None
-    transforms: list[TransformConfig] = Field(default_factory=list)
-    retry_count: int = 0
-    retry_delay_seconds: float = 1.0
-    circuit_breaker_threshold: int = 0
-    # How long the breaker stays open after tripping (review D3); the 60s
-    # default matches the pre-configurable behavior.
-    circuit_breaker_window_seconds: float = Field(default=60.0, gt=0)
-    serializer_out: SerializerConfig | None = None  # per-sink override; None = use global
 
 
-class MqttSinkConfig(BaseModel):
+
+class MqttSinkConfig(SinkCommonFieldsMixin):
     type: Literal["mqtt"]
     host: str
     port: int = 1883
@@ -1068,68 +1028,36 @@ class MqttSinkConfig(BaseModel):
     password: str | None = None
     tls: bool = False
     client_id: str = ""
-    condition: str | None = None
-    transforms: list[TransformConfig] = Field(default_factory=list)
-    retry_count: int = 0
-    retry_delay_seconds: float = 1.0
-    circuit_breaker_threshold: int = 0
-    # How long the breaker stays open after tripping (review D3); the 60s
-    # default matches the pre-configurable behavior.
-    circuit_breaker_window_seconds: float = Field(default=60.0, gt=0)
-    serializer_out: SerializerConfig | None = None  # per-sink override; None = use global
 
 
-class AmqpSinkConfig(BaseModel):
+
+class AmqpSinkConfig(SinkCommonFieldsMixin):
     type: Literal["amqp"]
     url: str = "amqp://guest:guest@localhost:5672/"
     exchange: str = ""
     routing_key: str = ""
     content_type: str = "application/json"
-    condition: str | None = None
-    transforms: list[TransformConfig] = Field(default_factory=list)
-    retry_count: int = 0
-    retry_delay_seconds: float = 1.0
-    circuit_breaker_threshold: int = 0
-    # How long the breaker stays open after tripping (review D3); the 60s
-    # default matches the pre-configurable behavior.
-    circuit_breaker_window_seconds: float = Field(default=60.0, gt=0)
-    serializer_out: SerializerConfig | None = None  # per-sink override; None = use global
 
 
-class NatsSinkConfig(BaseModel):
+
+class NatsSinkConfig(SinkCommonFieldsMixin):
     type: Literal["nats"]
     servers: list[str] = Field(default_factory=lambda: ["nats://localhost:4222"])
     subject: str
     credentials_file: str | None = None
-    condition: str | None = None
-    transforms: list[TransformConfig] = Field(default_factory=list)
-    retry_count: int = 0
-    retry_delay_seconds: float = 1.0
-    circuit_breaker_threshold: int = 0
-    # How long the breaker stays open after tripping (review D3); the 60s
-    # default matches the pre-configurable behavior.
-    circuit_breaker_window_seconds: float = Field(default=60.0, gt=0)
-    serializer_out: SerializerConfig | None = None  # per-sink override; None = use global
 
 
-class SqlSinkConfig(BaseModel):
+
+class SqlSinkConfig(SinkCommonFieldsMixin):
     type: Literal["sql"]
     connection_url: str
     table: str
     mode: Literal["insert", "upsert"] = "insert"
     upsert_keys: list[str] = Field(default_factory=list)
-    condition: str | None = None
-    transforms: list[TransformConfig] = Field(default_factory=list)
-    retry_count: int = 0
-    retry_delay_seconds: float = 1.0
-    circuit_breaker_threshold: int = 0
-    # How long the breaker stays open after tripping (review D3); the 60s
-    # default matches the pre-configurable behavior.
-    circuit_breaker_window_seconds: float = Field(default=60.0, gt=0)
-    serializer_out: SerializerConfig | None = None  # per-sink override; None = use global
 
 
-class InfluxDbSinkConfig(BaseModel):
+
+class InfluxDbSinkConfig(SinkCommonFieldsMixin):
     type: Literal["influxdb"]
     url: str
     token: str
@@ -1139,18 +1067,10 @@ class InfluxDbSinkConfig(BaseModel):
     tag_fields: list[str] = Field(default_factory=list)
     timestamp_field: str | None = None
     precision: Literal["ns", "us", "ms", "s"] = "ns"
-    condition: str | None = None
-    transforms: list[TransformConfig] = Field(default_factory=list)
-    retry_count: int = 0
-    retry_delay_seconds: float = 1.0
-    circuit_breaker_threshold: int = 0
-    # How long the breaker stays open after tripping (review D3); the 60s
-    # default matches the pre-configurable behavior.
-    circuit_breaker_window_seconds: float = Field(default=60.0, gt=0)
-    serializer_out: SerializerConfig | None = None  # per-sink override; None = use global
 
 
-class RedisSinkConfig(BaseModel):
+
+class RedisSinkConfig(SinkCommonFieldsMixin):
     type: Literal["redis"]
     host: str = "localhost"
     port: int = 6379
@@ -1159,35 +1079,19 @@ class RedisSinkConfig(BaseModel):
     mode: Literal["list", "pubsub", "stream"] = "list"
     key: str
     max_len: int | None = None
-    condition: str | None = None
-    transforms: list[TransformConfig] = Field(default_factory=list)
-    retry_count: int = 0
-    retry_delay_seconds: float = 1.0
-    circuit_breaker_threshold: int = 0
-    # How long the breaker stays open after tripping (review D3); the 60s
-    # default matches the pre-configurable behavior.
-    circuit_breaker_window_seconds: float = Field(default=60.0, gt=0)
-    serializer_out: SerializerConfig | None = None  # per-sink override; None = use global
 
 
-class GcsSinkConfig(BaseModel):
+
+class GcsSinkConfig(SinkCommonFieldsMixin):
     type: Literal["gcs"]
     bucket: str
     blob_template: str = "{pipeline}_{timestamp}.bin"
     service_account_json: str | None = None
     content_type: str = "application/json"
-    condition: str | None = None
-    transforms: list[TransformConfig] = Field(default_factory=list)
-    retry_count: int = 0
-    retry_delay_seconds: float = 1.0
-    circuit_breaker_threshold: int = 0
-    # How long the breaker stays open after tripping (review D3); the 60s
-    # default matches the pre-configurable behavior.
-    circuit_breaker_window_seconds: float = Field(default=60.0, gt=0)
-    serializer_out: SerializerConfig | None = None  # per-sink override; None = use global
 
 
-class AzureBlobSinkConfig(BaseModel):
+
+class AzureBlobSinkConfig(SinkCommonFieldsMixin):
     type: Literal["azure_blob"]
     connection_string: str | None = None
     account_name: str | None = None
@@ -1196,36 +1100,20 @@ class AzureBlobSinkConfig(BaseModel):
     blob_template: str = "{pipeline}_{timestamp}.bin"
     content_type: str = "application/json"
     overwrite: bool = True
-    condition: str | None = None
-    transforms: list[TransformConfig] = Field(default_factory=list)
-    retry_count: int = 0
-    retry_delay_seconds: float = 1.0
-    circuit_breaker_threshold: int = 0
-    # How long the breaker stays open after tripping (review D3); the 60s
-    # default matches the pre-configurable behavior.
-    circuit_breaker_window_seconds: float = Field(default=60.0, gt=0)
-    serializer_out: SerializerConfig | None = None  # per-sink override; None = use global
+
 
 
 # v0.5.0 new sinks
 
 
-class WebSocketSinkConfig(BaseModel):
+class WebSocketSinkConfig(SinkCommonFieldsMixin):
     type: Literal["websocket"]
     url: str
     extra_headers: dict[str, str] = Field(default_factory=dict)
-    condition: str | None = None
-    transforms: list[TransformConfig] = Field(default_factory=list)
-    retry_count: int = 0
-    retry_delay_seconds: float = 1.0
-    circuit_breaker_threshold: int = 0
-    # How long the breaker stays open after tripping (review D3); the 60s
-    # default matches the pre-configurable behavior.
-    circuit_breaker_window_seconds: float = Field(default=60.0, gt=0)
-    serializer_out: SerializerConfig | None = None  # per-sink override; None = use global
 
 
-class ElasticsearchSinkConfig(BaseModel):
+
+class ElasticsearchSinkConfig(SinkCommonFieldsMixin):
     type: Literal["elasticsearch"]
     hosts: list[str]
     index_template: str
@@ -1237,18 +1125,10 @@ class ElasticsearchSinkConfig(BaseModel):
     api_key: str | None = None
     ca_certs: str | None = None
     pipeline: str | None = None
-    condition: str | None = None
-    transforms: list[TransformConfig] = Field(default_factory=list)
-    retry_count: int = 0
-    retry_delay_seconds: float = 1.0
-    circuit_breaker_threshold: int = 0
-    # How long the breaker stays open after tripping (review D3); the 60s
-    # default matches the pre-configurable behavior.
-    circuit_breaker_window_seconds: float = Field(default=60.0, gt=0)
-    serializer_out: SerializerConfig | None = None  # per-sink override; None = use global
 
 
-class ClickHouseSinkConfig(BaseModel):
+
+class ClickHouseSinkConfig(SinkCommonFieldsMixin):
     type: Literal["clickhouse"]
     host: str = "localhost"
     port: int = 9000
@@ -1260,15 +1140,7 @@ class ClickHouseSinkConfig(BaseModel):
     verify: bool = True
     connect_timeout: int = 10
     send_receive_timeout: int = 300
-    condition: str | None = None
-    transforms: list[TransformConfig] = Field(default_factory=list)
-    retry_count: int = 0
-    retry_delay_seconds: float = 1.0
-    circuit_breaker_threshold: int = 0
-    # How long the breaker stays open after tripping (review D3); the 60s
-    # default matches the pre-configurable behavior.
-    circuit_breaker_window_seconds: float = Field(default=60.0, gt=0)
-    serializer_out: SerializerConfig | None = None  # per-sink override; None = use global
+
     # Batching — accumulate rows before flushing to prevent ClickHouse "too many parts"
     batch_size: int = 5000
     batch_timeout_seconds: float = 2.0
@@ -1417,11 +1289,12 @@ SerializerConfig = Annotated[
 # defined before it in the file. Pydantic v2 requires model_rebuild() after all
 # forward-referenced types are available.
 _SINK_CONFIG_CLASSES = [
-    SFTPSinkConfig, LocalSinkConfig, RestSinkConfig, KafkaSinkConfig,
-    OpenSearchSinkConfig, FtpSinkConfig, VesSinkConfig, S3SinkConfig,
-    SnmpTrapSinkConfig, MqttSinkConfig, AmqpSinkConfig, NatsSinkConfig,
-    SqlSinkConfig, ClickHouseSinkConfig, InfluxDbSinkConfig, RedisSinkConfig,
-    GcsSinkConfig, AzureBlobSinkConfig, WebSocketSinkConfig, ElasticsearchSinkConfig,
+    SinkCommonFieldsMixin, SFTPSinkConfig, LocalSinkConfig, RestSinkConfig,
+    KafkaSinkConfig, OpenSearchSinkConfig, FtpSinkConfig, VesSinkConfig,
+    S3SinkConfig, SnmpTrapSinkConfig, MqttSinkConfig, AmqpSinkConfig,
+    NatsSinkConfig, SqlSinkConfig, ClickHouseSinkConfig, InfluxDbSinkConfig,
+    RedisSinkConfig, GcsSinkConfig, AzureBlobSinkConfig, WebSocketSinkConfig,
+    ElasticsearchSinkConfig,
 ]
 for _cls in _SINK_CONFIG_CLASSES:
     _cls.model_rebuild()
@@ -1539,13 +1412,15 @@ class PipelineConfig(BaseModel):
     rate_limit_rps: float | None = Field(default=None, gt=0)
 
     # Parallelism
-    thread_workers: int = 1   # intra-node worker threads per pipeline run
+    thread_workers: int = Field(default=1, ge=1)   # intra-node worker threads per pipeline run
     parallel_sinks: bool = False   # fan-out sink writes concurrently
     workers: WorkersConfig | None = None
     kubernetes: KubernetesServiceConfig | None = None
 
-    # Batch size cap (max records to process per batch run; None = unlimited)
-    batch_size: int | None = None
+    # Batch size cap (max records to process per batch run; None = unlimited).
+    # gt=0: a zero value would silently mean "unlimited" (the executor treats
+    # falsy batch_size as no cap); reject it at validate time (review §2.14).
+    batch_size: int | None = Field(default=None, gt=0)
     record_chunk_size: int | None = Field(default=None, gt=0)
 
     # Run gc.collect() plus best-effort heap trim after each batch run. Defaults
@@ -1563,8 +1438,10 @@ class PipelineConfig(BaseModel):
 
     # Error handling
     on_error: Literal["continue", "abort", "retry", "dlq"] = "continue"
-    retry_count: int = 3
-    retry_delay_seconds: int = 10
+    # ge=0: negative counts/delays would fail at runtime (range()/sleep());
+    # reject them at validate time (review §2.14).
+    retry_count: int = Field(default=3, ge=0)
+    retry_delay_seconds: int = Field(default=10, ge=0)
 
     # Alert rules
     alerts: list[AlertRuleConfig] = Field(default_factory=list)

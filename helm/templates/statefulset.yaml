@@ -70,12 +70,28 @@ spec:
             - name: {{ $key }}
               value: {{ $val | quote }}
             {{- end }}
-            {{- if .Values.postgresql.enabled }}
-            ## Auto-wired from Bitnami PostgreSQL subchart.
+            {{- if hasKey (default dict .Values.envSecret) "TRAM_DB_URL" }}
+            ## TRAM_DB_URL provided via envSecret — rendered exactly once by the
+            ## envSecret range below; the chart's DB wiring defers to it entirely.
+            {{- else if .Values.postgresql.enabled }}
+            {{- $pgES := tpl (.Values.postgresql.auth.existingSecret | default "") . }}
+            {{- if eq $pgES (include "tram.postgresSecretName" .) }}
+            ## Auto-wired from the chart-managed postgres Secret (key: dbUrl) —
+            ## the password is generated once and never interpolated into the pod spec.
             ## Uses .Release.Name (not tram.fullname) so nameOverride/fullnameOverride
             ## can shorten TRAM pod names without breaking the DB connection.
             - name: TRAM_DB_URL
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "tram.postgresSecretName" . }}
+                  key: dbUrl
+            {{- else if and (not $pgES) .Values.postgresql.auth.password }}
+            ## Explicit postgresql.auth.password (no existingSecret) — dev path.
+            - name: TRAM_DB_URL
               value: "postgresql+psycopg2://{{ .Values.postgresql.auth.username }}:{{ .Values.postgresql.auth.password }}@{{ .Release.Name }}-postgresql/{{ .Values.postgresql.auth.database }}"
+            {{- else }}
+            {{- fail "postgresql.enabled=true but TRAM_DB_URL cannot be resolved: leave postgresql.auth.existingSecret at the chart-managed default (password is generated and stored in a Secret), set postgresql.auth.password explicitly, or provide TRAM_DB_URL via envSecret." }}
+            {{- end }}
             {{- else if .Values.persistence.enabled }}
             ## SQLAlchemy URL for SQLite on the /data PVC (v1.0.3+; replaces TRAM_DB_PATH)
             - name: TRAM_DB_URL

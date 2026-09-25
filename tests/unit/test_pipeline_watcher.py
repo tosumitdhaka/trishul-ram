@@ -221,6 +221,45 @@ class TestHandlerEvents:
         handler.on_deleted(ev)
         controller.delete.assert_not_called()
 
+    def test_deleted_yaml_removes_by_pipeline_name_not_filename_stem(self, tmp_path, watchdog_mocks):
+        """§2.15: a YAML whose `name:` differs from its filename must delete
+        the pipeline by NAME — the filename stem would remove the wrong (or
+        no) pipeline."""
+        handler, controller = self._handler(tmp_path, watchdog_mocks)
+        # Simulate the watcher having loaded the file earlier: the mapping
+        # records pipeline name per path.
+        yaml_file = _write_file(tmp_path, "disk-file.yaml", _MANUAL_YAML.format(name="real-name"))
+        controller.exists.return_value = True
+        handler._reload(str(yaml_file))
+        assert handler._path_to_name[str(yaml_file)] == "real-name"
+
+        handler.on_deleted(_make_event(str(yaml_file)))
+        controller.delete.assert_called_once_with("real-name")
+        # The mapping entry is consumed on delete.
+        assert str(yaml_file) not in handler._path_to_name
+
+    def test_deleted_yaml_without_mapping_falls_back_to_stem(self, tmp_path, watchdog_mocks):
+        """§2.15: when the file was never seen by the watcher (started after it
+        existed, then deleted without a modify event) there is no name mapping —
+        the filename stem is the best available guess."""
+        handler, controller = self._handler(tmp_path, watchdog_mocks)
+        controller.exists.return_value = True
+        ev = _make_event(str(tmp_path / "my-pipe.yaml"))
+        handler.on_deleted(ev)
+        controller.delete.assert_called_once_with("my-pipe")
+
+    def test_reload_prunes_mappings_for_missing_files(self, tmp_path, watchdog_mocks):
+        handler, controller = self._handler(tmp_path, watchdog_mocks)
+        first = _write_file(tmp_path, "gone.yaml", _MANUAL_YAML.format(name="gone-pipe"))
+        second = _write_file(tmp_path, "kept.yaml", _MANUAL_YAML.format(name="kept-pipe"))
+        controller.exists.return_value = True
+        handler._reload(str(first))
+        handler._reload(str(second))
+        assert set(handler._path_to_name) == {str(first), str(second)}
+        first.unlink()  # file removed outside the watcher
+        handler._reload(str(second))
+        assert set(handler._path_to_name) == {str(second)}
+
     def test_deleted_remove_failure_is_logged_not_swallowed(self, tmp_path, watchdog_mocks, caplog):
         handler, controller = self._handler(tmp_path, watchdog_mocks)
         controller.exists.return_value = True

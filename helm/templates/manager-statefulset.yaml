@@ -115,9 +115,26 @@ spec:
             - name: {{ $key }}
               value: {{ $val | quote }}
             {{- end }}
-            {{- if .Values.postgresql.enabled }}
+            {{- if hasKey (default dict .Values.envSecret) "TRAM_DB_URL" }}
+            ## TRAM_DB_URL provided via envSecret — rendered exactly once by the
+            ## envSecret range below; the chart's DB wiring defers to it entirely.
+            {{- else if .Values.postgresql.enabled }}
+            {{- $pgES := tpl (.Values.postgresql.auth.existingSecret | default "") . }}
+            {{- if eq $pgES (include "tram.postgresSecretName" .) }}
+            ## Auto-wired from the chart-managed postgres Secret (key: dbUrl) —
+            ## the password is generated once and never interpolated into the pod spec.
+            - name: TRAM_DB_URL
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "tram.postgresSecretName" . }}
+                  key: dbUrl
+            {{- else if and (not $pgES) .Values.postgresql.auth.password }}
+            ## Explicit postgresql.auth.password (no existingSecret) — dev path.
             - name: TRAM_DB_URL
               value: "postgresql+psycopg2://{{ .Values.postgresql.auth.username }}:{{ .Values.postgresql.auth.password }}@{{ .Release.Name }}-postgresql/{{ .Values.postgresql.auth.database }}"
+            {{- else }}
+            {{- fail "postgresql.enabled=true but TRAM_DB_URL cannot be resolved: leave postgresql.auth.existingSecret at the chart-managed default (password is generated and stored in a Secret), set postgresql.auth.password explicitly, or provide TRAM_DB_URL via envSecret." }}
+            {{- end }}
             {{- else if .Values.manager.persistence.enabled }}
             ## SQLite on the manager RWO PVC — no external database required.
             - name: TRAM_DB_URL
@@ -229,7 +246,10 @@ spec:
         - name: manager-data
           persistentVolumeClaim:
             claimName: {{ .Values.manager.persistence.existingClaim }}
-        {{- else if .Values.sharedStorage.enabled }}
+        {{- else if and .Values.sharedStorage.enabled (not .Values.manager.persistence.enabled) }}
+        ## RWX PVC — only reachable when manager.persistence is disabled, matching
+        ## the pvc.yaml creation guard. Workers never mount the RWX volume: they
+        ## sync schemas/MIBs from the manager via sync_assets() into their emptyDir.
         - name: data
           persistentVolumeClaim:
             claimName: data-{{ include "tram.fullname" . }}

@@ -764,3 +764,69 @@ class TestL013StatefulBroadcastStream:
         """)
         findings = lint(config)
         assert not any(f.rule_id == "L013" for f in findings)
+
+
+class TestL014KafkaMultiWorkerAtLeastOnce:
+    """§2.12: kafka at-least-once commits degrade with thread_workers > 1."""
+
+    def _load_kafka(self, thread_workers, enable_auto_commit=None):
+        lines = [
+            "pipeline:",
+            "  name: l014-kafka",
+            f"  thread_workers: {thread_workers}",
+            "  schedule:",
+            "    type: stream",
+            "  source:",
+            "    type: kafka",
+            '    brokers: ["localhost:9092"]',
+            "    topic: events",
+            "    group_id: g1",
+        ]
+        if enable_auto_commit is not None:
+            lines.append(f"    enable_auto_commit: {str(enable_auto_commit).lower()}")
+        lines += [
+            "  serializer_in:",
+            "    type: json",
+            "  serializer_out:",
+            "    type: json",
+            "  sink:",
+            "    type: local",
+            "    path: /out",
+        ]
+        return _load("\n".join(lines))
+
+    def test_l014_fires_for_multi_worker_with_at_least_once(self):
+        config = self._load_kafka(thread_workers=2)
+        findings = lint(config)
+        assert any(f.rule_id == "L014" and f.severity == "warning" for f in findings)
+
+    def test_l014_silent_for_single_worker(self):
+        config = self._load_kafka(thread_workers=1)
+        findings = lint(config)
+        assert not any(f.rule_id == "L014" for f in findings)
+
+    def test_l014_silent_when_auto_commit_restores_at_most_once(self):
+        config = self._load_kafka(thread_workers=4, enable_auto_commit=True)
+        findings = lint(config)
+        assert not any(f.rule_id == "L014" for f in findings)
+
+    def test_l014_silent_for_non_kafka_multi_worker(self):
+        config = _load("""
+            pipeline:
+              name: l014-non-kafka
+              thread_workers: 2
+              schedule:
+                type: stream
+              source:
+                type: webhook
+                path: /test
+              serializer_in:
+                type: json
+              serializer_out:
+                type: json
+              sink:
+                type: local
+                path: /out
+        """)
+        findings = lint(config)
+        assert not any(f.rule_id == "L014" for f in findings)

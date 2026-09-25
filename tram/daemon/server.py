@@ -136,6 +136,19 @@ def serve(config: AppConfig | None = None) -> None:
         },
     )
 
+    # Review §3.13 (warn-only first step): with uvicorn workers > 1 and no
+    # shared TRAM_AUTH_SECRET, each worker process mints its own session
+    # signing secret, so browser auth tokens fail verification intermittently
+    # across workers. Warn loudly; refusing to start would be the stricter
+    # option but is left to deployment policy.
+    if config.workers > 1 and not os.environ.get("TRAM_AUTH_SECRET"):
+        logger.warning(
+            "TRAM_WORKERS > 1 without TRAM_AUTH_SECRET: each worker process "
+            "generates its own auth-token signing secret, so browser sessions "
+            "will fail verification intermittently across workers. Set "
+            "TRAM_AUTH_SECRET to one shared value when running multi-worker."
+        )
+
     uvicorn_kwargs = dict(
         host=config.host,
         port=config.port,

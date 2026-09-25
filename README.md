@@ -267,11 +267,12 @@ Docker-managed volume by default, keeps `/data/output` inside the same volume un
 empty, the helper bootstraps `sample-health.yaml` automatically. Pass `--pipelines-dir` only if you
 explicitly want a host-managed runtime pipeline directory.
 
-The standalone script also bootstraps browser login by default with `TRAM_AUTH_USERS=admin:admin123`.
-Override it with an exported `TRAM_AUTH_USERS`, an `--env-file`, or `--env 'TRAM_AUTH_USERS=admin:changeme123'`.
-Quote the full value if the password contains shell-special characters. If you later change that
-password from the UI, the DB-backed hash stored in `/data/tram.db` overrides the bootstrap env value
-on future redeploys while the same data volume is reused.
+The standalone script does not inject a default UI credential (the weak `admin:admin123`
+bootstrap was removed, GH #51). Enable browser login by exporting `TRAM_AUTH_USERS`, using an
+`--env-file`, or passing `--env 'TRAM_AUTH_USERS=admin:changeme123'` — required for published
+`--ghcr` deployments. Quote the full value if the password contains shell-special characters.
+If you later change a password from the UI, the DB-backed hash stored in `/data/tram.db`
+overrides the bootstrap env value on future redeploys while the same data volume is reused.
 
 For local repo-based development, plain `up` auto-builds a fresh `trishul-ram:local-<epoch>` image
 on each run unless you pin a tag with `--tag`, and it prunes older `local-*` images afterward so

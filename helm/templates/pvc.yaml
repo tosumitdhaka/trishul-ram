@@ -1,10 +1,17 @@
-{{- if .Values.sharedStorage.enabled }}
+{{- if and .Values.sharedStorage.enabled (or (not .Values.manager.enabled) (not .Values.manager.persistence.enabled)) }}
 ## Shared ReadWriteMany PVC.
 ##
-## Standalone mode: mounted on every replica so all pods see the same schemas/MIBs.
-## Manager+worker mode: mounted on manager (for writing) and workers (for reading)
-##   when workers need to access schemas/MIBs at pipeline execution time.
-##   The manager SQLite database lives on the manager.persistence RWO PVC instead.
+## Rendered only when the RWX volume is actually mounted (GH #51):
+##   - Standalone mode (manager.enabled=false): mounted on every replica at /data.
+##   - Manager+worker mode: mounted on the manager at /data ONLY when
+##     manager.persistence.enabled=false. Workers never mount it — they use an
+##     emptyDir at /data and fetch schemas/MIBs from the manager at run time via
+##     sync_assets() (GET /api/schemas, GET /api/mibs/...).
+##
+## With manager.persistence.enabled=true the chart does NOT create this PVC:
+## the combination would provision a volume that nothing mounts (an orphan).
+## The PVC is a plain chart resource — it is removed with the release on
+## `helm uninstall`; nothing outlives its consumers.
 ##
 ## Requires a StorageClass that supports ReadWriteMany (e.g. nfs-rwx, efs-sc, azurefile).
 apiVersion: v1

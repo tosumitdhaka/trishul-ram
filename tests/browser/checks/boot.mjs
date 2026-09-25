@@ -44,9 +44,11 @@ const errorsSoFar = () =>
 await page.goto(`${BASE}/#dashboard`, { waitUntil: 'networkidle', timeout: 15000 })
 
 // The brand version is populated by the health poller from /api/meta —
-// wait deterministically instead of sleeping.
+// wait deterministically instead of sleeping. The shell now ships a `v—`
+// placeholder (index.html), so "non-empty" is vacuous — only a real
+// rendered version counts.
 await page.waitForFunction(
-  () => (document.getElementById('brand-ver')?.textContent || '').trim().length > 0,
+  () => (document.getElementById('brand-ver')?.textContent || '').trim() !== 'v—',
   { timeout: 10000 }
 )
 const brandVersion = await page.evaluate(() => document.getElementById("brand-ver")?.textContent.trim())

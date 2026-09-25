@@ -83,3 +83,37 @@ def test_schema_version_changes_when_schema_changes(monkeypatch):
     finally:
         cs._schema_version_cache = None
     assert before != after
+
+
+# ── A.1: per-field descriptions ───────────────────────────────────────────────
+
+
+def test_every_schema_field_has_a_description():
+    """A.1: every field descriptor in SCHEMA_FIELDS carries a non-empty,
+    operator-facing description (the wizard's form help text and the AI
+    schema consumers rely on it; gaps fail loudly at import already)."""
+    total = 0
+    missing: list[str] = []
+    for category, types in cs.SCHEMA_FIELDS.items():
+        for type_name, fields in types.items():
+            for field in fields:
+                total += 1
+                if not (field.get("description") or "").strip():
+                    missing.append(f"{category}/{type_name}/{field['name']}")
+    assert total > 0
+    assert missing == [], f"fields without a description: {missing}"
+
+
+def test_config_schema_endpoint_serves_field_descriptions():
+    app = FastAPI()
+    app.include_router(config_router)
+    client = TestClient(app)
+
+    data = client.get("/api/config/schema").json()
+
+    sftp_fields = {f["name"]: f for f in data["sources"]["sftp"]["fields"]}
+    assert sftp_fields["host"]["description"] == "Server hostname or IP address"
+    assert "directory" in sftp_fields["remote_path"]["description"]
+    # The description key is additive — existing metadata keys are intact.
+    assert sftp_fields["password"]["kind"] == "text"
+    assert sftp_fields["password"]["secret"] is True

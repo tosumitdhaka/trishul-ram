@@ -139,15 +139,16 @@ persistence:
 
 ## Shared ReadWriteMany storage for schemas and MIBs (v1.0.9).
 ##
-## Standalone mode: mounted on every replica so schemas/MIBs uploaded via the UI
-##   are visible to all pods immediately.
+## Standalone mode: mounted on every replica at /data so schemas/MIBs uploaded
+##   via the UI are visible to all pods immediately.
 ##
-## Manager+worker mode: manager writes schemas/MIBs to manager.persistence (RWO).
-##   Enable sharedStorage ONLY if workers also need to read those files at runtime
-##   (e.g. Avro/Protobuf pipelines that reference /data/schemas, SNMP pipelines
-##   that need custom MIBs at /data/mibs). When enabled in manager mode, the RWX
-##   PVC is mounted on BOTH the manager and workers at /data/schemas and /data/mibs.
-##   The manager.persistence RWO PVC still handles the SQLite database.
+## Manager+worker mode: the manager writes schemas/MIBs to manager.persistence
+##   (RWO), and workers fetch them at run time via sync_assets() into their own
+##   emptyDir /data — workers NEVER mount this volume. The RWX PVC is mounted
+##   (on the manager only) when manager.persistence.enabled=false. Enabling
+##   sharedStorage together with manager.persistence.enabled=true would create a
+##   PVC that nothing mounts, so the chart does not render one for that
+##   combination (GH #51).
 ##
 ## Requires a StorageClass that supports ReadWriteMany:
 ##   kind:       storageClass: "nfs-rwx"  (deploy helm/kind/nfs-provisioner.yaml first)
@@ -400,6 +401,16 @@ tls:
 ##   For most deployments: postgresql.enabled=false + manager.persistence.enabled=true
 ##   is the recommended setup — no external database dependency.
 ##
+## Credentials (v1.4.8, GH #51): there is NO committed plaintext password
+##   default. auth.password is empty — the chart generates a random 24-char
+##   password once on install and stores it in Secret <release>-postgres
+##   (keys: password / postgres-password / dbUrl). The Bitnami subchart reads
+##   POSTGRES_PASSWORD from that Secret; TRAM pods read the full TRAM_DB_URL
+##   from its dbUrl key (never interpolated into the pod spec). Upgrades reuse
+##   the existing value via lookup — the password never rotates on its own.
+##   For dev, set auth.password to a fixed value; it is still stored in the
+##   Secret instead of the values file or pod spec.
+##
 ## For production with an existing external PostgreSQL:
 ##   postgresql.enabled: false
 ##   envSecret:
@@ -410,8 +421,13 @@ postgresql:
   enabled: false
   auth:
     username: tram
-    password: tram
+    password: ""   # empty = chart generates once and stores in <release>-postgres Secret
     database: tram
+    ## Chart-managed Secret the Bitnami subchart reads credentials from
+    ## (tpl-evaluated, so release renames are picked up automatically). Point it
+    ## at your own Secret only if it carries the same keys; TRAM_DB_URL must
+    ## then be provided via envSecret because the chart cannot read the password.
+    existingSecret: '{{ .Release.Name }}-postgres'
   primary:
     persistence:
       enabled: true

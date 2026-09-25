@@ -301,6 +301,53 @@ class TestServeManagerBranch:
         assert "ssl_certfile" not in kwargs
         assert "ssl_keyfile" not in kwargs
 
+    def test_warns_when_multi_worker_without_auth_secret(self, monkeypatch, caplog):
+        """§3.13 (warn-only first step): workers > 1 without TRAM_AUTH_SECRET
+        mints per-process session secrets, breaking browser auth across workers."""
+        import logging
+
+        monkeypatch.delenv("TRAM_AUTH_SECRET", raising=False)
+        config = _make_config(tram_mode="standalone", workers=2)
+
+        with patch("tram.daemon.server.setup_logging"), \
+             patch("uvicorn.run"), \
+             patch("tram.api.app.create_app", return_value=MagicMock()), \
+             patch("signal.signal"):
+            with caplog.at_level(logging.WARNING, logger="tram.daemon.server"):
+                serve(config)
+
+        assert "TRAM_WORKERS > 1 without TRAM_AUTH_SECRET" in caplog.text
+
+    def test_no_warning_when_auth_secret_set(self, monkeypatch, caplog):
+        import logging
+
+        monkeypatch.setenv("TRAM_AUTH_SECRET", "shared-secret")
+        config = _make_config(tram_mode="standalone", workers=4)
+
+        with patch("tram.daemon.server.setup_logging"), \
+             patch("uvicorn.run"), \
+             patch("tram.api.app.create_app", return_value=MagicMock()), \
+             patch("signal.signal"):
+            with caplog.at_level(logging.WARNING, logger="tram.daemon.server"):
+                serve(config)
+
+        assert "TRAM_WORKERS > 1 without TRAM_AUTH_SECRET" not in caplog.text
+
+    def test_no_warning_for_single_worker(self, monkeypatch, caplog):
+        import logging
+
+        monkeypatch.delenv("TRAM_AUTH_SECRET", raising=False)
+        config = _make_config(tram_mode="standalone", workers=1)
+
+        with patch("tram.daemon.server.setup_logging"), \
+             patch("uvicorn.run"), \
+             patch("tram.api.app.create_app", return_value=MagicMock()), \
+             patch("signal.signal"):
+            with caplog.at_level(logging.WARNING, logger="tram.daemon.server"):
+                serve(config)
+
+        assert "TRAM_WORKERS > 1 without TRAM_AUTH_SECRET" not in caplog.text
+
     def test_manager_sigterm_handler_installed(self):
         """serve() installs a SIGTERM handler on the manager/standalone path."""
         config = _make_config(tram_mode="standalone")

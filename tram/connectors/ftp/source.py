@@ -7,6 +7,7 @@ import io
 import logging
 from collections.abc import Iterator
 
+from tram.connectors.config_utils import cfg_bool, cfg_int
 from tram.core.exceptions import SourceError
 from tram.interfaces.base_source import BaseSource
 from tram.registry.registry import register_source
@@ -26,15 +27,15 @@ class FTPSource(BaseSource):
     def __init__(self, config: dict) -> None:
         super().__init__(config)
         self.host: str = config["host"]
-        self.port: int = int(config.get("port", 21))
+        self.port: int = cfg_int(config, "port", 21)
         self.username: str = config["username"]
         self.password: str = config["password"]
         self.remote_path: str = config.get("remote_path", "/").rstrip("/") or "/"
         self.file_pattern: str = config.get("file_pattern", "*")
         self.move_after_read: str | None = config.get("move_after_read")
-        self.delete_after_read: bool = bool(config.get("delete_after_read", False))
-        self.passive: bool = bool(config.get("passive", True))
-        self.skip_processed: bool = bool(config.get("skip_processed", False))
+        self.delete_after_read: bool = cfg_bool(config, "delete_after_read", False)
+        self.passive: bool = cfg_bool(config, "passive", True)
+        self.skip_processed: bool = cfg_bool(config, "skip_processed", False)
         self._pipeline_name: str = config.get("_pipeline_name", "")
         self._file_tracker = config.get("_file_tracker")
 

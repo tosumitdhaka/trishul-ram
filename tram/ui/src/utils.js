@@ -315,17 +315,71 @@ export function confirmAction({
 
     const modal = bootstrap.Modal.getOrCreateInstance(el)
     let settled = false
-    const onOk = () => { settled = true; resolve(true); modal.hide() }
-    const onHidden = () => {
+    const settle = (result) => {
+      if (settled) return
+      settled = true
+      window.removeEventListener('tram:page-leave', onPageLeave)
       el.removeEventListener('hidden.bs.modal', onHidden)
       okBtn.removeEventListener('click', onOk)
-      if (!settled) resolve(false)
+      resolve(result)
     }
+    const onOk = () => { settle(true); modal.hide() }
+    const onHidden = () => settle(false)
+    // A route change means the router's modal cleanup disposed this dialog
+    // without a "hidden" event — from the caller's point of view that is a
+    // cancel, not a hang.
+    const onPageLeave = () => settle(false)
+    window.addEventListener('tram:page-leave', onPageLeave)
     el.addEventListener('hidden.bs.modal', onHidden)
     okBtn.addEventListener('click', onOk)
     el.addEventListener('shown.bs.modal', () => okBtn.focus(), { once: true })
     modal.show()
   })
+}
+
+// ── Navigation-time modal cleanup ─────────────────────────────────────────────
+// Route changes replace #content wholesale, but a shown Bootstrap modal
+// keeps state OUTSIDE it: the backdrop element, the body scroll-lock
+// (`modal-open` + inline overflow/padding), and the focus trap. Without
+// this, navigating with a modal open (the browser Back button is the usual
+// culprit) leaves an undismissable overlay on the incoming page. The router
+// calls it before every render swap; deploy-from-modal flows reuse it.
+
+export function closeAllModals() {
+  const content = document.getElementById('content')
+  document.querySelectorAll('.modal.show').forEach((el) => {
+    const m = bootstrap.Modal.getInstance(el)
+    if (m) {
+      // A modal caught mid-fade has its transitionComplete queued on the
+      // dialog via Bootstrap's executeAfterTransition (a raw transitionend
+      // listener plus a ~150ms fallback timer). dispose() nulls every
+      // instance property but cannot cancel that pending callback, so it
+      // would fire later on the nulled instance and throw. Consume it NOW,
+      // while the instance is still intact: the synthetic transitionend
+      // matches the listener's target check and runs the callback
+      // synchronously (no animation — cleanup stays fully synchronous).
+      if (m._isTransitioning && m._dialog) {
+        m._dialog.dispatchEvent(new Event('transitionend'))
+      }
+      try { m.dispose() } catch { /* never block navigation */ }
+    }
+    if (content && content.contains(el)) return // dies with the #content swap
+    if (el === _confirmModalEl) {
+      // The shared confirm dialog persists across pages — reset it for its
+      // next use, since dispose() leaves a shown element behind.
+      el.classList.remove('show')
+      el.style.display = 'none'
+    } else {
+      el.remove()
+    }
+  })
+  // dispose() releases the instance, backdrop, and focus trap but not the
+  // body scroll-lock; a backdrop caught mid-fade has no .show modal to
+  // iterate. Sweep both so the incoming page starts clean.
+  document.querySelectorAll('.modal-backdrop').forEach((el) => el.remove())
+  document.body.classList.remove('modal-open')
+  document.body.style.removeProperty('overflow')
+  document.body.style.removeProperty('padding-right')
 }
 
 export function pipelineStartFeedback(name, result = {}) {

@@ -101,6 +101,16 @@ TRAM_DB_URL=mysql+pymysql://tram:secret@mysql:3306/tramdb
 
 Schema migrations run automatically at startup: `CREATE TABLE IF NOT EXISTS` + `ALTER TABLE ADD COLUMN` guards handle upgrades from v0.6.0 databases.
 
+**Production recommendation (GH #51):** SQLite is for development and small-scale,
+single-writer deployments. At production scale use **PostgreSQL** — the Helm chart ships a
+Bitnami PostgreSQL subchart (`postgresql.enabled=true`, see the [PostgreSQL subchart
+section](#postgresql-subchart-v108)) or point `TRAM_DB_URL` at a managed database via
+`envSecret`. Concurrency caveat: the SQLite connection is opened with
+`check_same_thread=False`; since v1.4.8 every SQLite connection gets a 30s busy timeout
+(`PRAGMA busy_timeout`), so transient `database is locked` contention retries for up to
+30s instead of failing fast. Treat SQLite as a single-writer store and move to PostgreSQL
+when multiple writers or sustained throughput are expected.
+
 ## Manager + Worker Mode (v1.2.0)
 
 TRAM supports a split deployment where a single **manager** pod owns all scheduling, the database, and the UI, while one or more **worker** pods execute pipelines and return results.
@@ -581,11 +591,14 @@ single standalone container. By default it:
 - prunes older local `local-*` images after builds, keeping the newest 5 by default; override with `--keep-images N`
 - switches to the published image `ghcr.io/tosumitdhaka/trishul-ram:latest` when you pass `--ghcr` unless you also pass `--tag`
 
-The standalone helper bootstraps browser login by default with `TRAM_AUTH_USERS=admin:admin123`.
-Override it with an exported `TRAM_AUTH_USERS`, an `--env-file`, or `--env 'TRAM_AUTH_USERS=admin:changeme123'`.
-Quote the full value if the password contains shell-special characters. If you later change that
-password from the UI, the updated hash is stored in `/data/tram.db` and overrides the bootstrap
-`TRAM_AUTH_USERS` value on future redeploys while the same data volume is reused.
+The standalone helper no longer injects a default UI credential (the weak
+`admin:admin123` bootstrap was removed, GH #51). Enable browser login by
+exporting `TRAM_AUTH_USERS`, using an `--env-file`, or passing
+`--env 'TRAM_AUTH_USERS=admin:changeme123'` — required for published/`--ghcr`
+deployments. Quote the full value if the password contains shell-special
+characters. If you later change a password from the UI, the updated hash is
+stored in `/data/tram.db` and overrides the bootstrap `TRAM_AUTH_USERS` value
+on future redeploys while the same data volume is reused.
 
 Run `./scripts/deploy-docker-standalone.sh help` for all options, including custom image tags,
 env files, extra `TRAM_*` overrides, UDP port publishing for trap/syslog ingress, and an optional
@@ -624,6 +637,18 @@ cp .env.example .env
 # Edit .env with your credentials
 docker compose up
 ```
+
+> **First-time setup (permission trap, GH #51):** `docker-compose.yml` bind-mounts the
+> gitignored host dir `./output` (run output + `./output/sftp` for the SFTP fixture).
+> Docker auto-creates a missing bind source as root while the containers run as uid 1000,
+> so a fresh checkout hits `EACCES` on startup. Create the dirs with the right ownership
+> before the first `up`:
+>
+> ```bash
+> mkdir -p output && sudo chown -R 1000:1000 output
+> ```
+>
+> (uid 1000 is the tram user in the image and the sftp upload user.)
 
 ## Kubernetes — Helm (recommended)
 
@@ -669,7 +694,7 @@ helm upgrade tram oci://ghcr.io/tosumitdhaka/charts/trishul-ram \
 | `persistence.enabled` | `true` | Provision a per-pod RWO PVC via `volumeClaimTemplates` mounted at `/data`; auto-sets `TRAM_DB_URL=sqlite:////data/tram.db`, `TRAM_SCHEMA_DIR=/data/schemas`, `TRAM_MIB_DIR=/data/mibs`; disable in cluster mode when using `sharedStorage` |
 | `persistence.size` | `1Gi` | PVC size per pod (standalone mode only) |
 | `persistence.accessMode` | `ReadWriteOnce` | PVC access mode (standalone mode only) |
-| `sharedStorage.enabled` | `false` | Provision a single shared `ReadWriteMany` PVC (`data-<release>`) mounted at `/data` on every pod (v1.0.9); schemas/MIBs uploaded via the UI are visible to all replicas immediately; requires a RWX StorageClass |
+| `sharedStorage.enabled` | `false` | Provision a single shared `ReadWriteMany` PVC (`data-<release>`) mounted at `/data` (v1.0.9); schemas/MIBs uploaded via the UI are visible to all replicas immediately; requires a RWX StorageClass. In manager+worker mode the PVC is mounted on the manager only when `manager.persistence.enabled=false` — workers sync assets from the manager (`emptyDir` + `sync_assets()`) and never mount it. The chart does not render the PVC for the `manager.persistence.enabled=true` + `sharedStorage.enabled=true` combination (it would be mounted nowhere — GH #51) |
 | `sharedStorage.size` | `2Gi` | Shared PVC size |
 | `sharedStorage.storageClass` | `""` | RWX StorageClass: `nfs-rwx` (kind), `efs-sc` (AWS), `azurefile` (Azure), `filestore-rwx` (GKE), `longhorn-rwx` |
 | `schemaRegistry.url` | `""` | External registry URL; injects `TRAM_SCHEMA_REGISTRY_URL` — enables proxy + serializer default (v1.0.4) |
@@ -681,7 +706,8 @@ helm upgrade tram oci://ghcr.io/tosumitdhaka/charts/trishul-ram \
 | `authUsers` | `""` | Comma-separated `user:password` pairs for browser login bootstrap; with `TRAM_DB_URL`, changed passwords are stored as scrypt hashes in `user_passwords` and override the env value. No committed plaintext default — set explicitly or via `envSecret.TRAM_AUTH_USERS` |
 | `postgresql.enabled` | `false` | Deploy Bitnami PostgreSQL subchart and auto-wire `TRAM_DB_URL` (v1.0.8) |
 | `postgresql.auth.username` | `tram` | PostgreSQL username |
-| `postgresql.auth.password` | `tram` | PostgreSQL password (use external secret for production) |
+| `postgresql.auth.password` | `""` | PostgreSQL password. Empty (default) = the chart generates a random 24-char password once and stores it in Secret `<release>-postgres` (keys `password`/`postgres-password`/`dbUrl`); the value is preserved across upgrades via lookup and never rotates on its own (GH #51). Set a fixed value for dev deployments |
+| `postgresql.auth.existingSecret` | `'{{ .Release.Name }}-postgres'` | Secret the Bitnami subchart reads credentials from (tpl-evaluated). Point at your own Secret only if it carries the same keys; `TRAM_DB_URL` must then be provided via `envSecret` because the chart cannot read the password |
 | `postgresql.auth.database` | `tram` | PostgreSQL database name |
 | `nameOverride` | `""` | Override the chart name portion of resource names |
 | `fullnameOverride` | `""` | Fully override the resource name prefix |
@@ -753,6 +779,30 @@ helm install tram oci://ghcr.io/tosumitdhaka/charts/trishul-ram \
   --set postgresql.enabled=true
 ```
 
+**Database choice for production:** SQLite is intended for development and small-scale,
+single-writer deployments. For production scale use PostgreSQL — the Helm chart ships a
+Bitnami PostgreSQL subchart (enable it as above, or point `TRAM_DB_URL` at an external
+managed database via `envSecret`). Concurrency caveat: the SQLite driver is opened with
+`check_same_thread=False`; since v1.4.8 every SQLite connection gets a 30s busy timeout
+(`PRAGMA busy_timeout`), so transient contention retries for up to 30s instead of failing
+fast. Treat SQLite as dev/small-scale and move to PostgreSQL once multiple writers or
+sustained throughput are expected.
+
+**Credentials (v1.4.8, GH #51):** the chart no longer ships a committed plaintext
+password. `postgresql.auth.password` defaults to `""` — on install the chart generates a
+random 24-char password, stores it in Secret `<release>-postgres` (keys
+`password`/`postgres-password`/`dbUrl`), points the Bitnami subchart at it via
+`postgresql.auth.existingSecret`, and TRAM pods read the full `TRAM_DB_URL` from the
+`dbUrl` key (never interpolated into the pod spec). Upgrades reuse the value via lookup.
+For dev, set a fixed `postgresql.auth.password` — it is still kept in the Secret, not in
+values or the pod spec.
+
+**Upgrading a release that used the old chart's `password: tram` default:** pass your
+current password once so the postgres data volume keeps working:
+`--set postgresql.auth.password=<your current password>` (Bitnami requires current
+credentials on upgrade). Afterwards the chart-managed Secret pins it and the flag is no
+longer needed.
+
 For production with an existing external database, set `TRAM_DB_URL` via `envSecret` instead of the subchart.
 
 > **Note:** For production, use an external managed PostgreSQL and set `TRAM_DB_URL` via `envSecret`.
@@ -761,7 +811,7 @@ For production with an existing external database, set `TRAM_DB_URL` via `envSec
 
 In standalone mode, enable `sharedStorage` to provision a single `ReadWriteMany` PVC that every replica mounts at `/data`, so schemas/MIBs uploaded via the UI are visible to all pods immediately.
 
-In manager+worker mode the manager's RWO PVC already holds schemas and MIBs — workers sync them at run time via `GET /api/schemas` and `GET /api/mibs/{name}`. Only enable `sharedStorage` in manager mode if workers must read schema/MIB files directly at runtime (e.g. Avro/Protobuf pipelines referencing `/data/schemas`).
+In manager+worker mode the manager's RWO PVC already holds schemas and MIBs — workers sync them at run time via `sync_assets()` (`GET /api/schemas` and `GET /api/mibs/{name}`) into their own `emptyDir` and never mount the RWX volume. `sharedStorage` is therefore only meaningful in manager mode when `manager.persistence.enabled=false`. The chart will not render the RWX PVC for the `manager.persistence.enabled=true` + `sharedStorage.enabled=true` combination — it would be provisioned but mounted nowhere (GH #51).
 
 **For kind clusters** — deploy the bundled NFS Ganesha provisioner first:
 
@@ -775,20 +825,19 @@ kubectl apply -f ~/kind/nfs-provisioner.yaml
 kubectl rollout status deploy/nfs-provisioner -n nfs-provisioner
 ```
 
-Then install/upgrade TRAM with shared storage enabled:
+Then install/upgrade TRAM with shared storage enabled (standalone mode):
 
 ```bash
 helm upgrade trishul-ram helm/ \
   --namespace trishul-ram \
   --set image.tag=1.4.5 \
-  --set manager.enabled=true \
-  --set worker.replicas=3 \
-  --set manager.persistence.enabled=true \
+  --set manager.enabled=false \
   --set sharedStorage.enabled=true \
   --set sharedStorage.storageClass=nfs-rwx
 ```
 
-This creates a single RWX PVC for shared schemas/MIBs backed by NFS. In manager+worker mode the manager still keeps SQLite on its own RWO PVC; the shared RWX volume is only for assets that must be visible across pods.
+This creates a single RWX PVC (`data-<release>`) for shared schemas/MIBs backed by NFS,
+mounted at `/data` on every replica.
 
 **For production clouds** — use the platform RWX StorageClass directly:
 
@@ -799,7 +848,9 @@ This creates a single RWX PVC for shared schemas/MIBs backed by NFS. In manager+
 | GKE (Filestore) | `filestore-rwx` |
 | Longhorn | `longhorn-rwx` |
 
-> **Note:** `sharedStorage.enabled=true` does not replace manager persistence. In manager+worker mode, keep `manager.persistence.enabled=true` for SQLite and use the RWX volume only when workers must read shared schema/MIB files directly.
+> **Note:** in manager+worker mode `sharedStorage` does not replace manager persistence —
+> keep `manager.persistence.enabled=true` for SQLite; workers already receive schemas/MIBs
+> from the manager at run time via `sync_assets()`.
 
 ### Scale up / scale down
 
