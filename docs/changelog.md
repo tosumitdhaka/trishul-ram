@@ -5,7 +5,7 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ---
 
-## [Unreleased]
+## [1.4.8] - 2026-09-25
 
 ### Fixed
 - Navigating with a modal open (browser Back, same-page route change) no longer leaves an orphaned backdrop/scroll-lock — the router closes all modals synchronously before every render swap; a pending `confirmAction()` settles as cancel on navigation instead of hanging forever (#49)
