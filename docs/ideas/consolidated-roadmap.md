@@ -3,7 +3,7 @@
 **Date:** 2026-09-18
 **Purpose:** single planning view over ALL pending work — findings from both 2026-09-17 reviews, all improvement proposals, open GitHub issues, and the treq reuse feasibility — grouped by cross-cutting pattern and assigned to releases. All releases stay in the 1.4.x patch series per maintainers' preference (themed waves, not majors).
 
-> **Status (2026-09-24):** this is the living plan. **v1.4.1, v1.4.2, and v1.4.3 shipped as planned** (sections below marked ✅ SHIPPED). **v1.4.4** shipped as an unplanned wizard AI-assist fix pass (operator-reported; see `docs/changelog.md` `[1.4.4]`). **v1.4.5** shipped as an unplanned SNMP data-integrity pass (GH #32/#33/#35/#36; see `docs/changelog.md` `[1.4.5]`). The 2026-09-24 independent full-repo review (`docs/reviews/independent-review-2026-09-24.md`) produced 59 findings, now tracked as GH #43–#52; **the next three releases are planned in `docs/plans/next-versions-plan.md`** (v1.4.6 security & integrity fixes → v1.4.7 execution correctness + AI Wave B → v1.4.8 UX/deploy polish + AI A.1 + Wave C — the AI-expansion cut points shift one version each, fixes first per maintainer decision).
+> **Status (2026-09-25):** this document is now the historical grouping record. **v1.4.1–v1.4.3 shipped as planned** (sections below marked ✅ SHIPPED). **v1.4.4** (wizard AI-assist fixes) and **v1.4.5** (SNMP data-integrity, GH #32/#33/#35/#36) shipped as unplanned passes. The 2026-09-24 independent full-repo review (59 findings, GH #43–#52) drove **v1.4.6 (security & integrity, PR #53), v1.4.7 (execution correctness + AI Wave B, PR #56), and v1.4.8 (UX/deploy polish + AI A.1, PR #57)** — all shipped 2026-09-24/25 per `docs/plans/next-versions-plan.md` and `docs/changelog.md`. **All remaining pending work now lives in GH issues #41/#42 + #58–#70**; `docs/roadmap.md`'s backlog rows carry the issue refs.
 
 **Inputs consolidated:**
 
@@ -14,7 +14,7 @@
 | `docs/ideas/ui-ux-improvements.md` | QW1–QW11 quick wins, L1–L6 larger efforts |
 | `docs/ideas/ai-integration-improvements.md` | A1–A11 improvements, B1–B8 integration ideas |
 | `docs/ideas/treq-ai-reuse-feasibility.md` | treq `_providers/` vendoring assessment (deferred) |
-| Open issues | #24 (schema-registry feasibility — closed, implemented v1.4.3), #26 (editor plugin reference — closed v1.4.2), #27 (plugins page restructure — closed v1.4.2); #39 (A1 skip_processed, still open) |
+| Open issues | #24 (schema-registry feasibility — closed, implemented v1.4.3), #26 (editor plugin reference — closed v1.4.2), #27 (plugins page restructure — closed v1.4.2); #39 (A1 skip_processed — closed: fail-loud v1.4.6 + manager-routed tracker v1.4.7 via GH #54) |
 | Housekeeping | 5 uncommitted doc files (the two reviews, two improvement docs, treq feasibility) |
 
 ---
@@ -99,21 +99,21 @@ L5 may slip to the next release without breaking anything else.
 
 > Shipped as an unplanned pass out of an operator data-integrity report: GH #32 (tuple-space WALK subtree boundaries), #33 (refuse instead of silently collapsing classify rows), #35 (layered INTEGER classification; `*Vdom` code-default removed with migration), #36 (structured index grouping). See `docs/changelog.md` `[1.4.5]`.
 
-### AI expansion — sequenced into v1.4.7/v1.4.8 (per `docs/plans/next-versions-plan.md`)
+### AI expansion — Wave B + A.1/A.4 shipped (v1.4.7/v1.4.8)
 
 Theme: convert the AI feature from editor tooling into operator tooling, on top of a hardened base.
-**Sequenced behind the v1.4.6 fix release** (maintainer decision 2026-09-24): Wave B (A6/A7/B1) + A.4 ride v1.4.7; A.1 + Wave C ride v1.4.8. The treq vendor decision (whether to vendor `treq/_providers/`) remains the gate for the AI rows — it does not block the fix issues in those versions.
+**Shipped:** Wave B (A6 template-grounded generation, A7 fix-retry, B1 run-failure triage) + A.4 (server-side plugin field metadata) in v1.4.7, and A.1 (601 per-field descriptions) in v1.4.8 — all on the **current `ai.py`** per the treq vendor decision (2026-09-24: proceed without vendoring). **Still open:** A.2 (plugin docstrings) + A.3 (curated examples) + Wave C (C.1–C.3 UI tiers) under GH #42; A9 and B3–B6 remain gated on a future treq-vendor revisit.
 
-| Item | What | Effort | Note |
+| Item | What | Effort | Status |
 |---|---|---|---|
-| treq vendor | Vendor `treq/_providers/` per `docs/ideas/treq-ai-reuse-feasibility.md` (4-coupling adaptation list) | ~3 d | Supersedes A1's interim wrapper; brings streaming, retries, cost engine |
-| A6 | Template-grounded generation (few-shot from `/api/templates`) | S | Needs A3/A4 from v1.4.1 |
-| A7 | Fix-mode iteration loop (validate + one retry) | S | Same |
-| B1 | Run-failure triage "Explain this run" | S–M | Pairs with L4's run-detail page; needs A4 redaction |
-| B3 | MIB compile-error explanation | S | |
-| B4 | Alert-rule authoring from natural language | S–M | |
-| A9 | Streaming output | M | **Deliberately sequenced after the treq decision** — treq has streaming built in; building SSE into the current sync layer would be double work |
-| B5, B6 | Throughput-anomaly explanation (only with run-history join), connector-error explain | M, S | After B1/B3 |
+| treq vendor | Vendor `treq/_providers/` per `docs/ideas/treq-ai-reuse-feasibility.md` (4-coupling adaptation list) | ~3 d | Decision 2026-09-24: **defer** — proceed on current `ai.py`; a future revisit gates A9 + B3–B6 |
+| A6 | Template-grounded generation (few-shot from `/api/templates`) | S | ✅ shipped v1.4.7 (GH #41) |
+| A7 | Fix-mode iteration loop (validate + one retry) | S | ✅ shipped v1.4.7 (GH #41) |
+| B1 | Run-failure triage "Explain this run" | S–M | ✅ shipped v1.4.7 (GH #41) |
+| B3 | MIB compile-error explanation | S | open — gated on the treq revisit |
+| B4 | Alert-rule authoring from natural language | S–M | open — gated on the treq revisit |
+| A9 | Streaming output | M | open — gated on the treq revisit (treq has streaming built in; SSE on the current sync layer would be double work) |
+| B5, B6 | Throughput-anomaly explanation (only with run-history join), connector-error explain | M, S | open — after the treq revisit and B1 |
 
 ---
 
@@ -141,6 +141,6 @@ Theme: convert the AI feature from editor tooling into operator tooling, on top 
 
 ## 5. Open items & triggers
 
-- **AI expansion (v1.4.7):** Wave B (A6/A7/B1) + A.4 implemented on the **current `ai.py`** — the treq vendor decision (2026-09-24, maintainer) was *defer*; A9 (streaming) and B3–B6 stay gated on a future vendor revisit (`docs/ideas/treq-ai-reuse-feasibility.md`). See `docs/plans/next-versions-plan.md`.
-- **SNMP library migration decision (open):** the trishul-smi/trishul-snmp swap remains blocked on SNMPv1 + v3 crypto breadth (`docs/ideas/trishul-smi-snmp-migration-feasibility.md`). v1.4.5 shipped the SNMP data-integrity work on pysnmp; the migration decision is unaffected.
+- **AI expansion (Wave B + A.1/A.4 shipped v1.4.7/v1.4.8):** all on the **current `ai.py`** — the treq vendor decision (2026-09-24, maintainer) was *defer vendoring*. Remaining: A.2/A.3 + Wave C under GH #42; A9 (streaming) and B3–B6 stay gated on a future vendor revisit (`docs/ideas/treq-ai-reuse-feasibility.md`). Release record: `docs/plans/next-versions-plan.md`.
+- **SNMP library migration decision (open):** the upstream blockers are now CLOSED — trishul-snmp #8 (SNMPv1) and #10 (USM crypto parity: SHA-224/384/512, AES-192/256, 3DES-EDE) shipped in v0.5.0, #9/#11 closed, latest release v0.5.1 (2026-09-24). Awaiting a direction call: option B (parallel connector behind a flag) vs option C (full swap behind a feature flag); the feasibility doc assessed v0.4.x and should be re-validated against v0.5.x before committing (`docs/ideas/trishul-smi-snmp-migration-feasibility.md`).
 - **Resolved during the plan's execution:** L2 path choice (decided by the #24 study → structured creation wizard, shipped v1.4.3); L5 slip tolerance (no slip — shipped v1.4.3).

@@ -137,74 +137,74 @@ unconfirmed work lives in the backlog at the bottom.
 ## Backlog (unversioned)
 
 ### Connector Fixes (deferred from v1.2.4–v1.2.7)
-- [ ] **Kafka source** — reconnect, offset commit, consumer group edge cases *(stop + lag and `enable_auto_commit=false` default shipped v1.4.0; reconnect/offset/consumer-group open)*
-- [ ] **Kafka sink** — producer error handling, retry, serializer integration
-- [ ] **OpenSearch sink** — bulk write, index template, auth, retry on 429
-- [ ] **ClickHouse source/sink** — query execution, batch insert, type coercion
-- [ ] **InfluxDB source/sink** — line protocol, bucket/org resolution, token auth
-- [ ] **REST source/sink** — auth types, pagination, retry, SSL verify
-- [ ] **gNMI source** — subscription modes, path encoding, TLS *(subscription modes + reconnect shipped v1.4.0; TLS/client certs open)*
-- [ ] **SFTP source/sink** — file glob, move-after-read, skip_processed, key auth *(file-done guards shipped v1.4.0; remaining items open)*
-- [ ] **FTP source/sink** — passive mode, directory listing, file write
-- [ ] **S3 source/sink** — bucket/prefix, multipart upload, credential chain
-- [ ] **MQTT source/sink** — QoS levels, reconnect, topic wildcards
-- [ ] **AMQP source/sink** — exchange/queue binding, ack/nack, prefetch
-- [ ] **NATS source/sink** — subject routing, JetStream, reconnect
+- [ ] **Kafka source** — reconnect, offset commit, consumer group edge cases *(stop + lag and `enable_auto_commit=false` default shipped v1.4.0; reconnect/offset/consumer-group open)* (GH #58)
+- [ ] **Kafka sink** — producer error handling, retry, serializer integration (GH #58)
+- [ ] **OpenSearch sink** — bulk write, index template, auth, retry on 429 (GH #60)
+- [ ] **ClickHouse source/sink** — query execution, batch insert, type coercion (GH #60)
+- [ ] **InfluxDB source/sink** — line protocol, bucket/org resolution, token auth (GH #60)
+- [ ] **REST source/sink** — auth types, pagination, retry, SSL verify (GH #60)
+- [ ] **gNMI source** — subscription modes, path encoding, TLS *(subscription modes + reconnect shipped v1.4.0; TLS/client certs open)* (GH #59)
+- [ ] **SFTP source/sink** — file glob, move-after-read, skip_processed, key auth *(file-done guards shipped v1.4.0; remaining items open)* (GH #59)
+- [ ] **FTP source/sink** — passive mode, directory listing, file write (GH #59)
+- [ ] **S3 source/sink** — bucket/prefix, multipart upload, credential chain (GH #60)
+- [ ] **MQTT source/sink** — QoS levels, reconnect, topic wildcards (GH #61)
+- [ ] **AMQP source/sink** — exchange/queue binding, ack/nack, prefetch (GH #61)
+- [ ] **NATS source/sink** — subject routing, JetStream, reconnect (GH #61)
 
 ### Operations & Observability
-- [ ] **Pipeline cloning** — copy a pipeline with a name prompt in the UI
-- [ ] **Scheduled alert evaluation** — cron-based alert checks independent of pipeline runs
-- [ ] **Dead-letter queue viewer** — browse and replay DLQ records via the UI
-- [ ] **Per-sink record counts** — run metrics broken down per sink
-- [ ] **Pipeline dependency graph** — visualize pipeline chains when A feeds B
-- [ ] **Bulk actions** — start/stop/delete multiple pipelines from the list view
-- [ ] **Live log streaming** — WebSocket tail of log output for running stream pipelines
-- [ ] **Node health detail page** — per-worker pipeline assignments and load in manager mode
+- [ ] **Pipeline cloning** — copy a pipeline with a name prompt in the UI (GH #62)
+- [ ] **Scheduled alert evaluation** — cron-based alert checks independent of pipeline runs (GH #62)
+- [ ] **Dead-letter queue viewer** — browse and replay DLQ records via the UI (GH #62)
+- [ ] **Per-sink record counts** — run metrics broken down per sink (GH #62)
+- [ ] **Pipeline dependency graph** — visualize pipeline chains when A feeds B (GH #62)
+- [ ] **Bulk actions** — start/stop/delete multiple pipelines from the list view (GH #62)
+- [ ] **Live log streaming** — WebSocket tail of log output for running stream pipelines (GH #62)
+- [ ] **Node health detail page** — per-worker pipeline assignments and load in manager mode (GH #62)
 
 ### Security & Multi-tenancy
-- [ ] **Role-based access** — read-only vs admin token scopes (viewer/operator/admin)
-- [ ] **Per-pipeline API key scoping** — restrict a key to specific pipelines
-- [ ] **Key upload API** — `POST /api/keys/upload` / `GET /api/keys` / `DELETE /api/keys/<name>`
-- [ ] **Audit log** — record who triggered, modified, or deleted pipelines
+- [ ] **Role-based access** — read-only vs admin token scopes (viewer/operator/admin) (GH #63)
+- [ ] **Per-pipeline API key scoping** — restrict a key to specific pipelines (GH #63)
+- [ ] **Key upload API** — `POST /api/keys/upload` / `GET /api/keys` / `DELETE /api/keys/<name>` (GH #63)
+- [ ] **Audit log** — record who triggered, modified, or deleted pipelines (GH #63)
 
 ### New Connectors & Serializers
-- [ ] **SMTP sink** — outbound email delivery (alerts, reports)
-- [ ] **gRPC sink** — generic gRPC unary call sink
-- [ ] **Syslog sink** — forward records to remote syslog (RFC 5424)
-- [ ] **Kafka schema registry** — full Avro + Protobuf with Confluent wire format
-- [ ] **PM-XML source** — ingest 3GPP TS 32.435 PM XML files natively
+- [ ] **SMTP sink** — outbound email delivery (alerts, reports) (GH #64)
+- [ ] **gRPC sink** — generic gRPC unary call sink (GH #64)
+- [ ] **Syslog sink** — forward records to remote syslog (RFC 5424) (GH #64)
+- [ ] **Kafka schema registry** — full Avro + Protobuf with Confluent wire format (GH #64)
+- [ ] **PM-XML source** — ingest 3GPP TS 32.435 PM XML files natively (GH #64)
 
 ### Infrastructure
-- [ ] **Manager HA** — standby manager with DB-backed leader election
-- [ ] **Graceful worker drain** — `POST /api/workers/{id}/drain`; Helm pre-stop hook
+- [ ] **Manager HA** — standby manager with DB-backed leader election (GH #68)
+- [ ] **Graceful worker drain** — `POST /api/workers/{id}/drain`; Helm pre-stop hook (GH #68)
 - [x] **Coverage target increase** — CI threshold raised to 75%; current coverage ~80%
 
 ### Telecom Domain Hardening (from `docs/reviews/telecom-domain-review.md`)
-- [ ] **SNMP trap community-string verification** — trap source does not verify the community string (spoofing vector)
-- [ ] **SNMPv3 trap privacy handling** — undecryptable v3 traps surfaced/handled explicitly
-- [ ] **Counter64 varbind in SNMP trap sink** — trap sink lacks Counter64 varbind support
-- [ ] **Timezone-aware scheduling** — APScheduler is UTC-only and `misfire_grace_time` is hardcoded 60s; make both configurable
-- [ ] **Missed-window backfill for poll pipelines** — downtime windows are skipped, not backfilled
-- [ ] **CORBA Notification Service** — source remains DII-only (no Notification Service / typed args)
-- [ ] **KPI/unit library** — shared telecom KPI definitions and unit normalization
-- [ ] **FM alarm lifecycle model** — alarm state machine (raise/clear/correlate) for fault pipelines
-- [ ] **3GPP JSON PM output** — TS 28.550 output format for PM pipelines
-- [ ] **CDR sustained-throughput benchmarks** — reproducible benchmark suite for CDR ingestion rates
+- [ ] **SNMP trap community-string verification** — trap source does not verify the community string (spoofing vector) (GH #65)
+- [ ] **SNMPv3 trap privacy handling** — undecryptable v3 traps surfaced/handled explicitly (GH #65)
+- [ ] **Counter64 varbind in SNMP trap sink** — trap sink lacks Counter64 varbind support (GH #65)
+- [ ] **Timezone-aware scheduling** — APScheduler is UTC-only and `misfire_grace_time` is hardcoded 60s; make both configurable (GH #66)
+- [ ] **Missed-window backfill for poll pipelines** — downtime windows are skipped, not backfilled (GH #66)
+- [ ] **CORBA Notification Service** — source remains DII-only (no Notification Service / typed args) (GH #66)
+- [ ] **KPI/unit library** — shared telecom KPI definitions and unit normalization (GH #66)
+- [ ] **FM alarm lifecycle model** — alarm state machine (raise/clear/correlate) for fault pipelines (GH #66)
+- [ ] **3GPP JSON PM output** — TS 28.550 output format for PM pipelines (GH #66)
+- [ ] **CDR sustained-throughput benchmarks** — reproducible benchmark suite for CDR ingestion rates (GH #66)
 
 ### Extensibility
-- [ ] **Hot-loadable custom logic** — Starlark/execd-equivalent per-vendor quirk handling without redeploys (G1 in `docs/ideas/tram-improvements.md`; also the telecom review's vendor-quirk residual)
+- [ ] **Hot-loadable custom logic** — Starlark/execd-equivalent per-vendor quirk handling without redeploys (G1 in `docs/ideas/tram-improvements.md`; also the telecom review's vendor-quirk residual) (GH #67)
 
 ### Design Follow-ups (from shipped-feature design docs)
-- [ ] **Queue depth >1 for manual runs** — one queued run per pipeline today (re-trigger is idempotent, returns the same run_id); decide deeper-queue semantics (E.2 design Q5, `docs/plans/e2-queued-manual-runs-design.md`)
-- [ ] **Stateful-transform state-blob compaction at fleet scale** — per-pipeline state blobs grow with key cardinality (F.1 design Q2, `docs/plans/f1-counter-delta-design.md`)
-- [ ] **`align_timezone` knob for window alignment** — revisit trigger already met (F.4 `source_timezone` shipped) (F.1 design Q3)
-- [ ] **`max_gap_seconds` default tuning** — confirm the default against real stream feedback (F.1 design Q4)
-- [ ] **Dispatch-affinity escape hatch** — pinning a count=1 stateful pipeline to a specific worker for cache locality (F.1 design Q5)
-- (E.2 design Q3 — partial unique index for `queued_runs` — is tied to B9 and rides GH #55)
+- [ ] **Queue depth >1 for manual runs** — one queued run per pipeline today (re-trigger is idempotent, returns the same run_id); decide deeper-queue semantics (E.2 design Q5, `docs/plans/e2-queued-manual-runs-design.md`) (GH #69)
+- [ ] **Stateful-transform state-blob compaction at fleet scale** — per-pipeline state blobs grow with key cardinality (F.1 design Q2, `docs/plans/f1-counter-delta-design.md`) (GH #69)
+- [ ] **`align_timezone` knob for window alignment** — revisit trigger already met (F.4 `source_timezone` shipped) (F.1 design Q3) (GH #69)
+- [ ] **`max_gap_seconds` default tuning** — confirm the default against real stream feedback (F.1 design Q4) (GH #69)
+- [ ] **Dispatch-affinity escape hatch** — pinning a count=1 stateful pipeline to a specific worker for cache locality (F.1 design Q5) (GH #69)
+- [x] **Partial unique index for `queued_runs`** (E.2 design Q3) — resolved via B9 in v1.4.7 (GH #55)
 
 ### Open Decisions
-- [ ] **treq AI provider-layer vendor decision** — vendor `treq/_providers/` into TRAM (~3 days; adaptation list in `docs/ideas/treq-ai-reuse-feasibility.md`); gates AI streaming (A9) and B3–B6 of the AI expansion cycle
-- [ ] **SNMP library migration (tsmi/tsmp)** — blocked on upstream SNMPv1 support + v3 crypto parity; options B (parallel connector behind flag) / C (fix upstream first, then full swap) — `docs/ideas/trishul-smi-snmp-migration-feasibility.md`
+- [ ] **treq provider-layer vendoring (revisit)** — decision made 2026-09-24: proceed on the current `ai.py`, vendoring deferred; Wave B (A6/A7/B1) + A.4 shipped v1.4.7 and A.1 shipped v1.4.8 on the existing layer. A future revisit still gates AI streaming (A9) and B3–B6 — `docs/ideas/treq-ai-reuse-feasibility.md`
+- [ ] **SNMP library migration (tsmi/tsmp)** — upstream blockers CLOSED: trishul-snmp #8 (SNMPv1) and #10 (USM crypto parity — SHA-224/384/512, AES-192/256, 3DES-EDE) shipped in v0.5.0; #9/#11 closed; latest release v0.5.1 (2026-09-24). Awaiting a direction call: option B (parallel connector behind a flag) vs option C (full swap behind a feature flag). The feasibility doc assessed v0.4.x — re-validate against v0.5.x before committing — `docs/ideas/trishul-smi-snmp-migration-feasibility.md`
 - [ ] **Flip `TRAM_INTERNAL_AUTH_MODE=enforce`** — ops task, not development: after all clients carry keys, flip `warn` → `enforce` per `docs/deployment.md` (v1.4.6 adds the misconfiguration startup warning)
 
 > Architectural positions, not backlog items: thread-based execution (G2), no CRD/operator (G4), at-least-once without exactly-once (G5) — deliberate trade-offs documented in `docs/ideas/tram-improvements.md` and `docs/ideas/tram-vs-telegraf-comparison.md`. G3 (plugin catalog) is covered by the Connector Fixes section above; G6/G7/G8 already appear above as Manager HA, RBAC, and DLQ viewer/live log streaming.
@@ -217,6 +217,9 @@ unconfirmed work lives in the backlog at the bottom.
 
 | Version | Theme |
 |---------|-------|
+| v1.4.8 | UX/deploy polish + cleanup + AI A.1: modal lifecycle on navigation + modal-nav browser check (GH #49), chart-managed postgres credentials + PVC orphan guard + envSecret precedence (GH #51), config validation bounds + CSV formula guard + SQLite busy_timeout (D5) + SFTP/FTP connection reuse (D7) + E1/E3/E4 refactors (GH #52), 601 schema field descriptions (A.1, `schema_version` → `583465a50b4b`) — PR #57, tag `v1.4.8` |
+| v1.4.7 | Execution correctness + verification + AI Wave B: per-record correctness — A5, `inject_meta` gates, abort parity, threaded chunking (GH #48), manager-routed `ProcessedFileTracker` closing the #39 architecture follow-up (GH #54), code-review backlog incl. B9 unique index + legacy dedup (GH #55), browser-smoke fixture drift gate (GH #50), AI triage/fix-retry/template-grounded generation + A.4 plugin metadata (GH #41/#42) — PR #56, tag `v1.4.7` |
+| v1.4.6 | Security & integrity: AI secret redaction + call-time allowlist (GH #43), fail-open control plane + rate limiter (GH #44), webhook queue DoS (GH #45), stream/dry-run lifecycle (GH #46), run_id integrity (GH #47), #39 fail-loud — PR #53, tag `v1.4.6` |
 | v1.4.5 | SNMP data-integrity pass: tuple-space walk boundaries (GH #32), refuse-on-collapse (GH #33), layered INTEGER classification + `*Vdom` migration (GH #35), structured index grouping (GH #36) — PR #38, tag `v1.4.5` |
 | v1.4.4 | Wizard AI-assist fixes (operator-reported; unplanned) — PR #37, tag `v1.4.4` |
 | v1.4.3 | Structure & creation: guided creation wizard (`#create`), run-detail route (`#runs/:id`), shared page shell, schema identity (GH #24, Option A), editor gutter/anchoring, a11y; UI browser smoke gate check — PR #31, tag `v1.4.3` |

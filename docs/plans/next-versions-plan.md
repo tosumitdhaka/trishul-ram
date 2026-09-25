@@ -12,6 +12,8 @@ One branch + one PR per version, progress table in the PR body (same model as PR
 
 ## v1.4.6 — Security & Integrity
 
+> **Status: shipped 2026-09-24 — PR #53, tag `v1.4.6`** (see `docs/changelog.md` `[1.4.6]`). Scope text below is the original plan, kept as the release record.
+
 **Theme:** close every HIGH finding from the 2026-09-24 review plus the duplicate-CDR regression (#39) — the "no exploitable default, no silent data corruption" release.
 
 | Issue | What | Sev |
@@ -30,6 +32,8 @@ One branch + one PR per version, progress table in the PR body (same model as PR
 ---
 
 ## v1.4.7 — Execution Correctness + Verification + AI Wave B
+
+> **Status: shipped 2026-09-24 — PR #56, tag `v1.4.7`** (see `docs/changelog.md` `[1.4.7]`). Scope text below is the original plan, kept as the release record.
 
 **Theme:** per-record correctness on the threaded path, verification-gate drift fixes, and the first AI-expansion wave.
 
@@ -51,6 +55,8 @@ One branch + one PR per version, progress table in the PR body (same model as PR
 ---
 
 ## v1.4.8 — UX/Deploy Polish + AI Wave A.1 + Wave C
+
+> **Status: shipped 2026-09-25 — PR #57, tag `v1.4.8`** (see `docs/changelog.md` `[1.4.8]`). Scope text below is the original plan, kept as the release record. Delta at ship time: only AI A.1 rode this release — A.2/A.3 and Wave C (C.1–C.3) did not and remain open under GH #42.
 
 **Theme:** close the review's UI/deploy findings and the authoring-UX data layer.
 
