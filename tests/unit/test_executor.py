@@ -44,6 +44,84 @@ class TestPipelineExecutorDryRun:
         config = _make_pipeline("record_chunk_size: 1000")
         assert config.record_chunk_size == 1000
 
+    def test_pipeline_config_rejects_zero_rate_limit_rps(self):
+        """GH #48 §2.4: rate_limit_rps=0 would divide by zero in the token
+        bucket — rejected at validation, never a runtime ZeroDivisionError."""
+        from tram.core.exceptions import ConfigError
+
+        with pytest.raises(ConfigError, match="rate_limit_rps"):
+            _make_pipeline("rate_limit_rps: 0")
+
+    def test_pipeline_config_rejects_negative_rate_limit_rps(self):
+        from tram.core.exceptions import ConfigError
+
+        with pytest.raises(ConfigError, match="rate_limit_rps"):
+            _make_pipeline("rate_limit_rps: -1")
+
+    def test_pipeline_config_accepts_positive_rate_limit_rps(self):
+        config = _make_pipeline("rate_limit_rps: 5")
+        assert config.rate_limit_rps == 5
+
+    def test_pipeline_config_rejects_inject_meta_with_thread_workers(self):
+        """GH #48 §2.5: inject_meta reads runtime metadata written onto the
+        shared transform instance — thread_workers > 1 races it, so it is
+        gated like the stateful transforms."""
+        from tram.core.exceptions import ConfigError
+
+        with pytest.raises(ConfigError, match="thread_workers"):
+            _make_pipeline(
+                "thread_workers: 2\n"
+                "          transforms:\n"
+                "            - type: inject_meta\n"
+                "              fields:\n"
+                "                source_filename: src_file"
+            )
+
+    def test_pipeline_config_accepts_inject_meta_with_single_thread(self):
+        config = _make_pipeline(
+            "transforms:\n"
+            "          - type: inject_meta\n"
+            "            fields:\n"
+            "              source_filename: src_file"
+        )
+        assert [t.type for t in config.transforms] == ["inject_meta"]
+
+    def test_pipeline_config_rejects_sink_level_inject_meta_with_thread_workers(self):
+        """v1.4.7 review: sink-level inject_meta races thread_workers > 1 the
+        same way the top-level one does — per-sink transform instances are
+        built once per run (executor _build_sinks) and shared across the
+        chunk threads, so the runtime-meta write/read pair races."""
+        from tram.core.exceptions import ConfigError
+
+        with pytest.raises(ConfigError, match="thread_workers"):
+            _make_pipeline(
+                "thread_workers: 2\n"
+                "          sinks:\n"
+                "            - type: local\n"
+                "              path: /tmp/out\n"
+                "              transforms:\n"
+                "                - type: inject_meta\n"
+                "                  fields:\n"
+                "                    source_filename: src_file"
+            )
+
+    def test_pipeline_config_accepts_sink_level_inject_meta_with_parallel_sinks(self):
+        """parallel_sinks without thread_workers > 1 stays allowed: each
+        sink's transform instances are only touched by that sink's own
+        fan-out thread, so no instance is shared across threads."""
+        config = _make_pipeline(
+            "parallel_sinks: true\n"
+            "          sinks:\n"
+            "            - type: local\n"
+            "              path: /tmp/out\n"
+            "              transforms:\n"
+            "                - type: inject_meta\n"
+            "                  fields:\n"
+            "                    source_filename: src_file"
+        )
+        assert config.parallel_sinks is True
+        assert config.sinks[0].transforms[0].type == "inject_meta"
+
     def test_pipeline_config_post_batch_cleanup_defaults_true(self):
         config = _make_pipeline()
         assert config.post_batch_cleanup is True
@@ -690,6 +768,118 @@ class TestPipelineExecutorBatchRun:
         assert result.status == RunStatus.FAILED
         assert result.run_id == "orig-run-2"
 
+    def test_batch_run_abort_fails_on_transform_error(self):
+        """GH #48 §2.9: on_error=abort with a failing global transform must
+        fail the run with a FAILED result — not silently DLQ and continue."""
+        config = _make_pipeline("on_error: abort")
+
+        class BoomTransform:
+            def apply(self, records):
+                raise ValueError("transform boom")
+
+        executor = PipelineExecutor()
+        mock_source = MagicMock()
+        mock_source.read.return_value = iter([
+            (json.dumps([{"id": "1"}]).encode(), {"source_filename": "t.json"}),
+        ])
+        mock_sink = MagicMock()
+        mock_ser_in = MagicMock()
+        mock_ser_in.parse.return_value = [{"id": "1"}]
+        mock_ser_out = MagicMock()
+        mock_ser_out.serialize.return_value = b"[]"
+
+        with (
+            patch.object(executor, "_build_source", return_value=mock_source),
+            patch.object(executor, "_build_sinks", return_value=[(mock_sink, None, [])]),
+            patch.object(executor, "_build_serializer_in", return_value=mock_ser_in),
+            patch.object(executor, "_build_serializer_out", return_value=mock_ser_out),
+            patch.object(executor, "_build_transforms", return_value=[BoomTransform()]),
+        ):
+            result = executor.batch_run(config)
+
+        assert result.status == RunStatus.FAILED
+        assert "transform boom" in (result.error or "")
+        mock_sink.write.assert_not_called()
+
+    def test_batch_run_abort_fails_on_sink_transform_error(self):
+        """v1.4.7 review (C1): on_error=abort with a failing SINK-level
+        transform must fail the run like the global transform path — not
+        silently DLQ and continue."""
+        config = _make_pipeline("on_error: abort")
+
+        class BoomTransform:
+            def apply(self, records):
+                raise ValueError("sink transform boom")
+
+        executor = PipelineExecutor()
+        mock_source = MagicMock()
+        mock_source.read.return_value = iter([
+            (json.dumps([{"id": "1"}]).encode(), {"source_filename": "t.json"}),
+        ])
+        mock_sink = MagicMock()
+        mock_ser_in = MagicMock()
+        mock_ser_in.parse.return_value = [{"id": "1"}]
+        mock_ser_out = MagicMock()
+        mock_ser_out.serialize.return_value = b"[]"
+
+        with (
+            patch.object(executor, "_build_source", return_value=mock_source),
+            patch.object(
+                executor, "_build_sinks",
+                return_value=[(mock_sink, None, [BoomTransform()])],
+            ),
+            patch.object(executor, "_build_serializer_in", return_value=mock_ser_in),
+            patch.object(executor, "_build_serializer_out", return_value=mock_ser_out),
+            patch.object(executor, "_build_transforms", return_value=[]),
+        ):
+            result = executor.batch_run(config)
+
+        assert result.status == RunStatus.FAILED
+        assert "sink transform boom" in (result.error or "")
+        mock_sink.write.assert_not_called()
+
+    def test_parallel_sink_fanout_converts_raw_exception_to_tram_error(self):
+        """GH #48 §2.16: a non-TramError escaping _write_one_sink (here: a
+        serializer failure outside the per-partition retry loop) must be
+        folded into TramError so on_error=retry handles it through the
+        taxonomy (chunk skipped, error recorded) instead of the raw exception
+        exploding the whole run."""
+        config = _make_pipeline(
+            "parallel_sinks: true\n"
+            "          on_error: retry\n"
+            "          retry_count: 1\n"
+            "          retry_delay_seconds: 0"
+        )
+        executor = PipelineExecutor()
+        mock_source = MagicMock()
+        mock_source.read.return_value = iter([
+            (json.dumps([{"id": "1"}]).encode(), {"source_filename": "t.json"}),
+        ])
+        mock_sink_a = MagicMock()
+        mock_sink_b = MagicMock()
+        mock_ser_in = MagicMock()
+        mock_ser_in.parse.return_value = [{"id": "1"}]
+        mock_ser_out = MagicMock()
+        mock_ser_out.serialize.side_effect = ValueError("serializer exploded")
+
+        with (
+            patch.object(executor, "_build_source", return_value=mock_source),
+            patch.object(executor, "_build_sinks", return_value=[
+                (mock_sink_a, None, []),
+                (mock_sink_b, None, []),
+            ]),
+            patch.object(executor, "_build_serializer_in", return_value=mock_ser_in),
+            patch.object(executor, "_build_serializer_out", return_value=mock_ser_out),
+            patch.object(executor, "_build_transforms", return_value=[]),
+        ):
+            result = executor.batch_run(config, run_id="r-fan")
+
+        assert result.status == RunStatus.SUCCESS
+        assert result.run_id == "r-fan"
+        assert any("serializer exploded" in e for e in result.errors)
+        mock_sink_a.write.assert_not_called()
+        mock_sink_b.write.assert_not_called()
+
     def test_post_batch_cleanup_ignores_missing_trim_support(self):
         config = _make_pipeline()
 
@@ -701,6 +891,43 @@ class TestPipelineExecutorBatchRun:
 
         collect.assert_called_once_with()
         trim.assert_called_once_with()
+
+    def test_sink_finalize_failure_degrades_run_not_fails(self):
+        """B11 (GH #55): a sink finalize (staged-file rename) failure after all
+        chunks were written must not flip the run to FAILED — the run stays
+        SUCCESS with the finalize error recorded."""
+        config = _make_pipeline()
+        executor = PipelineExecutor()
+
+        records = [{"id": "1", "val": "hello"}]
+        mock_source = MagicMock()
+        mock_source.read.return_value = iter([
+            (json.dumps(records).encode(), {"source_filename": "file.json"}),
+        ])
+
+        mock_sink = MagicMock()
+        # The rename fails AFTER the write succeeded.
+        mock_sink.finalize_source.side_effect = RuntimeError("rename failed: EACCES")
+        mock_ser_in = MagicMock()
+        mock_ser_in.parse.return_value = records
+        mock_ser_out = MagicMock()
+        mock_ser_out.serialize.return_value = json.dumps(records).encode()
+
+        with (
+            patch.object(executor, "_build_source", return_value=mock_source),
+            patch.object(executor, "_build_sinks", return_value=[(mock_sink, None, [])]),
+            patch.object(executor, "_build_serializer_in", return_value=mock_ser_in),
+            patch.object(executor, "_build_serializer_out", return_value=mock_ser_out),
+            patch.object(executor, "_build_transforms", return_value=[]),
+        ):
+            result = executor.batch_run(config)
+
+        assert result.status == RunStatus.SUCCESS, (
+            "a finalize failure must not fail a run whose data was already written"
+        )
+        assert result.records_out == 1
+        assert any("Sink finalize failed" in e for e in result.errors)
+        mock_sink.write.assert_called_once()
 
 
 class TestPipelineExecutorStreamRun:

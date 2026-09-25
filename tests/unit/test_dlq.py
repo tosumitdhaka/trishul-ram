@@ -8,7 +8,7 @@ import textwrap
 from unittest.mock import MagicMock, patch
 
 from tram.core.context import PipelineRunContext
-from tram.pipeline.executor import PipelineExecutor, _write_dlq_envelope
+from tram.pipeline.executor import PipelineExecutor, _dlq_spool_dir, _write_dlq_envelope
 from tram.pipeline.loader import load_pipeline_from_yaml
 
 
@@ -118,16 +118,112 @@ class TestDlqEnvelopeHelper:
         assert envelope["_stage"] == "sink"
         assert envelope["record"] == records
 
-    def test_write_dlq_envelope_swallows_write_error(self, caplog):
+    def test_write_dlq_envelope_swallows_write_error(self, caplog, tmp_path, monkeypatch):
         ctx = PipelineRunContext(pipeline_name="p", run_id="x")
         dlq_sink = MagicMock()
         dlq_sink.write.side_effect = RuntimeError("disk full")
+        # Keep the spool fallback out of the real ~/.tram directory.
+        monkeypatch.setenv("TRAM_DLQ_SPOOL_DIR", str(tmp_path / "spool"))
 
         import logging
         with caplog.at_level(logging.ERROR):
             _write_dlq_envelope(dlq_sink, ctx, stage="sink", error="e")
 
         assert "DLQ write failed" in caplog.text
+
+
+class TestDlqDiskSpool:
+    """D1 (GH #55): a DLQ sink write failure must never silently discard the
+    record — the envelope is spooled to local disk as a durable fallback."""
+
+    def test_worker_mode_default_resolves_under_data_dir(self, monkeypatch):
+        """C3 (v1.4.7): in worker mode the spool default resolves under
+        TRAM_DATA_DIR so envelopes land on the mounted data volume instead of
+        the container overlay (~/.tram)."""
+        monkeypatch.setenv("TRAM_MODE", "worker")
+        monkeypatch.setenv("TRAM_DATA_DIR", "/data")
+        assert _dlq_spool_dir() == "/data/dlq-spool"
+
+    def test_worker_mode_data_dir_override_is_honored(self, monkeypatch):
+        monkeypatch.setenv("TRAM_MODE", "worker")
+        monkeypatch.setenv("TRAM_DATA_DIR", "/mnt/spool-root")
+        assert _dlq_spool_dir() == "/mnt/spool-root/dlq-spool"
+
+    def test_standalone_and_manager_default_under_home(self, monkeypatch):
+        """Non-worker modes keep the ~/.tram default (alongside the SQLite
+        fallback DB); an explicit TRAM_DLQ_SPOOL_DIR always wins."""
+        monkeypatch.setenv("TRAM_MODE", "standalone")
+        monkeypatch.delenv("TRAM_DLQ_SPOOL_DIR", raising=False)
+        monkeypatch.delenv("TRAM_DATA_DIR", raising=False)
+        assert _dlq_spool_dir() == "~/.tram/dlq-spool"
+        monkeypatch.setenv("TRAM_MODE", "manager")
+        assert _dlq_spool_dir() == "~/.tram/dlq-spool"
+        monkeypatch.setenv("TRAM_DLQ_SPOOL_DIR", "/custom/spool")
+        assert _dlq_spool_dir() == "/custom/spool"
+
+    def test_envelope_spooled_when_dlq_sink_write_fails(self, tmp_path, monkeypatch):
+        monkeypatch.setenv("TRAM_DLQ_SPOOL_DIR", str(tmp_path))
+        ctx = PipelineRunContext(pipeline_name="my-pipe", run_id="run-1")
+        dlq_sink = MagicMock()
+        dlq_sink.write.side_effect = RuntimeError("network partition")
+
+        _write_dlq_envelope(
+            dlq_sink, ctx, stage="sink", error="primary sink failed", record=[{"id": 1}]
+        )
+
+        spool_files = list(tmp_path.glob("*.json"))
+        assert len(spool_files) == 1
+        envelope = json.loads(spool_files[0].read_text())
+        assert envelope["_stage"] == "sink"
+        assert envelope["_pipeline"] == "my-pipe"
+        assert envelope["_run_id"] == "run-1"
+        assert envelope["record"] == [{"id": 1}]
+        assert "network partition" in envelope["_dlq_sink_error"]
+
+    def test_parse_stage_spool_keeps_raw(self, tmp_path, monkeypatch):
+        monkeypatch.setenv("TRAM_DLQ_SPOOL_DIR", str(tmp_path))
+        ctx = PipelineRunContext(pipeline_name="p", run_id="r")
+        dlq_sink = MagicMock()
+        dlq_sink.write.side_effect = OSError("refused")
+        raw = b'{"bad'
+
+        _write_dlq_envelope(dlq_sink, ctx, stage="parse", error="parse boom", raw=raw)
+
+        spool_files = list(tmp_path.glob("*.json"))
+        assert len(spool_files) == 1
+        envelope = json.loads(spool_files[0].read_text())
+        assert envelope["raw"] == base64.b64encode(raw).decode()
+
+    def test_spool_file_names_are_unique(self, tmp_path, monkeypatch):
+        monkeypatch.setenv("TRAM_DLQ_SPOOL_DIR", str(tmp_path))
+        ctx = PipelineRunContext(pipeline_name="p", run_id="r")
+        dlq_sink = MagicMock()
+        dlq_sink.write.side_effect = RuntimeError("boom")
+
+        _write_dlq_envelope(dlq_sink, ctx, stage="sink", error="e1")
+        _write_dlq_envelope(dlq_sink, ctx, stage="sink", error="e2")
+
+        assert len(list(tmp_path.glob("*.json"))) == 2
+
+    def test_spool_failure_is_loud_and_counted(self, tmp_path, monkeypatch, caplog):
+        """When even the disk spool fails the record is lost loudly — ERROR
+        log + DLQ_WRITE_FAILED counter, never a silent drop."""
+        import logging
+
+        # Point the spool at a path that is a FILE, so mkdir fails
+        # deterministically (regardless of the running user).
+        blocker = tmp_path / "not-a-dir"
+        blocker.write_text("occupied")
+        monkeypatch.setenv("TRAM_DLQ_SPOOL_DIR", str(blocker))
+        ctx = PipelineRunContext(pipeline_name="p", run_id="r")
+        dlq_sink = MagicMock()
+        dlq_sink.write.side_effect = RuntimeError("dlq down")
+        with patch("tram.metrics.registry.DLQ_WRITE_FAILED") as mock_metric:
+            with caplog.at_level(logging.ERROR):
+                _write_dlq_envelope(dlq_sink, ctx, stage="sink", error="e")
+
+        assert mock_metric.labels.return_value.inc.called
+        assert "envelope lost" in caplog.text
 
 
 class TestDlqInProcessChunk:

@@ -5,6 +5,7 @@ import hashlib
 import logging
 import threading
 import time
+from collections import deque
 from datetime import UTC, datetime
 from unittest.mock import MagicMock, patch
 
@@ -180,6 +181,79 @@ class TestPostRunComplete:
 
             # Must not raise
             _post_run_complete("http://bad-host/run-complete", "r", "p", "w0", "error", 0, 0, 0, 0, "boom")
+
+    def test_retries_on_transient_failure_then_succeeds(self):
+        """D2 (GH #55): a transient manager outage must not lose the
+        completion record — the callback retries with backoff."""
+        posts = {"count": 0}
+        captured = {}
+
+        def _flaky_post(url, **kwargs):
+            posts["count"] += 1
+            if posts["count"] == 1:
+                raise ConnectionError("manager restarting")
+            captured["json"] = kwargs.get("json")
+            resp = MagicMock()
+            resp.raise_for_status = MagicMock()
+            return resp
+
+        with patch("httpx.Client") as mock_client_cls, patch("tram.agent.server.time.sleep"):
+            mock_client = MagicMock()
+            mock_client.__enter__ = lambda s: mock_client
+            mock_client.__exit__ = MagicMock(return_value=False)
+            mock_client.post.side_effect = _flaky_post
+            mock_client_cls.return_value = mock_client
+
+            _post_run_complete(
+                "http://manager/api/internal/run-complete",
+                "run-42", "my-pipe", "worker-7", "success", 10, 8, 1024, 768, None,
+            )
+
+        assert posts["count"] == 2
+        assert captured["json"]["run_id"] == "run-42"
+
+    def test_exhausted_retries_swallow_and_log(self, caplog):
+        """D2: exhausted retries still swallow the error (never raise) and log
+        that the reconciler adoption path will take over."""
+        import logging
+
+        with patch("httpx.Client") as mock_client_cls, patch("tram.agent.server.time.sleep"):
+            mock_client = MagicMock()
+            mock_client.__enter__ = lambda s: mock_client
+            mock_client.__exit__ = MagicMock(return_value=False)
+            mock_client.post.side_effect = ConnectionError("manager down")
+            mock_client_cls.return_value = mock_client
+
+            with caplog.at_level(logging.WARNING, logger="tram.agent.server"):
+                _post_run_complete(
+                    "http://manager/api/internal/run-complete",
+                    "run-42", "my-pipe", "worker-7", "error", 0, 0, 0, 0, "boom",
+                )
+
+        assert mock_client.post.call_count == 3  # initial + 2 retries
+        assert "reconciler adoption" in caplog.text
+
+    def test_4xx_rejection_not_retried(self):
+        """N4 (v1.4.7): a 4xx run-complete response is a permanent rejection —
+        exactly 1 attempt, no pointless retries."""
+        with patch("httpx.Client") as mock_client_cls:
+            mock_client = MagicMock()
+            mock_client.__enter__ = lambda s: mock_client
+            mock_client.__exit__ = MagicMock(return_value=False)
+            resp = MagicMock()
+            resp.status_code = 400
+            resp.raise_for_status = MagicMock()
+            mock_client.post.return_value = resp
+            mock_client_cls.return_value = mock_client
+
+            with patch("tram.agent.server.time.sleep") as sleep:
+                _post_run_complete(
+                    "http://manager/api/internal/run-complete",
+                    "run-42", "my-pipe", "worker-7", "success", 10, 8, 1024, 768, None,
+                )
+
+        assert mock_client.post.call_count == 1
+        sleep.assert_not_called()
 
 
 # ── _post_stats unit tests (plan D.6) ──────────────────────────────────────
@@ -659,7 +733,7 @@ class TestStatsHelpers:
         assert captured["json"]["run_id"] == "run-1"
         assert captured["json"]["records_in"] == 5
         assert captured["json"]["error_count"] == 1
-        assert run.stats.errors_last_window == []
+        assert run.stats.errors_last_window == deque()
 
     def test_emit_stats_once_sends_api_key_header(self):
         state = WorkerState(worker_id="w0", manager_url="http://manager", api_key="secret")
@@ -1328,3 +1402,382 @@ sinks:
             assert any("skip_processed" in e for e in args[11])
         # One output file per run — the same source file was reprocessed.
         assert len(list(dst.glob("skip-pipe_*.bin"))) == 2
+
+
+# ── GH #54: manager-routed ProcessedFileTracker (worker mode) ───────────────
+
+
+class TestHttpFileTrackerClient:
+    """GH #54: the worker-side HTTP tracker facade over the manager's internal API."""
+
+    def test_check_sends_api_key_and_parses_result(self):
+        import json as _json
+
+        import httpx
+
+        from tram.agent.file_tracker_client import HttpFileTracker
+
+        seen = {}
+
+        def handler(request: httpx.Request) -> httpx.Response:
+            seen["headers"] = request.headers
+            body = _json.loads(request.content)
+            assert request.url.path == "/api/internal/processed-files/check"
+            assert body["pipeline_name"] == "skip-pipe"
+            assert body["files"] == [{"source_key": "local:/in", "filepath": "/in/a.json"}]
+            return httpx.Response(200, json={"processed": [True]})
+
+        # Trailing slash on the manager URL is tolerated (rstrip in __init__).
+        tracker = HttpFileTracker(
+            "http://mgr:8765/", "secret", transport=httpx.MockTransport(handler)
+        )
+        assert tracker.is_processed("skip-pipe", "local:/in", "/in/a.json") is True
+        assert seen["headers"]["X-API-Key"] == "secret"
+
+    def test_mark_posts_entry(self):
+        import json as _json
+
+        import httpx
+
+        from tram.agent.file_tracker_client import HttpFileTracker
+
+        seen = {}
+
+        def handler(request: httpx.Request) -> httpx.Response:
+            seen["body"] = _json.loads(request.content)
+            seen["path"] = request.url.path
+            return httpx.Response(200, json={"ok": True})
+
+        tracker = HttpFileTracker(
+            "http://mgr:8765", "", transport=httpx.MockTransport(handler)
+        )
+        tracker.mark_processed("skip-pipe", "local:/in", "/in/a.json")
+        # C2: marks are buffered and only sent on flush() — nothing yet.
+        assert "path" not in seen
+        tracker.flush()
+        assert seen["path"] == "/api/internal/processed-files/mark"
+        assert seen["body"]["pipeline_name"] == "skip-pipe"
+        assert seen["body"]["files"] == [{"source_key": "local:/in", "filepath": "/in/a.json"}]
+
+    def test_prefetch_many_checks_whole_run_in_one_batched_request(self):
+        """C2: the run's candidate list is checked in ONE batched request and
+        the per-file is_processed calls that follow hit the local cache with
+        zero further network."""
+        import json as _json
+
+        import httpx
+
+        from tram.agent.file_tracker_client import HttpFileTracker
+
+        seen = {"count": 0}
+
+        def handler(request: httpx.Request) -> httpx.Response:
+            seen["count"] += 1
+            body = _json.loads(request.content)
+            assert request.url.path == "/api/internal/processed-files/check"
+            assert body["pipeline_name"] == "skip-pipe"
+            assert body["files"] == [
+                {"source_key": "local:/in", "filepath": "/in/a.json"},
+                {"source_key": "local:/in", "filepath": "/in/b.json"},
+                {"source_key": "local:/in", "filepath": "/in/c.json"},
+            ]
+            return httpx.Response(200, json={"processed": [True, False, True]})
+
+        tracker = HttpFileTracker(
+            "http://mgr:8765", "", transport=httpx.MockTransport(handler)
+        )
+        tracker.prefetch_many(
+            "skip-pipe", "local:/in", ["/in/a.json", "/in/b.json", "/in/c.json"]
+        )
+        assert seen["count"] == 1  # one request for the run's file list
+        assert tracker.is_processed("skip-pipe", "local:/in", "/in/a.json") is True
+        assert tracker.is_processed("skip-pipe", "local:/in", "/in/b.json") is False
+        assert tracker.is_processed("skip-pipe", "local:/in", "/in/c.json") is True
+        assert seen["count"] == 1  # cache hits — no further network
+
+    def test_short_circuit_after_first_failure_one_network_attempt_for_n_files(self):
+        """C2: after the FIRST connection failure the tracker records the
+        degradation once and makes no further network calls — N files cost
+        exactly one attempt, and buffered marks are dropped (reprocess
+        fallback)."""
+        import httpx
+
+        from tram.agent.file_tracker_client import HttpFileTracker
+
+        attempts = {"n": 0}
+        notes = []
+
+        def handler(request: httpx.Request) -> httpx.Response:
+            attempts["n"] += 1
+            raise httpx.ConnectError("manager unreachable", request=request)
+
+        tracker = HttpFileTracker(
+            "http://mgr:8765", "", transport=httpx.MockTransport(handler),
+            on_degradation=notes.append,
+        )
+        tracker.prefetch_many("p", "local:/in", ["/f1", "/f2", "/f3"])
+        assert attempts["n"] == 1
+        assert len(notes) == 1
+        # Remaining files are treated as unprocessed with zero network.
+        for fp in ("/f1", "/f2", "/f3", "/f4"):
+            assert tracker.is_processed("p", "local:/in", fp) is False
+        tracker.mark_processed("p", "local:/in", "/f1")
+        tracker.flush()
+        assert attempts["n"] == 1  # marks never retried after degradation
+
+    def test_marks_flush_in_one_batched_request_after_success(self):
+        """C2: marks accumulated across a successful run flush in ONE batched
+        request carrying the run's file list."""
+        import json as _json
+
+        import httpx
+
+        from tram.agent.file_tracker_client import HttpFileTracker
+
+        seen = {"count": 0}
+
+        def handler(request: httpx.Request) -> httpx.Response:
+            seen["count"] += 1
+            body = _json.loads(request.content)
+            assert request.url.path == "/api/internal/processed-files/mark"
+            assert body["pipeline_name"] == "skip-pipe"
+            assert body["files"] == [
+                {"source_key": "local:/in", "filepath": "/in/a.json"},
+                {"source_key": "local:/in", "filepath": "/in/b.json"},
+                {"source_key": "local:/in", "filepath": "/in/c.json"},
+            ]
+            return httpx.Response(200, json={"ok": True})
+
+        tracker = HttpFileTracker(
+            "http://mgr:8765", "", transport=httpx.MockTransport(handler)
+        )
+        tracker.mark_processed("skip-pipe", "local:/in", "/in/a.json")
+        tracker.mark_processed("skip-pipe", "local:/in", "/in/b.json")
+        tracker.mark_processed("skip-pipe", "local:/in", "/in/c.json")
+        assert seen["count"] == 0  # buffered — nothing sent per file
+        tracker.close()            # run end → flush + release the client
+        assert seen["count"] == 1  # one batched mark request for the run
+
+    def test_check_failure_fails_loud_and_reprocesses(self, caplog):
+        """A dead manager degrades to 'not processed' — the run reprocesses —
+        with one ERROR and one degradation note per run, never silent."""
+        import httpx
+
+        from tram.agent.file_tracker_client import HttpFileTracker
+
+        def handler(request: httpx.Request) -> httpx.Response:
+            raise httpx.ConnectError("manager unreachable", request=request)
+
+        notes = []
+        tracker = HttpFileTracker(
+            "http://mgr:8765", "", transport=httpx.MockTransport(handler),
+            on_degradation=notes.append,
+        )
+        with caplog.at_level(logging.ERROR, logger="tram.agent.file_tracker_client"):
+            assert tracker.is_processed("p", "sk", "/f") is False
+            assert tracker.is_processed("p", "sk", "/g") is False
+        assert len(notes) == 1  # one degradation note per run, not per file
+        errors = [r for r in caplog.records if r.levelno == logging.ERROR]
+        assert len(errors) == 1
+        assert "skip_processed" in errors[0].message
+
+    def test_mark_failure_does_not_raise(self, caplog):
+        import httpx
+
+        from tram.agent.file_tracker_client import HttpFileTracker
+
+        def handler(request: httpx.Request) -> httpx.Response:
+            raise httpx.ConnectError("manager unreachable", request=request)
+
+        tracker = HttpFileTracker(
+            "http://mgr:8765", "", transport=httpx.MockTransport(handler)
+        )
+        with caplog.at_level(logging.ERROR, logger="tram.agent.file_tracker_client"):
+            tracker.mark_processed("p", "sk", "/f")  # must not raise
+
+
+class TestWorkerSkipProcessedTracker:
+    """GH #54: with a manager-backed tracker the worker executor honors
+    skip_processed — the same file is processed once across runs — and an
+    unreachable manager degrades to the v1.4.6 fail-loud fallback (ERROR +
+    degradation marker, file reprocessed, run never blocked)."""
+
+    def _dispatch(self, client, yaml_text, run_id, schedule_type="batch"):
+        return client.post("/agent/run", json={
+            "pipeline_name": "skip-pipe",
+            "yaml_text": yaml_text,
+            "run_id": run_id,
+            "schedule_type": schedule_type,
+        })
+
+    def _wait_for(self, collected, n=1, timeout=3.0):
+        deadline = time.time() + timeout
+        while time.time() < deadline and len(collected) < n:
+            time.sleep(0.02)
+        assert len(collected) >= n
+
+    @staticmethod
+    def _skip_processed_yaml(src, dst):
+        return f"""\
+name: skip-pipe
+schedule:
+  type: manual
+source:
+  type: local
+  path: {src}
+  skip_processed: true
+serializer_in:
+  type: json
+sinks:
+  - type: local
+    path: {dst}
+    filename_template: "skip-pipe_{{epoch_ms}}.bin"
+"""
+
+    def test_worker_executor_skips_file_once_with_tracker(self, tmp_path):
+        """E2E pin (GH #54): the REAL worker executor with a tracker backed by
+        a stubbed manager — the same file is processed ONCE across two runs
+        (run 2's check hits the manager's processed_files state and skips) and
+        no degradation marker is recorded (the tracker worked)."""
+        import json as _json
+
+        import httpx
+
+        from tram.agent.file_tracker_client import HttpFileTracker
+
+        src = tmp_path / "in"
+        dst = tmp_path / "out"
+        src.mkdir()
+        (src / "data.json").write_text(_json.dumps([{"x": 1}]))
+
+        yaml_text = self._skip_processed_yaml(src, dst)
+
+        # Stub manager: a stateful processed-files store held across both runs
+        # — the same (pipeline_name, source_key, filepath) keying the real
+        # manager's processed_files table uses.
+        processed: set[tuple[str, str, str]] = set()
+
+        def _manager_handler(request: httpx.Request) -> httpx.Response:
+            body = _json.loads(request.content)
+            pn = body["pipeline_name"]
+            if request.url.path.endswith("/check"):
+                results = [
+                    (pn, f["source_key"], f["filepath"]) in processed
+                    for f in body["files"]
+                ]
+                return httpx.Response(200, json={"processed": results})
+            for f in body["files"]:
+                processed.add((pn, f["source_key"], f["filepath"]))
+            return httpx.Response(200, json={"ok": True})
+
+        completed = []
+
+        def _capture_run_complete(*args, **kwargs):
+            if len(args) > 1 and str(args[1]).startswith("r-sp-tr-"):
+                completed.append(args)
+
+        # Factory keeps the server's real wiring (manager_url / api_key /
+        # on_degradation=active_run.degradation_notes.append) while injecting
+        # the stubbed-manager transport — one tracker per run, sharing the
+        # handler's processed-files state.
+        def _tracker_factory(*args, **kwargs):
+            return HttpFileTracker(
+                "http://mgr:8765",
+                "",
+                transport=httpx.MockTransport(_manager_handler),
+                on_degradation=kwargs.get("on_degradation"),
+            )
+
+        with patch("tram.agent.file_tracker_client.HttpFileTracker",
+                   side_effect=_tracker_factory), \
+             patch("tram.agent.assets.sync_assets"), \
+             patch("tram.agent.server._post_run_complete",
+                   side_effect=_capture_run_complete), \
+             patch("tram.agent.server._post_stats"):
+            client = _make_client(worker_id="w0", manager_url="http://mgr:8765")
+            # Run 1 fully completes (mark lands) before run 2 is dispatched so
+            # the skip is deterministic — concurrent runs would race the mark.
+            resp = self._dispatch(client, yaml_text, "r-sp-tr-0")
+            assert resp.status_code == 202
+            self._wait_for(completed, n=1, timeout=5.0)
+            resp = self._dispatch(client, yaml_text, "r-sp-tr-1")
+            assert resp.status_code == 202
+            self._wait_for(completed, n=2, timeout=5.0)
+
+        assert len(completed) == 2
+        # _post_run_complete positional order: callback_url, run_id,
+        # pipeline_name, worker_id, status, records_in, records_out,
+        # bytes_in, bytes_out, error, records_skipped, errors, ...
+        assert completed[0][4] == "success"
+        assert completed[0][5] == 1          # run 1 processed the file
+        assert completed[1][4] == "success"
+        assert completed[1][5] == 0          # run 2 skipped it (idempotent)
+        for args in completed:
+            assert not any("skip_processed" in e for e in args[11])
+        # One output file — the second run did not reprocess.
+        assert len(list(dst.glob("skip-pipe_*.bin"))) == 1
+
+    def test_worker_executor_falls_back_loud_when_tracker_unreachable(
+        self, tmp_path, caplog
+    ):
+        """GH #54 fallback: with the manager tracker unreachable the run is
+        never blocked — the file is reprocessed and each run fails loud with
+        the ERROR log plus the degradation marker in the run-complete payload
+        (the v1.4.6 fail-loud posture, now triggered by the client erroring)."""
+        import json as _json
+
+        import httpx
+
+        from tram.agent.file_tracker_client import HttpFileTracker
+
+        src = tmp_path / "in"
+        dst = tmp_path / "out"
+        src.mkdir()
+        (src / "data.json").write_text(_json.dumps([{"x": 1}]))
+
+        yaml_text = self._skip_processed_yaml(src, dst)
+
+        def _dead_handler(request: httpx.Request) -> httpx.Response:
+            raise httpx.ConnectError("manager unreachable", request=request)
+
+        completed = []
+
+        def _capture_run_complete(*args, **kwargs):
+            if len(args) > 1 and str(args[1]).startswith("r-sp-down-"):
+                completed.append(args)
+
+        # Factory keeps the server's real wiring — on_degradation lands on the
+        # run's degradation_notes so the run-complete payload carries the
+        # marker; each run gets its own tracker (fresh per-run ERROR).
+        def _tracker_factory(*args, **kwargs):
+            return HttpFileTracker(
+                "http://mgr:8765",
+                "",
+                transport=httpx.MockTransport(_dead_handler),
+                on_degradation=kwargs.get("on_degradation"),
+            )
+
+        with caplog.at_level(logging.ERROR, logger="tram.agent.file_tracker_client"), \
+             patch("tram.agent.file_tracker_client.HttpFileTracker",
+                   side_effect=_tracker_factory), \
+             patch("tram.agent.assets.sync_assets"), \
+             patch("tram.agent.server._post_run_complete",
+                   side_effect=_capture_run_complete), \
+             patch("tram.agent.server._post_stats"):
+            client = _make_client(worker_id="w0", manager_url="http://mgr:8765")
+            for i in range(2):
+                resp = self._dispatch(client, yaml_text, f"r-sp-down-{i}")
+                assert resp.status_code == 202
+            self._wait_for(completed, n=2, timeout=5.0)
+
+        assert len(completed) == 2
+        for args in completed:
+            assert args[4] == "success"
+            assert args[5] == 1              # the file WAS reprocessed
+            assert any("skip_processed" in e for e in args[11])
+        assert len(list(dst.glob("skip-pipe_*.bin"))) == 2
+        # One tracker per run → one escalating ERROR per run (first failure);
+        # later failures in the same run stay WARNING.
+        errors = [r for r in caplog.records
+                  if r.levelno == logging.ERROR and "skip_processed" in r.message]
+        assert len(errors) == 2

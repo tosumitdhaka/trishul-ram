@@ -83,6 +83,10 @@ spec:
               value: /data/mibs
             - name: TRAM_DATA_DIR
               value: /data
+            ## DLQ spool on the same mounted volume as schemas/MIBs so
+            ## spooled envelopes are not lost with the pod overlay (v1.4.7).
+            - name: TRAM_DLQ_SPOOL_DIR
+              value: {{ .Values.worker.dlqSpoolDir | quote }}
             {{- if .Values.schemaRegistry.url }}
             - name: TRAM_SCHEMA_REGISTRY_URL
               value: {{ .Values.schemaRegistry.url | quote }}

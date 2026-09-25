@@ -346,6 +346,7 @@ class TestRunBatchChunksMultiThreaded:
         config.on_error = on_error
         config.rate_limit_rps = None
         config.parallel_sinks = False
+        config.record_chunk_size = None
         return config
 
     def test_multi_threaded_uses_thread_pool_executor(self):
@@ -432,6 +433,39 @@ class TestRunBatchChunksMultiThreaded:
         assert len(submitted_fns) == 1
         assert submitted_fns[0].__func__ is PipelineExecutor._process_chunk
         assert submitted_fns[0].__self__ is executor
+
+    def test_multi_threaded_uses_incremental_parse_when_record_chunk_size_set(self):
+        """GH #48 §2.10: record_chunk_size must be honored on the threaded
+        path too — the chunk's fan-out goes through parse_chunks (bounded)
+        instead of a fully materialized parse()."""
+        config = self._make_threaded_config(thread_workers=2)
+        config.record_chunk_size = 2
+
+        chunks = [(b"payload", {"f": "a.ber"})]
+        mock_source = MagicMock()
+        mock_source.read.return_value = iter(chunks)
+
+        mock_sink = MagicMock()
+        mock_ser_in = MagicMock()
+        mock_ser_in.parse_chunks.return_value = iter([
+            [{"x": 1}, {"x": 2}],
+            [{"x": 3}],
+        ])
+        mock_ser_out = MagicMock()
+        mock_ser_out.serialize.return_value = b"[]"
+        sinks = [(mock_sink, None, [])]
+
+        executor = PipelineExecutor()
+        ctx = PipelineRunContext(pipeline_name="threaded-pipe")
+
+        executor._run_batch_chunks(
+            config, mock_source, sinks, mock_ser_in, mock_ser_out, [], None, ctx
+        )
+
+        mock_ser_in.parse.assert_not_called()
+        mock_ser_in.parse_chunks.assert_called_once_with(b"payload", 2)
+        assert ctx.records_in == 3
+        assert mock_sink.write.call_count == 2
 
     def test_threaded_finalizes_files_after_their_chunks_complete(self, tmp_path):
         """Success path: files are moved+marked only after their chunks drain."""

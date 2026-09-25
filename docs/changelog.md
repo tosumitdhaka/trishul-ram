@@ -5,6 +5,39 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ---
 
+## [1.4.7] - 2026-09-24
+
+### Fixed
+- `rate_limit_rps: 0` no longer crashes every chunk with `ZeroDivisionError` — rejected at config validation (`gt=0`) plus a defense-in-depth executor guard (historical review finding A5) (#48)
+- Top-level `inject_meta` with `thread_workers > 1` is now rejected at config validation — the shared transform instance could annotate records with another file's `source_filename`/`source_path` under concurrent chunks (same gating pattern as stateful transforms; sink-level uses stay allowed) (#48)
+- `on_error: abort` is now honored for per-record transform failures — the run FAILS instead of silently degrading to continue (parity with parse/sink abort paths) (#48)
+- `record_chunk_size` is honored on the threaded batch path — large `split_path` fan-outs stream incrementally instead of full eager materialization when `thread_workers > 1` (#48)
+- Unexpected (non-TramError) exceptions in parallel-sink fan-out are converted to `TramError` so `on_error` handling applies instead of escaping the taxonomy and exploding the run (#48)
+- Worker→manager run-complete callbacks now retry with bounded backoff (3 attempts) before falling back to the reconciler adoption path — a transient manager outage no longer loses the completion record (D2) (#55)
+- A DLQ sink write failure no longer silently drops the record — the envelope is spooled locally (`TRAM_DLQ_SPOOL_DIR`, default `~/.tram/dlq-spool`) for manual replay; even a spool failure is counted in metrics and logged as ERROR (D1) (#55)
+- The per-sink circuit-breaker open window is configurable (`circuit_breaker_window_seconds`, default 60s unchanged) (D3) (#55)
+- `errors_last_window` is bounded (deque, maxlen 100) between snapshots (B7) (#55)
+- `_add_column_if_missing` swallows only the duplicate-column error per dialect — locks/disk-full and other real failures now raise loudly (B8) (#55)
+- `save_pipeline_version` version races are resolved by a `UNIQUE(name, version)` constraint (fresh DBs) plus an idempotent unique-index migration for existing DBs and an IntegrityError retry (B9) (#55)
+- A `finalize_source` rename failure after all chunks drained no longer flips a fully-written run to FAILED — it degrades to a recorded error note on the run (B11) (#55)
+- Sink-level `inject_meta` is gated to `thread_workers: 1` as well — sink transform instances are shared across chunk threads exactly like top-level ones (review follow-up to #48)
+- The `UNIQUE(name, version)` migration (B9) deduplicates legacy rows before creating the index — a legacy DB that already holds duplicate versions no longer fails manager startup on upgrade (review follow-up to #55)
+- `on_error: abort` is now honored for per-sink transform failures too — the last abort bypass is closed (review follow-up to #48)
+- Worker `HttpFileTracker` batches processed-file checks (one batched request per run, 500-file sub-batches) and marks (one flush per run), reuses a single connection, and short-circuits after the first manager connection failure — a blackholed manager costs one timeout per run, not per file (review follow-up to #54); list-based sources prefetch the run's candidate files against the tracker in one batch
+- `TRAM_DLQ_SPOOL_DIR` defaults under `TRAM_DATA_DIR` in worker mode and gets a Helm value (`worker.dlqSpoolDir`) — the spool lands on the worker PVC, not the container overlay (review follow-up to #55 D1)
+- The processed-files internal endpoints cap `files` at 1000 per request (400 on overflow) (review follow-up to #54)
+- Template examples embedded in AI generation prompts pass through redaction (fail-closed drop) (review follow-up to #41)
+- Run-complete callbacks skip retry on 4xx responses — network errors and 5xx/429 still retry (review follow-up to #55 D2)
+- Browser-smoke version assertions now derive from `tram/ui/package.json` and cross-check `tests/browser/fixtures/meta.json` — fixture drift fails the check instead of passing silently; release-gate check 2 validates the fixture against the pyproject version (#50)
+- The yaml-quote browser check stubs the schema-poll interval (`window.__TRAM_TEST_SCHEMA_POLL_MS__` override) — the hardcoded 61.5s wall-clock wait is gone (check now ~11s) (#50)
+
+### Added
+- **[worker mode] `skip_processed` idempotency via a manager-routed tracker** (follow-up to #39): new internal endpoints `POST /api/internal/processed-files/check` and `/mark` (batch-friendly, namespaced by pipeline + source key + filepath, X-API-Key-authenticated) back a worker-side `HttpFileTracker` passed to the worker executor — a file processed once is not reprocessed across runs or worker failover. If the manager is unreachable the run fails loud (ERROR + run-history degradation note, once per run) and reprocesses; the v1.4.6 fail-loud path is now the fallback only (#54)
+- **AI generate is template-grounded (A6):** when bundled templates match the requested source/sink types, up to 3 curated examples (name + YAML, size-bounded) are appended to the generation prompt; ungrounded generation is unchanged when nothing matches (#41)
+- **AI fix retries once on invalid output (A7):** validation failures feed back into a single retry; the response carries `retried`/`attempts`, and the retry attempt is audited (`retried=True` on the second `tram.ai` log line) (#41)
+- **AI run-failure triage (B1):** `POST /api/ai/suggest` `mode: "triage"` with `run_id` — the server assembles the run's failure context (counters, top-level error, grouped skip reasons, redacted pipeline YAML, fails closed by omitting unredactable YAML) and returns `{explanation, run_id, pipeline, status}`; audited with `mode="triage"`. The run-detail page (`#runs/:id`) gains an "Explain this run" button, gated on AI being configured like the editor/wizard (#41)
+- **Server-side plugin field metadata (A.4):** `/api/plugins` field descriptors now carry `kind`/`choices`/`secret`/`multiline` from the config schema; the plugins page's client-side dual-fetch + `_enrichedFields` merge is deleted (#42 data-layer foundation)
+
 ## [1.4.6] - 2026-09-24
 
 ### Fixed

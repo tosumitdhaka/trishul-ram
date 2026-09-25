@@ -170,6 +170,12 @@ try:
         "Total records routed to the dead-letter queue",
         ["pipeline"],
     )
+    # Review D1: DLQ sink write failures (envelope spooled to disk or lost).
+    DLQ_WRITE_FAILED = Counter(
+        "tram_dlq_write_failed_total",
+        "Total DLQ sink write failures (envelope spooled to disk or lost)",
+        ["pipeline"],
+    )
     DURATION = Histogram(
         "tram_chunk_duration_seconds",
         "Time spent processing one chunk",
@@ -214,6 +220,7 @@ except ImportError:
     RECORDS_SKIP = _NoOpCounter()  # type: ignore[assignment]
     ERRORS = _NoOpCounter()  # type: ignore[assignment]
     DLQ_RECORDS = _NoOpCounter()  # type: ignore[assignment]
+    DLQ_WRITE_FAILED = _NoOpCounter()  # type: ignore[assignment]
     DURATION = _NoOpHistogram()  # type: ignore[assignment]
     KAFKA_LAG = _NoOpGauge()  # type: ignore[assignment]
     STREAM_QUEUE_DEPTH = _NoOpGauge()  # type: ignore[assignment]

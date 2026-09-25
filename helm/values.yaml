@@ -74,6 +74,11 @@ worker:
   replicas: 3
   port: 8766
   ingressPort: 8767
+  ## DLQ envelope spool directory (v1.4.7, GH #55). In worker mode the
+  ## code default resolves under TRAM_DATA_DIR (/data → /data/dlq-spool), so
+  ## spooled envelopes survive pod restarts only when /data is a real volume;
+  ## set this to an explicit persistent path if you mount one.
+  dlqSpoolDir: /data/dlq-spool
   ingressService:
     enabled: true
     type: NodePort

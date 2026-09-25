@@ -5,7 +5,7 @@
 image:
   registry: ""               # e.g. ghcr.io
   repository: OWNER/tram     # replace OWNER with your registry namespace
-  tag: "1.4.6"
+  tag: "1.4.7"
   pullPolicy: IfNotPresent
 
 ## Standalone mode: single-replica StatefulSet (replicaCount=1).
@@ -38,6 +38,10 @@ worker:
   replicas: 3
   port: 8766
   ingressPort: 8767
+  ## DLQ envelope spool directory (v1.4.7, GH #55); default resolves under
+  ## TRAM_DATA_DIR (/data → /data/dlq-spool) in worker mode. Override when
+  ## mounting a persistent volume for the spool.
+  dlqSpoolDir: /data/dlq-spool
   ingressService:
     enabled: true
     type: NodePort

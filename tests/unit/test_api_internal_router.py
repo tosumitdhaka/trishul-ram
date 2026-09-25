@@ -247,3 +247,132 @@ class TestTransformStateEndpoints:
         client = self._make_app(tmp_path)
         paths = client.get("/openapi.json").json().get("paths", {})
         assert "/api/internal/transform-state/{pipeline}" not in paths
+
+
+# ── Processed-files endpoints (GH #54) ──────────────────────────────────────
+
+
+class TestProcessedFilesEndpoints:
+    def _make_app(self, tmp_path):
+        app = FastAPI()
+        app.include_router(router)
+        app.state.controller = MagicMock()
+        app.state.stats_store = MagicMock()
+        app.state.db = TramDB(url=f"sqlite:///{tmp_path}/internal.db")
+        return TestClient(app)
+
+    @staticmethod
+    def _payload(pipeline_name, files):
+        return {
+            "pipeline_name": pipeline_name,
+            "files": [{"source_key": sk, "filepath": fp} for sk, fp in files],
+        }
+
+    def test_mark_then_check_roundtrip(self, tmp_path):
+        """mark → check round-trip through the manager-side tracker DB."""
+        client = self._make_app(tmp_path)
+        body = self._payload("pipe-a", [("local:/in", "/in/a.json")])
+
+        resp = client.post("/api/internal/processed-files/check", json=body)
+        assert resp.status_code == 200
+        assert resp.json() == {"processed": [False]}
+
+        resp = client.post("/api/internal/processed-files/mark", json=body)
+        assert resp.status_code == 200
+        assert resp.json() == {"ok": True}
+
+        resp = client.post("/api/internal/processed-files/check", json=body)
+        assert resp.status_code == 200
+        assert resp.json() == {"processed": [True]}
+
+    def test_batch_check_list_in_list_out(self, tmp_path):
+        """A multi-file check returns one bool per file, aligned with input order."""
+        client = self._make_app(tmp_path)
+        mark_body = self._payload(
+            "pipe-a", [("local:/in", "/in/a.json"), ("local:/in", "/in/b.json")]
+        )
+        assert client.post("/api/internal/processed-files/mark", json=mark_body).status_code == 200
+
+        check_body = self._payload(
+            "pipe-a",
+            [
+                ("local:/in", "/in/a.json"),
+                ("local:/in", "/in/unseen.json"),
+                ("local:/in", "/in/b.json"),
+            ],
+        )
+        resp = client.post("/api/internal/processed-files/check", json=check_body)
+        assert resp.status_code == 200
+        assert resp.json() == {"processed": [True, False, True]}
+
+    def test_per_pipeline_isolation(self, tmp_path):
+        """Files are namespaced by pipeline_name — another pipeline sees nothing."""
+        client = self._make_app(tmp_path)
+        body = self._payload("pipe-a", [("local:/in", "/in/a.json")])
+        assert client.post("/api/internal/processed-files/mark", json=body).status_code == 200
+
+        other = self._payload("pipe-b", [("local:/in", "/in/a.json")])
+        resp = client.post("/api/internal/processed-files/check", json=other)
+        assert resp.json() == {"processed": [False]}
+
+    def test_source_key_is_part_of_the_key(self, tmp_path):
+        """The same filepath under a different source_key is a different file."""
+        client = self._make_app(tmp_path)
+        body = self._payload("pipe-a", [("local:/in", "/in/a.json")])
+        assert client.post("/api/internal/processed-files/mark", json=body).status_code == 200
+
+        resp = client.post(
+            "/api/internal/processed-files/check",
+            json=self._payload("pipe-a", [("s3:bucket/key", "/in/a.json")]),
+        )
+        assert resp.json() == {"processed": [False]}
+
+    def test_db_unavailable_503(self, tmp_path):
+        app = FastAPI()
+        app.include_router(router)
+        app.state.controller = MagicMock()
+        app.state.stats_store = MagicMock()
+        app.state.db = None
+        client = TestClient(app)
+
+        resp = client.post(
+            "/api/internal/processed-files/check",
+            json=self._payload("pipe-a", [("local:/in", "/in/a.json")]),
+        )
+        assert resp.status_code == 503
+        resp = client.post(
+            "/api/internal/processed-files/mark",
+            json=self._payload("pipe-a", [("local:/in", "/in/a.json")]),
+        )
+        assert resp.status_code == 503
+
+    def test_missing_body_422(self, tmp_path):
+        client = self._make_app(tmp_path)
+        assert client.post("/api/internal/processed-files/check", content=b"").status_code == 422
+        assert client.post("/api/internal/processed-files/mark", content=b"").status_code == 422
+
+    def test_oversized_batch_rejected_400(self, tmp_path):
+        """C5 (v1.4.7): a processed-files request above the per-request bound
+        is rejected with 400 — batch-friendly but bounded; the bound itself is
+        still accepted."""
+        from tram.api.routers.internal import _MAX_PROCESSED_FILES_PER_REQUEST
+
+        client = self._make_app(tmp_path)
+        too_big = self._payload(
+            "pipe-a",
+            [("local:/in", f"/in/f{i}.json") for i in range(_MAX_PROCESSED_FILES_PER_REQUEST + 1)],
+        )
+        assert client.post("/api/internal/processed-files/check", json=too_big).status_code == 400
+        assert client.post("/api/internal/processed-files/mark", json=too_big).status_code == 400
+
+        at_bound = self._payload(
+            "pipe-a",
+            [("local:/in", f"/in/f{i}.json") for i in range(_MAX_PROCESSED_FILES_PER_REQUEST)],
+        )
+        assert client.post("/api/internal/processed-files/check", json=at_bound).status_code == 200
+
+    def test_not_in_openapi_schema(self, tmp_path):
+        client = self._make_app(tmp_path)
+        paths = client.get("/openapi.json").json().get("paths", {})
+        assert "/api/internal/processed-files/check" not in paths
+        assert "/api/internal/processed-files/mark" not in paths

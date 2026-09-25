@@ -6,13 +6,17 @@ import base64
 import gc
 import json
 import logging
+import os
 import queue as _queue
 import random
+import re
 import threading
 import time
+import uuid
 from collections import OrderedDict, deque
 from concurrent.futures import Future, ThreadPoolExecutor
 from datetime import UTC, datetime
+from pathlib import Path
 from typing import TYPE_CHECKING
 
 from tram.connectors.file_sink_common import extract_field_paths, validate_template_tokens
@@ -141,6 +145,76 @@ def _partition_records_for_template(
     return [(entry["field_values"], entry["records"]) for entry in grouped.values()]
 
 
+def _dlq_spool_dir() -> str:
+    """Directory for spooled DLQ envelopes (review D1 fallback).
+
+    The primary DLQ sink usually fails for the same reason the primary sink
+    did (a shared network partition), so a remote DLQ is not a safe last
+    resort. When the DLQ write itself fails, the envelope is durably spooled
+    to local disk instead of being dropped. Configurable via
+    ``TRAM_DLQ_SPOOL_DIR``. In worker mode the default resolves under the
+    ``TRAM_DATA_DIR`` root (``<data_dir>/dlq-spool``, following the
+    ``TRAM_SCHEMA_DIR``/``TRAM_MIB_DIR`` pattern) so spooled envelopes land on
+    the mounted data volume instead of the container overlay; standalone and
+    manager mode default under ``~/.tram`` alongside the SQLite fallback DB.
+    """
+    configured = os.environ.get("TRAM_DLQ_SPOOL_DIR")
+    if configured:
+        return configured
+    if os.environ.get("TRAM_MODE", "standalone").lower() == "worker":
+        data_dir = os.environ.get("TRAM_DATA_DIR", "/data")
+        return str(Path(data_dir).expanduser() / "dlq-spool")
+    return "~/.tram/dlq-spool"
+
+
+def _spool_dlq_envelope(
+    envelope: dict,
+    ctx: PipelineRunContext,
+    error: str,
+) -> str | None:
+    """Write a failed DLQ envelope to the local disk spool (review D1).
+
+    Returns the spool file path on success, or ``None`` when even the spool
+    failed (then the record is genuinely lost and the failure is logged at
+    ERROR with the ``DLQ_WRITE_FAILED`` counter incremented — the loud path,
+    never a silent drop).
+    """
+    from tram.metrics.registry import DLQ_WRITE_FAILED
+
+    safe_name = re.sub(r"[^A-Za-z0-9_.-]", "_", ctx.pipeline_name)
+    filename = (
+        f"{safe_name}-{ctx.run_id}-"
+        f"{datetime.now(UTC).strftime('%Y%m%dT%H%M%S%f')}-{uuid.uuid4().hex[:8]}.json"
+    )
+    payload = dict(envelope)
+    payload["_dlq_sink_error"] = str(error)
+    try:
+        spool_dir = Path(_dlq_spool_dir()).expanduser()
+        spool_dir.mkdir(parents=True, exist_ok=True)
+        path = spool_dir / filename
+        path.write_text(json.dumps(payload))
+        logger.error(
+            "DLQ write failed — envelope spooled to disk",
+            extra={
+                "pipeline": ctx.pipeline_name,
+                "spool_path": str(path),
+                "error": str(error),
+            },
+        )
+        return str(path)
+    except Exception as spool_exc:
+        DLQ_WRITE_FAILED.labels(pipeline=ctx.pipeline_name).inc()
+        logger.error(
+            "DLQ write failed and local spool failed — envelope lost",
+            extra={
+                "pipeline": ctx.pipeline_name,
+                "error": str(error),
+                "spool_error": str(spool_exc),
+            },
+        )
+        return None
+
+
 def _write_dlq_envelope(
     dlq_sink,
     ctx: PipelineRunContext,
@@ -150,7 +224,13 @@ def _write_dlq_envelope(
     record=None,
     raw: bytes | None = None,
 ) -> None:
-    """Write a DLQ envelope to the DLQ sink. Errors are logged and swallowed."""
+    """Write a DLQ envelope to the DLQ sink.
+
+    A DLQ sink write failure never silently discards the record (review D1):
+    the envelope is spooled to local disk as a durable fallback (replayable
+    JSON file), or — when even the spool fails — surfaced via ERROR logs and
+    the ``DLQ_WRITE_FAILED`` counter.
+    """
     envelope: dict = {
         "_error": error,
         "_stage": stage,
@@ -164,10 +244,7 @@ def _write_dlq_envelope(
     try:
         dlq_sink.write(json.dumps(envelope).encode(), {})
     except Exception as dlq_exc:
-        logger.error(
-            "DLQ write failed",
-            extra={"pipeline": ctx.pipeline_name, "error": str(dlq_exc)},
-        )
+        _spool_dlq_envelope(envelope, ctx, error=str(dlq_exc))
 
 
 def _try_trim_process_heap() -> bool:
@@ -225,7 +302,13 @@ class PipelineExecutor:
         Thread-safe: _tokens and _last_refill are protected by _rate_lock.
         Note: rate_limit_rps is approximate when thread_workers > 1 because
         the sleep happens outside the lock to avoid holding it during sleep.
+
+        A non-positive *rps* is a configuration error (rejected by the model's
+        ``gt=0`` constraint) — fail loudly as such rather than with a raw
+        ZeroDivisionError from the token math.
         """
+        if rps is None or rps <= 0:
+            raise ValueError(f"rate_limit_rps must be > 0, got {rps!r}")
         with self._rate_lock:
             now = time.monotonic()
             elapsed = now - self._last_refill
@@ -488,12 +571,41 @@ class PipelineExecutor:
         return f"{config.name}:{sink_type}:{index}"
 
     @staticmethod
-    def _finalize_source_for_sinks(sinks: list[tuple], meta: dict, *, success: bool) -> None:
+    def _finalize_source_for_sinks(
+        sinks: list[tuple],
+        meta: dict,
+        *,
+        success: bool,
+        ctx: PipelineRunContext | None = None,
+    ) -> None:
+        """Run each sink's ``finalize_source`` hook, degrading on failure.
+
+        A sink finalize failure (e.g. a staged-file rename) after all chunks
+        were drained must NOT flip the whole run to FAILED (review B11): the
+        data is already written, so the error is logged loudly and recorded on
+        the run context as a note — the run stays on its decided result with
+        the error attached, consistent with the at-least-once story.
+        """
         for sink_tuple in sinks:
             sink_instance = sink_tuple[0]
             finalize = getattr(sink_instance, "finalize_source", None)
-            if callable(finalize):
+            if not callable(finalize):
+                continue
+            try:
                 finalize(meta, success)
+            except Exception as exc:
+                msg = f"Sink finalize failed: {exc}"
+                logger.error(
+                    msg,
+                    extra={
+                        "sink_type": type(sink_instance).__name__,
+                        "success": success,
+                        "source_path": meta.get("source_path"),
+                        "source_filename": meta.get("source_filename"),
+                    },
+                )
+                if ctx is not None:
+                    ctx.note_skip(msg)
 
     @staticmethod
     def _close_sinks(sinks: list[tuple], dlq_sink=None) -> None:
@@ -580,6 +692,10 @@ class PipelineExecutor:
                         processed = t.apply(processed)
                     surviving_records.extend(processed)
                 except Exception as exc:
+                    if on_error == "abort":
+                        # GH #48 §2.9: abort must fail the run like the parse
+                        # and sink-write abort paths, not silently DLQ+continue.
+                        raise TramError(f"Transform error: {exc}") from exc
                     if dlq_sink is not None:
                         _write_dlq_envelope(
                             dlq_sink, ctx,
@@ -629,6 +745,12 @@ class PipelineExecutor:
                         self._set_transform_runtime_meta(t, meta)
                         sink_records = t.apply(sink_records)
                     except Exception as exc:
+                        if on_error == "abort":
+                            # GH #48 §2.9 parity: a failing sink-level transform
+                            # under abort must fail the run like the global
+                            # transform and sink-write abort paths — not
+                            # silently DLQ and continue.
+                            raise TramError(f"Transform error: {exc}") from exc
                         if dlq_sink is not None:
                             _write_dlq_envelope(
                                 dlq_sink, ctx,
@@ -734,10 +856,19 @@ class PipelineExecutor:
                             failures, _ = self._cb_state.get(sink_key, (0, 0.0))
                             failures += 1
                             if failures >= cb_threshold:
-                                open_until = time.monotonic() + 60.0
+                                cb_window = float(
+                                    getattr(sink_cfg, "circuit_breaker_window_seconds", 60.0)
+                                    or 60.0
+                                )
+                                open_until = time.monotonic() + cb_window
                                 logger.warning(
-                                    "Circuit breaker tripped — disabling sink for 60s",
-                                    extra={"pipeline": ctx.pipeline_name, "failures": failures},
+                                    "Circuit breaker tripped — disabling sink "
+                                    f"for {cb_window:g}s",
+                                    extra={
+                                        "pipeline": ctx.pipeline_name,
+                                        "failures": failures,
+                                        "window_seconds": cb_window,
+                                    },
                                 )
                             else:
                                 open_until = 0.0
@@ -777,6 +908,14 @@ class PipelineExecutor:
                             written_counts.append(f.result())
                         except TramError:
                             raise
+                        except Exception as exc:
+                            # GH #48 §2.16: unexpected exceptions from
+                            # _write_one_sink (e.g. a serializer bug outside
+                            # the per-partition retry loop) escape the error
+                            # taxonomy and would bypass on_error=retry. Fold
+                            # them into TramError so the retry/abort paths in
+                            # the run loop apply, preserving the cause.
+                            raise TramError(f"Sink write error: {exc}") from exc
             else:
                 written_counts = [
                     _write_one_sink(sink_tuple, records, i)
@@ -1187,7 +1326,9 @@ class PipelineExecutor:
                 if source_key is not None:
                     meta["enable_safe_finalize"] = True
                     if current_source_key is not None and source_key != current_source_key:
-                        self._finalize_source_for_sinks(sinks, current_source_meta, success=True)
+                        self._finalize_source_for_sinks(
+                            sinks, current_source_meta, success=True, ctx=ctx
+                        )
                         source.finalize(current_source_meta, success=True)
                         current_source_key = None
                         current_source_meta = None
@@ -1217,12 +1358,16 @@ class PipelineExecutor:
                     break
         except Exception:
             if current_source_meta is not None:
-                self._finalize_source_for_sinks(sinks, current_source_meta, success=False)
+                self._finalize_source_for_sinks(
+                    sinks, current_source_meta, success=False, ctx=ctx
+                )
                 source.finalize(current_source_meta, success=False)
             raise
         else:
             if current_source_meta is not None:
-                self._finalize_source_for_sinks(sinks, current_source_meta, success=True)
+                self._finalize_source_for_sinks(
+                    sinks, current_source_meta, success=True, ctx=ctx
+                )
                 if not stopped_early:
                     # On a batch_size stop the source generator was abandoned
                     # mid-file; the current file must stay unmarked so the next
@@ -1260,6 +1405,7 @@ class PipelineExecutor:
         on_error = config.on_error
         cap = _batch_inflight_cap(config.thread_workers)
         parallel_sinks = getattr(config, "parallel_sinks", False)
+        record_chunk_size = getattr(config, "record_chunk_size", None)
 
         in_flight: deque[tuple[Future, tuple | None, dict]] = deque()
         # Source units in submission order; each entry:
@@ -1267,12 +1413,27 @@ class PipelineExecutor:
         units: deque[list] = deque()
 
         def _submit(raw: bytes, meta: dict) -> None:
-            fut = pool.submit(
-                self._process_chunk,
-                raw, meta, serializer_in, transforms,
-                serializer_out, sinks, ctx, on_error,
-                config.rate_limit_rps, dlq_sink, parallel_sinks, sink_cb_keys, stats,
-            )
+            if record_chunk_size:
+                # GH #48 §2.10: honor record_chunk_size on the threaded path
+                # too — parse_chunks bounds the fan-out per chunk instead of
+                # materializing the whole split (asn1) in one parse(). The
+                # in-flight cap is unchanged (futures are what get bounded);
+                # batch_size truncation stays approximate like the sequential
+                # path's accepted over-submission.
+                fut = pool.submit(
+                    self._process_chunk_incrementally,
+                    raw, meta, serializer_in, transforms,
+                    serializer_out, sinks, ctx, on_error,
+                    record_chunk_size, batch_size, config.rate_limit_rps,
+                    dlq_sink, parallel_sinks, sink_cb_keys, stats,
+                )
+            else:
+                fut = pool.submit(
+                    self._process_chunk,
+                    raw, meta, serializer_in, transforms,
+                    serializer_out, sinks, ctx, on_error,
+                    config.rate_limit_rps, dlq_sink, parallel_sinks, sink_cb_keys, stats,
+                )
             key = _source_unit_key(meta)
             if key is not None:
                 if units and units[-1][0] == key:

@@ -16,7 +16,8 @@ from fastapi import APIRouter, HTTPException, Request
 from pydantic import BaseModel, ValidationError
 
 from tram.api.config_schema import SCHEMA_FIELDS, SECRET_NAME_TOKENS, schema_version
-from tram.api.routers.ai_docs import build_ai_context
+from tram.api.routers import templates as _templates_mod
+from tram.api.routers.ai_docs import build_ai_context, build_template_examples
 from tram.core.config import ai_audit_enabled
 from tram.core.exceptions import ConfigError
 from tram.pipeline.loader import load_pipeline_from_yaml
@@ -267,6 +268,41 @@ TRAM pipelines are defined in YAML. Given a user description, output ONLY valid 
 """
 
 
+async def _bundled_templates(request: Request) -> list[dict]:
+    """Bundled pipeline templates for generate-mode grounding (A6), or ``[]``
+    when none are available. Best-effort by design: a missing config (unit-test
+    apps), an absent templates dir, or a broken template file must never fail
+    the generate call — grounding is an enhancement, not a requirement."""
+    try:
+        return await _templates_mod.list_templates(request)
+    except Exception:
+        return []
+
+
+def _redact_template_examples(templates: list[dict]) -> list[dict]:
+    """Redact every template's YAML before it enters a generation prompt (N3).
+
+    The bundled library is curated, but operator-dropped templates can carry
+    real secrets, so each template's YAML goes through the same ``_redact_yaml``
+    used by explain/fix/modify. A template whose YAML cannot be redacted
+    safely is dropped (fail closed) — grounding is an enhancement and must
+    never become a secret-leak channel.
+    """
+    redacted: list[dict] = []
+    for tpl in templates:
+        raw = tpl.get("yaml") or ""
+        if not raw.strip():
+            redacted.append(tpl)
+            continue
+        try:
+            clean = dict(tpl)
+            clean["yaml"] = _redact_yaml(raw)
+        except ValueError:
+            continue
+        redacted.append(clean)
+    return redacted
+
+
 def _call_ai(system: str, user: str, max_tokens: int, cfg: dict) -> _AiResult:
     provider = cfg["provider"]
     api_key  = cfg["api_key"]
@@ -466,6 +502,109 @@ def _yaml_mode_result(result: _AiResult) -> dict:
     return {"yaml": yaml_text, "valid": not issues, "issues": issues}
 
 
+# ── A7: fix-mode validate-and-retry loop ────────────────────────────────────
+
+
+def _fix_mode_result(result: _AiResult, yaml_text: str, *, retried: bool) -> dict:
+    """A3 response shape for fix mode plus the A7 retry fact (``retried`` and
+    ``attempts``). The final validation issues are always the *last* attempt's
+    — a retried fix that is still invalid surfaces those errors."""
+    out = _yaml_mode_result(_AiResult(
+        yaml_text, result.stop_reason, result.tokens_in, result.tokens_out,
+    ))
+    out["retried"] = retried
+    out["attempts"] = 2 if retried else 1
+    return out
+
+
+async def _run_fix_with_retry(request: Request, cfg: dict, system: str, user: str) -> dict:
+    """Fix-mode loop (A7): call the provider, validate the returned YAML with
+    the existing loader check, and when it fails validation feed the validation
+    errors back into the prompt for AT MOST ONE retry. Never loops more than
+    once. Per-call wall time is bounded by the A1 timeout discipline, so a
+    retried fix costs at most two such calls. The retry attempt is audited with
+    ``retried=True`` (A10)."""
+    result = await _run_ai_call(request, "fix", system, user, max_tokens=1024, cfg=cfg)
+    yaml_text = _strip_fences(result.text)
+    issues = _validate_yaml(yaml_text)
+    if not issues:
+        return _fix_mode_result(result, yaml_text, retried=False)
+    retry_user = (
+        user
+        + "\n\nThe YAML you produced above failed TRAM validation. Fix ALL of "
+        "these validation errors and return the complete corrected pipeline "
+        "YAML only:\n"
+        + "\n".join(f"- {issue}" for issue in issues)
+    )
+    retry_result = await _run_ai_call(
+        request, "fix", system, retry_user, max_tokens=1024, cfg=cfg, retried=True,
+    )
+    return _fix_mode_result(retry_result, _strip_fences(retry_result.text), retried=True)
+
+
+# ── B1: run-failure triage context ──────────────────────────────────────────
+
+
+def _group_skip_reasons(
+    errors: list,
+    *,
+    max_groups: int = 8,
+    max_reason_chars: int = 200,
+) -> list[tuple[str, int]]:
+    """Dedupe + count per-record error strings (mirrors the runs-table UI's
+    ``reasonGroups``), sorted by count descending, capped at *max_groups*.
+    Long reason strings are truncated so the triage prompt stays bounded."""
+    counts: dict[str, int] = {}
+    for err in errors:
+        reason = err if isinstance(err, str) else str(err)
+        counts[reason] = counts.get(reason, 0) + 1
+    ordered = sorted(counts.items(), key=lambda kv: (-kv[1], kv[0]))
+    return [(reason[:max_reason_chars], count) for reason, count in ordered[:max_groups]]
+
+
+def _triage_pipeline_yaml(controller, pipeline_name: str) -> str | None:
+    """Redacted copy of the run's pipeline YAML for the triage prompt (B1), or
+    None when the pipeline is not currently registered or its YAML cannot be
+    redacted safely. Fails closed: unredactable config is omitted entirely —
+    never sent to the provider."""
+    if not pipeline_name:
+        return None
+    state = controller.get(pipeline_name)
+    yaml_text = getattr(state, "yaml_text", None) if state is not None else None
+    if not yaml_text:
+        return None
+    try:
+        return _redact_yaml(yaml_text)
+    except ValueError:
+        return None
+
+
+def _build_triage_context(run: dict, redacted_yaml: str | None) -> str:
+    """Assemble the run-failure context for the triage prompt: the run's
+    counters, top-level error, grouped skip reasons, and (when available) the
+    redacted pipeline YAML."""
+    lines = [
+        f"Pipeline: {run.get('pipeline')}",
+        f"Status: {run.get('status')}",
+        f"Started: {run.get('started_at')}",
+        f"Finished: {run.get('finished_at')}",
+        f"Records in: {run.get('records_in')}",
+        f"Records out: {run.get('records_out')}",
+        f"Records skipped: {run.get('records_skipped')}",
+        f"Bytes in: {run.get('bytes_in')}",
+        f"Bytes out: {run.get('bytes_out')}",
+        f"DLQ count: {run.get('dlq_count')}",
+        f"Error: {run.get('error') or '(none)'}",
+    ]
+    skip_reasons = _group_skip_reasons(run.get("errors") or [])
+    if skip_reasons:
+        lines.append("Skip reasons (grouped, highest count first):")
+        lines.extend(f"  {count}x {reason}" for reason, count in skip_reasons)
+    if redacted_yaml:
+        lines.append(f"Pipeline YAML (secrets redacted):\n{redacted_yaml}")
+    return "\n".join(lines)
+
+
 # ── Secret redaction for outbound prompts (A4) ─────────────────────────────
 
 _MASK_VALUE = "***redacted***"
@@ -613,11 +752,14 @@ def _audit_ai_call(
     result: _AiResult | None,
     duration_s: float,
     error: BaseException | None = None,
+    *,
+    retried: bool = False,
 ) -> None:
     """Emit one audit line per AI call: who (client host), what (mode,
     provider, model), cost (tokens when the SDK reported them), duration,
     and outcome. The log line is always emitted; the ai_usage DB row is
-    gated by the TRAM_AI_AUDIT feature flag (default on)."""
+    gated by the TRAM_AI_AUDIT feature flag (default on). ``retried`` marks
+    the second attempt of a fix-mode validate-and-retry pass (A7)."""
     client = request.client.host if request.client else ""
     provider = cfg["provider"]
     model = _resolve_model(cfg)
@@ -633,6 +775,7 @@ def _audit_ai_call(
         "tokens_out": tokens_out,
         "duration_s": round(duration_s, 3),
         "ok": ok,
+        "retried": retried,
     }
     if ok:
         logger.info("AI call completed", extra=extra)
@@ -653,16 +796,18 @@ def _audit_ai_call(
 
 
 async def _run_ai_call(request: Request, mode: str, system: str, user: str,
-                       max_tokens: int, cfg: dict) -> _AiResult:
+                       max_tokens: int, cfg: dict, *, retried: bool = False) -> _AiResult:
     """Execute one AI call off the event loop and audit it (A10). Raises the
-    underlying exception on failure — callers convert it to HTTPException."""
+    underlying exception on failure — callers convert it to HTTPException.
+    ``retried`` marks the second attempt of a fix-mode validate-and-retry pass
+    (A7) in the audit line."""
     started = time.monotonic()
     try:
         result = await asyncio.to_thread(_call_ai, system, user, max_tokens, cfg)
     except Exception as exc:
-        _audit_ai_call(request, mode, cfg, None, time.monotonic() - started, error=exc)
+        _audit_ai_call(request, mode, cfg, None, time.monotonic() - started, error=exc, retried=retried)
         raise
-    _audit_ai_call(request, mode, cfg, result, time.monotonic() - started)
+    _audit_ai_call(request, mode, cfg, result, time.monotonic() - started, retried=retried)
     return result
 
 
@@ -841,6 +986,16 @@ async def ai_suggest(request: Request) -> dict:
             pipeline_structure = _PIPELINE_STRUCTURE,
             connector_schema   = build_ai_context(prompt, plugins),
         )
+        # A6: ground generation in the bundled template library when one
+        # matches the prompt (bounded — never grows the prompt unboundedly).
+        # N3: template YAML is redacted before embedding (operator-dropped
+        # templates can carry real secrets); unredactable templates are
+        # dropped, never sent verbatim.
+        template_examples = build_template_examples(
+            _redact_template_examples(await _bundled_templates(request)), prompt
+        )
+        if template_examples:
+            system += "\n\n" + template_examples
         try:
             result = await _run_ai_call(request, "generate", system, prompt, max_tokens=1024, cfg=cfg)
         except Exception as exc:
@@ -875,10 +1030,10 @@ async def ai_suggest(request: Request) -> dict:
             f"Error to fix: {body.get('error', '')}"
         )
         try:
-            result = await _run_ai_call(request, "fix", system, user, max_tokens=1024, cfg=cfg)
+            # A7: validate the reply and retry at most once when it is invalid.
+            return await _run_fix_with_retry(request, cfg, system, user)
         except Exception as exc:
             raise HTTPException(status_code=502, detail=str(exc))
-        return _yaml_mode_result(result)
 
     elif mode == "modify":
         plugins = body.get("plugins", {})
@@ -895,5 +1050,45 @@ async def ai_suggest(request: Request) -> dict:
         except Exception as exc:
             raise HTTPException(status_code=502, detail=str(exc))
         return _yaml_mode_result(result)
+
+    elif mode == "triage":
+        # B1: explain a failed run from its run-history row. The run context
+        # (counters, error, grouped skip reasons) is joined with the pipeline
+        # YAML server-side; redaction (A4) is applied before anything reaches
+        # the provider.
+        run_id = body.get("run_id", "")
+        if not run_id:
+            raise HTTPException(status_code=400, detail="mode 'triage' requires a run_id")
+        controller = getattr(request.app.state, "controller", None)
+        if controller is None:
+            raise HTTPException(status_code=503, detail="Run history not available")
+        run = controller.get_run(run_id)
+        if run is None:
+            raise HTTPException(status_code=404, detail=f"Run '{run_id}' not found")
+        run_dict = run.to_dict()
+        redacted_yaml = _triage_pipeline_yaml(controller, run_dict.get("pipeline") or "")
+        context = _build_triage_context(run_dict, redacted_yaml)
+        system = (
+            "You are a TRAM run-diagnostics assistant. Given the failure "
+            "context of one pipeline run, explain what went wrong and what to "
+            "check next. Be concise and actionable. Base your answer ONLY on "
+            "the data provided — never invent errors, configuration, or next "
+            "steps not supported by the context."
+        )
+        user = (
+            f"Run failure context:\n{context}\n\n"
+            "Explain in 3-5 sentences what caused this outcome and what the "
+            "operator should check next."
+        )
+        try:
+            result = await _run_ai_call(request, "triage", system, user, max_tokens=500, cfg=cfg)
+        except Exception as exc:
+            raise HTTPException(status_code=502, detail=str(exc))
+        return {
+            "explanation": result.text,
+            "run_id": run_dict.get("run_id"),
+            "pipeline": run_dict.get("pipeline"),
+            "status": run_dict.get("status"),
+        }
 
     raise HTTPException(status_code=400, detail=f"Unknown mode: {mode!r}")

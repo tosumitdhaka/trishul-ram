@@ -5,10 +5,11 @@
 import { api } from '../api.js'
 import { router } from '../router.js'
 import { createPageController } from '../page.js'
-import { fmtDur, fmtNum, relTime, statusBadge, esc, toast } from '../utils.js'
+import { fmtDur, fmtNum, relTime, statusBadge, esc, setStatusMessage, toast } from '../utils.js'
 import { runDetailHtml } from './runs_table.js'
 
 let _runId = null
+let _aiEnabled = false
 
 const controller = createPageController({
   page: 'runs_detail',
@@ -97,10 +98,72 @@ function renderRun(run) {
       </div>
     </div>
     <div class="detail-card">
-      <div class="detail-label">Issues</div>
+      <div class="d-flex align-items-center gap-2">
+        <div class="detail-label mb-0">Issues</div>
+        <button class="btn btn-sm btn-outline-secondary ms-auto" type="button" id="run-detail-ai-explain-btn" disabled>
+          <i class="bi bi-stars me-1"></i>Explain this run
+        </button>
+      </div>
+      <div class="d-none mt-2 p-2 rounded editor-ai-warning" id="run-detail-ai-unconfigured">
+        <i class="bi bi-exclamation-triangle me-1"></i>AI not configured — <a href="#" class="editor-ai-warning-link" id="run-detail-ai-settings-link">open Settings</a> to add your API key.
+      </div>
+      <div class="mt-2" id="run-detail-ai-result"></div>
       <div class="run-issues-page-body">${runDetailHtml(run)}</div>
     </div>
   `
+
+  document.getElementById('run-detail-ai-explain-btn')?.addEventListener('click', () => { void _explainRun() })
+  document.getElementById('run-detail-ai-settings-link')?.addEventListener('click', (event) => {
+    event.preventDefault()
+    router.navigate('settings')
+  })
+  void _checkAI()
+}
+
+// ── AI: Explain this run ─────────────────────────────────────────────────────
+// One-shot triage call (mode="triage") — the server builds the whole prompt
+// from the run's history row + redacted pipeline YAML; the page only supplies
+// the run_id. No polling: the button re-enables after the call settles.
+
+async function _checkAI() {
+  try {
+    const status = await api.ai.status()
+    const btn = document.getElementById('run-detail-ai-explain-btn')
+    const uncfgEl = document.getElementById('run-detail-ai-unconfigured')
+    if (status.enabled) {
+      if (btn) btn.disabled = false
+      if (uncfgEl) uncfgEl.classList.add('d-none')
+    } else {
+      if (btn) btn.disabled = true
+      if (uncfgEl) uncfgEl.classList.remove('d-none')
+    }
+    _aiEnabled = Boolean(status.enabled)
+  } catch (_) { /* keep the button disabled (safe default) */ }
+}
+
+async function _explainRun() {
+  const panel = document.getElementById('run-detail-ai-result')
+  if (!panel) return
+  const btn = document.getElementById('run-detail-ai-explain-btn')
+  if (btn) btn.disabled = true
+  setStatusMessage(panel, 'Explaining…', 'info')
+  try {
+    const result = await api.ai.suggest({ mode: 'triage', run_id: _runId })
+    if (!result.explanation) throw new Error('No explanation returned')
+    panel.innerHTML = `
+      <div class="run-issue-block">
+        <div class="run-issue-heading">
+          <i class="bi bi-stars"></i>
+          <span>AI explanation</span>
+        </div>
+        <div class="run-issue-text" style="white-space:pre-wrap">${esc(result.explanation)}</div>
+      </div>`
+  } catch (e) {
+    setStatusMessage(panel, `Could not explain run: ${e.message}`, 'error')
+    toast(`AI error: ${e.message}`, 'error')
+  } finally {
+    if (btn) btn.disabled = !_aiEnabled
+  }
 }
 
 function renderNotFound() {

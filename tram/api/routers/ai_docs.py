@@ -8,6 +8,71 @@ from tram.api.config_schema import SCHEMA_LINES, schema_version
 
 router = APIRouter()
 
+# ── A6: template-grounded generation ─────────────────────────────────────────
+# Few-shot grounding from the bundled template library: the model knows field
+# *names* but not idiomatic *usage*, and a matching worked template shows real
+# condition strings, oid lists, filename templates, etc. Selection and size
+# are bounded so the prompt stays within the existing prompt-size discipline.
+
+_TEMPLATE_EXAMPLE_COUNT = 3     # max worked examples embedded in the prompt
+_TEMPLATE_EXAMPLE_CHARS = 1200  # per-template YAML cap (truncate beyond this)
+_TEMPLATE_EXAMPLE_TOTAL = 3000  # total grounding-section cap
+
+
+def build_template_examples(
+    templates: list[dict],
+    prompt: str,
+    *,
+    max_templates: int = _TEMPLATE_EXAMPLE_COUNT,
+    max_template_chars: int = _TEMPLATE_EXAMPLE_CHARS,
+    max_total_chars: int = _TEMPLATE_EXAMPLE_TOTAL,
+) -> str:
+    """Select bundled templates matching *prompt* and format them as worked
+    examples for a generate-mode system prompt (A6).
+
+    A template matches when its ``source_type`` or a ``sink_types`` entry
+    appears in the prompt; the best matches (most tag hits, then name) are
+    kept, capped at *max_templates*. Each template's YAML is capped at
+    *max_template_chars* chars and the whole section at *max_total_chars*.
+
+    Returns an empty string when nothing matches (or no templates exist) —
+    generation then proceeds ungrounded.
+    """
+    prompt_lower = prompt.lower()
+
+    def score(tpl: dict) -> int:
+        return sum(
+            1
+            for tag in [tpl.get("source_type", "")] + list(tpl.get("sink_types") or [])
+            if isinstance(tag, str) and tag and tag.lower() in prompt_lower
+        )
+
+    scored = [(score(tpl), tpl) for tpl in templates if score(tpl) > 0]
+    scored.sort(key=lambda pair: (-pair[0], pair[1].get("name") or ""))
+    scored = scored[:max_templates]
+
+    blocks: list[str] = []
+    total = 0
+    for _, tpl in scored:
+        name = tpl.get("name") or tpl.get("id") or "template"
+        content = (tpl.get("yaml") or "").rstrip()
+        if len(content) > max_template_chars:
+            content = content[:max_template_chars].rstrip() + "\n# … (truncated)"
+        block = f"### Template: {name}\n{content}"
+        if blocks and total + len(block) > max_total_chars:
+            break
+        blocks.append(block)
+        total += len(block)
+    if not blocks:
+        return ""
+    return (
+        "WORKED TEMPLATE EXAMPLES — use these as idiomatic reference for this "
+        "kind of pipeline. Adapt the structure and values; do not copy "
+        "verbatim:\n\n"
+        + "\n\n".join(blocks)
+    )
+
+
 # ── Context builder ───────────────────────────────────────────────────────────
 
 def _detect_types(prompt: str, available: list[str]) -> list[str]:

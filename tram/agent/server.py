@@ -14,8 +14,10 @@ from __future__ import annotations
 import hashlib
 import logging
 import os
+import random
 import socket
 import threading
+import time
 from contextlib import asynccontextmanager
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
@@ -32,17 +34,29 @@ if TYPE_CHECKING:
 
 logger = logging.getLogger(__name__)
 
+# Review D2 (GH #55): the run-complete callback must not be a single
+# fire-and-forget POST — a transient manager outage would otherwise lose the
+# completion record and the reconciler would later synthesize a phantom
+# FAILED run for a run that succeeded. Bounded retry with short backoff (the
+# callback runs on the run thread that is already exiting); exhausted retries
+# still swallow the error and let the reconciler adoption path take over.
+_RUN_COMPLETE_RETRIES = 3
+_RUN_COMPLETE_BACKOFF_BASE_S = 0.5
+
 # Consecutive stats-POST failures per worker_id, surfaced in the WARNING log
 # so an operator can tell a one-off blip from a persistent manager outage.
 _STATS_MISS_LOCK = threading.Lock()
 _CONSECUTIVE_STATS_MISSES: dict[str, int] = {}
 
-# GH #39 (code-review A1): the worker agent is a stateless executor with no
-# per-worker DB, so a ProcessedFileTracker cannot be constructed here — file
-# sources with ``skip_processed: true`` would silently reprocess every file on
-# every run. Fail loud instead: log at executor construction and record the
-# degradation on the run so the manager's run_history row carries it via the
-# run-complete payload errors, rather than silently disabling the feature.
+# GH #39/#54: the worker agent is a stateless executor with no per-worker DB,
+# so a ProcessedFileTracker cannot be constructed here from a local DB. With a
+# manager URL the executor gets an HTTP-backed tracker (GH #54) routing
+# check/mark to the manager's internal API; without one — or when the manager
+# is unreachable at call time (the client fails loud itself) — the fail-loud
+# fallback applies: log at executor construction / first tracker failure and
+# record the degradation on the run so the manager's run_history row carries
+# it via the run-complete payload errors, rather than silently disabling the
+# feature.
 _SKIP_PROCESSED_DISABLED_NOTE = (
     "skip_processed: true requested but worker mode has no processed-file "
     "tracker (stateless worker, no per-worker DB) — already-seen files will "
@@ -153,7 +167,14 @@ def _post_run_complete(
     finished_at: str | None = None,
     api_key: str = "",
 ) -> None:
-    """POST run-complete to the manager. Errors are logged and swallowed."""
+    """POST run-complete to the manager with bounded retry (review D2).
+
+    A transient manager outage must not lose the completion record: up to
+    ``_RUN_COMPLETE_RETRIES`` attempts with exponential backoff. Exhausted
+    retries still log and swallow — never raise — so the reconciler's
+    lost/adopted-run path remains the degraded fallback. The manager's
+    duplicate-callback guard (existing-run check) makes retries idempotent.
+    """
     if not callback_url:
         return
     payload = {
@@ -172,19 +193,58 @@ def _post_run_complete(
         "finished_at": finished_at,
     }
     headers = {"X-API-Key": api_key} if api_key else None
-    try:
-        with httpx.Client(timeout=10) as client:
-            resp = client.post(callback_url, json=payload, headers=headers)
-            resp.raise_for_status()
-        logger.debug(
-            "run-complete callback sent",
-            extra={"run_id": run_id, "status": status},
-        )
-    except Exception as exc:
-        logger.warning(
-            "run-complete callback failed",
-            extra={"callback_url": callback_url, "run_id": run_id, "error": str(exc)},
-        )
+    last_exc: Exception | None = None
+    for attempt in range(_RUN_COMPLETE_RETRIES):
+        try:
+            with httpx.Client(timeout=10) as client:
+                resp = client.post(callback_url, json=payload, headers=headers)
+                status_code = resp.status_code
+                if isinstance(status_code, int) and 400 <= status_code < 500:
+                    # Review N4: a 4xx is a permanent rejection (malformed
+                    # payload, auth, unknown route) — retrying cannot succeed,
+                    # so stop at the first attempt instead of burning the
+                    # bounded retries on a pointless loop.
+                    logger.warning(
+                        "run-complete callback rejected — not retrying (4xx)",
+                        extra={
+                            "callback_url": callback_url,
+                            "run_id": run_id,
+                            "status_code": status_code,
+                        },
+                    )
+                    return
+                resp.raise_for_status()
+            logger.debug(
+                "run-complete callback sent",
+                extra={"run_id": run_id, "status": status},
+            )
+            return
+        except Exception as exc:
+            last_exc = exc
+            if attempt < _RUN_COMPLETE_RETRIES - 1:
+                delay = _RUN_COMPLETE_BACKOFF_BASE_S * (2 ** attempt) + random.uniform(0, 0.25)
+                logger.warning(
+                    "run-complete callback failed, retrying",
+                    extra={
+                        "callback_url": callback_url,
+                        "run_id": run_id,
+                        "attempt": attempt + 1,
+                        "retries": _RUN_COMPLETE_RETRIES - 1,
+                        "delay": delay,
+                        "error": str(exc),
+                    },
+                )
+                time.sleep(delay)
+    logger.warning(
+        "run-complete callback failed after all retries — reconciler adoption "
+        "path will take over",
+        extra={
+            "callback_url": callback_url,
+            "run_id": run_id,
+            "attempts": _RUN_COMPLETE_RETRIES,
+            "error": str(last_exc),
+        },
+    )
 
 
 def _post_stats(stats_url: str, payload: dict, api_key: str = "") -> None:
@@ -217,6 +277,24 @@ def _post_stats(stats_url: str, payload: dict, api_key: str = "") -> None:
     worker_id = str(payload.get("worker_id", "") or "")
     with _STATS_MISS_LOCK:
         _CONSECUTIVE_STATS_MISSES.pop(worker_id, None)
+
+
+def _flush_file_tracker(file_tracker) -> None:
+    """Best-effort flush of buffered processed-file marks at run end (C2).
+
+    The worker-mode ``HttpFileTracker`` buffers per-file marks and emits them
+    in one batched request; this runs after ``executor.batch_run`` /
+    ``executor.stream_run`` return so the manager's ``processed_files`` table
+    is current when the next run's checks arrive. Never raises — a flush
+    failure degrades the tracker (already-recorded note) but must not break
+    the run-complete callback.
+    """
+    if file_tracker is None:
+        return
+    try:
+        file_tracker.close()
+    except Exception:
+        logger.exception("Processed-file tracker flush failed")
 
 
 def _derive_stats_url(callback_url: str, manager_url: str) -> str:
@@ -438,13 +516,30 @@ def create_worker_app(worker_id: str = "", manager_url: str = "", stats_interval
             if state.manager_url
             else None
         )
-        executor = PipelineExecutor(state_store=state_store)
+        # GH #54: worker-mode skip_processed rides the manager's processed-file
+        # tracker through the internal API (the F.1 state-store availability
+        # envelope — a worker run cannot exist without a manager dispatch). No
+        # manager URL → no client, and the construction guard below fires.
+        from tram.agent.file_tracker_client import HttpFileTracker
 
-        # GH #39 (A1): the worker is stateless — no per-worker DB exists, so
-        # the executor is built without a processed-file tracker. A pipeline
-        # whose source requests skip_processed would silently reprocess every
-        # file on every run; fail loud instead and record the degradation on
-        # the run so the manager's run_history row carries it.
+        file_tracker = (
+            HttpFileTracker(
+                state.manager_url,
+                state.api_key,
+                on_degradation=active_run.degradation_notes.append,
+            )
+            if state.manager_url
+            else None
+        )
+        executor = PipelineExecutor(state_store=state_store, file_tracker=file_tracker)
+
+        # GH #39 (A1)/#54: the worker is stateless — no per-worker DB exists,
+        # so without a manager URL the executor is built without a
+        # processed-file tracker and a pipeline whose source requests
+        # skip_processed would silently reprocess every file on every run. Fail
+        # loud instead and record the degradation on the run (when a tracker
+        # client errors at call time, HttpFileTracker fails loud itself) so the
+        # manager's run_history row carries it.
         if (
             _source_requests_skip_processed(config)
             and getattr(executor, "_file_tracker", None) is None
@@ -472,6 +567,9 @@ def create_worker_app(worker_id: str = "", manager_url: str = "", stats_interval
                         config, active_run.stop_event, stats=active_run.stats,
                         config_sha256=config_sha256,
                     )
+                    # C2: emit buffered processed-file marks (batched) before
+                    # the run-complete callback so the next run sees them.
+                    _flush_file_tracker(file_tracker)
                     stats_snapshot = _final_stats_snapshot(active_run)
                     _post_run_complete(
                         callback_url, req.run_id, req.pipeline_name, state.worker_id,
@@ -497,6 +595,9 @@ def create_worker_app(worker_id: str = "", manager_url: str = "", stats_interval
                             "error": str(exc),
                         },
                     )
+                    # C2: files finalized before the failure still get their
+                    # buffered marks flushed.
+                    _flush_file_tracker(file_tracker)
                     _post_run_complete(
                         callback_url, req.run_id, req.pipeline_name, state.worker_id,
                         "error", 0, 0, 0, 0, str(exc),
@@ -522,6 +623,9 @@ def create_worker_app(worker_id: str = "", manager_url: str = "", stats_interval
                         config_sha256=config_sha256,
                         flush=req.flush,
                     )
+                    # C2: emit buffered processed-file marks (batched) before
+                    # the run-complete callback so the next run sees them.
+                    _flush_file_tracker(file_tracker)
                     if active_run.stats is not None:
                         payload = {
                             "worker_id": state.worker_id,
@@ -562,6 +666,9 @@ def create_worker_app(worker_id: str = "", manager_url: str = "", stats_interval
                             "error": str(exc),
                         },
                     )
+                    # C2: files finalized before the failure still get their
+                    # buffered marks flushed.
+                    _flush_file_tracker(file_tracker)
                     _post_run_complete(
                         callback_url, req.run_id, req.pipeline_name, state.worker_id,
                         "error", 0, 0, 0, 0, str(exc),

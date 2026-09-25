@@ -96,7 +96,18 @@ class SFTPSource(BaseSource):
             )
 
             source_key = f"sftp:{self.host}:{self.remote_path}"
-            for filename in self._stable_candidates(matching, sftp):
+            stable = list(self._stable_candidates(matching, sftp))
+            # C2 (v1.4.7): batch the run's whole candidate list into one
+            # check request when the tracker supports it (worker-mode
+            # HttpFileTracker); the per-file is_processed calls below then
+            # hit the local cache.
+            prefetch = getattr(self._file_tracker, "prefetch_many", None)
+            if self.skip_processed and prefetch is not None:
+                prefetch(
+                    self._pipeline_name, source_key,
+                    [f"{self.remote_path}/{fn}" for fn in stable],
+                )
+            for filename in stable:
                 remote_file = f"{self.remote_path}/{filename}"
                 meta_filename = self._strip_done_suffix(filename)
 
