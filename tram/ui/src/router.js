@@ -17,7 +17,7 @@
 
 import { isAuthPending } from './auth_state.js'
 import { unmountPage } from './page.js'
-import { toast } from './utils.js'
+import { closeAllModals, toast } from './utils.js'
 import dashboardHtml from './pages/dashboard.html?raw'
 import pipelinesHtml from './pages/pipelines.html?raw'
 import createHtml     from './pages/create.html?raw'
@@ -141,6 +141,13 @@ export const router = {
     // Let the outgoing page flush in-memory state (the editor saves its
     // recovery draft here when the operator leaves via a sidebar link).
     window.dispatchEvent(new CustomEvent('tram:page-leave', { detail: { from: this.current, page } }))
+
+    // Close any open modal before the swap: a shown Bootstrap modal keeps
+    // its backdrop, body scroll-lock, and focus trap outside #content, so
+    // the swap alone would strand an undismissable overlay on the next
+    // page (Back-navigation with a modal open, deep links, same-page route
+    // changes like #detail/a → #detail/b).
+    closeAllModals()
 
     // Render HTML
     document.getElementById('content').innerHTML = pages[page]

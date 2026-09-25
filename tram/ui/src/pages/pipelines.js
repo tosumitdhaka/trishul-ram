@@ -1,7 +1,7 @@
 import { api } from '../api.js'
 import { router } from '../router.js'
 import { createPageController } from '../page.js'
-import { bindDataActions, confirmAction, downloadText, getSavedPollIntervalMs, relTime, schedBadge, statusBadge, esc, toast, pipelineStartFeedback } from '../utils.js'
+import { bindDataActions, closeAllModals, confirmAction, downloadText, getSavedPollIntervalMs, relTime, schedBadge, statusBadge, esc, toast, pipelineStartFeedback } from '../utils.js'
 import { monitorTriggeredRun, runOutcomeToast } from '../run_monitor.js'
 import { filterTemplates, normalizeTemplates, populateTemplateFilters, templateFlowText, templateScheduleClass } from './template_helpers.js'
 import { renderDiffStats, renderNumberedDiffLine, renderSideBySideYamlDiff } from '../yaml_diff.js'
@@ -404,10 +404,10 @@ function showTemplateListView() {
 }
 
 function doTemplateDeploy(template) {
-  document.querySelectorAll('.modal-backdrop').forEach(el => el.remove())
-  document.body.classList.remove('modal-open')
-  document.body.style.removeProperty('overflow')
-  document.body.style.removeProperty('padding-right')
+  // Release the modal before navigating. The router does this on every
+  // render swap too, but the hashchange fires a tick later — clearing
+  // here keeps the page transition instant.
+  closeAllModals()
   router.navigate(`editor?template=${encodeURIComponent(template.name)}&return=pipelines`)
 }
 
@@ -418,8 +418,11 @@ function _maybeOpenTemplatesFromRoute() {
   if (router.route().params[0] !== 'templates') return
   bootstrap.Modal.getOrCreateInstance(modalEl).show()
   modalEl.addEventListener('hidden.bs.modal', () => {
-    // Clean the URL so a later refresh/Back doesn't reopen the modal.
-    router.replaceRoute('pipelines')
+    // Clean the URL so a later refresh/Back doesn't reopen the modal. Only
+    // rewrite it while we're still on the pipelines page — the router's
+    // navigation-time modal cleanup can also close this modal for a route
+    // change, and this listener must not clobber the new route.
+    if (router.route().page === 'pipelines') router.replaceRoute('pipelines')
   }, { once: true })
 }
 
