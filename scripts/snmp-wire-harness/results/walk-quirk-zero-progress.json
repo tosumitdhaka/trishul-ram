@@ -1,0 +1,5 @@
+{
+  "check": "walk-quirk-zero-progress",
+  "ok": true,
+  "evidence": "zero-progress agent (always returns (1, 3, 6, 1, 4, 1, 90000, 1, 1)): walk=[(1, 3, 6, 1, 4, 1, 90000, 1, 1)] \u2014 terminated, no infinite loop"
+}

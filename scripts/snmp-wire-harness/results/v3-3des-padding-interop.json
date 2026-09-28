@@ -1,0 +1,5 @@
+{
+  "check": "v3-3des-padding-interop",
+  "ok": false,
+  "evidence": "3DES-EDE padding interop DEFECT (new finding for upstream): draft-reeder-3desede-00 5.1.1.2/5.1.1.3 say pad value is irrelevant and 'padding is ignored' on decrypt, but tsmp's _decrypt_3des_ede enforces PKCS7 \u2014 pysnmp zero-pad ciphertext -> ProtocolError: Unexpected trailing BER content; RFC 3414-convention pad (zeros + last=length) -> ProtocolError: Unexpected trailing BER content; both rejected. Keys themselves match pysnmp byte-for-byte (verified for SHA-224/256/384/512). tsmp's own PKCS7 ciphertext decrypts fine on pysnmp: OK (ignores PKCS7 tail). Net effect: live 3DES roundtrips vs pysnmp time out / drop (UNDROP: requests RequestTimeoutError, traps UNDECODABLE_BER)"
+}

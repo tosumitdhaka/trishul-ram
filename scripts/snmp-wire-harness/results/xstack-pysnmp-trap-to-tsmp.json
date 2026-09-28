@@ -1,0 +1,5 @@
+{
+  "check": "xstack-pysnmp-trap-to-tsmp",
+  "ok": true,
+  "evidence": "pysnmp 7.1.29 v2c trap (warmStart) -> tsmp V2cNotificationListener :11224: 2 varbinds decoded (was PASS at 0.4.x)"
+}

@@ -1,0 +1,5 @@
+{
+  "check": "v1-get-getnext-instackbar",
+  "ok": true,
+  "evidence": "V1Manager GET sysDescr.0='tsmp v1-capable responder' + GETNEXT -> (1, 3, 6, 1, 2, 1, 1, 5, 0) (tsmp community responder :11165)"
+}

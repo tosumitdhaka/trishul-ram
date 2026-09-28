@@ -1,0 +1,5 @@
+{
+  "check": "v2c-get-walk",
+  "ok": true,
+  "evidence": "v2c GET sysDescr.0='tsmp responder via interop' + walk(1.3.6.1.2.1.2): bulk=2, getnext-loop=2 varbinds, last=(1, 3, 6, 1, 2, 1, 2, 2, 1, 1, 2) (responder :11220)"
+}

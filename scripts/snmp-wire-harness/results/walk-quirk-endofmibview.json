@@ -1,0 +1,5 @@
+{
+  "check": "walk-quirk-endofmibview",
+  "ok": true,
+  "evidence": "endOfMibView-first agent: walk=[] \u2014 terminated cleanly"
+}

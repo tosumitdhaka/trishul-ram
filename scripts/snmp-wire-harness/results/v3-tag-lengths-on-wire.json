@@ -1,0 +1,5 @@
+{
+  "check": "v3-tag-lengths-on-wire",
+  "ok": true,
+  "evidence": "outgoing authParams lengths: {'MD5': 12, 'SHA1': 12, 'SHA224': 16, 'SHA256': 24, 'SHA384': 32, 'SHA512': 48} \u2014 matches RFC 3414 (MD5/SHA-1=12) + RFC 7860 (SHA-224=16, SHA-256=24, SHA-384=32, SHA-512=48); the v0.5.1 defect was all-12"
+}

@@ -1,0 +1,5 @@
+{
+  "check": "v3-instack-trap-regressions",
+  "ok": true,
+  "evidence": "in-stack tsmp->tsmp authPriv traps: SHA256/AES128 OK; SHA224/AES192 OK; SHA512/3DES OK"
+}

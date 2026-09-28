@@ -1,0 +1,5 @@
+{
+  "check": "walk-boundary-v1",
+  "ok": true,
+  "evidence": "V1Manager walk(sys)=[(1, 3, 6, 1, 2, 1, 1, 1, 0), (1, 3, 6, 1, 2, 1, 1, 5, 0), (1, 3, 6, 1, 2, 1, 1, 6, 0)] (GETNEXT loop, GETBULK downgraded), walk(ifTable)=3 rows \u2014 boundary honored"
+}

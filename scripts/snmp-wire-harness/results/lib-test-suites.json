@@ -1,0 +1,5 @@
+{
+  "check": "lib-test-suites",
+  "ok": true,
+  "evidence": "tsmp 0.6.1: rc=0 744 passed in 11.19s | tsmi 0.5.2: rc=0 660 passed in 19.74s"
+}
