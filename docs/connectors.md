@@ -368,7 +368,7 @@ and `workers.list` use manual Endpoints pinned to the dispatched workers.
 | `security_name` | `""` | SNMPv3 USM username |
 | `auth_protocol` | `SHA` | `MD5` \| `SHA` \| `SHA224` \| `SHA256` \| `SHA384` \| `SHA512` |
 | `auth_key` | — | SNMPv3 auth passphrase (omit for noAuthNoPriv) |
-| `priv_protocol` | `AES128` | `DES` \| `3DES` \| `AES` \| `AES128` \| `AES192` \| `AES256` |
+| `priv_protocol` | `AES128` | `AES` \| `AES128` \| `AES192` \| `AES256` (v1.5.0: `DES` and `3DES` are **removed** — rejected at config validation with a migration error; use `AES128`) |
 | `priv_key` | — | SNMPv3 privacy passphrase (omit for authNoPriv) |
 | `context_name` | `""` | SNMPv3 context name |
 

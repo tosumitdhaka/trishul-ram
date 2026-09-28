@@ -5,6 +5,15 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ---
 
+## [Unreleased]
+
+### Added
+- `TRAM_SNMP_STACK` env knob (`legacy` | `trishul`, default `legacy`, fail-loud on invalid values) selecting the SNMP library stack — the v1.5.0 swap flag; the manager and every worker must run the same stack (GH #72)
+
+### Changed
+- **Breaking (config contract):** `priv_protocol: DES` and `priv_protocol: 3DES` are now rejected at pipeline validation on all three SNMPv3 config classes — DES is obsoleted (RFC 8996 lineage) and dropped by the upstream trishul-snmp stack; 3DES was never standardized (expired draft). Use `AES128` (GH #72)
+- `tram[snmp]` is dual-stack during the flag period: pysnmp stays, with exact wire-validated pins `trishul-smi==0.5.2` + `trishul-snmp[v3]==0.6.1` added (GH #72)
+
 ## [1.4.8] - 2026-09-25
 
 ### Fixed

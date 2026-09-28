@@ -57,7 +57,15 @@ amqp = ["pika>=1.0,<2.0"]
 nats = ["nats-py>=2.3,<3.0"]
 
 # ── Telemetry / network-management connectors ──────────────────────────────
-snmp = ["pysnmp>=7,<8", "pyasn1>=0.4.8,<0.7"]
+# Dual-stack during the v1.5.0 flag period (GH #72): pysnmp stays (default
+# TRAM_SNMP_STACK=legacy) while trishul-smi/trishul-snmp are pinned alongside
+# (the wire-validated versions; TRAM_SNMP_STACK=trishul selects them in v1.5.0).
+snmp = [
+    "pysnmp>=7,<8",
+    "pyasn1>=0.4.8,<0.7",
+    "trishul-smi==0.5.2",
+    "trishul-snmp[v3]==0.6.1",
+]
 gnmi = ["pygnmi>=0.8,<1.0"]
 
 # ── Database connectors ────────────────────────────────────────────────────
@@ -200,7 +208,9 @@ log_cli_level = "DEBUG"
 [tool.ruff]
 line-length = 100
 target-version = "py313"
-extend-exclude = ["files"]
+# "scripts/snmp-wire-harness": wire-validation evidence, kept byte-identical to the
+# 2026-09-28 GO run (scripts/snmp-wire-harness/README.md) — never lint-modified
+extend-exclude = ["files", "scripts/snmp-wire-harness"]
 
 [tool.ruff.lint]
 select = ["E", "F", "I", "UP"]

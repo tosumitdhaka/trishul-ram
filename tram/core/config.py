@@ -23,6 +23,24 @@ def _env_int(name: str, default: int) -> int:
         ) from None
 
 
+def _env_snmp_stack() -> str:
+    """``TRAM_SNMP_STACK`` (v1.5.0, GH #72) — ``legacy`` (pysnmp) | ``trishul`` (tsmi/tsmp).
+
+    Default ``legacy``. Invalid values fail loud (a ``ValueError`` naming the
+    variable) instead of silently picking a stack — the strictest pattern in
+    this module (``_env_int``), since silently flipping a deployment's SNMP
+    stack would be worse than a startup error. Manager and every worker must
+    agree on the value; mismatch handling ships with the flag reader in
+    v1.5.0 layer 3.
+    """
+    raw = os.environ.get("TRAM_SNMP_STACK", "legacy").lower()
+    if raw not in ("legacy", "trishul"):
+        raise ValueError(
+            f"Environment variable TRAM_SNMP_STACK={raw!r} must be 'legacy' or 'trishul'"
+        )
+    return raw
+
+
 def stateful_transforms_enabled() -> bool:
     """``TRAM_STATEFUL_TRANSFORMS`` feature flag (F.1 §9) — default ON, fails open.
 
@@ -150,6 +168,9 @@ class AppConfig:
     # GH #44: serve /docs, /redoc, /openapi.json (default on for dev; the
     # production recommendation is to disable via TRAM_DOCS_ENABLED=false)
     docs_enabled: bool = True
+    # v1.5.0 (GH #72): SNMP library stack — "legacy" (pysnmp) | "trishul" (tsmi/tsmp).
+    # Definition only in v1.5.0 layer 2; the reader/consumer lands in layer 3.
+    snmp_stack: str = "legacy"
 
     @classmethod
     def from_env(cls) -> AppConfig:
@@ -212,6 +233,7 @@ class AppConfig:
             stateful_transforms=stateful_transforms_enabled(),
             state_max_bytes=state_max_bytes(),
             docs_enabled=os.environ.get("TRAM_DOCS_ENABLED", "true").lower() == "true",
+            snmp_stack=_env_snmp_stack(),
             worker_urls=os.environ.get("TRAM_WORKER_URLS", ""),
             worker_replicas=_env_int("TRAM_WORKER_REPLICAS", 0),
             worker_service=os.environ.get("TRAM_WORKER_SERVICE", "tram-worker"),

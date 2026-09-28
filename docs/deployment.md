@@ -52,6 +52,7 @@ All configuration is via environment variables (12-factor).
 | `TRAM_MIB_DIR` | `/mibs` | Directory containing compiled pysnmp MIB `.py` files; standard MIBs baked into Docker image at build time (v1.0.3) |
 | `TRAM_MIB_SOURCE_DIR` | sibling `mib-sources` beside `TRAM_MIB_DIR` | Directory containing persisted raw ASN.1 MIB source files uploaded/downloaded at runtime; used for local dependency resolution during later compiles |
 | `TRAM_MIB_BUNDLED_SOURCE_DIR` | `/mib-sources` | Read-only bundled ASN.1 MIB source directories consulted during compile/dependency resolution; separate multiple paths with the OS path separator |
+| `TRAM_SNMP_STACK` | `legacy` | SNMP library stack (v1.5.0, GH #72): `legacy` (pysnmp — the pre-v1.5.0 behavior, default) \| `trishul` (trishul-smi / trishul-snmp). During the flag period **both stacks must be installed** (`tram[snmp]` ships both). Manager and every worker must set the same value; an invalid value is a startup error (no silent fallback) |
 | `TRAM_SNMP_METRIC_PATTERNS` | _(empty)_ | Comma-separated, case-sensitive globs (v1.4.5, GH #35) that force `snmp_poll` INTEGER fields to classify as metrics when `classify: true` — the exception layer, winning over label patterns and MIB enums. Pipeline-level `metric_patterns` and the env var EXTEND — never replace — the code defaults (there are none for metrics). Unlisted INTEGER fields default to metrics |
 | `TRAM_SNMP_LABEL_PATTERNS` | _(empty)_ | Comma-separated, case-sensitive globs (v1.4.5, GH #35) that force `snmp_poll` INTEGER fields to classify as labels when `classify: true`. Pipeline-level `label_patterns` and this env var EXTEND — never replace — the code defaults (`*Id`, `*ID`, `*Index`, `*Port`). `*Vdom` was removed from the defaults (deployment-specific Fortigate vocabulary) — Fortigate pipelines relying on the old default must add it explicitly here or via `label_patterns` |
 | `TRAM_SCHEMA_DIR` | `/schemas` | Directory containing serialization schema files (`.proto`, `.avsc`, `.asn`, etc.); managed via `POST /api/schemas/upload` (v1.0.3) |
@@ -82,6 +83,16 @@ All configuration is via environment variables (12-factor).
 | `TRAM_STATEFUL_TRANSFORMS` | `1` | Stateful transforms (v1.4.0, F.1 — `counter_delta` and `window_aggregate`). `1` (default) enables the `counter_delta` and `window_aggregate` transforms, their durable per-pipeline state blob (the `transform_state` table in standalone mode, the internal `/api/internal/transform-state/{pipeline}` endpoints in worker mode), and the `state_persist_interval_s` stream persistence knob. `0` disables stateful transforms: pipelines using them fail validation with "stateful transforms disabled", the internal endpoints 404, and the manager-side dispatch guard is inert. An unrecognized value is logged at WARNING and fails open (feature ON). Rollback is `0` (immediate — no worker restart needed; the endpoints and guard vanish and offending pipelines go to `error` with a truthful message); `DROP TABLE transform_state` is optional cleanup. The SNMP source's `_snmp_widths` record field is additive and ignored by older stacks |
 | `TRAM_STATE_MAX_BYTES` | `20971520` | Maximum accepted transform-state blob size in bytes for the internal `PUT /api/internal/transform-state/{pipeline}` (F.1 §3.2b); oversized blobs are rejected with 413. Default 20 MiB ≈ 8× the design's ~2.5 MB / 50k-key `counter_delta` bound, leaving headroom for `window_aggregate` group/window state without letting a runaway blob inflate the `transform_state` DB row unbounded |
 | `TRAM_DLQ_SPOOL_DIR` | `~/.tram/dlq-spool` (worker mode: `<TRAM_DATA_DIR>/dlq-spool`, i.e. `/data/dlq-spool` in the Helm chart) | Local directory where DLQ envelopes are spooled when the DLQ sink write itself fails (v1.4.7, GH #55). Spooled JSON envelopes can be re-fed to the DLQ manually; a failure to even spool is counted in metrics and logged as ERROR — DLQ records are never silently dropped. In worker mode the default resolves under `TRAM_DATA_DIR` so envelopes land on the mounted data volume (`/data` in the chart) instead of the container overlay; the Helm chart value `worker.dlqSpoolDir` sets it explicitly |
+
+### SNMP library stack (v1.5.0, GH #72)
+
+`TRAM_SNMP_STACK` defaults to `legacy` (pysnmp), so existing deployments are
+unaffected until they opt in. During the flag period **both** stacks must be
+installed on every plane (`tram[snmp]` pins pysnmp/pyasn1 **and**
+`trishul-smi==0.5.2` / `trishul-snmp[v3]==0.6.1`), because the flag is read at
+startup and rollback is a redeploy with the flag off. Manager/worker mismatch
+handling (a mismatched rolling upgrade must fail loudly, not serve one stack's
+MIB artifacts to the other) ships with the flag reader in v1.5.0 layer 3.
 
 ### Database backends (v0.7.0)
 

@@ -104,3 +104,101 @@ class TestScalarKnobs:
         assert cfg.thread_workers == 1
         assert cfg.retry_count == 3
         assert cfg.retry_delay_seconds == 10
+
+
+class TestSnmpPrivProtocolRemoval:
+    """v1.5.0 (GH #72) — DES and 3DES rejected on all three SNMPv3 config classes.
+
+    DES is obsoleted (RFC 8996 lineage) and upstream-dropped; 3DES was never
+    standardized. The loader wraps Pydantic's ValidationError in ConfigError,
+    and the migration message must name AES128 as the replacement.
+    """
+
+    _USM = """
+    security_name: usr
+    auth_key: authpass
+    priv_key: privpass
+"""
+
+    def _poll_yaml(self, priv: str) -> str:
+        return f"""
+pipeline:
+  name: snmp-poll-pipe
+  source:
+    type: snmp_poll
+    host: 10.0.0.1
+    oids: ["1.3.6.1.2.1.1.1.0"]
+    version: "3"
+    {self._USM}    priv_protocol: {priv}
+  serializer_in:
+    type: json
+  serializer_out:
+    type: json
+  sink:
+    type: local
+    path: /tmp/out
+"""
+
+    def _trap_source_yaml(self, priv: str) -> str:
+        return f"""
+pipeline:
+  name: snmp-trap-source-pipe
+  source:
+    type: snmp_trap
+    version: "3"
+    {self._USM}    priv_protocol: {priv}
+  serializer_in:
+    type: json
+  serializer_out:
+    type: json
+  sink:
+    type: local
+    path: /tmp/out
+"""
+
+    def _trap_sink_yaml(self, priv: str) -> str:
+        return f"""
+pipeline:
+  name: snmp-trap-sink-pipe
+  source:
+    type: local
+    path: /tmp/in
+  serializer_in:
+    type: json
+  serializer_out:
+    type: json
+  sink:
+    type: snmp_trap
+    host: manager.example.com
+    version: "3"
+    {self._USM}    priv_protocol: {priv}
+"""
+
+    @pytest.mark.parametrize("algo", ["DES", "3DES", "des", "3des", "Des"])
+    def test_removed_priv_rejected_on_poll_source(self, algo):
+        with pytest.raises(ConfigError, match="removed in v1.5.0") as exc_info:
+            _load(self._poll_yaml(algo))
+        message = str(exc_info.value)
+        assert algo.upper() in message
+        assert "AES128" in message
+
+    @pytest.mark.parametrize("algo", ["DES", "3DES", "des", "3des", "Des"])
+    def test_removed_priv_rejected_on_trap_source(self, algo):
+        with pytest.raises(ConfigError, match="removed in v1.5.0") as exc_info:
+            _load(self._trap_source_yaml(algo))
+        message = str(exc_info.value)
+        assert algo.upper() in message
+        assert "AES128" in message
+
+    @pytest.mark.parametrize("algo", ["DES", "3DES", "des", "3des", "Des"])
+    def test_removed_priv_rejected_on_trap_sink(self, algo):
+        with pytest.raises(ConfigError, match="removed in v1.5.0") as exc_info:
+            _load(self._trap_sink_yaml(algo))
+        message = str(exc_info.value)
+        assert algo.upper() in message
+        assert "AES128" in message
+
+    def test_valid_priv_protocols_still_accepted(self):
+        for algo in ("AES", "AES128", "AES192", "AES256", "aes"):
+            cfg = _load(self._poll_yaml(algo))
+            assert cfg.source.priv_protocol == algo
