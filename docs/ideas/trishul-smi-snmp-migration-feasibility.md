@@ -232,3 +232,15 @@ Upstream v0.5.0/v0.5.1 closed both hard blockers (#8 SNMPv1, #10 USM crypto pari
 **One blocking defect (new, wire-proven):** tsmp truncates every USM HMAC to 12 bytes (`_AUTH_TAG_LEN = 12`, `security/usm.py:28`; its suite pins this in `test_sha2_auth_tag_is_12_bytes`) while RFC 7860 requires 16/24/32/48-byte authParameters for SHA-224/256/384/512. All 17 SHA-2 × priv combinations were rejected by pysnmp and net-snmp snmpd (`usmStatsWrongDigests`), and the tsmp listener drops standard-compliant SHA-2 traps. Root cause isolated to the tag length — a rebuilt request with a correct 24-byte SHA-256 tag is accepted and decrypts cleanly (key derivation, localization, Reeder/3DES priv, and engine discovery are all RFC-correct). Upstream missed it because its cross-agent CI runs v2c-only. DES-CBC (#11) remains fail-fast unimplemented. Filed upstream as [trishul-snmp #28](https://github.com/tosumitdhaka/trishul-snmp/issues/28).
 
 **Verdict:** NO-GO for option C as of 0.5.1 — one upstream fix away from GO at the original ~2–3 week estimate. Maintainer decision (2026-09-25): option C scheduled for v1.5.0 behind a feature flag (GH #72), gated on the upstream fix + a green harness re-run.
+
+## 13. Addendum — v0.6.1 re-validation (2026-09-28): GO
+
+Upstream closed #28 (SHA-2 HMAC tags — lengths 12/16/24/32/48, RFC 3414+7860 correct) and #29 (DES formally dropped, clean fail-fast). Full harness re-run against tsmi 0.5.2 + tsmp 0.6.1 (pysnmp 7.1.30, live wire; scripts, 37 per-check JSONs, and REPORT.md preserved under `/tmp/opencode/tsmi-smoke-v06/`):
+
+**Green:** the full v3 crypto matrix on the wire (SHA-1/224/256/384/512 × AES-128/192/256-Blumenthal + 3DES — accepted by both the pysnmp agent and net-snmp snmpd, incl. SHA-224/AES-256) · standard-compliant SHA-2 traps received + `decode_notification` decodes · SNMPv1 GET/GETNEXT/WALK + v1 traps · v2c GET/WALK/trap · walk boundaries · corpus compile (tsmi 0.5.2 enums/units/constraints IR) · cross-stack interop both directions · silent-drop counters · walk hardening #25 (dedupe, echo-reject, zero-progress, EndOfMibView) · lib suites (tsmp 744 passed, 31 snmpd tests live).
+
+**One new non-blocking defect** (filed as [trishul-snmp #31](https://github.com/tosumitdhaka/trishul-snmp/issues/31)): `_decrypt_3des_ede` enforces strict PKCS#7 while draft-reeder-3desede-00 §5.1.3 says padding is ignored on decrypt — draft-compliant peers (pysnmp zero-pads) are rejected (0/6 requests, traps dropped). Keys verified identical byte-for-byte; AES unaffected.
+
+**Scope notes for the swap:** reject `priv: DES` at TRAM config validation; test fixtures use pysnmp `*_BLUMENTHAL` users for AES-192/256 (variant nuance, not a tsmp bug); document the 3DES limitation for pysnmp-peering pipelines pending #31; walk dedupe/echo-reject is a behavior improvement for TRAM's consumers.
+
+**Verdict:** GO for option C at the original ~2–3 week estimate. The v1.5.0 hold (maintainer, 2026-09-25) is lifted; the swap proceeds per GH #72.

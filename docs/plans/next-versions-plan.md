@@ -89,7 +89,7 @@ One branch + one PR per version, progress table in the PR body (same model as PR
 | A.2/A.3 | Editor inline-validation UX + per-plugin examples (ungated; confirm scope at wave planning) | #42 |
 | SNMP swap — option C | Full pysnmp/pysmi → trishul-snmp/tsmp swap behind a feature flag (default off): poll + trap paths, v3 USM full crypto matrix, MIB compile/resolve via tsmi | #72 |
 
-**Entry criteria:** v1.4.8 tagged ✓; **ON HOLD (maintainer, 2026-09-25): an upstream tsmi/tsmp improvement round is in progress — v1.5.0 waits for it, and the SNMP swap scope will include that round's output**; upstream trishul-snmp #28 (SHA-2 HMAC tag length) + #29 (DES-CBC priv) resolved + smoke harness re-run green (addendum in `docs/ideas/trishul-smi-snmp-migration-feasibility.md`). Wave C rows additionally require the vendored AI layer landed and reviewed.
+**Entry criteria:** v1.4.8 tagged ✓; ~~ON HOLD (maintainer, 2026-09-25)~~ **hold lifted 2026-09-28 — gate MET**: upstream round complete (tsmi 0.5.2 / tsmp 0.6.1), trishul-snmp #28 (SHA-2 HMAC tags, wire-proven) + #29 (DES dropped) resolved, harness re-run green — **GO** (addenda in `docs/ideas/trishul-smi-snmp-migration-feasibility.md` §12–13). Known swap limitation: 3DES-EDE interop with draft-reeder-compliant peers pending upstream #31 (document, don't block). Wave C rows additionally require the vendored AI layer (#71) landed and reviewed.
 **Exit criteria:** flag-off path behavior-identical (full suite green on pysnmp) + flag-on live kind verification (v1/v2c/v3 roundtrips + trap paths) + vendored AI layer with the v1.4.6 security properties test-proven on the new call path + independent diff review + release gate green.
 
 ---
