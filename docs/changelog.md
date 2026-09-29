@@ -12,6 +12,7 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - Flag-on (`trishul`) MIB chain: manager-side compile via trishul-smi to JSON IR bundles in a dual-format corpus (`.py` + `.json` + manifest/oid_index sidecars), `GET /api/mibs/{name}?format=auto|py|json` serving, both-format worker sync (GH #72)
 - Flag-on (`trishul`) connector paths via trishul-snmp: poll (GET/GETNEXT/WALK), v1/v2c/v3 trap receive + `decode_notification`, trap-sink send — full v3 USM auth/priv matrix; tsmi JSON-bundle resolve in `mib_utils` (GH #72)
 - Worker stats carry `snmp_stack`; the manager logs a once-per-worker warning on stack mismatch (rolling-upgrade guard) (GH #72)
+- Cross-stack decode-equivalence tests (the same trap BER bytes through the pysnmp and tsmp decoders) and an env-gated in-process pysnmp-peer wire suite (`TRAM_TEST_SNMP_WIRE=1`, enabled by the release gate) — catches wire-level breakage the in-stack tests can mask (GH #72)
 
 ### Changed
 - **Breaking (config contract):** `priv_protocol: DES` and `priv_protocol: 3DES` are now rejected at pipeline validation on all three SNMPv3 config classes — DES is obsoleted (RFC 8996 lineage) and dropped by the upstream trishul-snmp stack; 3DES was never standardized (expired draft). Use `AES128` (GH #72)

@@ -678,17 +678,25 @@ class TestTrapSourceTsmp:
 
 
 class _CaptureListener:
-    """In-process tsmp notification listener capturing one event."""
+    """In-process tsmp notification listener capturing one event.
+
+    Signals ``ready`` once the listener socket is bound so a sender fired
+    right after ``start()`` can never drop its trap into an unbound socket
+    (UDP has no receiver for it) — the same race the source-side listener
+    guards against.
+    """
 
     def __init__(self, port: int, version: str = "2c", **usm):
         self.port = port
         self.version = version
         self.usm = usm
         self.event = None
+        self.ready = threading.Event()
         self._thread = threading.Thread(target=self._run, daemon=True)
 
     def start(self):
         self._thread.start()
+        assert self.ready.wait(5), "capture listener did not bind"
 
     def _run(self):
         loop = asyncio.new_event_loop()
@@ -713,6 +721,7 @@ class _CaptureListener:
             async with V3NotificationListener(
                 host="127.0.0.1", port=self.port, user=user, local_engine=engine
             ) as listener:
+                self.ready.set()
                 self.event = await asyncio.wait_for(listener.receive(), timeout=5)
             return
         from trishul_snmp import V2cNotificationListener
@@ -720,6 +729,7 @@ class _CaptureListener:
         async with V2cNotificationListener(
             host="127.0.0.1", port=self.port, communities=None
         ) as listener:
+            self.ready.set()
             self.event = await asyncio.wait_for(listener.receive(), timeout=5)
 
     def join(self, timeout: float = 6):

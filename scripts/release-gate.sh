@@ -105,7 +105,10 @@ fi
 if [ "$FAST" -eq 1 ]; then
   record PASS "pytest + coverage floor (skipped: --fast)"
 else
-  if pytest tests/unit/ tests/integration/ -q --tb=short --cov=tram \
+  # TRAM_TEST_SNMP_WIRE=1 enables the cross-stack (tsmp-vs-pysnmp) wire suite —
+  # catches wire-level breakage the in-stack tests can mask (the trishul-snmp
+  # #28 defect class)
+  if TRAM_TEST_SNMP_WIRE=1 pytest tests/unit/ tests/integration/ -q --tb=short --cov=tram \
       --cov-report=term-missing --cov-fail-under=75 >/tmp/tram-gate-pytest.log 2>&1; then
     record PASS "pytest + coverage floor (75%)"
   else
