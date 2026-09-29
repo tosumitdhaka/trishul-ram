@@ -3,7 +3,9 @@
 from __future__ import annotations
 
 import json
+import os
 import socket
+import sys
 from collections.abc import Awaitable
 from unittest.mock import MagicMock, patch
 
@@ -12,6 +14,49 @@ import pytest
 from tram.connectors.snmp.sink import SNMPTrapSink
 from tram.connectors.snmp.source import SNMPPollSource, SNMPTrapSource
 from tram.core.exceptions import SinkError, SourceError
+
+# Submodules of the real pysnmp that ``get_hlapi_asyncio`` (mib_utils) tries
+# to import before falling back to ``sys.modules["pysnmp.hlapi"]``. If an
+# earlier test module has imported them, the mocked-sys.modules tests below
+# resolve the dotted import through the mock's auto-created attribute chain
+# instead of raising, and the patched getCmd/nextCmd are bypassed.
+_PYSNMP_HLAPI_SUBMODULES = (
+    "pysnmp.hlapi.v3arch",
+    "pysnmp.hlapi.v3arch.asyncio",
+    "pysnmp.hlapi.asyncio",
+)
+_MISSING = object()
+
+
+@pytest.fixture(autouse=True)
+def _deterministic_pysnmp_mock_state():
+    """Make the mocked-pysnmp tests order-independent (GH #72 review follow-up).
+
+    These tests mock the legacy pysnmp wire layer via ``patch.dict`` on
+    ``sys.modules`` and assume ``get_hlapi_asyncio``'s imports fail so it
+    falls back to the patched ``sys.modules["pysnmp.hlapi"]``. That only
+    holds while the real pysnmp was never imported. Removing the real hlapi
+    submodule entries before each test recreates the never-imported state
+    regardless of collection order, and restores them afterwards.
+
+    Also asserts TRAM_SNMP_STACK is not leaking from another module — the
+    mock targets the legacy wire layer and only makes sense with the flag
+    off.
+    """
+    stack = os.environ.get("TRAM_SNMP_STACK")
+    assert stack in (None, "", "legacy"), (
+        f"TRAM_SNMP_STACK={stack!r} leaked into the mocked-pysnmp connector "
+        "tests — they mock the legacy pysnmp wire layer"
+    )
+    saved = {key: sys.modules.get(key, _MISSING) for key in _PYSNMP_HLAPI_SUBMODULES}
+    for key in _PYSNMP_HLAPI_SUBMODULES:
+        sys.modules.pop(key, None)
+    yield
+    for key, value in saved.items():
+        if value is _MISSING:
+            sys.modules.pop(key, None)
+        else:
+            sys.modules[key] = value
 
 
 class _FakeWireValue:

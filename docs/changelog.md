@@ -10,6 +10,9 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 ### Changed
 - The `snmp` extra now floor-pins the in-house libraries — `trishul-smi>=0.5.2`, `trishul-snmp[v3]>=0.6.1` (was exact pins in v1.5.0) — so their patch releases flow without a TRAM release (maintainer decision 2026-09-29; wire-validated baseline: tsmi 0.5.2 / tsnmp 0.6.1)
 
+### Fixed
+- Order-dependent test pollution in the SNMP connectors suite — the mocked-pysnmp tests silently assumed the real `pysnmp.hlapi` submodules had never been imported; an autouse fixture now pins that state per test (plus asserts no `TRAM_SNMP_STACK` leakage), so every module order passes identically
+
 ## [1.5.0] - 2026-09-29
 
 ### Added
