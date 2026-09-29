@@ -64,12 +64,16 @@ rendering.
 - trishul-smi 0.5.3: **732 passed** in 25.3s (unchanged vs the 053 run);
   corpus compile byte-identical to the 053 no-cache baseline
 
-## Repo venv (floor pins: tsmi 0.5.3 + tsnmp 0.6.2 + pysnmp 7.1.25)
+## Repo venv (tsmi 0.5.3 + tsnmp 0.6.2 + pysnmp 7.1.25)
+
+Figures below are from the harness-run tree (`3ad9fb2` — pre-3DES-restore,
+pre-TC-fallback). The release tree (`a7fd3be`) runs **2,620 passed, 15 skipped**
+and the wire suite **15 ×2** with the 3DES, TC-enum, and review-batch tests added.
 
 | Suite | Result | Baseline |
 |---|---|---|
-| Full TRAM suite (`pytest tests/ -q`) | **2,594 passed, 13 skipped** | identical |
-| Wire cross-stack (`TRAM_TEST_SNMP_WIRE=1`), runs 1–2 | **13 passed** ×2 | 13 (no flakes) |
+| Full TRAM suite (`pytest tests/ -q`) | **2,594 passed, 13 skipped** @ `3ad9fb2` | identical |
+| Wire cross-stack (`TRAM_TEST_SNMP_WIRE=1`), runs 1–2 | **13 passed** ×2 @ `3ad9fb2` | 13 (no flakes) |
 
 No TRAM-side adaptation was forced by 0.6.2 (WalkError, responder v1 drop,
 engineTime advancement, duplicate-bundle validation — none surface in TRAM's
