@@ -106,3 +106,53 @@ all against an independent pysnmp 7.1.25 peer on the wire, with zero
 stack-mismatch warnings and both planes pinned to `TRAM_SNMP_STACK=trishul`.
 The issue #72 flag-on acceptance criterion (v1/v2c/v3 roundtrips + trap
 paths + worker MIB sync) is met.
+
+## Re-run at final HEAD (26a5131)
+
+Pre-tag re-run after the post-review fix batch 5698a51 (RFC 2576 v1 Trap-PDU
+mapping, value-rendering parity, `_sync_mib` bundle-content guard, dead
+`_decode_trap_tsmp` removal), requested by the independent re-review (N3).
+
+Redeploy: `./scripts/deploy-kind-tram-dev.sh --mode manager` with the same
+values file (`env.TRAM_SNMP_STACK: trishul`) — images `local-20260929044450`
+(app 1.4.8, branch `release/v1.5.0`, HEAD 26a5131, tree clean); all pods
+Running; flag verified `trishul` on the manager and all 3 workers via pod env.
+
+### Regression spot-checks
+
+| Check | Result | Evidence |
+|---|---|---|
+| v3 poll GET (SHA-256/AES-128, symbolic) | PASS | run success on worker-0; `{"sysDescr.0": "PySNMP engine version 7.1.25, …"}` — byte-identical to the first run's record |
+| Worker MIB sync (custom MIB) | PASS | post-rollout fresh emptyDir on worker-0 re-synced `KIND-TEST-MIB.json` from the manager and resolved `ktOne.0`/`ktTwo.0` with the same values as the first run |
+| Trap source v3 | PASS | pysnmp `warmStart` v3 trap → NodePort 30163 → decoded `{"snmpTrapOID.0": "1.3.6.1.6.3.1.1.5.2", "enterprises.99999.1.0": "kind-v150-rerun-final"}` |
+| Stack-consistency guard | PASS | zero `SNMP stack mismatch` log lines; `tram_mgr_pipeline_stats_received_total` climbing (8 callbacks observed during the spot checks) |
+
+### New check — v1 trap sink on the wire (N3)
+
+Two `snmp_trap` sink pipelines (`version: "1"`, post-fix tsmp path) sent to a
+raw BER capture on the host (decoded per the repo wire suite's own
+`test_v1_send_trap_wire_enterprise_specific` technique — `pyasn1` BER +
+`pysnmp.proto.api.v1`):
+
+- **Enterprise-specific trap** (`trap_oid: 1.3.6.1.4.1.99999`):
+  `enterprise=1.3.6.1.4.1`, `generic=6`, `specific=99999` —
+  `enterprise + (specific,)` reconstructs the configured trap OID **exactly**
+  (the RFC 2576 §3.2 split; the pre-fix bug of stuffing the full OID into the
+  enterprise field would have yielded `1.3.6.1.4.1.99999.99999`).
+  Varbinds: `sysUpTime.0 = 10936782` + `1.3.6.1.4.1.99999.1.0 = rerun-v1-sink-payload`.
+- **Standard warmStart trap** (`trap_oid: 1.3.6.1.6.3.1.1.5.2`):
+  `enterprise=1.3.6.1.6.3.1.1.5` (the snmpTraps node), `generic=1` (warmStart),
+  `specific=0` — the standard-trap 0–5 mapping live on the wire.
+  Varbinds: same sysUpTime + `rerun-v1-warm-payload`.
+
+Both sink runs succeeded on the wire (datagrams received from node
+172.19.0.3, i.e. the worker's SNATed node IP) and the runs reported
+`success` in run history.
+
+### Verdict
+
+No regressions vs the first run (poll, trap source, MIB sync, stack guard all
+green with identical evidence), and the new v1 trap-sink check confirms the
+5698a51 RFC 2576 Trap-PDU encoding on the wire: the enterprise/generic/specific
+split reconstructs the configured trap OID exactly, standard traps map to
+generic 0–5, and payload varbinds carry through. The pre-tag re-run is clean.
