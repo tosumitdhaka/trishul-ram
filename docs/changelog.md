@@ -5,6 +5,11 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ---
 
+## [Unreleased]
+
+### Changed
+- The `snmp` extra now floor-pins the in-house libraries — `trishul-smi>=0.5.2`, `trishul-snmp[v3]>=0.6.1` (was exact pins in v1.5.0) — so their patch releases flow without a TRAM release (maintainer decision 2026-09-29; wire-validated baseline: tsmi 0.5.2 / tsnmp 0.6.1)
+
 ## [1.5.0] - 2026-09-29
 
 ### Added

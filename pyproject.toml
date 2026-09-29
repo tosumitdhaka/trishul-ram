@@ -58,13 +58,14 @@ nats = ["nats-py>=2.3,<3.0"]
 
 # ── Telemetry / network-management connectors ──────────────────────────────
 # Dual-stack during the v1.5.0 flag period (GH #72): pysnmp stays (default
-# TRAM_SNMP_STACK=legacy) while trishul-smi/trishul-snmp are pinned alongside
-# (the wire-validated versions; TRAM_SNMP_STACK=trishul selects them in v1.5.0).
+# TRAM_SNMP_STACK=legacy) while trishul-smi/trishul-snmp ride alongside.
+# Floor pins (maintainer 2026-09-29): in-house libraries take patch releases
+# without a TRAM release; wire-validated baseline is tsmi 0.5.2 / tsnmp 0.6.1.
 snmp = [
     "pysnmp>=7,<8",
     "pyasn1>=0.4.8,<0.7",
-    "trishul-smi==0.5.2",
-    "trishul-snmp[v3]==0.6.1",
+    "trishul-smi>=0.5.2",
+    "trishul-snmp[v3]>=0.6.1",
 ]
 gnmi = ["pygnmi>=0.8,<1.0"]
 
