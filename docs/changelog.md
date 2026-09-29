@@ -5,7 +5,7 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ---
 
-## [Unreleased]
+## [1.5.0] - 2026-09-29
 
 ### Added
 - `TRAM_SNMP_STACK` env knob (`legacy` | `trishul`, default `legacy`, fail-loud on invalid values) selecting the SNMP library stack — the v1.5.0 swap flag; the manager and every worker must run the same stack (GH #72)
