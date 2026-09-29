@@ -113,7 +113,9 @@ class SNMPTrapSource(BaseSource):
         security_name   (str)   SNMPv3 USM username.
         auth_protocol   (str)   MD5 | SHA | SHA224 | SHA256 | SHA384 | SHA512.
         auth_key        (str)   Auth passphrase (None → noAuthNoPriv).
-        priv_protocol   (str)   AES | AES128 | AES192 | AES256 (DES/3DES rejected at validation).
+        priv_protocol   (str)   AES | AES128 | AES192 | AES256 | 3DES
+                        (3DES-EDE supported again in v1.5.1; DES rejected at
+                        validation).
         priv_key        (str)   Privacy passphrase (None → authNoPriv).
         context_name    (str)   SNMPv3 context name.
     """
@@ -460,7 +462,9 @@ class SNMPPollSource(BaseSource):
         security_name   (str)   SNMPv3 USM username.
         auth_protocol   (str)   MD5 | SHA | SHA224 | SHA256 | SHA384 | SHA512.
         auth_key        (str)   Auth passphrase (None → noAuthNoPriv).
-        priv_protocol   (str)   AES | AES128 | AES192 | AES256 (DES/3DES rejected at validation).
+        priv_protocol   (str)   AES | AES128 | AES192 | AES256 | 3DES
+                        (3DES-EDE supported again in v1.5.1; DES rejected at
+                        validation).
         priv_key        (str)   Privacy passphrase (None → authNoPriv).
         context_name    (str)   SNMPv3 context name.
     """

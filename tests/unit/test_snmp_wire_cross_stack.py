@@ -139,16 +139,21 @@ class PysnmpAgent:
         auth_protos = {
             "u_sha256_aes128": config.USM_AUTH_HMAC192_SHA256,
             "u_sha256_aes256_blum": config.USM_AUTH_HMAC192_SHA256,
+            "u_sha256_3des": config.USM_AUTH_HMAC192_SHA256,
         }
         priv_protos = {
             "u_sha256_aes128": config.USM_PRIV_CFB128_AES,
             # draft-blumenthal-04 / RFC 8963 derivation — what tsmp matches
             # (pysnmp's default USM_PRIV_CFB256_AES is the Cisco/Reeder variant).
             "u_sha256_aes256_blum": config.USM_PRIV_CFB256_AES_BLUMENTHAL,
+            # 3DES-EDE (v1.5.1 re-support): pysnmp's USM_PRIV_CBC168_3DES uses
+            # the Blumenthal derivation — tsmp's THREEDES_EDE matches it.
+            "u_sha256_3des": config.USM_PRIV_CBC168_3DES,
         }
         for name, a_key, p_key in (
             ("u_sha256_aes128", "authpass", "privpass"),
             ("u_sha256_aes256_blum", "authpass", "privpass"),
+            ("u_sha256_3des", "authpass", "privpass"),
         ):
             config.add_v3_user(snmp_engine, name, auth_protos[name], a_key, priv_protos[name], p_key)
             config.add_vacm_user(snmp_engine, 3, name, "authPriv", (1, 3, 6, 1), (1, 3, 6, 1))
@@ -332,8 +337,15 @@ class TestPollSourceVsPysnmpAgent:
                 "auth_protocol": "SHA256", "auth_key": "authpass",
                 "priv_protocol": "AES256", "priv_key": "privpass",
             }),
+            # 3DES-EDE (v1.5.1): tsmp's THREEDES_EDE vs pysnmp's
+            # USM_PRIV_CBC168_3DES — the #31 padding-interop wire proof.
+            ("3", {
+                "security_name": "u_sha256_3des",
+                "auth_protocol": "SHA256", "auth_key": "authpass",
+                "priv_protocol": "3DES", "priv_key": "privpass",
+            }),
         ],
-        ids=["v1", "v2c", "v3-sha256-aes128", "v3-sha256-aes256-blumenthal"],
+        ids=["v1", "v2c", "v3-sha256-aes128", "v3-sha256-aes256-blumenthal", "v3-sha256-3des"],
     )
     def test_get(self, pysnmp_agent, version, auth):
         from tram.connectors.snmp.source import SNMPPollSource

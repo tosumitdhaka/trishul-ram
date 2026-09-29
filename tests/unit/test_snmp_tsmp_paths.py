@@ -235,6 +235,8 @@ class TestBuildV3UsmUser:
         assert build_v3_usm_user("u", "SHA", "k", "AES", "p").auth_protocol.name == "SHA1"
         assert build_v3_usm_user("u", "SHA", "k", "AES", "p").priv_protocol.name == "AES128"
         assert build_v3_usm_user("u", "MD5", "k", "3DES", "p").priv_protocol.name == "THREEDES_EDE"
+        # 3DES-EDE spelling alias (v1.5.1) — same wire protocol.
+        assert build_v3_usm_user("u", "MD5", "k", "3des-ede", "p").priv_protocol.name == "THREEDES_EDE"
 
     def test_unknown_protocol_falls_back(self):
         user = build_v3_usm_user("u", "UNKNOWN", "k", "UNKNOWN", "p")

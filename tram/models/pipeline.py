@@ -178,26 +178,25 @@ class SyslogSourceConfig(BaseModel):
     max_connections: int = Field(64, ge=1)
 
 
-# ── SNMPv3 priv-protocol removal (v1.5.0, GH #72) ───────────────────────────
-# DES and 3DES are rejected at config validation on every SNMPv3 config class.
-# DES is obsoleted (RFC 8996 lineage) and dropped upstream (trishul-snmp #29);
-# 3DES was never standardized (expired draft) and upstream #31 makes it a
-# silent-data-loss trap on the trishul stack. AES128 is the replacement.
+# ── SNMPv3 priv-protocol restriction (v1.5.0/v1.5.1, GH #72) ────────────────
+# DES is rejected at config validation on every SNMPv3 config class: it is
+# obsoleted (RFC 8996 lineage) and dropped upstream (trishul-snmp #29).
+# 3DES-EDE is supported again in v1.5.1 — tsnmp 0.6.2 wire-fixed the #31
+# padding-interop defect (harness-validated vs pysnmp peers). The USM
+# builders map ``3DES``/``3des``/``3des-ede`` spellings to the wire protocol.
 
 _SNMP_PRIV_PROTOCOL_REMOVED: dict[str, str] = {
     "DES": (
         "DES is obsoleted (RFC 8996 lineage) and dropped by the upstream "
         "trishul-snmp stack"
     ),
-    "3DES": (
-        "3DES was never standardized (an expired draft) and is not supported "
-        "by the trishul-snmp stack"
-    ),
 }
 
 
 def _reject_removed_priv_protocol(value: str) -> str:
-    """Reject SNMPv3 privacy protocols removed in v1.5.0 (case-insensitive)."""
+    """Reject SNMPv3 privacy protocols removed from the config surface
+    (case-insensitive). Only DES is rejected in v1.5.1 — 3DES-EDE (also
+    spelled ``3des`` / ``3des-ede``) is accepted again."""
     reason = _SNMP_PRIV_PROTOCOL_REMOVED.get(value.upper())
     if reason is not None:
         raise ValueError(

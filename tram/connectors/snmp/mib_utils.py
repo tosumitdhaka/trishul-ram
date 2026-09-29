@@ -198,12 +198,13 @@ _AUTH_PROTO_NAMES: dict[str, str] = {
 }
 
 _PRIV_PROTO_NAMES: dict[str, str] = {
-    "DES":    "usmDESPrivProtocol",
-    "3DES":   "usm3DESEDEPrivProtocol",
-    "AES":    "usmAesCfb128Protocol",    # alias for AES-128
-    "AES128": "usmAesCfb128Protocol",
-    "AES192": "usmAesCfb192Protocol",
-    "AES256": "usmAesCfb256Protocol",
+    "DES":      "usmDESPrivProtocol",
+    "3DES":     "usm3DESEDEPrivProtocol",
+    "3DES-EDE": "usm3DESEDEPrivProtocol",  # spelling alias (v1.5.1)
+    "AES":      "usmAesCfb128Protocol",    # alias for AES-128
+    "AES128":   "usmAesCfb128Protocol",
+    "AES192":   "usmAesCfb192Protocol",
+    "AES256":   "usmAesCfb256Protocol",
 }
 
 
@@ -231,8 +232,9 @@ def build_v3_auth(
         auth_protocol:  Auth algorithm — MD5 | SHA | SHA224 | SHA256 | SHA384 | SHA512.
                         Defaults to SHA.  Unknown values fall back to SHA.
         auth_key:       Auth passphrase.  ``None`` → noAuthNoPriv.
-        priv_protocol:  Privacy algorithm — AES | AES128 | AES192 | AES256
-                        (DES/3DES rejected at validation).
+        priv_protocol:  Privacy algorithm — AES | AES128 | AES192 | AES256 | 3DES
+                        (3DES-EDE supported again in v1.5.1; DES rejected at
+                        validation).
                         Defaults to AES128.  Unknown values fall back to AES128.
         priv_key:       Privacy passphrase.  ``None`` → authNoPriv (when auth_key set).
 
@@ -268,8 +270,8 @@ def build_v3_auth(
 # enum member names. Looked up via getattr at call time so this module stays
 # importable without trishul_snmp installed. The config surface is identical
 # to the legacy builders — the same YAML, a different wire stack under it.
-# DES/3DES configs are rejected at validation (v1.5.0 layer 2), so the enum
-# members exist here only for completeness.
+# DES configs are rejected at validation (v1.5.0) and the enum member is
+# listed here only for completeness; 3DES-EDE is supported again in v1.5.1.
 
 _TSMP_AUTH_PROTOCOLS: dict[str, str] = {
     "MD5":    "MD5",
@@ -281,12 +283,13 @@ _TSMP_AUTH_PROTOCOLS: dict[str, str] = {
 }
 
 _TSMP_PRIV_PROTOCOLS: dict[str, str] = {
-    "DES":    "DES",
-    "3DES":   "THREEDES_EDE",
-    "AES":    "AES128",      # alias for AES-128
-    "AES128": "AES128",
-    "AES192": "AES192",
-    "AES256": "AES256",
+    "DES":      "DES",
+    "3DES":     "THREEDES_EDE",
+    "3DES-EDE": "THREEDES_EDE",  # spelling alias (v1.5.1)
+    "AES":      "AES128",        # alias for AES-128
+    "AES128":   "AES128",
+    "AES192":   "AES192",
+    "AES256":   "AES256",
 }
 
 
