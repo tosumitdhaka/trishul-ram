@@ -12,10 +12,12 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Changed
 - In-house SNMP library pins advanced to the newly released `trishul-smi==0.5.3` + `trishul-snmp[v3]==0.6.2` (from 0.5.2/0.6.1 in v1.5.0) — validated via the full wire-harness re-run and a fresh kind deployment (GH #72 flag-period pin refresh). tsnmp 0.6.2 also wire-fixes 2-byte BER arc decoding (upstream #34); `priv: DES` stays rejected (upstream-dropped; use AES128)
+- Internal shorthand renamed `tsmp` → `tsnmp` across connector identifiers, tests, and docs (no behavior change; the library is trishul-snmp)
 
 ### Fixed
 - Order-dependent test pollution in the SNMP connectors suite — the mocked-pysnmp tests silently assumed the real `pysnmp.hlapi` submodules had never been imported; an autouse fixture now pins that state per test (plus asserts no `TRAM_SNMP_STACK` leakage), so every module order passes identically
 - `priv: 3des-ede` silently fell back to AES128 in the v3 USM builders on both stacks (the spelling was missing from the protocol tables) — now resolves to 3DES-EDE on both stacks
+- TC-typed columns (e.g. `ifType`/IANAifType) rendered without enums on the trishul stack — the classify layer now resolves textual-convention enum tables from the corpus when a column has no inline SYNTAX enums (precedence: patterns > inline enum > TC enum > default metric), restoring parity with the legacy pysnmp path (upstream trishul-smi #44 filed for the IR-level fix)
 
 ## [1.5.0] - 2026-09-29
 

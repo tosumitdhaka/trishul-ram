@@ -26,7 +26,7 @@ logger = logging.getLogger(__name__)
 def snmp_stack() -> str:
     """``TRAM_SNMP_STACK`` reader for the connector layer (v1.5.0, GH #72).
 
-    Returns ``"legacy"`` (pysnmp) or ``"trishul"`` (tsmi/tsmp). Delegates to
+    Returns ``"legacy"`` (pysnmp) or ``"trishul"`` (tsmi/tsnmp). Delegates to
     the canonical reader in ``tram.core.config`` (same env, same validation —
     invalid values fail loud so a deployment never silently flips its SNMP
     stack). The connectors read this directly so manager and worker processes
@@ -130,6 +130,24 @@ class _TsmiBundleView:
             node = bundle.resolve_node(module, symbol)
             if node is not None:
                 return node
+        return None
+
+    def resolve_type(self, module: str, type_name: str):
+        """Resolve a textual convention (local or imported) across bundles.
+
+        tsmi IR keeps TC definitions separate from object nodes — a column
+        whose SYNTAX names a TC (e.g. ``ifType`` → ``IANAifType``) has no
+        inline ``enums``; the TC's enum table lives in its own
+        ``types[type_name]`` record. Used by the classify layer's TC-enum
+        fallback (trishul-smi #44). Returns None when the TC is absent.
+        """
+        for bundle in self._bundles:
+            try:
+                resolved = bundle.resolve_type(module, type_name)
+            except Exception:
+                continue
+            if resolved is not None:
+                return resolved
         return None
 
     def module_names(self) -> list[str]:
@@ -264,7 +282,7 @@ def build_v3_auth(
     return hlapi.UsmUserData(**kwargs)
 
 
-# ── tsmp USM builders (v1.5.0 flag-on path) ────────────────────────────────
+# ── tsnmp USM builders (v1.5.0 flag-on path) ────────────────────────────────
 
 # Human-readable protocol strings → trishul_snmp AuthProtocol/PrivProtocol
 # enum member names. Looked up via getattr at call time so this module stays
@@ -273,7 +291,7 @@ def build_v3_auth(
 # DES configs are rejected at validation (v1.5.0) and the enum member is
 # listed here only for completeness; 3DES-EDE is supported again in v1.5.1.
 
-_TSMP_AUTH_PROTOCOLS: dict[str, str] = {
+_TSNMP_AUTH_PROTOCOLS: dict[str, str] = {
     "MD5":    "MD5",
     "SHA":    "SHA1",        # SHA-1 / HMAC-96
     "SHA224": "SHA224",
@@ -282,7 +300,7 @@ _TSMP_AUTH_PROTOCOLS: dict[str, str] = {
     "SHA512": "SHA512",
 }
 
-_TSMP_PRIV_PROTOCOLS: dict[str, str] = {
+_TSNMP_PRIV_PROTOCOLS: dict[str, str] = {
     "DES":      "DES",
     "3DES":     "THREEDES_EDE",
     "3DES-EDE": "THREEDES_EDE",  # spelling alias (v1.5.1)
@@ -300,7 +318,7 @@ def build_v3_usm_user(
     priv_protocol: str = "AES128",
     priv_key: str | None = None,
 ):
-    """Build a ``trishul_snmp.UsmUser`` for the tsmp stack (v1.5.0 flag-on).
+    """Build a ``trishul_snmp.UsmUser`` for the tsnmp stack (v1.5.0 flag-on).
 
     Security level auto-detection mirrors :func:`build_v3_auth`: no
     ``auth_key`` → noAuthNoPriv; ``auth_key`` only → authNoPriv;
@@ -312,24 +330,24 @@ def build_v3_usm_user(
     if not auth_key:
         return UsmUser(username=security_name)
 
-    auth_name = _TSMP_AUTH_PROTOCOLS.get(auth_protocol.upper(), "SHA1")
+    auth_name = _TSNMP_AUTH_PROTOCOLS.get(auth_protocol.upper(), "SHA1")
     kwargs: dict = {
         "username": security_name,
         "auth_protocol": getattr(AuthProtocol, auth_name),
         "auth_key": str(auth_key).encode("utf-8"),
     }
     if priv_key:
-        priv_name = _TSMP_PRIV_PROTOCOLS.get(priv_protocol.upper(), "AES128")
+        priv_name = _TSNMP_PRIV_PROTOCOLS.get(priv_protocol.upper(), "AES128")
         kwargs["priv_protocol"] = getattr(PrivProtocol, priv_name)
         kwargs["priv_key"] = str(priv_key).encode("utf-8")
     return UsmUser(**kwargs)
 
 
-def build_tsmp_local_engine(seed: str, *, engine_boots: int = 1):
-    """Build a deterministic ``UsmLocalEngine`` for tsmp v3 trap endpoints.
+def build_tsnmp_local_engine(seed: str, *, engine_boots: int = 1):
+    """Build a deterministic ``UsmLocalEngine`` for tsnmp v3 trap endpoints.
 
     SNMPv3 traps are sender-authoritative: the trap receiver's engine state
-    is whatever the sender last cached, and tsmp listeners answer USM
+    is whatever the sender last cached, and tsnmp listeners answer USM
     discovery probes automatically. A deterministic engine id per endpoint
     (host:port:user) keeps sender caches valid across restarts; boots/time
     are per-process counters.

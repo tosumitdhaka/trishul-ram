@@ -127,7 +127,7 @@ class TestTsmiCompile:
         assert result.compiled == ["SELF-MIB"]
         assert (compiled_dir / "SELF-MIB.json").is_file()
 
-    def test_compile_trishul_bundle_loads_via_tsmp(self, tmp_path):
+    def test_compile_trishul_bundle_loads_via_tsnmp(self, tmp_path):
         """The bundle is tsmi's native output — loadable by trishul-snmp."""
         pytest.importorskip("trishul_snmp")
         from trishul_snmp import load_bundle
