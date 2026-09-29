@@ -1,0 +1,5 @@
+{
+  "check": "walk-quirk-oid-echo",
+  "ok": true,
+  "evidence": "request-echoing agent: walk=[(1, 3, 6, 1, 4, 1, 90000, 1, 1)] \u2014 echo rejected as phantom row, walk terminated with prior rows kept (no duplication, no loop)"
+}

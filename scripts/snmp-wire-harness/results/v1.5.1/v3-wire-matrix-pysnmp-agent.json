@@ -1,0 +1,5 @@
+{
+  "check": "v3-wire-matrix-pysnmp-agent",
+  "ok": true,
+  "evidence": "tsmp GETs vs pysnmp 7.1.30 :11164 \u2014 AES128 all 6 auths: 6/6 OK; AES192/256 vs Blumenthal-variant users: 12/12 OK; AES192/256 vs pysnmp-DEFAULT(Reeder) users: 7/12 OK (the 5 misses are MD5/SHA1 x AES192/256 + SHA224/AES256 \u2014 key-EXTENSION combos where pysnmp's default Reeder variant differs from tsmp's net-snmp-compatible blumenthal-04 derivation; tsmp matches net-snmp + RFC 8963, pysnmp default is the Cisco-style variant \u2014 NOT a tsmp defect; verified green vs snmpd); 3DES: 6/6 OK \u2014 see v3-3des-padding-interop"
+}

@@ -1,0 +1,5 @@
+{
+  "check": "silent-drop-v3-listener",
+  "ok": true,
+  "evidence": "V3NotificationListener :11231 \u2014 garbage datagrams: dropped=2, drop_counts={'DropReason.UNDECODABLE_BER': 2}, on_error fired 2x"
+}

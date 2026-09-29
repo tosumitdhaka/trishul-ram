@@ -226,7 +226,44 @@ pipeline:
         cfg = _load(self._trap_sink_yaml(algo))
         assert cfg.sink.priv_protocol == algo
 
+    @pytest.mark.parametrize("garbage", ["3DESEDE", "3des_ede", "AES-512", "foo"])
+    def test_garbage_priv_rejected_on_poll_source(self, garbage):
+        """Unknown spellings reject instead of silently mapping to AES128
+        at runtime (review C4)."""
+        with pytest.raises(ConfigError, match="not a supported SNMPv3 privacy protocol") as exc_info:
+            _load(self._poll_yaml(garbage))
+        message = str(exc_info.value)
+        assert "AES128" in message
+        assert "3DES" in message
+
+    @pytest.mark.parametrize("garbage", ["3DESEDE", "3des_ede", "AES-512", "foo"])
+    def test_garbage_priv_rejected_on_trap_source(self, garbage):
+        with pytest.raises(ConfigError, match="not a supported SNMPv3 privacy protocol"):
+            _load(self._trap_source_yaml(garbage))
+
+    @pytest.mark.parametrize("garbage", ["3DESEDE", "3des_ede", "AES-512", "foo"])
+    def test_garbage_priv_rejected_on_trap_sink(self, garbage):
+        with pytest.raises(ConfigError, match="not a supported SNMPv3 privacy protocol"):
+            _load(self._trap_sink_yaml(garbage))
+
     def test_valid_priv_protocols_still_accepted(self):
-        for algo in ("AES", "AES128", "AES192", "AES256", "aes"):
+        for algo in ("AES", "AES128", "AES192", "AES256", "aes", "3DES", "3des-ede"):
             cfg = _load(self._poll_yaml(algo))
             assert cfg.source.priv_protocol == algo
+
+    def test_validator_set_matches_both_usm_builders(self):
+        """The validator's accepted set is exactly the union of the USM
+        builders' mapping keys on BOTH stacks (+ DES, which is rejected) —
+        nothing a builder maps can be a config 400 (review C4)."""
+        from tram.connectors.snmp.mib_utils import (
+            _PRIV_PROTO_NAMES,
+            _TSNMP_PRIV_PROTOCOLS,
+        )
+        from tram.models.pipeline import _SNMP_PRIV_PROTOCOL_VALUES
+
+        legacy_keys = set(_PRIV_PROTO_NAMES)
+        tsnmp_keys = set(_TSNMP_PRIV_PROTOCOLS)
+        assert legacy_keys == tsnmp_keys, (
+            f"legacy/tsnmp priv mappings diverged: {legacy_keys} vs {tsnmp_keys}"
+        )
+        assert _SNMP_PRIV_PROTOCOL_VALUES | {"DES"} == legacy_keys

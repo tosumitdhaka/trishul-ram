@@ -1,0 +1,5 @@
+{
+  "check": "v3-sha256-aes128-trap-regression",
+  "ok": true,
+  "evidence": "v3 authPriv SHA256/AES128 trap -> decrypting listener :11222: 3 varbinds received (was PASS at 0.4.6/0.4.2)"
+}

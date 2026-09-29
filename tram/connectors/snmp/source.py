@@ -979,14 +979,18 @@ class SNMPPollSource(BaseSource):
                     return None
                 # TC-typed SYNTAX: thread the TC's own enum table (tsmi IR
                 # stores it in types[<tc>].constraints, separate from the
-                # column node). Gracefully degrades when the TC module is
-                # absent from the corpus (resolve_type → None).
+                # column node). Gate on kind == "enum" — range constraints
+                # (kind "range", e.g. SNMPv2-SMI Integer32 [[min, max]]) must
+                # NOT be read as label→number tables, or a saturation value
+                # would render the range MIN as a label. Gracefully degrades
+                # when the TC module is absent from the corpus
+                # (resolve_type → None).
                 tc_name = getattr(node, "syntax", None)
                 if tc_name and hasattr(mib_view, "resolve_type"):
                     tc = mib_view.resolve_type(mod_name, tc_name)
-                    data = (tc.constraints or {}).get("data") if tc else None
-                    if data:
-                        for label, number in data:
+                    constraints = tc.constraints if tc else None
+                    if constraints and constraints.get("kind") == "enum":
+                        for label, number in constraints.get("data") or []:
                             if number == int(value):
                                 return label
                 return None

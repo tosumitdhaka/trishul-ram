@@ -1,0 +1,5 @@
+{
+  "check": "v3-des-outcome",
+  "ok": true,
+  "evidence": "DES-CBC (#29): outcome = FORMALLY DROPPED (fail-fast) \u2014 every auth x DES attempt raises a clean ProtocolError ('single-DES primitive no longer exposed by cryptography'); enum retained in PrivProtocol; observed errors: {'ProtocolError'}"
+}

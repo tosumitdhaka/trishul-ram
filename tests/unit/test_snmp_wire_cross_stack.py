@@ -360,6 +360,30 @@ class TestPollSourceVsPysnmpAgent:
         assert data[self._OID] == "pysnmp-agent"
         assert meta["source_host"] == "127.0.0.1"
 
+    def test_legacy_3des_get_against_pysnmp_agent(self, pysnmp_agent, monkeypatch):
+        """Legacy (pysnmp) stack: restored 3DES-EDE GET roundtrip (v1.5.1).
+
+        This suite's autouse fixture pins the tsnmp flag; monkeypatch flips
+        the SOURCE instance to the legacy path — an in-stack pysnmp client →
+        pysnmp peer 3DES roundtrip, covering the legacy stack's restored
+        3DES that the tsnmp-flag cases don't exercise.
+        """
+        monkeypatch.delenv("TRAM_SNMP_STACK", raising=False)  # legacy path
+        from tram.connectors.snmp.source import SNMPPollSource
+
+        src = SNMPPollSource({
+            "host": "127.0.0.1", "port": pysnmp_agent.port,
+            "oids": [self._OID], "operation": "get",
+            "version": "3", "timeout": 3.0, "retries": 3,
+            "security_name": "u_sha256_3des",
+            "auth_protocol": "SHA256", "auth_key": "authpass",
+            "priv_protocol": "3DES", "priv_key": "privpass",
+        })
+        payload, meta = next(iter(src.read()))
+        data = json.loads(payload)
+        assert data[self._OID] == "pysnmp-agent"
+        assert meta["source_host"] == "127.0.0.1"
+
     @pytest.mark.parametrize(
         ("version", "auth"),
         [

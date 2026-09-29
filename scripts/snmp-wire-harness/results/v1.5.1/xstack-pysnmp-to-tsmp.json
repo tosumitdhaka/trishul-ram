@@ -1,0 +1,5 @@
+{
+  "check": "xstack-pysnmp-to-tsmp",
+  "ok": true,
+  "evidence": "pysnmp 7.1.29 getCmd -> tsmp V2cResponder :11223: sysDescr.0='tsmp responder via interop' (match) + nextCmd ok=True"
+}

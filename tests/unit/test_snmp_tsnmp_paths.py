@@ -618,6 +618,47 @@ class TestPollSourceTsnmp:
         assert SNMPPollSource._mib_enum_name(view, "IF-MIB", "ifOperStatus", "1") == "up"
         assert SNMPPollSource._mib_enum_name(view, "IF-MIB", "ifType", "0") is None
 
+    def test_mib_enum_name_tc_range_constraint_not_enum(self, tmp_path, monkeypatch):
+        """Range-constrained TCs (kind "range") must not be read as enum
+        tables (review B1): a saturation value returns None, never the range
+        MIN as a bogus label."""
+        monkeypatch.setenv("TRAM_SNMP_STACK", "trishul")
+        _write_bundle(tmp_path)
+        import json as _json
+        bundle = _json.loads((tmp_path / "SNMPv2-MIB.json").read_text())
+        bundle["types"]["Integer32"] = {
+            "class": "textualconvention",
+            "base_type": "INTEGER",
+            "constraints": {"kind": "range", "data": [[-2147483648, 2147483647]]},
+        }
+        (tmp_path / "SNMPv2-MIB.json").write_text(_json.dumps(bundle))
+        ifmib = _json.loads((tmp_path / "IF-MIB.json").read_text())
+        ifmib["objects"]["ipDefaultTTL"] = {
+            "oid": "1.3.6.1.2.1.4.2",
+            "object_type": "OBJECT-TYPE",
+            "class": "objecttype",
+            "nodetype": "scalar",
+            "syntax": "Integer32",
+        }
+        ifmib["imports"]["SNMPv2-MIB"] = ["sysDescr", "Integer32"]
+        (tmp_path / "IF-MIB.json").write_text(_json.dumps(ifmib))
+        view = get_mib_view([str(tmp_path)], ["IF-MIB"])
+        assert SNMPPollSource._mib_enum_name(view, "IF-MIB", "ipDefaultTTL", "2147483647") is None
+        assert SNMPPollSource._mib_enum_name(view, "IF-MIB", "ipDefaultTTL", "-2147483648") is None
+        # The real enum-TC path still works after the gate.
+        assert SNMPPollSource._mib_enum_name(view, "IF-MIB", "ifType", "24") == "softwareLoopback"
+
+    def test_mib_enum_name_real_corpus_range_tc_stays_none(self, monkeypatch):
+        """Shipped corpus: Integer32 (range TC) at a saturation value stays
+        None — the review B1 repro through the actual code path."""
+        import os
+        corpus = os.path.join(os.path.dirname(__file__), "..", "..", "files", "mibs_compiled")
+        corpus = os.path.normpath(corpus)
+        monkeypatch.setenv("TRAM_SNMP_STACK", "trishul")
+        view = get_mib_view([corpus], [])
+        assert SNMPPollSource._mib_enum_name(view, "IP-MIB", "ipDefaultTTL", "2147483647") is None
+        assert SNMPPollSource._mib_enum_name(view, "IP-MIB", "ipDefaultTTL", "-2147483648") is None
+
 
 # ── trap source tsnmp path ───────────────────────────────────────────────────
 
