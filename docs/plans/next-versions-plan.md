@@ -102,7 +102,7 @@ The treq `_providers/` vendoring (#71), Wave C (A9 streaming; B3–B6 = MIB comp
 
 ## Standing rules & open decisions
 
-- **Sequencing:** v1.4.6 → v1.4.7 → v1.4.8 shipped; v1.5.0 (SNMP swap) entry gate MET 2026-09-28 — executing.
+- **Sequencing:** v1.4.6 → v1.4.7 → v1.4.8 → v1.5.0 shipped (2026-09-29, PR #74, tag `v1.5.0`); legacy pysnmp/pysmi deletion deliberately deferred to a future release per the flag-period design (maintainer decision 2026-09-29).
 - **Overlapping files:** lanes touching the same file queue or combine — never concurrent (repo rule).
 - **treq vendor decision — DECIDED 2026-09-25, re-scoped 2026-09-28:** vendoring `_providers/` remains the direction (GH #71), but as an open design question to be worked after v1.5.0 ships — not scheduled to a version.
 - **SNMP library migration — DECIDED 2026-09-25:** option C in v1.5.0 behind a feature flag (GH #72), gated on upstream trishul-snmp #28 + a green harness re-run.
