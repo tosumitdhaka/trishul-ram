@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "tram"
-version = "1.5.0"
+version = "1.5.1"
 description = "Trishul Real-time Aggregation & Mediation — telecom data pipeline daemon"
 readme = "README.md"
 requires-python = ">=3.13"
@@ -59,13 +59,13 @@ nats = ["nats-py>=2.3,<3.0"]
 # ── Telemetry / network-management connectors ──────────────────────────────
 # Dual-stack during the v1.5.0 flag period (GH #72): pysnmp stays (default
 # TRAM_SNMP_STACK=legacy) while trishul-smi/trishul-snmp ride alongside.
-# Floor pins (maintainer 2026-09-29): in-house libraries take patch releases
-# without a TRAM release; wire-validated baseline is tsmi 0.5.2 / tsnmp 0.6.1.
+# v1.5.1 pins (maintainer 2026-09-29): exact wire-validated versions
+# tsmi 0.5.3 / tsnmp 0.6.2.
 snmp = [
     "pysnmp>=7,<8",
     "pyasn1>=0.4.8,<0.7",
-    "trishul-smi>=0.5.2",
-    "trishul-snmp[v3]>=0.6.1",
+    "trishul-smi==0.5.3",
+    "trishul-snmp[v3]==0.6.2",
 ]
 gnmi = ["pygnmi>=0.8,<1.0"]
 

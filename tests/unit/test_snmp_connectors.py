@@ -532,6 +532,7 @@ class TestBuildV3Auth:
         m.usmHMAC192SHA256AuthProtocol = "SHA256_CONST"
         m.usmAesCfb128Protocol = "AES128_CONST"
         m.usmAesCfb256Protocol = "AES256_CONST"
+        m.usm3DESEDEPrivProtocol = "3DESEDE_CONST"
         m.UsmUserData = MagicMock(return_value="usm_obj")
         return m
 
@@ -587,6 +588,16 @@ class TestBuildV3Auth:
                       priv_protocol="AES128")
         call_kwargs = hlapi.UsmUserData.call_args[1]
         assert call_kwargs["privProtocol"] == "AES128_CONST"
+
+    @pytest.mark.parametrize("algo", ["3DES", "3des-ede"])
+    def test_3des_priv_protocol_resolves(self, algo):
+        """3DES/3des-ede map to usm3DESEDEPrivProtocol (v1.5.1 re-support)."""
+        from tram.connectors.snmp.mib_utils import build_v3_auth
+        hlapi = self._mock_hlapi()
+        build_v3_auth(hlapi, security_name="u", auth_key="a", priv_key="p",
+                      priv_protocol=algo)
+        call_kwargs = hlapi.UsmUserData.call_args[1]
+        assert call_kwargs["privProtocol"] == "3DESEDE_CONST"
 
     def test_aes256_priv_protocol_resolves(self):
         """priv_protocol='AES256' maps to usmAesCfb256Protocol."""

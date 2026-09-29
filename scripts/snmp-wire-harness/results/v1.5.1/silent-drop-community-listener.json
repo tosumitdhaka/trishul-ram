@@ -1,0 +1,5 @@
+{
+  "check": "silent-drop-community-listener",
+  "ok": true,
+  "evidence": "V2cNotificationListener :11230 \u2014 dropped=4 (garbage x2, well-formed GET, wrong-community trap), drop_counts={'DropReason.UNDECODABLE_BER': 2, 'DropReason.NOT_NOTIFICATION': 1, 'DropReason.WRONG_COMMUNITY': 1}, on_error callback fired 4x (0.4.2 behavior: silent, zero signal)"
+}

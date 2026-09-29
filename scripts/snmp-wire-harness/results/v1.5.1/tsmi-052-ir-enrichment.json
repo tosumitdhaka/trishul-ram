@@ -1,0 +1,5 @@
+{
+  "check": "tsmi-052-ir-enrichment",
+  "ok": true,
+  "evidence": "IF-MIB.json: schema_version=1.1 (stays 1.1, additive); ifOperStatus.enums={'up': 1, 'down': 2, 'testing': 3, 'unknown': 4, 'dormant': 5, 'notPresent': 6, 'lowerLayerDown': 7} (up=1, lowerLayerDown=7); ifOperStatus.constraints=present; units IR threading verified on synthetic UNITS-TEST-MIB (units='kilometers per hour') \u2014 TRAM's raw corpus IF-MIB contains no UNITS clauses, so its IR correctly has none"
+}

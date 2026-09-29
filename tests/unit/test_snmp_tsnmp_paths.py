@@ -1,13 +1,13 @@
-"""v1.5.0 layer 3 lane B (GH #72) — tsmp (trishul_snmp) connector paths + flag flow.
+"""v1.5.0 layer 3 lane B (GH #72) — tsnmp (trishul_snmp) connector paths + flag flow.
 
 Covers the ``TRAM_SNMP_STACK=trishul`` wire layers:
 
 * ``mib_utils`` tsmi JSON-bundle resolve (the dual-format corpus consumers)
-  and the tsmp USM builders.
-* poll source GET/WALK against an in-process tsmp responder (the harness
+  and the tsnmp USM builders.
+* poll source GET/WALK against an in-process tsnmp responder (the harness
   reference pattern) + the typed/classify mapping.
-* trap source tsmp listener bridge + offline ``decode_notification``.
-* trap sink v1/v2c/v3 sends against in-process tsmp listeners.
+* trap source tsnmp listener bridge + offline ``decode_notification``.
+* trap sink v1/v2c/v3 sends against in-process tsnmp listeners.
 * worker stats payload ``snmp_stack`` field and the manager-side mismatch
   warning (once per worker).
 
@@ -29,7 +29,7 @@ import pytest
 
 from tram.api.routers import internal as internal_router
 from tram.connectors.snmp.mib_utils import (
-    build_tsmp_local_engine,
+    build_tsnmp_local_engine,
     build_v3_usm_user,
     get_mib_view,
     resolve_oid,
@@ -44,11 +44,11 @@ from tram.core.exceptions import SourceError
 try:  # pragma: no cover - import probe only
     import trishul_snmp  # noqa: F401
 
-    _TSMP_AVAILABLE = True
+    _TSNMP_AVAILABLE = True
 except Exception:  # pragma: no cover
-    _TSMP_AVAILABLE = False
+    _TSNMP_AVAILABLE = False
 
-pytestmark = pytest.mark.skipif(not _TSMP_AVAILABLE, reason="trishul_snmp not installed")
+pytestmark = pytest.mark.skipif(not _TSNMP_AVAILABLE, reason="trishul_snmp not installed")
 
 
 def _free_port() -> int:
@@ -119,13 +119,54 @@ def _write_bundle(tmp_path: Path) -> Path:
                 "nodetype": "columnar",
                 "enums": {"up": 1, "down": 2, "testing": 3},
             },
+            # TC-typed column (trishul-smi #44): SYNTAX names the IANAifType
+            # textual convention, so no inline enums — the enum table lives in
+            # IANAifType-MIB's types section.
+            "ifType": {
+                "oid": "1.3.6.1.2.1.2.2.1.3",
+                "object_type": "OBJECT-TYPE",
+                "class": "objecttype",
+                "nodetype": "columnar",
+                "syntax": "IANAifType",
+            },
         },
         "types": {},
         "notifications": {},
         "module_metadata": {},
     }
+    ianaiftype = {
+        "module": "IANAifType-MIB",
+        "language": "SMIv2",
+        "schema_version": "1.1",
+        "producer_version": "0.5.2",
+        "generated_by": "trishul-smi",
+        "generated_at": "2026-09-28T00:00:00Z",
+        "imports": {},
+        "objects": {},
+        "types": {
+            "IANAifType": {
+                "class": "textualconvention",
+                "base_type": "INTEGER",
+                "constraints": {
+                    "kind": "enum",
+                    "data": [
+                        ["softwareLoopback", 24],
+                        ["ethernetCsmacd", 6],
+                        ["ieee80211", 71],
+                    ],
+                },
+            },
+        },
+        "notifications": {},
+        "module_metadata": {},
+    }
+    ifmib["imports"] = {
+        "SNMPv2-MIB": ["sysDescr"],
+        "IANAifType-MIB": ["IANAifType"],
+    }
     (tmp_path / "SNMPv2-MIB.json").write_text(json.dumps(snmpv2))
     (tmp_path / "IF-MIB.json").write_text(json.dumps(ifmib))
+    (tmp_path / "IANAifType-MIB.json").write_text(json.dumps(ianaiftype))
     return tmp_path
 
 
@@ -235,6 +276,8 @@ class TestBuildV3UsmUser:
         assert build_v3_usm_user("u", "SHA", "k", "AES", "p").auth_protocol.name == "SHA1"
         assert build_v3_usm_user("u", "SHA", "k", "AES", "p").priv_protocol.name == "AES128"
         assert build_v3_usm_user("u", "MD5", "k", "3DES", "p").priv_protocol.name == "THREEDES_EDE"
+        # 3DES-EDE spelling alias (v1.5.1) — same wire protocol.
+        assert build_v3_usm_user("u", "MD5", "k", "3des-ede", "p").priv_protocol.name == "THREEDES_EDE"
 
     def test_unknown_protocol_falls_back(self):
         user = build_v3_usm_user("u", "UNKNOWN", "k", "UNKNOWN", "p")
@@ -247,23 +290,23 @@ class TestBuildV3UsmUser:
         assert build_v3_usm_user("u", "SHA", "k", "DES", "p").priv_protocol.name == "DES"
 
 
-class TestBuildTsmpLocalEngine:
+class TestBuildTsnmpLocalEngine:
     def test_deterministic_and_shaped(self):
-        a = build_tsmp_local_engine("tram:1.2.3.4:162:user")
-        b = build_tsmp_local_engine("tram:1.2.3.4:162:user")
+        a = build_tsnmp_local_engine("tram:1.2.3.4:162:user")
+        b = build_tsnmp_local_engine("tram:1.2.3.4:162:user")
         assert a.engine_id == b.engine_id
         assert len(a.engine_id) == 17
         assert a.engine_id[:5] == b"\x80\x00\x01\x02\x03"
         assert a.engine_boots == 1
-        c = build_tsmp_local_engine("tram:5.6.7.8:162:other")
+        c = build_tsnmp_local_engine("tram:5.6.7.8:162:other")
         assert a.engine_id != c.engine_id
 
 
-# ── poll source tsmp wire layer ────────────────────────────────────────────
+# ── poll source tsnmp wire layer ────────────────────────────────────────────
 
 
 class _ResponderThread:
-    """In-process tsmp responder on its own event loop (harness pattern)."""
+    """In-process tsnmp responder on its own event loop (harness pattern)."""
 
     def __init__(self, objects: list, port: int | None = None):
         self.port = port or _free_port()
@@ -309,22 +352,22 @@ def _responder_objects() -> list:
     global _RESPONDER_OBJECTS
     if _RESPONDER_OBJECTS is None:
         _RESPONDER_OBJECTS = [
-            ((1, 3, 6, 1, 2, 1, 1, 1, 0), _tsmp_value("OctetStringValue", b"tsmp responder")),
-            ((1, 3, 6, 1, 2, 1, 1, 5, 0), _tsmp_value("OctetStringValue", b"box")),
-            ((1, 3, 6, 1, 2, 1, 2, 2, 1, 1, 1), _tsmp_value("IntegerValue", 1)),
-            ((1, 3, 6, 1, 2, 1, 2, 2, 1, 1, 2), _tsmp_value("IntegerValue", 2)),
-            ((1, 3, 6, 1, 2, 1, 2, 2, 1, 10, 1), _tsmp_value("Counter32Value", 100)),
-            ((1, 3, 6, 1, 2, 1, 2, 2, 1, 10, 2), _tsmp_value("Counter32Value", 200)),
+            ((1, 3, 6, 1, 2, 1, 1, 1, 0), _tsnmp_value("OctetStringValue", b"tsnmp responder")),
+            ((1, 3, 6, 1, 2, 1, 1, 5, 0), _tsnmp_value("OctetStringValue", b"box")),
+            ((1, 3, 6, 1, 2, 1, 2, 2, 1, 1, 1), _tsnmp_value("IntegerValue", 1)),
+            ((1, 3, 6, 1, 2, 1, 2, 2, 1, 1, 2), _tsnmp_value("IntegerValue", 2)),
+            ((1, 3, 6, 1, 2, 1, 2, 2, 1, 10, 1), _tsnmp_value("Counter32Value", 100)),
+            ((1, 3, 6, 1, 2, 1, 2, 2, 1, 10, 2), _tsnmp_value("Counter32Value", 200)),
         ]
     return _RESPONDER_OBJECTS
 
 
-def _tsmp_value(cls_name: str, raw):
+def _tsnmp_value(cls_name: str, raw):
     cls = getattr(trishul_snmp, cls_name)
     return cls(raw)
 
 
-class TestPollSourceTsmp:
+class TestPollSourceTsnmp:
     def test_get_against_inprocess_responder(self, monkeypatch):
         monkeypatch.setenv("TRAM_SNMP_STACK", "trishul")
         with _ResponderThread(_responder_objects()) as responder:
@@ -334,7 +377,7 @@ class TestPollSourceTsmp:
             })
             payload, meta = next(iter(src.read()))
         data = json.loads(payload)
-        assert data["1.3.6.1.2.1.1.1.0"] == "tsmp responder"
+        assert data["1.3.6.1.2.1.1.1.0"] == "tsnmp responder"
         assert meta["operation"] == "get"
 
     def test_get_error_status_raises(self, monkeypatch):
@@ -359,9 +402,9 @@ class TestPollSourceTsmp:
         src = SNMPPollSource({
             "host": "127.0.0.1", "oids": ["1.3.6.1.2.1.1.1.0"], "operation": "get",
         })
-        with patch.object(src, "_build_tsmp_manager", return_value=_FakeMgr()):
+        with patch.object(src, "_build_tsnmp_manager", return_value=_FakeMgr()):
             with pytest.raises(SourceError, match="NO_SUCH_NAME"):
-                asyncio.run(src._do_get_tsmp())
+                asyncio.run(src._do_get_tsnmp())
 
     def test_walk_against_inprocess_responder(self, monkeypatch):
         monkeypatch.setenv("TRAM_SNMP_STACK", "trishul")
@@ -381,7 +424,7 @@ class TestPollSourceTsmp:
         }
 
     def test_classify_typed_walk_maps_wire_types(self, monkeypatch):
-        """tsmp type names map to the legacy wire-class names so the shared
+        """tsnmp type names map to the legacy wire-class names so the shared
         classify layer (GH #35 fixed tables) works unchanged."""
         monkeypatch.setenv("TRAM_SNMP_STACK", "trishul")
         with _ResponderThread(_responder_objects()) as responder:
@@ -401,7 +444,7 @@ class TestPollSourceTsmp:
         assert by_index["1"]["_snmp_widths"] == {"1.3.6.1.2.1.2.2.1.10": 32}
 
     def test_v3_get_typed_mapping(self, monkeypatch):
-        """v3 authPriv GET path: tsmp values serialize + map with USM config."""
+        """v3 authPriv GET path: tsnmp values serialize + map with USM config."""
         monkeypatch.setenv("TRAM_SNMP_STACK", "trishul")
 
         from trishul_snmp import (
@@ -437,8 +480,8 @@ class TestPollSourceTsmp:
             "auth_protocol": "SHA256", "auth_key": "authpass",
             "priv_protocol": "AES128", "priv_key": "privpass",
         })
-        with patch.object(src, "_build_tsmp_manager", return_value=_FakeMgr()):
-            result = asyncio.run(src._do_get_tsmp(typed=True))
+        with patch.object(src, "_build_tsnmp_manager", return_value=_FakeMgr()):
+            result = asyncio.run(src._do_get_tsnmp(typed=True))
         assert result == {
             "1.3.6.1.2.1.1.1.0": ("v3-box", "OctetString"),
             "1.3.6.1.2.1.2.2.1.10.1": ("77", "Counter32"),
@@ -446,17 +489,17 @@ class TestPollSourceTsmp:
         assert captured["targets"] == ("1.3.6.1.2.1.1.1.0", "1.3.6.1.2.1.2.2.1.10.1")
 
     def test_binary_octet_string_hex_policy(self, monkeypatch):
-        """_tsmp_val_to_str mirrors the legacy hex/MAC policy for binary data."""
+        """_tsnmp_val_to_str mirrors the legacy hex/MAC policy for binary data."""
         monkeypatch.setenv("TRAM_SNMP_STACK", "trishul")
         from trishul_snmp import OctetStringValue
 
-        assert SNMPPollSource._tsmp_val_to_str(OctetStringValue(b"\x01\x02\x03\x04\x05\x06")) == (
+        assert SNMPPollSource._tsnmp_val_to_str(OctetStringValue(b"\x01\x02\x03\x04\x05\x06")) == (
             "01:02:03:04:05:06"
         )
-        assert SNMPPollSource._tsmp_val_to_str(OctetStringValue(b"\x00\xff\x10")) == "0x00ff10"
-        assert SNMPPollSource._tsmp_val_to_str(OctetStringValue(b"printable")) == "printable"
+        assert SNMPPollSource._tsnmp_val_to_str(OctetStringValue(b"\x00\xff\x10")) == "0x00ff10"
+        assert SNMPPollSource._tsnmp_val_to_str(OctetStringValue(b"printable")) == "printable"
 
-    def test_test_connection_tsmp(self, monkeypatch):
+    def test_test_connection_tsnmp(self, monkeypatch):
         monkeypatch.setenv("TRAM_SNMP_STACK", "trishul")
         with _ResponderThread(_responder_objects()) as responder:
             src = SNMPPollSource({
@@ -465,10 +508,10 @@ class TestPollSourceTsmp:
             })
             result = src.test_connection()
         assert result["ok"] is True
-        assert "sysDescr" in result["detail"] or "tsmp responder" in result["detail"]
+        assert "sysDescr" in result["detail"] or "tsnmp responder" in result["detail"]
 
     def test_classify_resolve_enum_via_tsmi_bundle(self, tmp_path, monkeypatch):
-        """End-to-end: tsmp typed walk + tsmi-bundle resolution + enum labels.
+        """End-to-end: tsnmp typed walk + tsmi-bundle resolution + enum labels.
 
         The shared classify layer consumes the tsmi bundle's structured
         indices and enums exactly as it consumes the pysnmp MIB view —
@@ -485,9 +528,9 @@ class TestPollSourceTsmp:
         (tmp_path / "IF-MIB.json").write_text(_json.dumps(bundle))
 
         objects = [
-            ((1, 3, 6, 1, 2, 1, 2, 2, 1, 1, 1), _tsmp_value("IntegerValue", 1)),
-            ((1, 3, 6, 1, 2, 1, 2, 2, 1, 8, 1), _tsmp_value("IntegerValue", 1)),
-            ((1, 3, 6, 1, 2, 1, 2, 2, 1, 10, 1), _tsmp_value("Counter32Value", 100)),
+            ((1, 3, 6, 1, 2, 1, 2, 2, 1, 1, 1), _tsnmp_value("IntegerValue", 1)),
+            ((1, 3, 6, 1, 2, 1, 2, 2, 1, 8, 1), _tsnmp_value("IntegerValue", 1)),
+            ((1, 3, 6, 1, 2, 1, 2, 2, 1, 10, 1), _tsnmp_value("Counter32Value", 100)),
         ]
         with _ResponderThread(objects) as responder:
             src = SNMPPollSource({
@@ -505,12 +548,123 @@ class TestPollSourceTsmp:
         assert rows[0]["_metrics"] == {"ifInOctets": 100}
         assert rows[0]["_snmp_widths"] == {"ifInOctets": 32}
 
+    def test_classify_tc_enum_via_tsmi_bundle(self, tmp_path, monkeypatch):
+        """TC-typed columns render their TC's enum labels (trishul-smi #44).
 
-# ── trap source tsmp path ───────────────────────────────────────────────────
+        ``ifType``'s SYNTAX names the ``IANAifType`` textual convention — the
+        tsmi IR keeps TC enums in ``types``, not on the column node. The
+        classify layer threads them through, matching legacy pysnmp's
+        ``softwareLoopback (24)`` rendering. Precedence is preserved: inline
+        enum (ifOperStatus) and TC enum (ifType) both label; a non-enum
+        column stays a plain value.
+        """
+        monkeypatch.setenv("TRAM_SNMP_STACK", "trishul")
+        _write_bundle(tmp_path)
+
+        objects = [
+            ((1, 3, 6, 1, 2, 1, 2, 2, 1, 1, 1), _tsnmp_value("IntegerValue", 1)),
+            ((1, 3, 6, 1, 2, 1, 2, 2, 1, 3, 1), _tsnmp_value("IntegerValue", 24)),
+            ((1, 3, 6, 1, 2, 1, 2, 2, 1, 8, 1), _tsnmp_value("IntegerValue", 1)),
+        ]
+        with _ResponderThread(objects) as responder:
+            src = SNMPPollSource({
+                "host": "127.0.0.1", "port": responder.port,
+                "oids": ["1.3.6.1.2.1.2"], "operation": "walk",
+                "classify": True, "yield_rows": True, "index_depth": 0,
+                "resolve_oids": True, "mib_dirs": [str(tmp_path)],
+                "mib_modules": ["IF-MIB"],
+            })
+            payload, _ = next(iter(src.read()))
+        rows = json.loads(payload)
+        assert len(rows) == 1
+        assert rows[0]["_index"] == "1"
+        assert rows[0]["_labels"] == {
+            "ifIndex": "1",
+            "ifType": "softwareLoopback (24)",
+            "ifOperStatus": "up (1)",
+        }
+        assert rows[0]["_metrics"] == {}
+
+    def test_mib_enum_name_tc_graceful_degradation(self, tmp_path, monkeypatch):
+        """Missing TC module degrades exactly like today (None, no exception)."""
+        monkeypatch.setenv("TRAM_SNMP_STACK", "trishul")
+        _write_bundle(tmp_path)
+        import json as _json
+        bundle = _json.loads((tmp_path / "IF-MIB.json").read_text())
+        # Point a column at a TC that exists in no module of the corpus.
+        bundle["objects"]["ifType"]["syntax"] = "NoSuchTC"
+        (tmp_path / "IF-MIB.json").write_text(_json.dumps(bundle))
+        view = get_mib_view([str(tmp_path)], ["IF-MIB"])
+        assert SNMPPollSource._mib_enum_name(view, "IF-MIB", "ifType", "24") is None
+        # Non-enum columns stay untouched.
+        assert SNMPPollSource._mib_enum_name(view, "IF-MIB", "ifDescr", "lo") is None
+
+    def test_mib_enum_name_real_corpus_tc_parity(self, monkeypatch):
+        """Shipped corpus: ifType renders the same labels as legacy pysnmp.
+
+        files/mibs_compiled carries IF-MIB + IANAifType-MIB in both formats,
+        so the TC-enum fallback resolves against the real corpus — the exact
+        values from the kind E2E capture (24/6/71 on a live ifTable).
+        """
+        import os
+        corpus = os.path.join(os.path.dirname(__file__), "..", "..", "files", "mibs_compiled")
+        corpus = os.path.normpath(corpus)
+        monkeypatch.setenv("TRAM_SNMP_STACK", "trishul")
+        view = get_mib_view([corpus], [])
+        assert SNMPPollSource._mib_enum_name(view, "IF-MIB", "ifType", "24") == "softwareLoopback"
+        assert SNMPPollSource._mib_enum_name(view, "IF-MIB", "ifType", "6") == "ethernetCsmacd"
+        assert SNMPPollSource._mib_enum_name(view, "IF-MIB", "ifType", "71") == "ieee80211"
+        # Inline enums and unknown values are unaffected.
+        assert SNMPPollSource._mib_enum_name(view, "IF-MIB", "ifOperStatus", "1") == "up"
+        assert SNMPPollSource._mib_enum_name(view, "IF-MIB", "ifType", "0") is None
+
+    def test_mib_enum_name_tc_range_constraint_not_enum(self, tmp_path, monkeypatch):
+        """Range-constrained TCs (kind "range") must not be read as enum
+        tables (review B1): a saturation value returns None, never the range
+        MIN as a bogus label."""
+        monkeypatch.setenv("TRAM_SNMP_STACK", "trishul")
+        _write_bundle(tmp_path)
+        import json as _json
+        bundle = _json.loads((tmp_path / "SNMPv2-MIB.json").read_text())
+        bundle["types"]["Integer32"] = {
+            "class": "textualconvention",
+            "base_type": "INTEGER",
+            "constraints": {"kind": "range", "data": [[-2147483648, 2147483647]]},
+        }
+        (tmp_path / "SNMPv2-MIB.json").write_text(_json.dumps(bundle))
+        ifmib = _json.loads((tmp_path / "IF-MIB.json").read_text())
+        ifmib["objects"]["ipDefaultTTL"] = {
+            "oid": "1.3.6.1.2.1.4.2",
+            "object_type": "OBJECT-TYPE",
+            "class": "objecttype",
+            "nodetype": "scalar",
+            "syntax": "Integer32",
+        }
+        ifmib["imports"]["SNMPv2-MIB"] = ["sysDescr", "Integer32"]
+        (tmp_path / "IF-MIB.json").write_text(_json.dumps(ifmib))
+        view = get_mib_view([str(tmp_path)], ["IF-MIB"])
+        assert SNMPPollSource._mib_enum_name(view, "IF-MIB", "ipDefaultTTL", "2147483647") is None
+        assert SNMPPollSource._mib_enum_name(view, "IF-MIB", "ipDefaultTTL", "-2147483648") is None
+        # The real enum-TC path still works after the gate.
+        assert SNMPPollSource._mib_enum_name(view, "IF-MIB", "ifType", "24") == "softwareLoopback"
+
+    def test_mib_enum_name_real_corpus_range_tc_stays_none(self, monkeypatch):
+        """Shipped corpus: Integer32 (range TC) at a saturation value stays
+        None — the review B1 repro through the actual code path."""
+        import os
+        corpus = os.path.join(os.path.dirname(__file__), "..", "..", "files", "mibs_compiled")
+        corpus = os.path.normpath(corpus)
+        monkeypatch.setenv("TRAM_SNMP_STACK", "trishul")
+        view = get_mib_view([corpus], [])
+        assert SNMPPollSource._mib_enum_name(view, "IP-MIB", "ipDefaultTTL", "2147483647") is None
+        assert SNMPPollSource._mib_enum_name(view, "IP-MIB", "ipDefaultTTL", "-2147483648") is None
+
+
+# ── trap source tsnmp path ───────────────────────────────────────────────────
 
 
 class _SenderThread:
-    """Sends one trap from its own event loop (tsmp notifier)."""
+    """Sends one trap from its own event loop (tsnmp notifier)."""
 
     def __init__(self, port: int, version: str = "2c", **usm):
         self.port = port
@@ -559,7 +713,7 @@ class _SenderThread:
             )
 
 
-class TestTrapSourceTsmp:
+class TestTrapSourceTsnmp:
     def test_read_stream_receives_v2c_trap(self, monkeypatch):
         monkeypatch.setenv("TRAM_SNMP_STACK", "trishul")
         port = _free_port()
@@ -608,7 +762,7 @@ class TestTrapSourceTsmp:
     def test_decode_notification_v2c(self, monkeypatch):
         """decode_notification path: send a trap to a capture socket, decode it.
 
-        Calls tsmp's ``decode_notification`` directly (C6): the flag-on trap
+        Calls tsnmp's ``decode_notification`` directly (C6): the flag-on trap
         stream has no connector-level offline decoder — the listener path
         uses ``decode_notification`` internally, which is what this exercises.
         """
@@ -682,11 +836,11 @@ class TestTrapSourceTsmp:
             decode_notification(b"\x00\x01\x02garbage")
 
 
-# ── trap sink tsmp path ─────────────────────────────────────────────────────
+# ── trap sink tsnmp path ─────────────────────────────────────────────────────
 
 
 class _CaptureListener:
-    """In-process tsmp notification listener capturing one event.
+    """In-process tsnmp notification listener capturing one event.
 
     Signals ``ready`` once the listener socket is bound so a sender fired
     right after ``start()`` can never drop its trap into an unbound socket
@@ -745,7 +899,7 @@ class _CaptureListener:
         assert self.event is not None, "listener captured no event"
 
 
-class TestTrapSinkTsmp:
+class TestTrapSinkTsnmp:
     def test_v2c_send_auto_varbinds(self, monkeypatch):
         monkeypatch.setenv("TRAM_SNMP_STACK", "trishul")
         port = _free_port()
@@ -810,7 +964,7 @@ class TestTrapSinkTsmp:
         assert varbinds["1.3.6.1.4.1.99999.1.0"] == "v1-alarm"
         # the v1 PDU carries sysUpTime in its header — no snmpTrapOID varbind
         assert "1.3.6.1.6.3.1.1.4.1.0" not in varbinds
-        assert "1.3.6.1.2.1.1.3.0" in varbinds  # tsmp auto-prepends sysUpTime.0
+        assert "1.3.6.1.2.1.1.3.0" in varbinds  # tsnmp auto-prepends sysUpTime.0
 
     def test_v1_send_standard_trap_maps_to_generic(self, monkeypatch):
         """Standard trap OIDs map to generic traps 0-5 (RFC 2576 §3.2.3)."""
@@ -855,9 +1009,9 @@ class TestTrapSinkLegacyRegression:
     """Review BUG 2: the legacy pysnmp send path passed the varbind list as ONE
     positional to ``sendNotification`` (``SmiError: ObjectType object not fully
     initialized`` on every send). These are real, unmocked sends against an
-    in-process tsmp listener — no ``hlapi_send_notification`` mocking."""
+    in-process tsnmp listener — no ``hlapi_send_notification`` mocking."""
 
-    def test_legacy_v2c_send_against_tsmp_listener(self, monkeypatch):
+    def test_legacy_v2c_send_against_tsnmp_listener(self, monkeypatch):
         monkeypatch.delenv("TRAM_SNMP_STACK", raising=False)  # legacy / flag off
         port = _free_port()
         listener = _CaptureListener(port)
@@ -873,7 +1027,7 @@ class TestTrapSinkLegacyRegression:
         assert varbinds["1.3.6.1.6.3.1.1.4.1.0"] == "1.3.6.1.4.1.99999"
         assert "1.3.6.1.2.1.1.3.0" in varbinds
 
-    def test_legacy_v1_send_against_tsmp_listener(self, monkeypatch):
+    def test_legacy_v1_send_against_tsnmp_listener(self, monkeypatch):
         monkeypatch.delenv("TRAM_SNMP_STACK", raising=False)  # legacy / flag off
         port = _free_port()
         listener = _CaptureListener(port)
@@ -887,7 +1041,7 @@ class TestTrapSinkLegacyRegression:
         varbinds = {vb.oid_str: vb.value.to_display_string() for vb in listener.event.varbinds}
         assert varbinds["1.3.6.1.4.1.99999.1.0"] == "legacy-v1"
         # pysnmp's v1 conversion carries the RFC 2576 enterprise/specific
-        # split (the same BUG 1 semantics the tsmp path now emits).
+        # split (the same BUG 1 semantics the tsnmp path now emits).
         d = listener.event.to_dict()
         assert d["generic_trap"] == 6
         assert d["enterprise"] == "1.3.6.1.4.1"

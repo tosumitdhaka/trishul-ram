@@ -1,0 +1,5 @@
+{
+  "check": "oid-ber-arcs-2x",
+  "ok": true,
+  "evidence": "encode/decode roundtrips: {(2, 100, 3): True, (2, 40, 1): True, (2, 47, 5): True, (2, 39): True, (1, 3, 6, 1, 4, 1, 99999): True, (0, 0): True}; 2.100.3 decoded=(2, 100, 3) (0.6.1 bug: decoded as (2,49,52,3) and rejected at encode)"
+}

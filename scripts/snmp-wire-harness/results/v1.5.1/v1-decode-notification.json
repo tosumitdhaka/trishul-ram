@@ -1,0 +1,5 @@
+{
+  "check": "v1-decode-notification",
+  "ok": true,
+  "evidence": "decode_notification() on pysnmp v1 Trap-PDU: 42B decoded: pdu_type=trap, generic_trap=1, enterprise=1.3.6.1.6.3.1.1.5 (old 0.4.2: ProtocolError 'Unsupported PDU tag 0xa4')"
+}

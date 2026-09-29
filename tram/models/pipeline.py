@@ -178,30 +178,50 @@ class SyslogSourceConfig(BaseModel):
     max_connections: int = Field(64, ge=1)
 
 
-# ── SNMPv3 priv-protocol removal (v1.5.0, GH #72) ───────────────────────────
-# DES and 3DES are rejected at config validation on every SNMPv3 config class.
-# DES is obsoleted (RFC 8996 lineage) and dropped upstream (trishul-snmp #29);
-# 3DES was never standardized (expired draft) and upstream #31 makes it a
-# silent-data-loss trap on the trishul stack. AES128 is the replacement.
+# ── SNMPv3 priv-protocol restriction (v1.5.0/v1.5.1, GH #72) ────────────────
+# DES is rejected at config validation on every SNMPv3 config class: it is
+# obsoleted (RFC 8996 lineage) and dropped upstream (trishul-snmp #29).
+# 3DES-EDE is supported again in v1.5.1 — tsnmp 0.6.2 wire-fixed the #31
+# padding-interop defect (harness-validated vs pysnmp peers). The USM
+# builders map ``3DES``/``3des``/``3des-ede`` spellings to the wire protocol.
 
 _SNMP_PRIV_PROTOCOL_REMOVED: dict[str, str] = {
     "DES": (
         "DES is obsoleted (RFC 8996 lineage) and dropped by the upstream "
         "trishul-snmp stack"
     ),
-    "3DES": (
-        "3DES was never standardized (an expired draft) and is not supported "
-        "by the trishul-snmp stack"
-    ),
 }
+
+# Supported SNMPv3 privacy protocols (case-insensitive) — mirrors the USM
+# builders on BOTH stacks (``_PRIV_PROTO_NAMES`` legacy + ``_TSNMP_PRIV_PROTOCOLS``
+# tsnmp in tram/connectors/snmp/mib_utils.py; a parity test pins the union).
+# Any other spelling is rejected at validation instead of silently falling
+# back to AES128 at runtime (review C4).
+_SNMP_PRIV_PROTOCOL_VALUES: frozenset[str] = frozenset({
+    "3DES", "3DES-EDE", "AES", "AES128", "AES192", "AES256",
+})
 
 
 def _reject_removed_priv_protocol(value: str) -> str:
-    """Reject SNMPv3 privacy protocols removed in v1.5.0 (case-insensitive)."""
-    reason = _SNMP_PRIV_PROTOCOL_REMOVED.get(value.upper())
-    if reason is not None:
+    """Validate SNMPv3 ``priv_protocol`` against the supported set.
+
+    Case-insensitive. DES keeps its v1.5.0 obsoletion message (removed in
+    v1.5.0, still removed — use AES128); 3DES-EDE is accepted again in
+    v1.5.1 (``3DES``/``3des``/``3des-ede`` spellings); any other spelling is
+    rejected with the valid values listed, rather than silently mapping to
+    AES128 at runtime."""
+    upper = value.upper()
+    if upper == "DES":
         raise ValueError(
-            f"priv_protocol {value!r} was removed in v1.5.0 — {reason}; use AES128"
+            f"priv_protocol {value!r} was removed in v1.5.0 — DES is obsoleted "
+            "(RFC 8996 lineage) and dropped by the upstream trishul-snmp stack; "
+            "use AES128"
+        )
+    if upper not in _SNMP_PRIV_PROTOCOL_VALUES:
+        raise ValueError(
+            f"priv_protocol {value!r} is not a supported SNMPv3 privacy protocol "
+            "— valid values: AES, AES128, AES192, AES256, 3DES (3DES-EDE; DES "
+            "removed — use AES128)"
         )
     return value
 

@@ -1,0 +1,5 @@
+{
+  "check": "tsmp-061-enum-rendering",
+  "ok": true,
+  "evidence": "tsnmp get with --mib-bundle renders pysnmp-style labels: ifOperStatus.1 -> up(1), ifOperStatus.2 -> down(2) (0.6.1 rendering fidelity from tsmi 0.5.2 IR; TRAM does not render, additive only)"
+}

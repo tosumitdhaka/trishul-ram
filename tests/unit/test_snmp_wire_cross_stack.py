@@ -1,7 +1,7 @@
 """v1.5.0 layer 4 (GH #72) — env-gated cross-stack wire suite.
 
-TRAM's tsmp connector paths driven against **in-process pysnmp peers** — an
-independent SNMP stack on the other end of the wire (the whole point: tsmp
+TRAM's tsnmp connector paths driven against **in-process pysnmp peers** — an
+independent SNMP stack on the other end of the wire (the whole point: tsnmp
 responsers could mask a shared defect, a pysnmp peer cannot).
 
 Gated on ``TRAM_TEST_SNMP_WIRE=1`` — the default suite skips this module
@@ -13,14 +13,14 @@ ports and no cross-test collisions.
 
 Coverage:
 
-* poll source (tsmp) GET + GETNEXT-walk against the pysnmp agent for v1,
+* poll source (tsnmp) GET + GETNEXT-walk against the pysnmp agent for v1,
   v2c, v3 authPriv (SHA-256/AES-128) plus the ``*_BLUMENTHAL`` user for
   AES-256 (the AES-192/256 key-extension-derivation nuance).
-* trap sink (tsmp ``_send_trap_tsmp``) → pysnmp notification receiver:
-  v1 + v2c + v3 (v3 requires pre-seeding the receiver with the tsmp sink's
+* trap sink (tsnmp ``_send_trap_tsnmp``) → pysnmp notification receiver:
+  v1 + v2c + v3 (v3 requires pre-seeding the receiver with the tsnmp sink's
   deterministic authoritative engine id — pysnmp's USM drops traps from
-  unknown engines, a pysnmp receiver constraint, not a tsmp defect).
-* trap source (tsmp listener) ← pysnmp sender: v2c + v3 SHA-256/AES-128
+  unknown engines, a pysnmp receiver constraint, not a tsnmp defect).
+* trap source (tsnmp listener) ← pysnmp sender: v2c + v3 SHA-256/AES-128
   (the #28-defect-class catcher: a standard SHA-2 trap must be received and
   decoded, exercising real encode → wire → decode in both directions).
 """
@@ -43,8 +43,8 @@ pytestmark = pytest.mark.skipif(
 
 
 @pytest.fixture(autouse=True)
-def _tsmp_stack():
-    """This suite exercises TRAM's tsmp connector paths — pin the flag on.
+def _tsnmp_stack():
+    """This suite exercises TRAM's tsnmp connector paths — pin the flag on.
 
     Without it a connector would silently fall back to the legacy pysnmp
     path and the tests would pass for the wrong reason (pysnmp client →
@@ -139,16 +139,21 @@ class PysnmpAgent:
         auth_protos = {
             "u_sha256_aes128": config.USM_AUTH_HMAC192_SHA256,
             "u_sha256_aes256_blum": config.USM_AUTH_HMAC192_SHA256,
+            "u_sha256_3des": config.USM_AUTH_HMAC192_SHA256,
         }
         priv_protos = {
             "u_sha256_aes128": config.USM_PRIV_CFB128_AES,
-            # draft-blumenthal-04 / RFC 8963 derivation — what tsmp matches
+            # draft-blumenthal-04 / RFC 8963 derivation — what tsnmp matches
             # (pysnmp's default USM_PRIV_CFB256_AES is the Cisco/Reeder variant).
             "u_sha256_aes256_blum": config.USM_PRIV_CFB256_AES_BLUMENTHAL,
+            # 3DES-EDE (v1.5.1 re-support): pysnmp's USM_PRIV_CBC168_3DES uses
+            # the Blumenthal derivation — tsnmp's THREEDES_EDE matches it.
+            "u_sha256_3des": config.USM_PRIV_CBC168_3DES,
         }
         for name, a_key, p_key in (
             ("u_sha256_aes128", "authpass", "privpass"),
             ("u_sha256_aes256_blum", "authpass", "privpass"),
+            ("u_sha256_3des", "authpass", "privpass"),
         ):
             config.add_v3_user(snmp_engine, name, auth_protos[name], a_key, priv_protos[name], p_key)
             config.add_vacm_user(snmp_engine, 3, name, "authPriv", (1, 3, 6, 1), (1, 3, 6, 1))
@@ -198,12 +203,12 @@ class PysnmpTrapReceiver:
     """v1/v2c/v3 notification receiver capturing decoded varbind lists."""
 
     def __init__(self, v3_sink_seed: str | None = None) -> None:
-        """``v3_sink_seed`` is a ``build_tsmp_local_engine`` seed template with
+        """``v3_sink_seed`` is a ``build_tsnmp_local_engine`` seed template with
         a ``{port}`` placeholder, filled from this receiver's own port.
 
-        The resulting engine id pre-seeds the USM cache for the tsmp sink's
+        The resulting engine id pre-seeds the USM cache for the tsnmp sink's
         deterministic authoritative engine (pysnmp drops v3 traps from
-        unknown engines — a pysnmp receiver constraint, not a tsmp defect).
+        unknown engines — a pysnmp receiver constraint, not a tsnmp defect).
         """
         self.port = _free_port()
         self.received: list[list[tuple[str, str]]] = []
@@ -211,9 +216,9 @@ class PysnmpTrapReceiver:
         if v3_sink_seed is not None:
             from pysnmp.entity import config as pysnmp_config
 
-            from tram.connectors.snmp.mib_utils import build_tsmp_local_engine
+            from tram.connectors.snmp.mib_utils import build_tsnmp_local_engine
 
-            engine_id = build_tsmp_local_engine(
+            engine_id = build_tsnmp_local_engine(
                 v3_sink_seed.format(port=self.port)
             ).engine_id
             self._v3_user = (
@@ -306,11 +311,11 @@ def pysnmp_trap_receiver():
     receiver.stop()
 
 
-# ── poll source (tsmp) vs pysnmp agent ──────────────────────────────────────
+# ── poll source (tsnmp) vs pysnmp agent ──────────────────────────────────────
 
 
 class TestPollSourceVsPysnmpAgent:
-    """tsmp GET/GETNEXT-walk against the independent pysnmp agent."""
+    """tsnmp GET/GETNEXT-walk against the independent pysnmp agent."""
 
     _OID = "1.3.6.1.4.1.99999.1.1.0"
 
@@ -324,7 +329,7 @@ class TestPollSourceVsPysnmpAgent:
                 "auth_protocol": "SHA256", "auth_key": "authpass",
                 "priv_protocol": "AES128", "priv_key": "privpass",
             }),
-            # AES-256 via the draft-blumenthal-04 variant user (tsmp matches
+            # AES-256 via the draft-blumenthal-04 variant user (tsnmp matches
             # net-snmp; pysnmp's default Reeder derivation differs for
             # AES-192/256 key extension).
             ("3", {
@@ -332,8 +337,15 @@ class TestPollSourceVsPysnmpAgent:
                 "auth_protocol": "SHA256", "auth_key": "authpass",
                 "priv_protocol": "AES256", "priv_key": "privpass",
             }),
+            # 3DES-EDE (v1.5.1): tsnmp's THREEDES_EDE vs pysnmp's
+            # USM_PRIV_CBC168_3DES — the #31 padding-interop wire proof.
+            ("3", {
+                "security_name": "u_sha256_3des",
+                "auth_protocol": "SHA256", "auth_key": "authpass",
+                "priv_protocol": "3DES", "priv_key": "privpass",
+            }),
         ],
-        ids=["v1", "v2c", "v3-sha256-aes128", "v3-sha256-aes256-blumenthal"],
+        ids=["v1", "v2c", "v3-sha256-aes128", "v3-sha256-aes256-blumenthal", "v3-sha256-3des"],
     )
     def test_get(self, pysnmp_agent, version, auth):
         from tram.connectors.snmp.source import SNMPPollSource
@@ -342,6 +354,30 @@ class TestPollSourceVsPysnmpAgent:
             "host": "127.0.0.1", "port": pysnmp_agent.port,
             "oids": [self._OID], "operation": "get",
             "version": version, "timeout": 3.0, "retries": 3, **auth,
+        })
+        payload, meta = next(iter(src.read()))
+        data = json.loads(payload)
+        assert data[self._OID] == "pysnmp-agent"
+        assert meta["source_host"] == "127.0.0.1"
+
+    def test_legacy_3des_get_against_pysnmp_agent(self, pysnmp_agent, monkeypatch):
+        """Legacy (pysnmp) stack: restored 3DES-EDE GET roundtrip (v1.5.1).
+
+        This suite's autouse fixture pins the tsnmp flag; monkeypatch flips
+        the SOURCE instance to the legacy path — an in-stack pysnmp client →
+        pysnmp peer 3DES roundtrip, covering the legacy stack's restored
+        3DES that the tsnmp-flag cases don't exercise.
+        """
+        monkeypatch.delenv("TRAM_SNMP_STACK", raising=False)  # legacy path
+        from tram.connectors.snmp.source import SNMPPollSource
+
+        src = SNMPPollSource({
+            "host": "127.0.0.1", "port": pysnmp_agent.port,
+            "oids": [self._OID], "operation": "get",
+            "version": "3", "timeout": 3.0, "retries": 3,
+            "security_name": "u_sha256_3des",
+            "auth_protocol": "SHA256", "auth_key": "authpass",
+            "priv_protocol": "3DES", "priv_key": "privpass",
         })
         payload, meta = next(iter(src.read()))
         data = json.loads(payload)
@@ -362,7 +398,7 @@ class TestPollSourceVsPysnmpAgent:
         ids=["v1", "v2c", "v3-sha256-aes128"],
     )
     def test_walk_getnext_loop(self, pysnmp_agent, version, auth):
-        """tsmp WALK (GETNEXT loop) collects the smoke scalars from the agent."""
+        """tsnmp WALK (GETNEXT loop) collects the smoke scalars from the agent."""
         from tram.connectors.snmp.source import SNMPPollSource
 
         src = SNMPPollSource({
@@ -377,11 +413,11 @@ class TestPollSourceVsPysnmpAgent:
         assert data.get("1.3.6.1.4.1.99999.1.3.0") == "walk-b"
 
 
-# ── trap sink (tsmp) → pysnmp trap receiver ─────────────────────────────────
+# ── trap sink (tsnmp) → pysnmp trap receiver ─────────────────────────────────
 
 
 class TestTrapSinkToPysnmpReceiver:
-    """tsmp _send_trap_tsmp traps decoded by the independent pysnmp receiver."""
+    """tsnmp _send_trap_tsnmp traps decoded by the independent pysnmp receiver."""
 
     @pytest.mark.parametrize(
         ("version", "auth"),
@@ -442,7 +478,7 @@ class TestTrapSinkToPysnmpReceiver:
         assert (1, 3, 6, 1, 4, 1, 99999, 1, 0) in varbind_oids
 
 
-# ── trap source (tsmp listener) ← pysnmp sender ─────────────────────────────
+# ── trap source (tsnmp listener) ← pysnmp sender ─────────────────────────────
 
 
 class _PysnmpTrapSender:
@@ -495,7 +531,7 @@ class _PysnmpTrapSender:
 
 
 class TestTrapSourceFromPysnmpSender:
-    """tsmp trap listener receives + decodes standard pysnmp traps (the
+    """tsnmp trap listener receives + decodes standard pysnmp traps (the
     #28-defect-class catcher — a standard SHA-2 v3 trap must decode)."""
 
     @pytest.mark.parametrize("version", ["2c", "3"], ids=["v2c", "v3-sha256-aes128"])

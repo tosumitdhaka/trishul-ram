@@ -1,0 +1,5 @@
+{
+  "check": "v1-trap-send-receive",
+  "ok": true,
+  "evidence": "V1Notifier trap (enterprise=...99999, generic=6, specific=42, ts=123456) -> V2cNotificationListener :11167 received; event={'enterprise': '1.3.6.1.4.1.99999', 'generic_trap': 6, 'specific_trap': 42, 'agent_addr': '127.0.0.1', 'timestamp': 123456, 'pdu_type': 'trap'}"
+}

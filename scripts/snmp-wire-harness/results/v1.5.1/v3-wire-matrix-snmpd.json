@@ -1,0 +1,5 @@
+{
+  "check": "v3-wire-matrix-snmpd",
+  "ok": true,
+  "evidence": "tsmp GETs vs net-snmp snmpd 5.9.4 :11162 (net-snmp default AES-192/256 = draft-blumenthal-04 3.1.2, #30 fix): 10/10 non-DES OK \u2014 SHA-1/224/256/384/512 x AES-128/192/256 + SHA224/AES256 (extension combo) all green; DES rows fail-fast as expected"
+}

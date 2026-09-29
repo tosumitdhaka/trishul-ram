@@ -1,0 +1,5 @@
+{
+  "check": "v1-get-getnext-instackbar",
+  "ok": true,
+  "evidence": "v1 GET vs tsmp V2cResponder :11165 correctly dropped (0.6.2 #37: v1 must not be answered with v2-only exception values); v2c GET on same responder ok=True"
+}

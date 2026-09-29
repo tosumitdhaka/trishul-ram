@@ -1,0 +1,5 @@
+{
+  "check": "mib-bundle-resolve",
+  "ok": true,
+  "evidence": "load_bundle(SNMPv2-MIB.json): resolve(sysDescr)=(1, 3, 6, 1, 2, 1, 1, 1), lookup(1.3.6.1.2.1.1.1)=OidMatch(oid=(1, 3, 6, 1, 2, 1, 1, 1), module='SNMPv2-MIB', symbol='sysDescr', matched_oid=(1, 3, 6, 1, 2, 1, 1, 1), suffix=(), class_name='objecttype', object_type='OBJECT-TYPE', nodetype='scalar')"
+}

@@ -8,6 +8,10 @@ entity-API agent + net-snmp snmpd 5.9.4), which verified the upstream #28 fix
 
 - `REPORT.md` — the 2026-09-28 run's verdict + per-check table (durable copy:
   `docs/reviews/snmp-wire-harness-2026-09-28.md`)
+- `REPORT-v1.5.1.md` — the 2026-09-29 v1.5.1 re-validation (tsmi 0.5.3 + tsnmp
+  0.6.2) verdict + per-check table; its per-check JSONs live in
+  `results/v1.5.1/` (the 0.6.1/0.5.2 files in `results/` remain the historical
+  GO evidence, untouched)
 - `scripts/` — the checks, numbered in run order (`01_libtests.sh` … `09_ir_enrichment.py`);
   `smokecommon.py` is the shared helper; `pysnmp_agent.py` / `pysnmp_traprecv.py` are the
   in-process pysnmp reference peers (bind 127.0.0.1:1116x)
@@ -15,11 +19,13 @@ entity-API agent + net-snmp snmpd 5.9.4), which verified the upstream #28 fix
 
 ## Re-running
 
-Fresh venv, then install the exact validated versions:
+Fresh venv, then install the exact validated versions (the current pins are
+the v1.5.1 set; re-runs should compare against both the 0.6.1/0.5.2 baseline
+in `results/` and the 0.6.2/0.5.3 set in `results/v1.5.1/`):
 
 ```bash
 python3 -m venv .venv-harness && . .venv-harness/bin/activate
-pip install 'trishul-snmp[v3]==0.6.1' 'trishul-smi==0.5.2' 'pysnmp==7.1.30' cryptography
+pip install 'trishul-snmp[v3]==0.6.2' 'trishul-smi==0.5.3' 'pysnmp==7.1.30' cryptography
 ```
 
 Run `scripts/01_libtests.sh` first (both lib test suites), then the numbered checks in

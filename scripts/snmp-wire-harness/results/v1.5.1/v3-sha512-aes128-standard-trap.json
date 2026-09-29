@@ -1,0 +1,5 @@
+{
+  "check": "v3-sha512-aes128-standard-trap",
+  "ok": true,
+  "evidence": "pysnmp 7.1.30 SHA-512/AES-128 authPriv trap -> tsmp listener :11262: received (2 varbinds, security_level=authPriv)"
+}

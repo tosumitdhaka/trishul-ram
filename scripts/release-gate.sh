@@ -105,10 +105,17 @@ fi
 if [ "$FAST" -eq 1 ]; then
   record PASS "pytest + coverage floor (skipped: --fast)"
 else
-  # TRAM_TEST_SNMP_WIRE=1 enables the cross-stack (tsmp-vs-pysnmp) wire suite —
+  # Deterministic interpreter: prefer the repo venv (the dependency set every
+  # TRAM validation runs against). A bare `pytest` can resolve to a host-global
+  # interpreter with skewed deps — v1.5.1's gate ran pysnmp 7.1.24 there while
+  # the venv/images carry 7.1.25/7.1.30, and the 3DES wire tests failed on
+  # exactly that skew. CI (no .venv) falls back to python3 -m pytest.
+  # TRAM_TEST_SNMP_WIRE=1 enables the cross-stack (tsnmp-vs-pysnmp) wire suite —
   # catches wire-level breakage the in-stack tests can mask (the trishul-snmp
   # #28 defect class)
-  if TRAM_TEST_SNMP_WIRE=1 pytest tests/unit/ tests/integration/ -q --tb=short --cov=tram \
+  GATE_PYTEST="python3 -m pytest"
+  [ -x ".venv/bin/python" ] && GATE_PYTEST=".venv/bin/python -m pytest"
+  if TRAM_TEST_SNMP_WIRE=1 $GATE_PYTEST tests/unit/ tests/integration/ -q --tb=short --cov=tram \
       --cov-report=term-missing --cov-fail-under=75 >/tmp/tram-gate-pytest.log 2>&1; then
     record PASS "pytest + coverage floor (75%)"
   else

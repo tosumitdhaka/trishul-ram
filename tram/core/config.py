@@ -24,7 +24,7 @@ def _env_int(name: str, default: int) -> int:
 
 
 def _env_snmp_stack() -> str:
-    """``TRAM_SNMP_STACK`` (v1.5.0, GH #72) — ``legacy`` (pysnmp) | ``trishul`` (tsmi/tsmp).
+    """``TRAM_SNMP_STACK`` (v1.5.0, GH #72) — ``legacy`` (pysnmp) | ``trishul`` (tsmi/tsnmp).
 
     Default ``legacy``. Invalid values fail loud (a ``ValueError`` naming the
     variable) instead of silently picking a stack — the strictest pattern in
@@ -42,7 +42,7 @@ def _env_snmp_stack() -> str:
 
 
 def snmp_stack() -> str:
-    """Active SNMP stack — ``legacy`` (pysnmp/pysmi) | ``trishul`` (tsmi/tsmp).
+    """Active SNMP stack — ``legacy`` (pysnmp/pysmi) | ``trishul`` (tsmi/tsnmp).
 
     v1.5.0 layer 3 flag reader (GH #72). Reads ``TRAM_SNMP_STACK`` each call
     so a re-exec'd worker picks up the value the process was started with;
@@ -178,7 +178,7 @@ class AppConfig:
     # GH #44: serve /docs, /redoc, /openapi.json (default on for dev; the
     # production recommendation is to disable via TRAM_DOCS_ENABLED=false)
     docs_enabled: bool = True
-    # v1.5.0 (GH #72): SNMP library stack — "legacy" (pysnmp) | "trishul" (tsmi/tsmp).
+    # v1.5.0 (GH #72): SNMP library stack — "legacy" (pysnmp) | "trishul" (tsmi/tsnmp).
     # Definition only in v1.5.0 layer 2; the reader/consumer lands in layer 3.
     snmp_stack: str = "legacy"
 

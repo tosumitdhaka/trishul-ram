@@ -89,7 +89,7 @@ All configuration is via environment variables (12-factor).
 `TRAM_SNMP_STACK` defaults to `legacy` (pysnmp), so existing deployments are
 unaffected until they opt in. During the flag period **both** stacks must be
 installed on every plane (`tram[snmp]` pins pysnmp/pyasn1 **and**
-`trishul-smi==0.5.2` / `trishul-snmp[v3]==0.6.1`), because the flag is read at
+`trishul-smi==0.5.3` / `trishul-snmp[v3]==0.6.2`), because the flag is read at
 startup and rollback is a redeploy with the flag off. Manager/worker mismatch
 handling: a mismatched rolling upgrade does **not** fail at startup — the
 manager logs a WARNING (once per worker) when a worker's reported stack

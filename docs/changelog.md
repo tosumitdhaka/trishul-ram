@@ -5,13 +5,21 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ---
 
-## [Unreleased]
+## [1.5.1] - 2026-09-29
+
+### Added
+- SNMPv3 3DES-EDE priv support restored — v1.5.0 rejected it as a workaround for the upstream trishul-snmp #31 padding-interop defect, which tsnmp 0.6.2 wire-fixes (validated live: 3DES request matrix 6/6 vs pysnmp peers, SHA-512/3DES traps received, a `v3-sha256-3des` roundtrip case in the cross-stack wire suite, and a legacy-stack 3DES wire case; evidence: `scripts/snmp-wire-harness/REPORT-v1.5.1.md` + `results/v1.5.1/`). All spellings (`3DES`, `3des`, `3des-ede`, `3DES-EDE`) validate and map to 3DES-EDE on both stacks. 3DES remains a deprecated, never-standardized cipher — use AES where peers allow it
 
 ### Changed
-- The `snmp` extra now floor-pins the in-house libraries — `trishul-smi>=0.5.2`, `trishul-snmp[v3]>=0.6.1` (was exact pins in v1.5.0) — so their patch releases flow without a TRAM release (maintainer decision 2026-09-29; wire-validated baseline: tsmi 0.5.2 / tsnmp 0.6.1)
+- In-house SNMP library pins advanced to the newly released `trishul-smi==0.5.3` + `trishul-snmp[v3]==0.6.2` (from 0.5.2/0.6.1 in v1.5.0) — validated via the full wire-harness re-run (evidence in-repo: `scripts/snmp-wire-harness/REPORT-v1.5.1.md` + `results/v1.5.1/`) and a fresh kind deployment (GH #72 flag-period pin refresh). tsnmp 0.6.2 also wire-fixes 2-byte BER arc decoding (upstream #34); `priv: DES` stays rejected (upstream-dropped; use AES128)
+- `priv_protocol` now validates against the supported set — `AES, AES128, AES192, AES256, 3DES (3DES-EDE)` case-insensitive; unknown spellings are rejected at config validation with the valid values listed. Previously unknown spellings validated and silently fell back to AES128 at runtime (the `3des-ede` bug was one instance of the class — the class is now closed)
+- Internal shorthand renamed `tsmp` → `tsnmp` across connector identifiers, tests, and docs (no behavior change; the library is trishul-snmp)
 
 ### Fixed
 - Order-dependent test pollution in the SNMP connectors suite — the mocked-pysnmp tests silently assumed the real `pysnmp.hlapi` submodules had never been imported; an autouse fixture now pins that state per test (plus asserts no `TRAM_SNMP_STACK` leakage), so every module order passes identically
+- `priv: 3des-ede` silently fell back to AES128 in the v3 USM builders on both stacks (the spelling was missing from the protocol tables) — now resolves to 3DES-EDE on both stacks
+- TC-typed columns (e.g. `ifType`/IANAifType) rendered without enums on the trishul stack — the classify layer now resolves textual-convention enum tables from the corpus when a column has no inline SYNTAX enums (precedence: patterns > inline enum > TC enum > default metric), restoring parity with the legacy pysnmp path (upstream trishul-smi #44 filed for the IR-level fix)
+- The TC-enum fallback could misread range constraints as enum tables — a polled value equal to a TC's range max rendered the range min as a bogus enum label (e.g. `ipDefaultTTL` at 2147483647 → `"-2147483648"`), demoting metrics to labels. The fallback now applies only to `kind: "enum"` constraints; range-constrained columns stay un-enumerated (caught by the v1.5.1 independent review, fixed pre-tag)
 
 ## [1.5.0] - 2026-09-29
 

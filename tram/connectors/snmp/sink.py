@@ -1,6 +1,6 @@
 """SNMP trap sink connector — sends SNMP traps to a target NMS.
 
-v1.5.0 (GH #72): dual-stack. ``TRAM_SNMP_STACK=trishul`` sends via tsmp
+v1.5.0 (GH #72): dual-stack. ``TRAM_SNMP_STACK=trishul`` sends via tsnmp
 (V1/V2c/V3 notifiers, full USM auth/priv matrix); the default ``legacy``
 path is the byte-identical pysnmp implementation. The varbind building and
 config surface are shared — only the wire layer differs, and the flag-off
@@ -22,7 +22,7 @@ from tram.connectors.config_utils import (
     prepend_system_mib_dirs,
     snmpv3_usm,
 )
-from tram.connectors.snmp.mib_utils import build_tsmp_local_engine, snmp_stack
+from tram.connectors.snmp.mib_utils import build_tsnmp_local_engine, snmp_stack
 from tram.core.exceptions import SinkError
 from tram.interfaces.base_sink import BaseSink
 from tram.registry.registry import register_sink
@@ -30,7 +30,7 @@ from tram.registry.registry import register_sink
 logger = logging.getLogger(__name__)
 
 # RFC 2576 §3.2 v2→v1 trap mapping — mirrors pysnmp's proxy rfc2576.v2_to_v1
-# so a v1 trap emitted by the tsmp sink carries the same Trap-PDU fields the
+# so a v1 trap emitted by the tsnmp sink carries the same Trap-PDU fields the
 # legacy path produces. Standard notification OIDs map to generic traps 0-5
 # under the snmpTraps enterprise root; enterprise-specific OIDs split into
 # enterprise + specific-trap with generic=6 (an RFC 2576-conformant NMS
@@ -71,7 +71,9 @@ class SNMPTrapSink(BaseSink):
         security_name   (str)   SNMPv3 USM username.
         auth_protocol   (str)   MD5 | SHA | SHA224 | SHA256 | SHA384 | SHA512.
         auth_key        (str)   Auth passphrase (None → noAuthNoPriv).
-        priv_protocol   (str)   AES | AES128 | AES192 | AES256 (DES/3DES rejected at validation).
+        priv_protocol   (str)   AES | AES128 | AES192 | AES256 | 3DES
+                        (3DES-EDE supported again in v1.5.1; DES rejected at
+                        validation).
         priv_key        (str)   Privacy passphrase (None → authNoPriv).
         context_name    (str)   SNMPv3 context name.
     """
@@ -171,11 +173,11 @@ class SNMPTrapSink(BaseSink):
 
         return var_binds
 
-    # ── tsmp wire layer (v1.5.0 flag-on) ────────────────────────────────────
+    # ── tsnmp wire layer (v1.5.0 flag-on) ────────────────────────────────────
 
     # Config type names → trishul_snmp value classes (the value shapes differ
     # per type, so the classes are used individually, not through one map).
-    _TSMP_TYPE_BUILDERS = {
+    _TSNMP_TYPE_BUILDERS = {
         "Integer32": "integer",
         "OctetString": "octet-string",
         "Counter32": "counter32",
@@ -188,8 +190,8 @@ class SNMPTrapSink(BaseSink):
     }
 
     @staticmethod
-    def _build_tsmp_value(type_name: str, val):
-        """Build a tsmp SnmpValue from a config type name + raw value."""
+    def _build_tsnmp_value(type_name: str, val):
+        """Build a tsnmp SnmpValue from a config type name + raw value."""
         from trishul_snmp import (
             Counter32Value,
             Counter64Value,
@@ -202,7 +204,7 @@ class SNMPTrapSink(BaseSink):
             TimeTicksValue,
         )
 
-        kind = SNMPTrapSink._TSMP_TYPE_BUILDERS.get(type_name, "octet-string")
+        kind = SNMPTrapSink._TSNMP_TYPE_BUILDERS.get(type_name, "octet-string")
         if kind == "integer":
             return IntegerValue(int(val))
         if kind == "counter32":
@@ -222,8 +224,8 @@ class SNMPTrapSink(BaseSink):
             return OpaqueValue(raw)
         return OctetStringValue(str(val).encode("utf-8"))
 
-    def _build_var_binds_tsmp(self, bindings_raw: dict) -> list:
-        """Build tsmp ``(oid, value)`` varbind inputs, mirroring the legacy spec."""
+    def _build_var_binds_tsnmp(self, bindings_raw: dict) -> list:
+        """Build tsnmp ``(oid, value)`` varbind inputs, mirroring the legacy spec."""
         var_binds = []
 
         if self.varbinds:
@@ -251,23 +253,23 @@ class SNMPTrapSink(BaseSink):
                             oid_str = ".".join(str(x) for x in resolved)
 
                 try:
-                    var_binds.append((oid_str, self._build_tsmp_value(type_name, val)))
+                    var_binds.append((oid_str, self._build_tsnmp_value(type_name, val)))
                 except Exception as exc:
                     logger.warning("Skipping varbind %s=%s: %s", oid_str, val, exc)
         else:
             for oid, val in bindings_raw.items():
                 try:
                     if isinstance(val, int):
-                        var_binds.append((oid, self._build_tsmp_value("Integer32", val)))
+                        var_binds.append((oid, self._build_tsnmp_value("Integer32", val)))
                     else:
-                        var_binds.append((oid, self._build_tsmp_value("OctetString", val)))
+                        var_binds.append((oid, self._build_tsnmp_value("OctetString", val)))
                 except Exception as exc:
                     logger.warning("Skipping invalid OID binding %s=%s: %s", oid, val, exc)
 
         return var_binds
 
-    async def _send_trap_tsmp(self, bindings_raw: dict) -> None:
-        """Send one trap via tsmp notifiers (v1.5.0 flag-on path).
+    async def _send_trap_tsnmp(self, bindings_raw: dict) -> None:
+        """Send one trap via tsnmp notifiers (v1.5.0 flag-on path).
 
         The notifiers auto-build the sysUpTime.0 + snmpTrapOID.0 varbinds
         (v2c/v3) and the v1 Trap-PDU enterprise/timestamp fields, so only the
@@ -286,7 +288,7 @@ class SNMPTrapSink(BaseSink):
             "timeout": self.timeout,
             "retries": self.retries,
         }
-        var_binds = self._build_var_binds_tsmp(bindings_raw)
+        var_binds = self._build_var_binds_tsnmp(bindings_raw)
 
         if self.version == "3":
             from trishul_snmp import V3Notifier
@@ -298,7 +300,7 @@ class SNMPTrapSink(BaseSink):
                 priv_protocol=self.priv_protocol,
                 priv_key=self.priv_key,
             )
-            local_engine = build_tsmp_local_engine(
+            local_engine = build_tsnmp_local_engine(
                 f"tram:sink:{self.host}:{self.port}:{self.security_name}"
             )
             async with V3Notifier(
@@ -332,7 +334,7 @@ class SNMPTrapSink(BaseSink):
                 generic_trap = 6
                 specific_trap = trap_oid_tuple[-1]
             # The v1 Trap-PDU carries sysUpTime + enterprise/generic/specific
-            # in its header — drop the v2c-style mandatory varbinds (tsmp
+            # in its header — drop the v2c-style mandatory varbinds (tsnmp
             # auto-prepends sysUpTime.0 to the v1 varbind list).
             v1_varbinds = [
                 (oid, val) for oid, val in var_binds
@@ -358,7 +360,7 @@ class SNMPTrapSink(BaseSink):
 
     async def _send_trap(self, hlapi_mod, bindings_raw: dict) -> None:
         if self._snmp_stack == "trishul":
-            await self._send_trap_tsmp(bindings_raw)
+            await self._send_trap_tsnmp(bindings_raw)
             return
         from tram.connectors.snmp.mib_utils import (
             build_v3_auth,
@@ -431,7 +433,7 @@ class SNMPTrapSink(BaseSink):
 
     def write(self, data: bytes, meta: dict) -> None:
         if self._snmp_stack == "trishul":
-            # tsmp path (v1.5.0 flag-on): no pysnmp requirement.
+            # tsnmp path (v1.5.0 flag-on): no pysnmp requirement.
             _hlapi = None
         else:
             try:

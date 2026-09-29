@@ -1,0 +1,5 @@
+{
+  "check": "v3-3des-padding-interop",
+  "ok": true,
+  "evidence": "3DES-EDE padding interop (0.6.2 #31 fix, was the 0.6.1 defect): decrypt now truncates to the ScopedPDU BER extent per draft-reeder-3desede-00 5.1.1.3 \u2014 pysnmp zero-pad ciphertext -> OK; RFC 3414-convention pad (zeros + last=length) -> OK; tsmp's own PKCS7 ciphertext decrypts fine on pysnmp: OK (ignores PKCS7 tail). Live wire: 3DES request matrix vs pysnmp agent now 6/6 OK (was 0/6) and pysnmp SHA512/3DES traps are received + decoded (was DROPPED UNDECODABLE_BER)"
+}

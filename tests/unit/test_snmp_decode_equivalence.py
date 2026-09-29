@@ -3,8 +3,8 @@
 The SAME trap BER bytes decoded through both wire stacks:
 
 * legacy pysnmp ``SNMPTrapSource._decode_trap`` (flag off)
-* tsmp ``decode_notification`` (flag on — called directly, the same decoder
-  the tsmp listener path uses; there is no connector-level offline decoder)
+* tsnmp ``decode_notification`` (flag on — called directly, the same decoder
+  the tsnmp listener path uses; there is no connector-level offline decoder)
 
 and the parsed records compared. Fixture bytes are produced by pysnmp's own
 encoder (both stacks are installed in the dev env), so this module is the
@@ -19,11 +19,11 @@ Findings encoded here (matching the layer-1 wire-harness evidence):
 
 * v2c — both stacks parse identical records (the true equivalence case).
 * v1 — the legacy v2c-spec decoder cannot parse a v1 Trap-PDU (tag 0xa4) and
-  degrades to ``_raw``; tsmp fully decodes varbinds + Trap-PDU metadata.
+  degrades to ``_raw``; tsnmp fully decodes varbinds + Trap-PDU metadata.
 * v3 authPriv — encrypted scoped PDU: legacy always degrades to ``_raw``;
-  tsmp authenticates/decrypts (the #28-defect class: a standard pysnmp
+  tsnmp authenticates/decrypts (the #28-defect class: a standard pysnmp
   SHA-256/AES-128 trap must decode).
-* v3 noAuthNoPriv — tsmp fully decodes; legacy cannot produce the payload
+* v3 noAuthNoPriv — tsnmp fully decodes; legacy cannot produce the payload
   record (``_raw`` or a header-only partial).
 """
 
@@ -40,11 +40,11 @@ from tram.connectors.snmp.source import SNMPTrapSource
 try:
     import trishul_snmp  # noqa: F401
 
-    _TSMP_AVAILABLE = True
+    _TSNMP_AVAILABLE = True
 except Exception:  # pragma: no cover - import probe only
-    _TSMP_AVAILABLE = False
+    _TSNMP_AVAILABLE = False
 
-pytestmark = pytest.mark.skipif(not _TSMP_AVAILABLE, reason="trishul_snmp not installed")
+pytestmark = pytest.mark.skipif(not _TSNMP_AVAILABLE, reason="trishul_snmp not installed")
 
 
 # ── fixture-byte builders (pysnmp's encoder) ────────────────────────────────
@@ -200,13 +200,13 @@ def _decode_legacy(raw: bytes, version: str = "2c", **_ignored) -> dict:
     return source._decode_trap(raw)
 
 
-def _decode_tsmp(raw: bytes, version: str = "2c", **usm) -> dict:
-    """Decode with tsmp's ``decode_notification`` directly (C6).
+def _decode_tsnmp(raw: bytes, version: str = "2c", **usm) -> dict:
+    """Decode with tsnmp's ``decode_notification`` directly (C6).
 
-    The flag-on trap stream decodes inside the tsmp listeners (there is no
+    The flag-on trap stream decodes inside the tsnmp listeners (there is no
     connector-level offline decoder), so the equivalence proof calls the
     same decoder the listener path uses. Values render with the trap-path
-    parity formatter (``_tsmp_val_to_legacy_str``) so the records are
+    parity formatter (``_tsnmp_val_to_legacy_str``) so the records are
     comparable to the legacy ``str(val)`` output.
     """
     from trishul_snmp import decode_notification
@@ -226,7 +226,7 @@ def _decode_tsmp(raw: bytes, version: str = "2c", **usm) -> dict:
         )
     event = decode_notification(raw, user=user)
     return {
-        vb.oid_str: SNMPTrapSource._tsmp_val_to_legacy_str(vb.value)
+        vb.oid_str: SNMPTrapSource._tsnmp_val_to_legacy_str(vb.value)
         for vb in event.varbinds
     }
 
@@ -246,8 +246,8 @@ class TestV2cDecodeEquivalence:
         """The same v2c trap bytes parse to the identical record on both stacks."""
         raw = _v2c_trap_bytes()
         legacy = _decode_legacy(raw, version="2c")
-        tsmp = _decode_tsmp(raw, version="2c")
-        assert legacy == tsmp
+        tsnmp = _decode_tsnmp(raw, version="2c")
+        assert legacy == tsnmp
         assert legacy == {
             "1.3.6.1.2.1.1.3.0": "123456",
             "1.3.6.1.6.3.1.1.4.1.0": "1.3.6.1.4.1.99999",
@@ -259,21 +259,21 @@ class TestV2cDecodeEquivalence:
 
 
 class TestV1DecodeEquivalence:
-    def test_legacy_raw_tsmp_full_record(self):
-        """v1 Trap-PDUs: legacy (v2c-spec decoder) degrades to _raw; tsmp
+    def test_legacy_raw_tsnmp_full_record(self):
+        """v1 Trap-PDUs: legacy (v2c-spec decoder) degrades to _raw; tsnmp
         fully decodes the varbind record."""
         raw = _v1_trap_bytes()
         legacy = _decode_legacy(raw, version="1")
-        tsmp = _decode_tsmp(raw, version="1")
+        tsnmp = _decode_tsnmp(raw, version="1")
 
         assert legacy == {"_raw": raw.hex()}
-        assert tsmp == {
+        assert tsnmp == {
             "1.3.6.1.2.1.1.3.0": "123456",
             "1.3.6.1.4.1.99999.1.0": "v1-alarm",
             "1.3.6.1.4.1.99999.2.0": "7",
         }
 
-    def test_tsmp_v1_trap_pdu_metadata(self):
+    def test_tsnmp_v1_trap_pdu_metadata(self):
         """decode_notification surfaces the v1 Trap-PDU metadata (enterprise,
         agent-addr, generic/specific, timestamp, community) — the record shape
         read() would carry for a v1 trap."""
@@ -292,27 +292,27 @@ class TestV1DecodeEquivalence:
 
 
 class TestV3DecodeEquivalence:
-    def test_authpriv_legacy_raw_tsmp_full(self):
+    def test_authpriv_legacy_raw_tsnmp_full(self):
         """Standard pysnmp SHA-256/AES-128 trap: legacy sees only _raw (the
-        scoped PDU is encrypted); tsmp authenticates + decrypts the full
+        scoped PDU is encrypted); tsnmp authenticates + decrypts the full
         record — the #28-defect class caught in CI."""
         fixture = _capture_pysnmp_v3_trap(
             username="trapuser", authpw="authpass", privpw="privpass"
         )
         legacy = _decode_legacy(fixture.raw, version="3", **_v3_usm_config())
-        tsmp = _decode_tsmp(fixture.raw, version="3", **_v3_usm_config())
+        tsnmp = _decode_tsnmp(fixture.raw, version="3", **_v3_usm_config())
 
         assert legacy == {"_raw": fixture.raw.hex()}
-        assert tsmp == fixture.expected
+        assert tsnmp == fixture.expected
 
-    def test_noauth_tsmp_full_legacy_cannot(self):
-        """noAuthNoPriv v3: tsmp decodes the record; legacy cannot produce
+    def test_noauth_tsnmp_full_legacy_cannot(self):
+        """noAuthNoPriv v3: tsnmp decodes the record; legacy cannot produce
         the payload varbind (either _raw or a header-only partial)."""
         fixture = _capture_pysnmp_v3_trap(username="trapuser")
-        tsmp = _decode_tsmp(
+        tsnmp = _decode_tsnmp(
             fixture.raw, version="3", security_name="trapuser"
         )
-        assert tsmp == fixture.expected
+        assert tsnmp == fixture.expected
 
         legacy = _decode_legacy(fixture.raw, version="3", security_name="trapuser")
         assert "1.3.6.1.4.1.99999.1.0" not in legacy
@@ -324,7 +324,7 @@ class TestDecodeGarbageEquivalence:
         garbage = b"\x00\x01\x02garbage"
         assert _decode_legacy(garbage) == {"_raw": garbage.hex()}
 
-    def test_tsmp_decode_notification_rejects_garbage(self):
+    def test_tsnmp_decode_notification_rejects_garbage(self):
         """decode_notification raises on undecodable bytes — the listener path
         treats a decode failure as a drop (there is no connector-level _raw
         fallback on the flag-on stack)."""

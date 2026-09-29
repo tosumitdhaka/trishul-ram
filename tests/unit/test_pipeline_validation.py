@@ -106,12 +106,15 @@ class TestScalarKnobs:
         assert cfg.retry_delay_seconds == 10
 
 
-class TestSnmpPrivProtocolRemoval:
-    """v1.5.0 (GH #72) — DES and 3DES rejected on all three SNMPv3 config classes.
+class TestSnmpPrivProtocolRestriction:
+    """SNMPv3 priv-protocol validation (v1.5.0/v1.5.1, GH #72).
 
-    DES is obsoleted (RFC 8996 lineage) and upstream-dropped; 3DES was never
-    standardized. The loader wraps Pydantic's ValidationError in ConfigError,
-    and the migration message must name AES128 as the replacement.
+    DES is rejected on all three SNMPv3 config classes — it is obsoleted
+    (RFC 8996 lineage) and upstream-dropped. 3DES-EDE was removed in v1.5.0
+    but is accepted again in v1.5.1 (tsnmp 0.6.2 wire-fixed the #31 padding
+    interop), in the ``3DES``/``3des``/``3des-ede`` spellings. The loader
+    wraps Pydantic's ValidationError in ConfigError, and the DES migration
+    message must name AES128 as the replacement.
     """
 
     _USM = """
@@ -174,7 +177,7 @@ pipeline:
     {self._USM}    priv_protocol: {priv}
 """
 
-    @pytest.mark.parametrize("algo", ["DES", "3DES", "des", "3des", "Des"])
+    @pytest.mark.parametrize("algo", ["DES", "des", "Des"])
     def test_removed_priv_rejected_on_poll_source(self, algo):
         with pytest.raises(ConfigError, match="removed in v1.5.0") as exc_info:
             _load(self._poll_yaml(algo))
@@ -182,7 +185,7 @@ pipeline:
         assert algo.upper() in message
         assert "AES128" in message
 
-    @pytest.mark.parametrize("algo", ["DES", "3DES", "des", "3des", "Des"])
+    @pytest.mark.parametrize("algo", ["DES", "des", "Des"])
     def test_removed_priv_rejected_on_trap_source(self, algo):
         with pytest.raises(ConfigError, match="removed in v1.5.0") as exc_info:
             _load(self._trap_source_yaml(algo))
@@ -190,7 +193,7 @@ pipeline:
         assert algo.upper() in message
         assert "AES128" in message
 
-    @pytest.mark.parametrize("algo", ["DES", "3DES", "des", "3des", "Des"])
+    @pytest.mark.parametrize("algo", ["DES", "des", "Des"])
     def test_removed_priv_rejected_on_trap_sink(self, algo):
         with pytest.raises(ConfigError, match="removed in v1.5.0") as exc_info:
             _load(self._trap_sink_yaml(algo))
@@ -198,7 +201,69 @@ pipeline:
         assert algo.upper() in message
         assert "AES128" in message
 
+    @pytest.mark.parametrize(
+        "algo", ["3DES", "3des", "3des-ede", "3DES-EDE"],
+        ids=["3DES", "3des", "3des-ede", "3DES-EDE"],
+    )
+    def test_3des_accepted_on_poll_source(self, algo):
+        """3DES-EDE is supported again in v1.5.1 (tsnmp 0.6.2 #31 fix)."""
+        cfg = _load(self._poll_yaml(algo))
+        assert cfg.source.priv_protocol == algo
+
+    @pytest.mark.parametrize(
+        "algo", ["3DES", "3des", "3des-ede", "3DES-EDE"],
+        ids=["3DES", "3des", "3des-ede", "3DES-EDE"],
+    )
+    def test_3des_accepted_on_trap_source(self, algo):
+        cfg = _load(self._trap_source_yaml(algo))
+        assert cfg.source.priv_protocol == algo
+
+    @pytest.mark.parametrize(
+        "algo", ["3DES", "3des", "3des-ede", "3DES-EDE"],
+        ids=["3DES", "3des", "3des-ede", "3DES-EDE"],
+    )
+    def test_3des_accepted_on_trap_sink(self, algo):
+        cfg = _load(self._trap_sink_yaml(algo))
+        assert cfg.sink.priv_protocol == algo
+
+    @pytest.mark.parametrize("garbage", ["3DESEDE", "3des_ede", "AES-512", "foo"])
+    def test_garbage_priv_rejected_on_poll_source(self, garbage):
+        """Unknown spellings reject instead of silently mapping to AES128
+        at runtime (review C4)."""
+        with pytest.raises(ConfigError, match="not a supported SNMPv3 privacy protocol") as exc_info:
+            _load(self._poll_yaml(garbage))
+        message = str(exc_info.value)
+        assert "AES128" in message
+        assert "3DES" in message
+
+    @pytest.mark.parametrize("garbage", ["3DESEDE", "3des_ede", "AES-512", "foo"])
+    def test_garbage_priv_rejected_on_trap_source(self, garbage):
+        with pytest.raises(ConfigError, match="not a supported SNMPv3 privacy protocol"):
+            _load(self._trap_source_yaml(garbage))
+
+    @pytest.mark.parametrize("garbage", ["3DESEDE", "3des_ede", "AES-512", "foo"])
+    def test_garbage_priv_rejected_on_trap_sink(self, garbage):
+        with pytest.raises(ConfigError, match="not a supported SNMPv3 privacy protocol"):
+            _load(self._trap_sink_yaml(garbage))
+
     def test_valid_priv_protocols_still_accepted(self):
-        for algo in ("AES", "AES128", "AES192", "AES256", "aes"):
+        for algo in ("AES", "AES128", "AES192", "AES256", "aes", "3DES", "3des-ede"):
             cfg = _load(self._poll_yaml(algo))
             assert cfg.source.priv_protocol == algo
+
+    def test_validator_set_matches_both_usm_builders(self):
+        """The validator's accepted set is exactly the union of the USM
+        builders' mapping keys on BOTH stacks (+ DES, which is rejected) —
+        nothing a builder maps can be a config 400 (review C4)."""
+        from tram.connectors.snmp.mib_utils import (
+            _PRIV_PROTO_NAMES,
+            _TSNMP_PRIV_PROTOCOLS,
+        )
+        from tram.models.pipeline import _SNMP_PRIV_PROTOCOL_VALUES
+
+        legacy_keys = set(_PRIV_PROTO_NAMES)
+        tsnmp_keys = set(_TSNMP_PRIV_PROTOCOLS)
+        assert legacy_keys == tsnmp_keys, (
+            f"legacy/tsnmp priv mappings diverged: {legacy_keys} vs {tsnmp_keys}"
+        )
+        assert _SNMP_PRIV_PROTOCOL_VALUES | {"DES"} == legacy_keys
