@@ -1,0 +1,5 @@
+{
+  "check": "xstack-tsmp-to-pysnmp",
+  "ok": true,
+  "evidence": "tsmp V2cManager GET/GETNEXT/WALK vs pysnmp 7.1.29 agent :11163: GET='pysnmp-agent 7.1.29 reference for tsmi/t' walk(6 scalars)=6 varbinds, GETNEXT->(1, 3, 6, 1, 4, 1, 99999, 1, 2, 0)"
+}

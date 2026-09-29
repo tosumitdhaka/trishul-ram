@@ -486,7 +486,6 @@ class TestBuildV3Auth:
         m.usmHMACMD5AuthProtocol = "MD5_CONST"
         m.usmHMAC192SHA256AuthProtocol = "SHA256_CONST"
         m.usmAesCfb128Protocol = "AES128_CONST"
-        m.usmDESPrivProtocol = "DES_CONST"
         m.usmAesCfb256Protocol = "AES256_CONST"
         m.UsmUserData = MagicMock(return_value="usm_obj")
         return m
@@ -535,14 +534,14 @@ class TestBuildV3Auth:
         call_kwargs = hlapi.UsmUserData.call_args[1]
         assert call_kwargs["authProtocol"] == "SHA256_CONST"
 
-    def test_des_priv_protocol_resolves(self):
-        """priv_protocol='DES' maps to usmDESPrivProtocol."""
+    def test_aes128_priv_protocol_resolves(self):
+        """priv_protocol='AES128' maps to usmAesCfb128Protocol (DES removed in v1.5.0)."""
         from tram.connectors.snmp.mib_utils import build_v3_auth
         hlapi = self._mock_hlapi()
         build_v3_auth(hlapi, security_name="u", auth_key="a", priv_key="p",
-                      priv_protocol="DES")
+                      priv_protocol="AES128")
         call_kwargs = hlapi.UsmUserData.call_args[1]
-        assert call_kwargs["privProtocol"] == "DES_CONST"
+        assert call_kwargs["privProtocol"] == "AES128_CONST"
 
     def test_aes256_priv_protocol_resolves(self):
         """priv_protocol='AES256' maps to usmAesCfb256Protocol."""
@@ -1134,7 +1133,7 @@ class TestSNMPTrapSinkV3Config:
             "security_name": "trapuser",
             "auth_protocol": "MD5",
             "auth_key": "authpass",
-            "priv_protocol": "DES",
+            "priv_protocol": "AES128",
             "priv_key": "privpass",
             "context_name": "trapctx",
         })
@@ -1142,7 +1141,7 @@ class TestSNMPTrapSinkV3Config:
         assert sink.security_name == "trapuser"
         assert sink.auth_protocol == "MD5"
         assert sink.auth_key == "authpass"
-        assert sink.priv_protocol == "DES"
+        assert sink.priv_protocol == "AES128"
         assert sink.priv_key == "privpass"
         assert sink.context_name == "trapctx"
 
@@ -1651,12 +1650,18 @@ class TestSNMPTrapSinkBuildVarBinds:
 class TestSNMPTrapSinkSendTrap:
     """Tests for _send_trap using asyncio.run."""
 
-    def test_send_trap_passes_varbinds_as_list(self):
-        """Async HLAPI expects varBinds as one list argument, not variadic args."""
+    def test_send_trap_passes_varbinds_as_varargs(self):
+        """sendNotification takes varBinds as variadic args (review BUG 2).
+
+        The pre-fix code passed the varbind list as ONE positional, which
+        pysnmp treats as a single varBind and rejects with ``SmiError:
+        ObjectType object not fully initialized`` on every legacy send. The
+        sink must splat each ObjectType as its own positional argument.
+        """
         captured = {}
         mock_hlapi = _make_mock_hlapi()
 
-        async def _fake_send(snmpEngine, authData, transportTarget, contextData, notifyType, varBinds, **options):
+        async def _fake_send(snmpEngine, authData, transportTarget, contextData, notifyType, *varBinds, **options):
             captured["notifyType"] = notifyType
             captured["varBinds"] = varBinds
             return (None, None, None, [])
@@ -1673,8 +1678,9 @@ class TestSNMPTrapSinkSendTrap:
         asyncio.run(sink._send_trap(mock_hlapi, {"1.3.6.1": "val"}))
 
         assert captured["notifyType"] == "trap"
-        assert isinstance(captured["varBinds"], list)
-        assert len(captured["varBinds"]) >= 2
+        # sysUpTime.0 + snmpTrapOID.0 + the payload varbind, each as its own arg
+        assert len(captured["varBinds"]) >= 3
+        assert all(not isinstance(vb, list) for vb in captured["varBinds"])
 
     def test_send_trap_v2c(self):
         """v2c trap: uses CommunityData, calls sendNotification."""

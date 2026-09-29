@@ -134,14 +134,19 @@ unconfirmed work lives in the backlog at the bottom.
 
 ---
 
-## v1.5.0 — AI Provider Layer + SNMP Library Swap
+## v1.5.0 — SNMP Library Swap (pysnmp/pysmi → trishul-snmp/tsmp)
 
-> Both scope-defining decisions made by the maintainer on 2026-09-25. Hold lifted 2026-09-28: the upstream round completed (tsmi 0.5.2 / tsmp 0.6.1), trishul-snmp #28 + #29 resolved, harness re-run green — GO for the swap. Known limitation: 3DES-EDE interop with draft-reeder-compliant peers pending upstream #31 (documented, not blocking).
+> Scope-defining decision 2026-09-25 (option C); gate MET 2026-09-28 (tsmi 0.5.2 / tsmp 0.6.1 wire-proven, trishul-snmp #28 + #29 resolved — addenda §12–13 in `docs/ideas/trishul-smi-snmp-migration-feasibility.md`); re-scoped 2026-09-28 after the independent plan review: swap only, the AI layer becomes a post-v1.5.0 design question. Known limitation: 3DES-EDE interop with draft-reeder-compliant peers pending upstream #31 — moot for TRAM, which drops 3DES entirely (below).
 
-- [ ] **treq `_providers/` vendoring (GH #71)** — copy the layer (no library extraction), adaptation list per `docs/ideas/treq-ai-reuse-feasibility.md`; preserve the v1.4.6 security properties (A10 audit, A11 base_url policy, redaction, three-state config) on the new call path
-- [ ] **AI Wave C on the vendored layer (GH #41)** — A9 streaming, B3–B6 per the ai-expansion-plan
-- [ ] **A.2/A.3 authoring-UX (GH #42)** — editor inline-validation UX + per-plugin examples (ungated; confirm scope at wave planning)
-- [ ] **SNMP swap, option C (GH #72)** — full pysnmp/pysmi → trishul-snmp/tsmp swap behind a feature flag (default off); flag-off path must remain behavior-identical
+- [ ] **Packaging & pins (GH #72)** — both stacks in `tram[snmp]` during the flag period; dev extras install both; pin `trishul-smi==0.5.2` / `trishul-snmp==0.6.1` (the wire-validated versions); Docker image implications written down
+- [ ] **DES + 3DES rejection at validation (GH #72)** — Pydantic validators on the three config classes + lint rule + migration note naming AES128 (DES obsoleted, RFC 8996 lineage; 3DES never standardized — expired draft — and upstream #31 makes it a silent-data-loss trap on the target stack; zero in-repo usage)
+- [ ] **Swap core behind a feature flag, default off (GH #72)** — poll + trap paths + sink, v3 USM crypto matrix via tsmp; MIB compile/resolve via tsmi JSON IR incl. the full serving/sync chain: dual-format corpus, `routers/mibs` JSON serving, `agent/assets` worker JSON sync, Docker `/mibs` layout
+- [ ] **Worker-mode flag consistency (GH #72)** — helm values on manager + worker planes, startup mismatch warning, deployment.md note
+- [ ] **Test hardening (GH #72)** — existing SNMP suite green unmodified (the flag-off proof); dual-stack decode fixtures (same BER bytes both stacks); env-gated in-process pysnmp-peer wire suite (catches the #28 defect class in CI); live kind verification incl. worker MIB sync → `docs/reviews/`
+
+## Post-v1.5.0 — AI Provider Layer (open design question)
+
+- [ ] treq `_providers/` vendoring (GH #71) + Wave C (A9 streaming; B3–B6 = MIB compile-error explanation, alert-rule authoring, throughput-anomaly explanation, connector test-failure explanation, per `docs/plans/ai-expansion-plan.md`) + A.2/A.3 plugin docstrings/examples (GH #41/#42) — **not scheduled to a version**; the maintainer runs a design round once v1.5.0 ships. Calibration from the 2026-09-28 plan review: vendor 4–6 days, Wave C 2–3 weeks, A.2/A.3 ~1 week; treq's portable tests ~1,346 lines, no bedrock coverage.
 
 ---
 
@@ -214,8 +219,8 @@ unconfirmed work lives in the backlog at the bottom.
 - [x] **Partial unique index for `queued_runs`** (E.2 design Q3) — resolved via B9 in v1.4.7 (GH #55)
 
 ### Open Decisions
-- [x] **treq provider-layer vendoring — DECIDED 2026-09-25: vendor in v1.5.0 (GH #71)** — supersedes the 2026-09-24 proceed-on-current-ai.py decision. Unblocks AI streaming (A9) and B3–B6 of the AI expansion cycle — `docs/ideas/treq-ai-reuse-feasibility.md`
-- [x] **SNMP library migration — DECIDED 2026-09-25: option C (full swap behind a feature flag) in v1.5.0 (GH #72), gated upstream** — the v0.5.1 re-validation confirmed the former blockers fixed (SNMPv1, crypto matrix in-stack, silent-drop, walk boundaries, cross-stack interop) but found one new wire-level defect: every USM HMAC is truncated to 12 bytes while RFC 7860 requires 16/24/32/48 for SHA-224/256/384/512 (filed as trishul-snmp #28 with the root-cause chain). The swap proceeds once that fix lands and the harness re-runs green — addendum in `docs/ideas/trishul-smi-snmp-migration-feasibility.md`
+- [x] **treq provider-layer vendoring — DECIDED 2026-09-25, re-scoped 2026-09-28: direction confirmed, scheduling deferred to a post-v1.5.0 design round (GH #71)** — supersedes the 2026-09-24 proceed-on-current-ai.py decision. Unblocks AI streaming (A9) and B3–B6 of the AI expansion cycle — `docs/ideas/treq-ai-reuse-feasibility.md`
+- [x] **SNMP library migration — DECIDED 2026-09-25: option C (full swap behind a feature flag) (GH #72)** — the v0.5.1 re-validation found one new wire-level defect (USM HMAC truncated to 12 bytes, filed as trishul-snmp #28 with the root-cause chain). **Gate MET 2026-09-28:** #28 fixed + wire-proven, #29 closed (DES dropped), harness re-run green on tsmp 0.6.1 / tsmi 0.5.2 (new non-blocking #31 filed — moot for TRAM, which drops 3DES); addenda in `docs/ideas/trishul-smi-snmp-migration-feasibility.md`. Executing as v1.5.0.
 - [ ] **Flip `TRAM_INTERNAL_AUTH_MODE=enforce`** — ops task, not development: after all clients carry keys, flip `warn` → `enforce` per `docs/deployment.md` (v1.4.6 adds the misconfiguration startup warning)
 
 > Architectural positions, not backlog items: thread-based execution (G2), no CRD/operator (G4), at-least-once without exactly-once (G5) — deliberate trade-offs documented in `docs/ideas/tram-improvements.md` and `docs/ideas/tram-vs-telegraf-comparison.md`. G3 (plugin catalog) is covered by the Connector Fixes section above; G6/G7/G8 already appear above as Manager HA, RBAC, and DLQ viewer/live log streaming.

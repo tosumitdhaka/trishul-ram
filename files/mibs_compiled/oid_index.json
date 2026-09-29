@@ -1,0 +1,5033 @@
+{
+  "schema_version": "1.1",
+  "producer_version": "0.5.2",
+  "generated_by": "trishul-smi",
+  "generated_at": "1970-01-01T00:00:00Z",
+  "oids": {
+    "0.0": {
+      "module": "SNMPv2-SMI",
+      "object": "zeroDotZero",
+      "class": "objectidentity",
+      "object_type": "OBJECT-IDENTITY"
+    },
+    "1.3": {
+      "module": "SNMPv2-SMI",
+      "object": "org",
+      "class": "objectidentifier",
+      "object_type": "OBJECT IDENTIFIER"
+    },
+    "1.3.6": {
+      "module": "SNMPv2-SMI",
+      "object": "dod",
+      "class": "objectidentifier",
+      "object_type": "OBJECT IDENTIFIER"
+    },
+    "1.3.6.1": {
+      "module": "SNMPv2-SMI",
+      "object": "internet",
+      "class": "objectidentifier",
+      "object_type": "OBJECT IDENTIFIER"
+    },
+    "1.3.6.1.1": {
+      "module": "SNMPv2-SMI",
+      "object": "directory",
+      "class": "objectidentifier",
+      "object_type": "OBJECT IDENTIFIER"
+    },
+    "1.3.6.1.2": {
+      "module": "SNMPv2-SMI",
+      "object": "mgmt",
+      "class": "objectidentifier",
+      "object_type": "OBJECT IDENTIFIER"
+    },
+    "1.3.6.1.2.1": {
+      "module": "SNMPv2-SMI",
+      "object": "mib-2",
+      "class": "objectidentifier",
+      "object_type": "OBJECT IDENTIFIER"
+    },
+    "1.3.6.1.2.1.1": {
+      "module": "SNMPv2-MIB",
+      "object": "system",
+      "class": "objectidentifier",
+      "object_type": "OBJECT IDENTIFIER"
+    },
+    "1.3.6.1.2.1.1.1": {
+      "module": "SNMPv2-MIB",
+      "object": "sysDescr",
+      "class": "objecttype",
+      "object_type": "OBJECT-TYPE",
+      "nodetype": "scalar"
+    },
+    "1.3.6.1.2.1.1.2": {
+      "module": "SNMPv2-MIB",
+      "object": "sysObjectID",
+      "class": "objecttype",
+      "object_type": "OBJECT-TYPE",
+      "nodetype": "scalar"
+    },
+    "1.3.6.1.2.1.1.3": {
+      "module": "SNMPv2-MIB",
+      "object": "sysUpTime",
+      "class": "objecttype",
+      "object_type": "OBJECT-TYPE",
+      "nodetype": "scalar"
+    },
+    "1.3.6.1.2.1.1.4": {
+      "module": "SNMPv2-MIB",
+      "object": "sysContact",
+      "class": "objecttype",
+      "object_type": "OBJECT-TYPE",
+      "nodetype": "scalar"
+    },
+    "1.3.6.1.2.1.1.5": {
+      "module": "SNMPv2-MIB",
+      "object": "sysName",
+      "class": "objecttype",
+      "object_type": "OBJECT-TYPE",
+      "nodetype": "scalar"
+    },
+    "1.3.6.1.2.1.1.6": {
+      "module": "SNMPv2-MIB",
+      "object": "sysLocation",
+      "class": "objecttype",
+      "object_type": "OBJECT-TYPE",
+      "nodetype": "scalar"
+    },
+    "1.3.6.1.2.1.1.7": {
+      "module": "SNMPv2-MIB",
+      "object": "sysServices",
+      "class": "objecttype",
+      "object_type": "OBJECT-TYPE",
+      "nodetype": "scalar"
+    },
+    "1.3.6.1.2.1.1.8": {
+      "module": "SNMPv2-MIB",
+      "object": "sysORLastChange",
+      "class": "objecttype",
+      "object_type": "OBJECT-TYPE",
+      "nodetype": "scalar"
+    },
+    "1.3.6.1.2.1.1.9": {
+      "module": "SNMPv2-MIB",
+      "object": "sysORTable",
+      "class": "objecttype",
+      "object_type": "OBJECT-TYPE",
+      "nodetype": "table"
+    },
+    "1.3.6.1.2.1.1.9.1": {
+      "module": "SNMPv2-MIB",
+      "object": "sysOREntry",
+      "class": "objecttype",
+      "object_type": "OBJECT-TYPE",
+      "nodetype": "row"
+    },
+    "1.3.6.1.2.1.1.9.1.1": {
+      "module": "SNMPv2-MIB",
+      "object": "sysORIndex",
+      "class": "objecttype",
+      "object_type": "OBJECT-TYPE",
+      "nodetype": "column"
+    },
+    "1.3.6.1.2.1.1.9.1.2": {
+      "module": "SNMPv2-MIB",
+      "object": "sysORID",
+      "class": "objecttype",
+      "object_type": "OBJECT-TYPE",
+      "nodetype": "column"
+    },
+    "1.3.6.1.2.1.1.9.1.3": {
+      "module": "SNMPv2-MIB",
+      "object": "sysORDescr",
+      "class": "objecttype",
+      "object_type": "OBJECT-TYPE",
+      "nodetype": "column"
+    },
+    "1.3.6.1.2.1.1.9.1.4": {
+      "module": "SNMPv2-MIB",
+      "object": "sysORUpTime",
+      "class": "objecttype",
+      "object_type": "OBJECT-TYPE",
+      "nodetype": "column"
+    },
+    "1.3.6.1.2.1.2": {
+      "module": "IF-MIB",
+      "object": "interfaces",
+      "class": "objectidentifier",
+      "object_type": "OBJECT IDENTIFIER"
+    },
+    "1.3.6.1.2.1.2.1": {
+      "module": "IF-MIB",
+      "object": "ifNumber",
+      "class": "objecttype",
+      "object_type": "OBJECT-TYPE",
+      "nodetype": "scalar"
+    },
+    "1.3.6.1.2.1.2.2": {
+      "module": "IF-MIB",
+      "object": "ifTable",
+      "class": "objecttype",
+      "object_type": "OBJECT-TYPE",
+      "nodetype": "table"
+    },
+    "1.3.6.1.2.1.2.2.1": {
+      "module": "IF-MIB",
+      "object": "ifEntry",
+      "class": "objecttype",
+      "object_type": "OBJECT-TYPE",
+      "nodetype": "row"
+    },
+    "1.3.6.1.2.1.2.2.1.1": {
+      "module": "IF-MIB",
+      "object": "ifIndex",
+      "class": "objecttype",
+      "object_type": "OBJECT-TYPE",
+      "nodetype": "column"
+    },
+    "1.3.6.1.2.1.2.2.1.2": {
+      "module": "IF-MIB",
+      "object": "ifDescr",
+      "class": "objecttype",
+      "object_type": "OBJECT-TYPE",
+      "nodetype": "column"
+    },
+    "1.3.6.1.2.1.2.2.1.3": {
+      "module": "IF-MIB",
+      "object": "ifType",
+      "class": "objecttype",
+      "object_type": "OBJECT-TYPE",
+      "nodetype": "column"
+    },
+    "1.3.6.1.2.1.2.2.1.4": {
+      "module": "IF-MIB",
+      "object": "ifMtu",
+      "class": "objecttype",
+      "object_type": "OBJECT-TYPE",
+      "nodetype": "column"
+    },
+    "1.3.6.1.2.1.2.2.1.5": {
+      "module": "IF-MIB",
+      "object": "ifSpeed",
+      "class": "objecttype",
+      "object_type": "OBJECT-TYPE",
+      "nodetype": "column"
+    },
+    "1.3.6.1.2.1.2.2.1.6": {
+      "module": "IF-MIB",
+      "object": "ifPhysAddress",
+      "class": "objecttype",
+      "object_type": "OBJECT-TYPE",
+      "nodetype": "column"
+    },
+    "1.3.6.1.2.1.2.2.1.7": {
+      "module": "IF-MIB",
+      "object": "ifAdminStatus",
+      "class": "objecttype",
+      "object_type": "OBJECT-TYPE",
+      "nodetype": "column"
+    },
+    "1.3.6.1.2.1.2.2.1.8": {
+      "module": "IF-MIB",
+      "object": "ifOperStatus",
+      "class": "objecttype",
+      "object_type": "OBJECT-TYPE",
+      "nodetype": "column"
+    },
+    "1.3.6.1.2.1.2.2.1.9": {
+      "module": "IF-MIB",
+      "object": "ifLastChange",
+      "class": "objecttype",
+      "object_type": "OBJECT-TYPE",
+      "nodetype": "column"
+    },
+    "1.3.6.1.2.1.2.2.1.10": {
+      "module": "IF-MIB",
+      "object": "ifInOctets",
+      "class": "objecttype",
+      "object_type": "OBJECT-TYPE",
+      "nodetype": "column"
+    },
+    "1.3.6.1.2.1.2.2.1.11": {
+      "module": "IF-MIB",
+      "object": "ifInUcastPkts",
+      "class": "objecttype",
+      "object_type": "OBJECT-TYPE",
+      "nodetype": "column"
+    },
+    "1.3.6.1.2.1.2.2.1.12": {
+      "module": "IF-MIB",
+      "object": "ifInNUcastPkts",
+      "class": "objecttype",
+      "object_type": "OBJECT-TYPE",
+      "nodetype": "column"
+    },
+    "1.3.6.1.2.1.2.2.1.13": {
+      "module": "IF-MIB",
+      "object": "ifInDiscards",
+      "class": "objecttype",
+      "object_type": "OBJECT-TYPE",
+      "nodetype": "column"
+    },
+    "1.3.6.1.2.1.2.2.1.14": {
+      "module": "IF-MIB",
+      "object": "ifInErrors",
+      "class": "objecttype",
+      "object_type": "OBJECT-TYPE",
+      "nodetype": "column"
+    },
+    "1.3.6.1.2.1.2.2.1.15": {
+      "module": "IF-MIB",
+      "object": "ifInUnknownProtos",
+      "class": "objecttype",
+      "object_type": "OBJECT-TYPE",
+      "nodetype": "column"
+    },
+    "1.3.6.1.2.1.2.2.1.16": {
+      "module": "IF-MIB",
+      "object": "ifOutOctets",
+      "class": "objecttype",
+      "object_type": "OBJECT-TYPE",
+      "nodetype": "column"
+    },
+    "1.3.6.1.2.1.2.2.1.17": {
+      "module": "IF-MIB",
+      "object": "ifOutUcastPkts",
+      "class": "objecttype",
+      "object_type": "OBJECT-TYPE",
+      "nodetype": "column"
+    },
+    "1.3.6.1.2.1.2.2.1.18": {
+      "module": "IF-MIB",
+      "object": "ifOutNUcastPkts",
+      "class": "objecttype",
+      "object_type": "OBJECT-TYPE",
+      "nodetype": "column"
+    },
+    "1.3.6.1.2.1.2.2.1.19": {
+      "module": "IF-MIB",
+      "object": "ifOutDiscards",
+      "class": "objecttype",
+      "object_type": "OBJECT-TYPE",
+      "nodetype": "column"
+    },
+    "1.3.6.1.2.1.2.2.1.20": {
+      "module": "IF-MIB",
+      "object": "ifOutErrors",
+      "class": "objecttype",
+      "object_type": "OBJECT-TYPE",
+      "nodetype": "column"
+    },
+    "1.3.6.1.2.1.2.2.1.21": {
+      "module": "IF-MIB",
+      "object": "ifOutQLen",
+      "class": "objecttype",
+      "object_type": "OBJECT-TYPE",
+      "nodetype": "column"
+    },
+    "1.3.6.1.2.1.2.2.1.22": {
+      "module": "IF-MIB",
+      "object": "ifSpecific",
+      "class": "objecttype",
+      "object_type": "OBJECT-TYPE",
+      "nodetype": "column"
+    },
+    "1.3.6.1.2.1.4": {
+      "module": "IP-MIB",
+      "object": "ip",
+      "class": "objectidentifier",
+      "object_type": "OBJECT IDENTIFIER"
+    },
+    "1.3.6.1.2.1.4.1": {
+      "module": "IP-MIB",
+      "object": "ipForwarding",
+      "class": "objecttype",
+      "object_type": "OBJECT-TYPE",
+      "nodetype": "scalar"
+    },
+    "1.3.6.1.2.1.4.2": {
+      "module": "IP-MIB",
+      "object": "ipDefaultTTL",
+      "class": "objecttype",
+      "object_type": "OBJECT-TYPE",
+      "nodetype": "scalar"
+    },
+    "1.3.6.1.2.1.4.3": {
+      "module": "IP-MIB",
+      "object": "ipInReceives",
+      "class": "objecttype",
+      "object_type": "OBJECT-TYPE",
+      "nodetype": "scalar"
+    },
+    "1.3.6.1.2.1.4.4": {
+      "module": "IP-MIB",
+      "object": "ipInHdrErrors",
+      "class": "objecttype",
+      "object_type": "OBJECT-TYPE",
+      "nodetype": "scalar"
+    },
+    "1.3.6.1.2.1.4.5": {
+      "module": "IP-MIB",
+      "object": "ipInAddrErrors",
+      "class": "objecttype",
+      "object_type": "OBJECT-TYPE",
+      "nodetype": "scalar"
+    },
+    "1.3.6.1.2.1.4.6": {
+      "module": "IP-MIB",
+      "object": "ipForwDatagrams",
+      "class": "objecttype",
+      "object_type": "OBJECT-TYPE",
+      "nodetype": "scalar"
+    },
+    "1.3.6.1.2.1.4.7": {
+      "module": "IP-MIB",
+      "object": "ipInUnknownProtos",
+      "class": "objecttype",
+      "object_type": "OBJECT-TYPE",
+      "nodetype": "scalar"
+    },
+    "1.3.6.1.2.1.4.8": {
+      "module": "IP-MIB",
+      "object": "ipInDiscards",
+      "class": "objecttype",
+      "object_type": "OBJECT-TYPE",
+      "nodetype": "scalar"
+    },
+    "1.3.6.1.2.1.4.9": {
+      "module": "IP-MIB",
+      "object": "ipInDelivers",
+      "class": "objecttype",
+      "object_type": "OBJECT-TYPE",
+      "nodetype": "scalar"
+    },
+    "1.3.6.1.2.1.4.10": {
+      "module": "IP-MIB",
+      "object": "ipOutRequests",
+      "class": "objecttype",
+      "object_type": "OBJECT-TYPE",
+      "nodetype": "scalar"
+    },
+    "1.3.6.1.2.1.4.11": {
+      "module": "IP-MIB",
+      "object": "ipOutDiscards",
+      "class": "objecttype",
+      "object_type": "OBJECT-TYPE",
+      "nodetype": "scalar"
+    },
+    "1.3.6.1.2.1.4.12": {
+      "module": "IP-MIB",
+      "object": "ipOutNoRoutes",
+      "class": "objecttype",
+      "object_type": "OBJECT-TYPE",
+      "nodetype": "scalar"
+    },
+    "1.3.6.1.2.1.4.13": {
+      "module": "IP-MIB",
+      "object": "ipReasmTimeout",
+      "class": "objecttype",
+      "object_type": "OBJECT-TYPE",
+      "nodetype": "scalar"
+    },
+    "1.3.6.1.2.1.4.14": {
+      "module": "IP-MIB",
+      "object": "ipReasmReqds",
+      "class": "objecttype",
+      "object_type": "OBJECT-TYPE",
+      "nodetype": "scalar"
+    },
+    "1.3.6.1.2.1.4.15": {
+      "module": "IP-MIB",
+      "object": "ipReasmOKs",
+      "class": "objecttype",
+      "object_type": "OBJECT-TYPE",
+      "nodetype": "scalar"
+    },
+    "1.3.6.1.2.1.4.16": {
+      "module": "IP-MIB",
+      "object": "ipReasmFails",
+      "class": "objecttype",
+      "object_type": "OBJECT-TYPE",
+      "nodetype": "scalar"
+    },
+    "1.3.6.1.2.1.4.17": {
+      "module": "IP-MIB",
+      "object": "ipFragOKs",
+      "class": "objecttype",
+      "object_type": "OBJECT-TYPE",
+      "nodetype": "scalar"
+    },
+    "1.3.6.1.2.1.4.18": {
+      "module": "IP-MIB",
+      "object": "ipFragFails",
+      "class": "objecttype",
+      "object_type": "OBJECT-TYPE",
+      "nodetype": "scalar"
+    },
+    "1.3.6.1.2.1.4.19": {
+      "module": "IP-MIB",
+      "object": "ipFragCreates",
+      "class": "objecttype",
+      "object_type": "OBJECT-TYPE",
+      "nodetype": "scalar"
+    },
+    "1.3.6.1.2.1.4.20": {
+      "module": "IP-MIB",
+      "object": "ipAddrTable",
+      "class": "objecttype",
+      "object_type": "OBJECT-TYPE",
+      "nodetype": "table"
+    },
+    "1.3.6.1.2.1.4.20.1": {
+      "module": "IP-MIB",
+      "object": "ipAddrEntry",
+      "class": "objecttype",
+      "object_type": "OBJECT-TYPE",
+      "nodetype": "row"
+    },
+    "1.3.6.1.2.1.4.20.1.1": {
+      "module": "IP-MIB",
+      "object": "ipAdEntAddr",
+      "class": "objecttype",
+      "object_type": "OBJECT-TYPE",
+      "nodetype": "column"
+    },
+    "1.3.6.1.2.1.4.20.1.2": {
+      "module": "IP-MIB",
+      "object": "ipAdEntIfIndex",
+      "class": "objecttype",
+      "object_type": "OBJECT-TYPE",
+      "nodetype": "column"
+    },
+    "1.3.6.1.2.1.4.20.1.3": {
+      "module": "IP-MIB",
+      "object": "ipAdEntNetMask",
+      "class": "objecttype",
+      "object_type": "OBJECT-TYPE",
+      "nodetype": "column"
+    },
+    "1.3.6.1.2.1.4.20.1.4": {
+      "module": "IP-MIB",
+      "object": "ipAdEntBcastAddr",
+      "class": "objecttype",
+      "object_type": "OBJECT-TYPE",
+      "nodetype": "column"
+    },
+    "1.3.6.1.2.1.4.20.1.5": {
+      "module": "IP-MIB",
+      "object": "ipAdEntReasmMaxSize",
+      "class": "objecttype",
+      "object_type": "OBJECT-TYPE",
+      "nodetype": "column"
+    },
+    "1.3.6.1.2.1.4.22": {
+      "module": "IP-MIB",
+      "object": "ipNetToMediaTable",
+      "class": "objecttype",
+      "object_type": "OBJECT-TYPE",
+      "nodetype": "table"
+    },
+    "1.3.6.1.2.1.4.22.1": {
+      "module": "IP-MIB",
+      "object": "ipNetToMediaEntry",
+      "class": "objecttype",
+      "object_type": "OBJECT-TYPE",
+      "nodetype": "row"
+    },
+    "1.3.6.1.2.1.4.22.1.1": {
+      "module": "IP-MIB",
+      "object": "ipNetToMediaIfIndex",
+      "class": "objecttype",
+      "object_type": "OBJECT-TYPE",
+      "nodetype": "column"
+    },
+    "1.3.6.1.2.1.4.22.1.2": {
+      "module": "IP-MIB",
+      "object": "ipNetToMediaPhysAddress",
+      "class": "objecttype",
+      "object_type": "OBJECT-TYPE",
+      "nodetype": "column"
+    },
+    "1.3.6.1.2.1.4.22.1.3": {
+      "module": "IP-MIB",
+      "object": "ipNetToMediaNetAddress",
+      "class": "objecttype",
+      "object_type": "OBJECT-TYPE",
+      "nodetype": "column"
+    },
+    "1.3.6.1.2.1.4.22.1.4": {
+      "module": "IP-MIB",
+      "object": "ipNetToMediaType",
+      "class": "objecttype",
+      "object_type": "OBJECT-TYPE",
+      "nodetype": "column"
+    },
+    "1.3.6.1.2.1.4.23": {
+      "module": "IP-MIB",
+      "object": "ipRoutingDiscards",
+      "class": "objecttype",
+      "object_type": "OBJECT-TYPE",
+      "nodetype": "scalar"
+    },
+    "1.3.6.1.2.1.4.25": {
+      "module": "IP-MIB",
+      "object": "ipv6IpForwarding",
+      "class": "objecttype",
+      "object_type": "OBJECT-TYPE",
+      "nodetype": "scalar"
+    },
+    "1.3.6.1.2.1.4.26": {
+      "module": "IP-MIB",
+      "object": "ipv6IpDefaultHopLimit",
+      "class": "objecttype",
+      "object_type": "OBJECT-TYPE",
+      "nodetype": "scalar"
+    },
+    "1.3.6.1.2.1.4.27": {
+      "module": "IP-MIB",
+      "object": "ipv4InterfaceTableLastChange",
+      "class": "objecttype",
+      "object_type": "OBJECT-TYPE",
+      "nodetype": "scalar"
+    },
+    "1.3.6.1.2.1.4.28": {
+      "module": "IP-MIB",
+      "object": "ipv4InterfaceTable",
+      "class": "objecttype",
+      "object_type": "OBJECT-TYPE",
+      "nodetype": "table"
+    },
+    "1.3.6.1.2.1.4.28.1": {
+      "module": "IP-MIB",
+      "object": "ipv4InterfaceEntry",
+      "class": "objecttype",
+      "object_type": "OBJECT-TYPE",
+      "nodetype": "row"
+    },
+    "1.3.6.1.2.1.4.28.1.1": {
+      "module": "IP-MIB",
+      "object": "ipv4InterfaceIfIndex",
+      "class": "objecttype",
+      "object_type": "OBJECT-TYPE",
+      "nodetype": "column"
+    },
+    "1.3.6.1.2.1.4.28.1.2": {
+      "module": "IP-MIB",
+      "object": "ipv4InterfaceReasmMaxSize",
+      "class": "objecttype",
+      "object_type": "OBJECT-TYPE",
+      "nodetype": "column"
+    },
+    "1.3.6.1.2.1.4.28.1.3": {
+      "module": "IP-MIB",
+      "object": "ipv4InterfaceEnableStatus",
+      "class": "objecttype",
+      "object_type": "OBJECT-TYPE",
+      "nodetype": "column"
+    },
+    "1.3.6.1.2.1.4.28.1.4": {
+      "module": "IP-MIB",
+      "object": "ipv4InterfaceRetransmitTime",
+      "class": "objecttype",
+      "object_type": "OBJECT-TYPE",
+      "nodetype": "column"
+    },
+    "1.3.6.1.2.1.4.29": {
+      "module": "IP-MIB",
+      "object": "ipv6InterfaceTableLastChange",
+      "class": "objecttype",
+      "object_type": "OBJECT-TYPE",
+      "nodetype": "scalar"
+    },
+    "1.3.6.1.2.1.4.30": {
+      "module": "IP-MIB",
+      "object": "ipv6InterfaceTable",
+      "class": "objecttype",
+      "object_type": "OBJECT-TYPE",
+      "nodetype": "table"
+    },
+    "1.3.6.1.2.1.4.30.1": {
+      "module": "IP-MIB",
+      "object": "ipv6InterfaceEntry",
+      "class": "objecttype",
+      "object_type": "OBJECT-TYPE",
+      "nodetype": "row"
+    },
+    "1.3.6.1.2.1.4.30.1.1": {
+      "module": "IP-MIB",
+      "object": "ipv6InterfaceIfIndex",
+      "class": "objecttype",
+      "object_type": "OBJECT-TYPE",
+      "nodetype": "column"
+    },
+    "1.3.6.1.2.1.4.30.1.2": {
+      "module": "IP-MIB",
+      "object": "ipv6InterfaceReasmMaxSize",
+      "class": "objecttype",
+      "object_type": "OBJECT-TYPE",
+      "nodetype": "column"
+    },
+    "1.3.6.1.2.1.4.30.1.3": {
+      "module": "IP-MIB",
+      "object": "ipv6InterfaceIdentifier",
+      "class": "objecttype",
+      "object_type": "OBJECT-TYPE",
+      "nodetype": "column"
+    },
+    "1.3.6.1.2.1.4.30.1.5": {
+      "module": "IP-MIB",
+      "object": "ipv6InterfaceEnableStatus",
+      "class": "objecttype",
+      "object_type": "OBJECT-TYPE",
+      "nodetype": "column"
+    },
+    "1.3.6.1.2.1.4.30.1.6": {
+      "module": "IP-MIB",
+      "object": "ipv6InterfaceReachableTime",
+      "class": "objecttype",
+      "object_type": "OBJECT-TYPE",
+      "nodetype": "column"
+    },
+    "1.3.6.1.2.1.4.30.1.7": {
+      "module": "IP-MIB",
+      "object": "ipv6InterfaceRetransmitTime",
+      "class": "objecttype",
+      "object_type": "OBJECT-TYPE",
+      "nodetype": "column"
+    },
+    "1.3.6.1.2.1.4.30.1.8": {
+      "module": "IP-MIB",
+      "object": "ipv6InterfaceForwarding",
+      "class": "objecttype",
+      "object_type": "OBJECT-TYPE",
+      "nodetype": "column"
+    },
+    "1.3.6.1.2.1.4.31": {
+      "module": "IP-MIB",
+      "object": "ipTrafficStats",
+      "class": "objectidentifier",
+      "object_type": "OBJECT IDENTIFIER"
+    },
+    "1.3.6.1.2.1.4.31.1": {
+      "module": "IP-MIB",
+      "object": "ipSystemStatsTable",
+      "class": "objecttype",
+      "object_type": "OBJECT-TYPE",
+      "nodetype": "table"
+    },
+    "1.3.6.1.2.1.4.31.1.1": {
+      "module": "IP-MIB",
+      "object": "ipSystemStatsEntry",
+      "class": "objecttype",
+      "object_type": "OBJECT-TYPE",
+      "nodetype": "row"
+    },
+    "1.3.6.1.2.1.4.31.1.1.1": {
+      "module": "IP-MIB",
+      "object": "ipSystemStatsIPVersion",
+      "class": "objecttype",
+      "object_type": "OBJECT-TYPE",
+      "nodetype": "column"
+    },
+    "1.3.6.1.2.1.4.31.1.1.3": {
+      "module": "IP-MIB",
+      "object": "ipSystemStatsInReceives",
+      "class": "objecttype",
+      "object_type": "OBJECT-TYPE",
+      "nodetype": "column"
+    },
+    "1.3.6.1.2.1.4.31.1.1.4": {
+      "module": "IP-MIB",
+      "object": "ipSystemStatsHCInReceives",
+      "class": "objecttype",
+      "object_type": "OBJECT-TYPE",
+      "nodetype": "column"
+    },
+    "1.3.6.1.2.1.4.31.1.1.5": {
+      "module": "IP-MIB",
+      "object": "ipSystemStatsInOctets",
+      "class": "objecttype",
+      "object_type": "OBJECT-TYPE",
+      "nodetype": "column"
+    },
+    "1.3.6.1.2.1.4.31.1.1.6": {
+      "module": "IP-MIB",
+      "object": "ipSystemStatsHCInOctets",
+      "class": "objecttype",
+      "object_type": "OBJECT-TYPE",
+      "nodetype": "column"
+    },
+    "1.3.6.1.2.1.4.31.1.1.7": {
+      "module": "IP-MIB",
+      "object": "ipSystemStatsInHdrErrors",
+      "class": "objecttype",
+      "object_type": "OBJECT-TYPE",
+      "nodetype": "column"
+    },
+    "1.3.6.1.2.1.4.31.1.1.8": {
+      "module": "IP-MIB",
+      "object": "ipSystemStatsInNoRoutes",
+      "class": "objecttype",
+      "object_type": "OBJECT-TYPE",
+      "nodetype": "column"
+    },
+    "1.3.6.1.2.1.4.31.1.1.9": {
+      "module": "IP-MIB",
+      "object": "ipSystemStatsInAddrErrors",
+      "class": "objecttype",
+      "object_type": "OBJECT-TYPE",
+      "nodetype": "column"
+    },
+    "1.3.6.1.2.1.4.31.1.1.10": {
+      "module": "IP-MIB",
+      "object": "ipSystemStatsInUnknownProtos",
+      "class": "objecttype",
+      "object_type": "OBJECT-TYPE",
+      "nodetype": "column"
+    },
+    "1.3.6.1.2.1.4.31.1.1.11": {
+      "module": "IP-MIB",
+      "object": "ipSystemStatsInTruncatedPkts",
+      "class": "objecttype",
+      "object_type": "OBJECT-TYPE",
+      "nodetype": "column"
+    },
+    "1.3.6.1.2.1.4.31.1.1.12": {
+      "module": "IP-MIB",
+      "object": "ipSystemStatsInForwDatagrams",
+      "class": "objecttype",
+      "object_type": "OBJECT-TYPE",
+      "nodetype": "column"
+    },
+    "1.3.6.1.2.1.4.31.1.1.13": {
+      "module": "IP-MIB",
+      "object": "ipSystemStatsHCInForwDatagrams",
+      "class": "objecttype",
+      "object_type": "OBJECT-TYPE",
+      "nodetype": "column"
+    },
+    "1.3.6.1.2.1.4.31.1.1.14": {
+      "module": "IP-MIB",
+      "object": "ipSystemStatsReasmReqds",
+      "class": "objecttype",
+      "object_type": "OBJECT-TYPE",
+      "nodetype": "column"
+    },
+    "1.3.6.1.2.1.4.31.1.1.15": {
+      "module": "IP-MIB",
+      "object": "ipSystemStatsReasmOKs",
+      "class": "objecttype",
+      "object_type": "OBJECT-TYPE",
+      "nodetype": "column"
+    },
+    "1.3.6.1.2.1.4.31.1.1.16": {
+      "module": "IP-MIB",
+      "object": "ipSystemStatsReasmFails",
+      "class": "objecttype",
+      "object_type": "OBJECT-TYPE",
+      "nodetype": "column"
+    },
+    "1.3.6.1.2.1.4.31.1.1.17": {
+      "module": "IP-MIB",
+      "object": "ipSystemStatsInDiscards",
+      "class": "objecttype",
+      "object_type": "OBJECT-TYPE",
+      "nodetype": "column"
+    },
+    "1.3.6.1.2.1.4.31.1.1.18": {
+      "module": "IP-MIB",
+      "object": "ipSystemStatsInDelivers",
+      "class": "objecttype",
+      "object_type": "OBJECT-TYPE",
+      "nodetype": "column"
+    },
+    "1.3.6.1.2.1.4.31.1.1.19": {
+      "module": "IP-MIB",
+      "object": "ipSystemStatsHCInDelivers",
+      "class": "objecttype",
+      "object_type": "OBJECT-TYPE",
+      "nodetype": "column"
+    },
+    "1.3.6.1.2.1.4.31.1.1.20": {
+      "module": "IP-MIB",
+      "object": "ipSystemStatsOutRequests",
+      "class": "objecttype",
+      "object_type": "OBJECT-TYPE",
+      "nodetype": "column"
+    },
+    "1.3.6.1.2.1.4.31.1.1.21": {
+      "module": "IP-MIB",
+      "object": "ipSystemStatsHCOutRequests",
+      "class": "objecttype",
+      "object_type": "OBJECT-TYPE",
+      "nodetype": "column"
+    },
+    "1.3.6.1.2.1.4.31.1.1.22": {
+      "module": "IP-MIB",
+      "object": "ipSystemStatsOutNoRoutes",
+      "class": "objecttype",
+      "object_type": "OBJECT-TYPE",
+      "nodetype": "column"
+    },
+    "1.3.6.1.2.1.4.31.1.1.23": {
+      "module": "IP-MIB",
+      "object": "ipSystemStatsOutForwDatagrams",
+      "class": "objecttype",
+      "object_type": "OBJECT-TYPE",
+      "nodetype": "column"
+    },
+    "1.3.6.1.2.1.4.31.1.1.24": {
+      "module": "IP-MIB",
+      "object": "ipSystemStatsHCOutForwDatagrams",
+      "class": "objecttype",
+      "object_type": "OBJECT-TYPE",
+      "nodetype": "column"
+    },
+    "1.3.6.1.2.1.4.31.1.1.25": {
+      "module": "IP-MIB",
+      "object": "ipSystemStatsOutDiscards",
+      "class": "objecttype",
+      "object_type": "OBJECT-TYPE",
+      "nodetype": "column"
+    },
+    "1.3.6.1.2.1.4.31.1.1.26": {
+      "module": "IP-MIB",
+      "object": "ipSystemStatsOutFragReqds",
+      "class": "objecttype",
+      "object_type": "OBJECT-TYPE",
+      "nodetype": "column"
+    },
+    "1.3.6.1.2.1.4.31.1.1.27": {
+      "module": "IP-MIB",
+      "object": "ipSystemStatsOutFragOKs",
+      "class": "objecttype",
+      "object_type": "OBJECT-TYPE",
+      "nodetype": "column"
+    },
+    "1.3.6.1.2.1.4.31.1.1.28": {
+      "module": "IP-MIB",
+      "object": "ipSystemStatsOutFragFails",
+      "class": "objecttype",
+      "object_type": "OBJECT-TYPE",
+      "nodetype": "column"
+    },
+    "1.3.6.1.2.1.4.31.1.1.29": {
+      "module": "IP-MIB",
+      "object": "ipSystemStatsOutFragCreates",
+      "class": "objecttype",
+      "object_type": "OBJECT-TYPE",
+      "nodetype": "column"
+    },
+    "1.3.6.1.2.1.4.31.1.1.30": {
+      "module": "IP-MIB",
+      "object": "ipSystemStatsOutTransmits",
+      "class": "objecttype",
+      "object_type": "OBJECT-TYPE",
+      "nodetype": "column"
+    },
+    "1.3.6.1.2.1.4.31.1.1.31": {
+      "module": "IP-MIB",
+      "object": "ipSystemStatsHCOutTransmits",
+      "class": "objecttype",
+      "object_type": "OBJECT-TYPE",
+      "nodetype": "column"
+    },
+    "1.3.6.1.2.1.4.31.1.1.32": {
+      "module": "IP-MIB",
+      "object": "ipSystemStatsOutOctets",
+      "class": "objecttype",
+      "object_type": "OBJECT-TYPE",
+      "nodetype": "column"
+    },
+    "1.3.6.1.2.1.4.31.1.1.33": {
+      "module": "IP-MIB",
+      "object": "ipSystemStatsHCOutOctets",
+      "class": "objecttype",
+      "object_type": "OBJECT-TYPE",
+      "nodetype": "column"
+    },
+    "1.3.6.1.2.1.4.31.1.1.34": {
+      "module": "IP-MIB",
+      "object": "ipSystemStatsInMcastPkts",
+      "class": "objecttype",
+      "object_type": "OBJECT-TYPE",
+      "nodetype": "column"
+    },
+    "1.3.6.1.2.1.4.31.1.1.35": {
+      "module": "IP-MIB",
+      "object": "ipSystemStatsHCInMcastPkts",
+      "class": "objecttype",
+      "object_type": "OBJECT-TYPE",
+      "nodetype": "column"
+    },
+    "1.3.6.1.2.1.4.31.1.1.36": {
+      "module": "IP-MIB",
+      "object": "ipSystemStatsInMcastOctets",
+      "class": "objecttype",
+      "object_type": "OBJECT-TYPE",
+      "nodetype": "column"
+    },
+    "1.3.6.1.2.1.4.31.1.1.37": {
+      "module": "IP-MIB",
+      "object": "ipSystemStatsHCInMcastOctets",
+      "class": "objecttype",
+      "object_type": "OBJECT-TYPE",
+      "nodetype": "column"
+    },
+    "1.3.6.1.2.1.4.31.1.1.38": {
+      "module": "IP-MIB",
+      "object": "ipSystemStatsOutMcastPkts",
+      "class": "objecttype",
+      "object_type": "OBJECT-TYPE",
+      "nodetype": "column"
+    },
+    "1.3.6.1.2.1.4.31.1.1.39": {
+      "module": "IP-MIB",
+      "object": "ipSystemStatsHCOutMcastPkts",
+      "class": "objecttype",
+      "object_type": "OBJECT-TYPE",
+      "nodetype": "column"
+    },
+    "1.3.6.1.2.1.4.31.1.1.40": {
+      "module": "IP-MIB",
+      "object": "ipSystemStatsOutMcastOctets",
+      "class": "objecttype",
+      "object_type": "OBJECT-TYPE",
+      "nodetype": "column"
+    },
+    "1.3.6.1.2.1.4.31.1.1.41": {
+      "module": "IP-MIB",
+      "object": "ipSystemStatsHCOutMcastOctets",
+      "class": "objecttype",
+      "object_type": "OBJECT-TYPE",
+      "nodetype": "column"
+    },
+    "1.3.6.1.2.1.4.31.1.1.42": {
+      "module": "IP-MIB",
+      "object": "ipSystemStatsInBcastPkts",
+      "class": "objecttype",
+      "object_type": "OBJECT-TYPE",
+      "nodetype": "column"
+    },
+    "1.3.6.1.2.1.4.31.1.1.43": {
+      "module": "IP-MIB",
+      "object": "ipSystemStatsHCInBcastPkts",
+      "class": "objecttype",
+      "object_type": "OBJECT-TYPE",
+      "nodetype": "column"
+    },
+    "1.3.6.1.2.1.4.31.1.1.44": {
+      "module": "IP-MIB",
+      "object": "ipSystemStatsOutBcastPkts",
+      "class": "objecttype",
+      "object_type": "OBJECT-TYPE",
+      "nodetype": "column"
+    },
+    "1.3.6.1.2.1.4.31.1.1.45": {
+      "module": "IP-MIB",
+      "object": "ipSystemStatsHCOutBcastPkts",
+      "class": "objecttype",
+      "object_type": "OBJECT-TYPE",
+      "nodetype": "column"
+    },
+    "1.3.6.1.2.1.4.31.1.1.46": {
+      "module": "IP-MIB",
+      "object": "ipSystemStatsDiscontinuityTime",
+      "class": "objecttype",
+      "object_type": "OBJECT-TYPE",
+      "nodetype": "column"
+    },
+    "1.3.6.1.2.1.4.31.1.1.47": {
+      "module": "IP-MIB",
+      "object": "ipSystemStatsRefreshRate",
+      "class": "objecttype",
+      "object_type": "OBJECT-TYPE",
+      "nodetype": "column"
+    },
+    "1.3.6.1.2.1.4.31.2": {
+      "module": "IP-MIB",
+      "object": "ipIfStatsTableLastChange",
+      "class": "objecttype",
+      "object_type": "OBJECT-TYPE",
+      "nodetype": "scalar"
+    },
+    "1.3.6.1.2.1.4.31.3": {
+      "module": "IP-MIB",
+      "object": "ipIfStatsTable",
+      "class": "objecttype",
+      "object_type": "OBJECT-TYPE",
+      "nodetype": "table"
+    },
+    "1.3.6.1.2.1.4.31.3.1": {
+      "module": "IP-MIB",
+      "object": "ipIfStatsEntry",
+      "class": "objecttype",
+      "object_type": "OBJECT-TYPE",
+      "nodetype": "row"
+    },
+    "1.3.6.1.2.1.4.31.3.1.1": {
+      "module": "IP-MIB",
+      "object": "ipIfStatsIPVersion",
+      "class": "objecttype",
+      "object_type": "OBJECT-TYPE",
+      "nodetype": "column"
+    },
+    "1.3.6.1.2.1.4.31.3.1.2": {
+      "module": "IP-MIB",
+      "object": "ipIfStatsIfIndex",
+      "class": "objecttype",
+      "object_type": "OBJECT-TYPE",
+      "nodetype": "column"
+    },
+    "1.3.6.1.2.1.4.31.3.1.3": {
+      "module": "IP-MIB",
+      "object": "ipIfStatsInReceives",
+      "class": "objecttype",
+      "object_type": "OBJECT-TYPE",
+      "nodetype": "column"
+    },
+    "1.3.6.1.2.1.4.31.3.1.4": {
+      "module": "IP-MIB",
+      "object": "ipIfStatsHCInReceives",
+      "class": "objecttype",
+      "object_type": "OBJECT-TYPE",
+      "nodetype": "column"
+    },
+    "1.3.6.1.2.1.4.31.3.1.5": {
+      "module": "IP-MIB",
+      "object": "ipIfStatsInOctets",
+      "class": "objecttype",
+      "object_type": "OBJECT-TYPE",
+      "nodetype": "column"
+    },
+    "1.3.6.1.2.1.4.31.3.1.6": {
+      "module": "IP-MIB",
+      "object": "ipIfStatsHCInOctets",
+      "class": "objecttype",
+      "object_type": "OBJECT-TYPE",
+      "nodetype": "column"
+    },
+    "1.3.6.1.2.1.4.31.3.1.7": {
+      "module": "IP-MIB",
+      "object": "ipIfStatsInHdrErrors",
+      "class": "objecttype",
+      "object_type": "OBJECT-TYPE",
+      "nodetype": "column"
+    },
+    "1.3.6.1.2.1.4.31.3.1.8": {
+      "module": "IP-MIB",
+      "object": "ipIfStatsInNoRoutes",
+      "class": "objecttype",
+      "object_type": "OBJECT-TYPE",
+      "nodetype": "column"
+    },
+    "1.3.6.1.2.1.4.31.3.1.9": {
+      "module": "IP-MIB",
+      "object": "ipIfStatsInAddrErrors",
+      "class": "objecttype",
+      "object_type": "OBJECT-TYPE",
+      "nodetype": "column"
+    },
+    "1.3.6.1.2.1.4.31.3.1.10": {
+      "module": "IP-MIB",
+      "object": "ipIfStatsInUnknownProtos",
+      "class": "objecttype",
+      "object_type": "OBJECT-TYPE",
+      "nodetype": "column"
+    },
+    "1.3.6.1.2.1.4.31.3.1.11": {
+      "module": "IP-MIB",
+      "object": "ipIfStatsInTruncatedPkts",
+      "class": "objecttype",
+      "object_type": "OBJECT-TYPE",
+      "nodetype": "column"
+    },
+    "1.3.6.1.2.1.4.31.3.1.12": {
+      "module": "IP-MIB",
+      "object": "ipIfStatsInForwDatagrams",
+      "class": "objecttype",
+      "object_type": "OBJECT-TYPE",
+      "nodetype": "column"
+    },
+    "1.3.6.1.2.1.4.31.3.1.13": {
+      "module": "IP-MIB",
+      "object": "ipIfStatsHCInForwDatagrams",
+      "class": "objecttype",
+      "object_type": "OBJECT-TYPE",
+      "nodetype": "column"
+    },
+    "1.3.6.1.2.1.4.31.3.1.14": {
+      "module": "IP-MIB",
+      "object": "ipIfStatsReasmReqds",
+      "class": "objecttype",
+      "object_type": "OBJECT-TYPE",
+      "nodetype": "column"
+    },
+    "1.3.6.1.2.1.4.31.3.1.15": {
+      "module": "IP-MIB",
+      "object": "ipIfStatsReasmOKs",
+      "class": "objecttype",
+      "object_type": "OBJECT-TYPE",
+      "nodetype": "column"
+    },
+    "1.3.6.1.2.1.4.31.3.1.16": {
+      "module": "IP-MIB",
+      "object": "ipIfStatsReasmFails",
+      "class": "objecttype",
+      "object_type": "OBJECT-TYPE",
+      "nodetype": "column"
+    },
+    "1.3.6.1.2.1.4.31.3.1.17": {
+      "module": "IP-MIB",
+      "object": "ipIfStatsInDiscards",
+      "class": "objecttype",
+      "object_type": "OBJECT-TYPE",
+      "nodetype": "column"
+    },
+    "1.3.6.1.2.1.4.31.3.1.18": {
+      "module": "IP-MIB",
+      "object": "ipIfStatsInDelivers",
+      "class": "objecttype",
+      "object_type": "OBJECT-TYPE",
+      "nodetype": "column"
+    },
+    "1.3.6.1.2.1.4.31.3.1.19": {
+      "module": "IP-MIB",
+      "object": "ipIfStatsHCInDelivers",
+      "class": "objecttype",
+      "object_type": "OBJECT-TYPE",
+      "nodetype": "column"
+    },
+    "1.3.6.1.2.1.4.31.3.1.20": {
+      "module": "IP-MIB",
+      "object": "ipIfStatsOutRequests",
+      "class": "objecttype",
+      "object_type": "OBJECT-TYPE",
+      "nodetype": "column"
+    },
+    "1.3.6.1.2.1.4.31.3.1.21": {
+      "module": "IP-MIB",
+      "object": "ipIfStatsHCOutRequests",
+      "class": "objecttype",
+      "object_type": "OBJECT-TYPE",
+      "nodetype": "column"
+    },
+    "1.3.6.1.2.1.4.31.3.1.23": {
+      "module": "IP-MIB",
+      "object": "ipIfStatsOutForwDatagrams",
+      "class": "objecttype",
+      "object_type": "OBJECT-TYPE",
+      "nodetype": "column"
+    },
+    "1.3.6.1.2.1.4.31.3.1.24": {
+      "module": "IP-MIB",
+      "object": "ipIfStatsHCOutForwDatagrams",
+      "class": "objecttype",
+      "object_type": "OBJECT-TYPE",
+      "nodetype": "column"
+    },
+    "1.3.6.1.2.1.4.31.3.1.25": {
+      "module": "IP-MIB",
+      "object": "ipIfStatsOutDiscards",
+      "class": "objecttype",
+      "object_type": "OBJECT-TYPE",
+      "nodetype": "column"
+    },
+    "1.3.6.1.2.1.4.31.3.1.26": {
+      "module": "IP-MIB",
+      "object": "ipIfStatsOutFragReqds",
+      "class": "objecttype",
+      "object_type": "OBJECT-TYPE",
+      "nodetype": "column"
+    },
+    "1.3.6.1.2.1.4.31.3.1.27": {
+      "module": "IP-MIB",
+      "object": "ipIfStatsOutFragOKs",
+      "class": "objecttype",
+      "object_type": "OBJECT-TYPE",
+      "nodetype": "column"
+    },
+    "1.3.6.1.2.1.4.31.3.1.28": {
+      "module": "IP-MIB",
+      "object": "ipIfStatsOutFragFails",
+      "class": "objecttype",
+      "object_type": "OBJECT-TYPE",
+      "nodetype": "column"
+    },
+    "1.3.6.1.2.1.4.31.3.1.29": {
+      "module": "IP-MIB",
+      "object": "ipIfStatsOutFragCreates",
+      "class": "objecttype",
+      "object_type": "OBJECT-TYPE",
+      "nodetype": "column"
+    },
+    "1.3.6.1.2.1.4.31.3.1.30": {
+      "module": "IP-MIB",
+      "object": "ipIfStatsOutTransmits",
+      "class": "objecttype",
+      "object_type": "OBJECT-TYPE",
+      "nodetype": "column"
+    },
+    "1.3.6.1.2.1.4.31.3.1.31": {
+      "module": "IP-MIB",
+      "object": "ipIfStatsHCOutTransmits",
+      "class": "objecttype",
+      "object_type": "OBJECT-TYPE",
+      "nodetype": "column"
+    },
+    "1.3.6.1.2.1.4.31.3.1.32": {
+      "module": "IP-MIB",
+      "object": "ipIfStatsOutOctets",
+      "class": "objecttype",
+      "object_type": "OBJECT-TYPE",
+      "nodetype": "column"
+    },
+    "1.3.6.1.2.1.4.31.3.1.33": {
+      "module": "IP-MIB",
+      "object": "ipIfStatsHCOutOctets",
+      "class": "objecttype",
+      "object_type": "OBJECT-TYPE",
+      "nodetype": "column"
+    },
+    "1.3.6.1.2.1.4.31.3.1.34": {
+      "module": "IP-MIB",
+      "object": "ipIfStatsInMcastPkts",
+      "class": "objecttype",
+      "object_type": "OBJECT-TYPE",
+      "nodetype": "column"
+    },
+    "1.3.6.1.2.1.4.31.3.1.35": {
+      "module": "IP-MIB",
+      "object": "ipIfStatsHCInMcastPkts",
+      "class": "objecttype",
+      "object_type": "OBJECT-TYPE",
+      "nodetype": "column"
+    },
+    "1.3.6.1.2.1.4.31.3.1.36": {
+      "module": "IP-MIB",
+      "object": "ipIfStatsInMcastOctets",
+      "class": "objecttype",
+      "object_type": "OBJECT-TYPE",
+      "nodetype": "column"
+    },
+    "1.3.6.1.2.1.4.31.3.1.37": {
+      "module": "IP-MIB",
+      "object": "ipIfStatsHCInMcastOctets",
+      "class": "objecttype",
+      "object_type": "OBJECT-TYPE",
+      "nodetype": "column"
+    },
+    "1.3.6.1.2.1.4.31.3.1.38": {
+      "module": "IP-MIB",
+      "object": "ipIfStatsOutMcastPkts",
+      "class": "objecttype",
+      "object_type": "OBJECT-TYPE",
+      "nodetype": "column"
+    },
+    "1.3.6.1.2.1.4.31.3.1.39": {
+      "module": "IP-MIB",
+      "object": "ipIfStatsHCOutMcastPkts",
+      "class": "objecttype",
+      "object_type": "OBJECT-TYPE",
+      "nodetype": "column"
+    },
+    "1.3.6.1.2.1.4.31.3.1.40": {
+      "module": "IP-MIB",
+      "object": "ipIfStatsOutMcastOctets",
+      "class": "objecttype",
+      "object_type": "OBJECT-TYPE",
+      "nodetype": "column"
+    },
+    "1.3.6.1.2.1.4.31.3.1.41": {
+      "module": "IP-MIB",
+      "object": "ipIfStatsHCOutMcastOctets",
+      "class": "objecttype",
+      "object_type": "OBJECT-TYPE",
+      "nodetype": "column"
+    },
+    "1.3.6.1.2.1.4.31.3.1.42": {
+      "module": "IP-MIB",
+      "object": "ipIfStatsInBcastPkts",
+      "class": "objecttype",
+      "object_type": "OBJECT-TYPE",
+      "nodetype": "column"
+    },
+    "1.3.6.1.2.1.4.31.3.1.43": {
+      "module": "IP-MIB",
+      "object": "ipIfStatsHCInBcastPkts",
+      "class": "objecttype",
+      "object_type": "OBJECT-TYPE",
+      "nodetype": "column"
+    },
+    "1.3.6.1.2.1.4.31.3.1.44": {
+      "module": "IP-MIB",
+      "object": "ipIfStatsOutBcastPkts",
+      "class": "objecttype",
+      "object_type": "OBJECT-TYPE",
+      "nodetype": "column"
+    },
+    "1.3.6.1.2.1.4.31.3.1.45": {
+      "module": "IP-MIB",
+      "object": "ipIfStatsHCOutBcastPkts",
+      "class": "objecttype",
+      "object_type": "OBJECT-TYPE",
+      "nodetype": "column"
+    },
+    "1.3.6.1.2.1.4.31.3.1.46": {
+      "module": "IP-MIB",
+      "object": "ipIfStatsDiscontinuityTime",
+      "class": "objecttype",
+      "object_type": "OBJECT-TYPE",
+      "nodetype": "column"
+    },
+    "1.3.6.1.2.1.4.31.3.1.47": {
+      "module": "IP-MIB",
+      "object": "ipIfStatsRefreshRate",
+      "class": "objecttype",
+      "object_type": "OBJECT-TYPE",
+      "nodetype": "column"
+    },
+    "1.3.6.1.2.1.4.32": {
+      "module": "IP-MIB",
+      "object": "ipAddressPrefixTable",
+      "class": "objecttype",
+      "object_type": "OBJECT-TYPE",
+      "nodetype": "table"
+    },
+    "1.3.6.1.2.1.4.32.1": {
+      "module": "IP-MIB",
+      "object": "ipAddressPrefixEntry",
+      "class": "objecttype",
+      "object_type": "OBJECT-TYPE",
+      "nodetype": "row"
+    },
+    "1.3.6.1.2.1.4.32.1.1": {
+      "module": "IP-MIB",
+      "object": "ipAddressPrefixIfIndex",
+      "class": "objecttype",
+      "object_type": "OBJECT-TYPE",
+      "nodetype": "column"
+    },
+    "1.3.6.1.2.1.4.32.1.2": {
+      "module": "IP-MIB",
+      "object": "ipAddressPrefixType",
+      "class": "objecttype",
+      "object_type": "OBJECT-TYPE",
+      "nodetype": "column"
+    },
+    "1.3.6.1.2.1.4.32.1.3": {
+      "module": "IP-MIB",
+      "object": "ipAddressPrefixPrefix",
+      "class": "objecttype",
+      "object_type": "OBJECT-TYPE",
+      "nodetype": "column"
+    },
+    "1.3.6.1.2.1.4.32.1.4": {
+      "module": "IP-MIB",
+      "object": "ipAddressPrefixLength",
+      "class": "objecttype",
+      "object_type": "OBJECT-TYPE",
+      "nodetype": "column"
+    },
+    "1.3.6.1.2.1.4.32.1.5": {
+      "module": "IP-MIB",
+      "object": "ipAddressPrefixOrigin",
+      "class": "objecttype",
+      "object_type": "OBJECT-TYPE",
+      "nodetype": "column"
+    },
+    "1.3.6.1.2.1.4.32.1.6": {
+      "module": "IP-MIB",
+      "object": "ipAddressPrefixOnLinkFlag",
+      "class": "objecttype",
+      "object_type": "OBJECT-TYPE",
+      "nodetype": "column"
+    },
+    "1.3.6.1.2.1.4.32.1.7": {
+      "module": "IP-MIB",
+      "object": "ipAddressPrefixAutonomousFlag",
+      "class": "objecttype",
+      "object_type": "OBJECT-TYPE",
+      "nodetype": "column"
+    },
+    "1.3.6.1.2.1.4.32.1.8": {
+      "module": "IP-MIB",
+      "object": "ipAddressPrefixAdvPreferredLifetime",
+      "class": "objecttype",
+      "object_type": "OBJECT-TYPE",
+      "nodetype": "column"
+    },
+    "1.3.6.1.2.1.4.32.1.9": {
+      "module": "IP-MIB",
+      "object": "ipAddressPrefixAdvValidLifetime",
+      "class": "objecttype",
+      "object_type": "OBJECT-TYPE",
+      "nodetype": "column"
+    },
+    "1.3.6.1.2.1.4.33": {
+      "module": "IP-MIB",
+      "object": "ipAddressSpinLock",
+      "class": "objecttype",
+      "object_type": "OBJECT-TYPE",
+      "nodetype": "scalar"
+    },
+    "1.3.6.1.2.1.4.34": {
+      "module": "IP-MIB",
+      "object": "ipAddressTable",
+      "class": "objecttype",
+      "object_type": "OBJECT-TYPE",
+      "nodetype": "table"
+    },
+    "1.3.6.1.2.1.4.34.1": {
+      "module": "IP-MIB",
+      "object": "ipAddressEntry",
+      "class": "objecttype",
+      "object_type": "OBJECT-TYPE",
+      "nodetype": "row"
+    },
+    "1.3.6.1.2.1.4.34.1.1": {
+      "module": "IP-MIB",
+      "object": "ipAddressAddrType",
+      "class": "objecttype",
+      "object_type": "OBJECT-TYPE",
+      "nodetype": "column"
+    },
+    "1.3.6.1.2.1.4.34.1.2": {
+      "module": "IP-MIB",
+      "object": "ipAddressAddr",
+      "class": "objecttype",
+      "object_type": "OBJECT-TYPE",
+      "nodetype": "column"
+    },
+    "1.3.6.1.2.1.4.34.1.3": {
+      "module": "IP-MIB",
+      "object": "ipAddressIfIndex",
+      "class": "objecttype",
+      "object_type": "OBJECT-TYPE",
+      "nodetype": "column"
+    },
+    "1.3.6.1.2.1.4.34.1.4": {
+      "module": "IP-MIB",
+      "object": "ipAddressType",
+      "class": "objecttype",
+      "object_type": "OBJECT-TYPE",
+      "nodetype": "column"
+    },
+    "1.3.6.1.2.1.4.34.1.5": {
+      "module": "IP-MIB",
+      "object": "ipAddressPrefix",
+      "class": "objecttype",
+      "object_type": "OBJECT-TYPE",
+      "nodetype": "column"
+    },
+    "1.3.6.1.2.1.4.34.1.6": {
+      "module": "IP-MIB",
+      "object": "ipAddressOrigin",
+      "class": "objecttype",
+      "object_type": "OBJECT-TYPE",
+      "nodetype": "column"
+    },
+    "1.3.6.1.2.1.4.34.1.7": {
+      "module": "IP-MIB",
+      "object": "ipAddressStatus",
+      "class": "objecttype",
+      "object_type": "OBJECT-TYPE",
+      "nodetype": "column"
+    },
+    "1.3.6.1.2.1.4.34.1.8": {
+      "module": "IP-MIB",
+      "object": "ipAddressCreated",
+      "class": "objecttype",
+      "object_type": "OBJECT-TYPE",
+      "nodetype": "column"
+    },
+    "1.3.6.1.2.1.4.34.1.9": {
+      "module": "IP-MIB",
+      "object": "ipAddressLastChanged",
+      "class": "objecttype",
+      "object_type": "OBJECT-TYPE",
+      "nodetype": "column"
+    },
+    "1.3.6.1.2.1.4.34.1.10": {
+      "module": "IP-MIB",
+      "object": "ipAddressRowStatus",
+      "class": "objecttype",
+      "object_type": "OBJECT-TYPE",
+      "nodetype": "column"
+    },
+    "1.3.6.1.2.1.4.34.1.11": {
+      "module": "IP-MIB",
+      "object": "ipAddressStorageType",
+      "class": "objecttype",
+      "object_type": "OBJECT-TYPE",
+      "nodetype": "column"
+    },
+    "1.3.6.1.2.1.4.35": {
+      "module": "IP-MIB",
+      "object": "ipNetToPhysicalTable",
+      "class": "objecttype",
+      "object_type": "OBJECT-TYPE",
+      "nodetype": "table"
+    },
+    "1.3.6.1.2.1.4.35.1": {
+      "module": "IP-MIB",
+      "object": "ipNetToPhysicalEntry",
+      "class": "objecttype",
+      "object_type": "OBJECT-TYPE",
+      "nodetype": "row"
+    },
+    "1.3.6.1.2.1.4.35.1.1": {
+      "module": "IP-MIB",
+      "object": "ipNetToPhysicalIfIndex",
+      "class": "objecttype",
+      "object_type": "OBJECT-TYPE",
+      "nodetype": "column"
+    },
+    "1.3.6.1.2.1.4.35.1.2": {
+      "module": "IP-MIB",
+      "object": "ipNetToPhysicalNetAddressType",
+      "class": "objecttype",
+      "object_type": "OBJECT-TYPE",
+      "nodetype": "column"
+    },
+    "1.3.6.1.2.1.4.35.1.3": {
+      "module": "IP-MIB",
+      "object": "ipNetToPhysicalNetAddress",
+      "class": "objecttype",
+      "object_type": "OBJECT-TYPE",
+      "nodetype": "column"
+    },
+    "1.3.6.1.2.1.4.35.1.4": {
+      "module": "IP-MIB",
+      "object": "ipNetToPhysicalPhysAddress",
+      "class": "objecttype",
+      "object_type": "OBJECT-TYPE",
+      "nodetype": "column"
+    },
+    "1.3.6.1.2.1.4.35.1.5": {
+      "module": "IP-MIB",
+      "object": "ipNetToPhysicalLastUpdated",
+      "class": "objecttype",
+      "object_type": "OBJECT-TYPE",
+      "nodetype": "column"
+    },
+    "1.3.6.1.2.1.4.35.1.6": {
+      "module": "IP-MIB",
+      "object": "ipNetToPhysicalType",
+      "class": "objecttype",
+      "object_type": "OBJECT-TYPE",
+      "nodetype": "column"
+    },
+    "1.3.6.1.2.1.4.35.1.7": {
+      "module": "IP-MIB",
+      "object": "ipNetToPhysicalState",
+      "class": "objecttype",
+      "object_type": "OBJECT-TYPE",
+      "nodetype": "column"
+    },
+    "1.3.6.1.2.1.4.35.1.8": {
+      "module": "IP-MIB",
+      "object": "ipNetToPhysicalRowStatus",
+      "class": "objecttype",
+      "object_type": "OBJECT-TYPE",
+      "nodetype": "column"
+    },
+    "1.3.6.1.2.1.4.36": {
+      "module": "IP-MIB",
+      "object": "ipv6ScopeZoneIndexTable",
+      "class": "objecttype",
+      "object_type": "OBJECT-TYPE",
+      "nodetype": "table"
+    },
+    "1.3.6.1.2.1.4.36.1": {
+      "module": "IP-MIB",
+      "object": "ipv6ScopeZoneIndexEntry",
+      "class": "objecttype",
+      "object_type": "OBJECT-TYPE",
+      "nodetype": "row"
+    },
+    "1.3.6.1.2.1.4.36.1.1": {
+      "module": "IP-MIB",
+      "object": "ipv6ScopeZoneIndexIfIndex",
+      "class": "objecttype",
+      "object_type": "OBJECT-TYPE",
+      "nodetype": "column"
+    },
+    "1.3.6.1.2.1.4.36.1.2": {
+      "module": "IP-MIB",
+      "object": "ipv6ScopeZoneIndexLinkLocal",
+      "class": "objecttype",
+      "object_type": "OBJECT-TYPE",
+      "nodetype": "column"
+    },
+    "1.3.6.1.2.1.4.36.1.3": {
+      "module": "IP-MIB",
+      "object": "ipv6ScopeZoneIndex3",
+      "class": "objecttype",
+      "object_type": "OBJECT-TYPE",
+      "nodetype": "column"
+    },
+    "1.3.6.1.2.1.4.36.1.4": {
+      "module": "IP-MIB",
+      "object": "ipv6ScopeZoneIndexAdminLocal",
+      "class": "objecttype",
+      "object_type": "OBJECT-TYPE",
+      "nodetype": "column"
+    },
+    "1.3.6.1.2.1.4.36.1.5": {
+      "module": "IP-MIB",
+      "object": "ipv6ScopeZoneIndexSiteLocal",
+      "class": "objecttype",
+      "object_type": "OBJECT-TYPE",
+      "nodetype": "column"
+    },
+    "1.3.6.1.2.1.4.36.1.6": {
+      "module": "IP-MIB",
+      "object": "ipv6ScopeZoneIndex6",
+      "class": "objecttype",
+      "object_type": "OBJECT-TYPE",
+      "nodetype": "column"
+    },
+    "1.3.6.1.2.1.4.36.1.7": {
+      "module": "IP-MIB",
+      "object": "ipv6ScopeZoneIndex7",
+      "class": "objecttype",
+      "object_type": "OBJECT-TYPE",
+      "nodetype": "column"
+    },
+    "1.3.6.1.2.1.4.36.1.8": {
+      "module": "IP-MIB",
+      "object": "ipv6ScopeZoneIndexOrganizationLocal",
+      "class": "objecttype",
+      "object_type": "OBJECT-TYPE",
+      "nodetype": "column"
+    },
+    "1.3.6.1.2.1.4.36.1.9": {
+      "module": "IP-MIB",
+      "object": "ipv6ScopeZoneIndex9",
+      "class": "objecttype",
+      "object_type": "OBJECT-TYPE",
+      "nodetype": "column"
+    },
+    "1.3.6.1.2.1.4.36.1.10": {
+      "module": "IP-MIB",
+      "object": "ipv6ScopeZoneIndexA",
+      "class": "objecttype",
+      "object_type": "OBJECT-TYPE",
+      "nodetype": "column"
+    },
+    "1.3.6.1.2.1.4.36.1.11": {
+      "module": "IP-MIB",
+      "object": "ipv6ScopeZoneIndexB",
+      "class": "objecttype",
+      "object_type": "OBJECT-TYPE",
+      "nodetype": "column"
+    },
+    "1.3.6.1.2.1.4.36.1.12": {
+      "module": "IP-MIB",
+      "object": "ipv6ScopeZoneIndexC",
+      "class": "objecttype",
+      "object_type": "OBJECT-TYPE",
+      "nodetype": "column"
+    },
+    "1.3.6.1.2.1.4.36.1.13": {
+      "module": "IP-MIB",
+      "object": "ipv6ScopeZoneIndexD",
+      "class": "objecttype",
+      "object_type": "OBJECT-TYPE",
+      "nodetype": "column"
+    },
+    "1.3.6.1.2.1.4.37": {
+      "module": "IP-MIB",
+      "object": "ipDefaultRouterTable",
+      "class": "objecttype",
+      "object_type": "OBJECT-TYPE",
+      "nodetype": "table"
+    },
+    "1.3.6.1.2.1.4.37.1": {
+      "module": "IP-MIB",
+      "object": "ipDefaultRouterEntry",
+      "class": "objecttype",
+      "object_type": "OBJECT-TYPE",
+      "nodetype": "row"
+    },
+    "1.3.6.1.2.1.4.37.1.1": {
+      "module": "IP-MIB",
+      "object": "ipDefaultRouterAddressType",
+      "class": "objecttype",
+      "object_type": "OBJECT-TYPE",
+      "nodetype": "column"
+    },
+    "1.3.6.1.2.1.4.37.1.2": {
+      "module": "IP-MIB",
+      "object": "ipDefaultRouterAddress",
+      "class": "objecttype",
+      "object_type": "OBJECT-TYPE",
+      "nodetype": "column"
+    },
+    "1.3.6.1.2.1.4.37.1.3": {
+      "module": "IP-MIB",
+      "object": "ipDefaultRouterIfIndex",
+      "class": "objecttype",
+      "object_type": "OBJECT-TYPE",
+      "nodetype": "column"
+    },
+    "1.3.6.1.2.1.4.37.1.4": {
+      "module": "IP-MIB",
+      "object": "ipDefaultRouterLifetime",
+      "class": "objecttype",
+      "object_type": "OBJECT-TYPE",
+      "nodetype": "column"
+    },
+    "1.3.6.1.2.1.4.37.1.5": {
+      "module": "IP-MIB",
+      "object": "ipDefaultRouterPreference",
+      "class": "objecttype",
+      "object_type": "OBJECT-TYPE",
+      "nodetype": "column"
+    },
+    "1.3.6.1.2.1.4.38": {
+      "module": "IP-MIB",
+      "object": "ipv6RouterAdvertSpinLock",
+      "class": "objecttype",
+      "object_type": "OBJECT-TYPE",
+      "nodetype": "scalar"
+    },
+    "1.3.6.1.2.1.4.39": {
+      "module": "IP-MIB",
+      "object": "ipv6RouterAdvertTable",
+      "class": "objecttype",
+      "object_type": "OBJECT-TYPE",
+      "nodetype": "table"
+    },
+    "1.3.6.1.2.1.4.39.1": {
+      "module": "IP-MIB",
+      "object": "ipv6RouterAdvertEntry",
+      "class": "objecttype",
+      "object_type": "OBJECT-TYPE",
+      "nodetype": "row"
+    },
+    "1.3.6.1.2.1.4.39.1.1": {
+      "module": "IP-MIB",
+      "object": "ipv6RouterAdvertIfIndex",
+      "class": "objecttype",
+      "object_type": "OBJECT-TYPE",
+      "nodetype": "column"
+    },
+    "1.3.6.1.2.1.4.39.1.2": {
+      "module": "IP-MIB",
+      "object": "ipv6RouterAdvertSendAdverts",
+      "class": "objecttype",
+      "object_type": "OBJECT-TYPE",
+      "nodetype": "column"
+    },
+    "1.3.6.1.2.1.4.39.1.3": {
+      "module": "IP-MIB",
+      "object": "ipv6RouterAdvertMaxInterval",
+      "class": "objecttype",
+      "object_type": "OBJECT-TYPE",
+      "nodetype": "column"
+    },
+    "1.3.6.1.2.1.4.39.1.4": {
+      "module": "IP-MIB",
+      "object": "ipv6RouterAdvertMinInterval",
+      "class": "objecttype",
+      "object_type": "OBJECT-TYPE",
+      "nodetype": "column"
+    },
+    "1.3.6.1.2.1.4.39.1.5": {
+      "module": "IP-MIB",
+      "object": "ipv6RouterAdvertManagedFlag",
+      "class": "objecttype",
+      "object_type": "OBJECT-TYPE",
+      "nodetype": "column"
+    },
+    "1.3.6.1.2.1.4.39.1.6": {
+      "module": "IP-MIB",
+      "object": "ipv6RouterAdvertOtherConfigFlag",
+      "class": "objecttype",
+      "object_type": "OBJECT-TYPE",
+      "nodetype": "column"
+    },
+    "1.3.6.1.2.1.4.39.1.7": {
+      "module": "IP-MIB",
+      "object": "ipv6RouterAdvertLinkMTU",
+      "class": "objecttype",
+      "object_type": "OBJECT-TYPE",
+      "nodetype": "column"
+    },
+    "1.3.6.1.2.1.4.39.1.8": {
+      "module": "IP-MIB",
+      "object": "ipv6RouterAdvertReachableTime",
+      "class": "objecttype",
+      "object_type": "OBJECT-TYPE",
+      "nodetype": "column"
+    },
+    "1.3.6.1.2.1.4.39.1.9": {
+      "module": "IP-MIB",
+      "object": "ipv6RouterAdvertRetransmitTime",
+      "class": "objecttype",
+      "object_type": "OBJECT-TYPE",
+      "nodetype": "column"
+    },
+    "1.3.6.1.2.1.4.39.1.10": {
+      "module": "IP-MIB",
+      "object": "ipv6RouterAdvertCurHopLimit",
+      "class": "objecttype",
+      "object_type": "OBJECT-TYPE",
+      "nodetype": "column"
+    },
+    "1.3.6.1.2.1.4.39.1.11": {
+      "module": "IP-MIB",
+      "object": "ipv6RouterAdvertDefaultLifetime",
+      "class": "objecttype",
+      "object_type": "OBJECT-TYPE",
+      "nodetype": "column"
+    },
+    "1.3.6.1.2.1.4.39.1.12": {
+      "module": "IP-MIB",
+      "object": "ipv6RouterAdvertRowStatus",
+      "class": "objecttype",
+      "object_type": "OBJECT-TYPE",
+      "nodetype": "column"
+    },
+    "1.3.6.1.2.1.5": {
+      "module": "IP-MIB",
+      "object": "icmp",
+      "class": "objectidentifier",
+      "object_type": "OBJECT IDENTIFIER"
+    },
+    "1.3.6.1.2.1.5.1": {
+      "module": "IP-MIB",
+      "object": "icmpInMsgs",
+      "class": "objecttype",
+      "object_type": "OBJECT-TYPE",
+      "nodetype": "scalar"
+    },
+    "1.3.6.1.2.1.5.2": {
+      "module": "IP-MIB",
+      "object": "icmpInErrors",
+      "class": "objecttype",
+      "object_type": "OBJECT-TYPE",
+      "nodetype": "scalar"
+    },
+    "1.3.6.1.2.1.5.3": {
+      "module": "IP-MIB",
+      "object": "icmpInDestUnreachs",
+      "class": "objecttype",
+      "object_type": "OBJECT-TYPE",
+      "nodetype": "scalar"
+    },
+    "1.3.6.1.2.1.5.4": {
+      "module": "IP-MIB",
+      "object": "icmpInTimeExcds",
+      "class": "objecttype",
+      "object_type": "OBJECT-TYPE",
+      "nodetype": "scalar"
+    },
+    "1.3.6.1.2.1.5.5": {
+      "module": "IP-MIB",
+      "object": "icmpInParmProbs",
+      "class": "objecttype",
+      "object_type": "OBJECT-TYPE",
+      "nodetype": "scalar"
+    },
+    "1.3.6.1.2.1.5.6": {
+      "module": "IP-MIB",
+      "object": "icmpInSrcQuenchs",
+      "class": "objecttype",
+      "object_type": "OBJECT-TYPE",
+      "nodetype": "scalar"
+    },
+    "1.3.6.1.2.1.5.7": {
+      "module": "IP-MIB",
+      "object": "icmpInRedirects",
+      "class": "objecttype",
+      "object_type": "OBJECT-TYPE",
+      "nodetype": "scalar"
+    },
+    "1.3.6.1.2.1.5.8": {
+      "module": "IP-MIB",
+      "object": "icmpInEchos",
+      "class": "objecttype",
+      "object_type": "OBJECT-TYPE",
+      "nodetype": "scalar"
+    },
+    "1.3.6.1.2.1.5.9": {
+      "module": "IP-MIB",
+      "object": "icmpInEchoReps",
+      "class": "objecttype",
+      "object_type": "OBJECT-TYPE",
+      "nodetype": "scalar"
+    },
+    "1.3.6.1.2.1.5.10": {
+      "module": "IP-MIB",
+      "object": "icmpInTimestamps",
+      "class": "objecttype",
+      "object_type": "OBJECT-TYPE",
+      "nodetype": "scalar"
+    },
+    "1.3.6.1.2.1.5.11": {
+      "module": "IP-MIB",
+      "object": "icmpInTimestampReps",
+      "class": "objecttype",
+      "object_type": "OBJECT-TYPE",
+      "nodetype": "scalar"
+    },
+    "1.3.6.1.2.1.5.12": {
+      "module": "IP-MIB",
+      "object": "icmpInAddrMasks",
+      "class": "objecttype",
+      "object_type": "OBJECT-TYPE",
+      "nodetype": "scalar"
+    },
+    "1.3.6.1.2.1.5.13": {
+      "module": "IP-MIB",
+      "object": "icmpInAddrMaskReps",
+      "class": "objecttype",
+      "object_type": "OBJECT-TYPE",
+      "nodetype": "scalar"
+    },
+    "1.3.6.1.2.1.5.14": {
+      "module": "IP-MIB",
+      "object": "icmpOutMsgs",
+      "class": "objecttype",
+      "object_type": "OBJECT-TYPE",
+      "nodetype": "scalar"
+    },
+    "1.3.6.1.2.1.5.15": {
+      "module": "IP-MIB",
+      "object": "icmpOutErrors",
+      "class": "objecttype",
+      "object_type": "OBJECT-TYPE",
+      "nodetype": "scalar"
+    },
+    "1.3.6.1.2.1.5.16": {
+      "module": "IP-MIB",
+      "object": "icmpOutDestUnreachs",
+      "class": "objecttype",
+      "object_type": "OBJECT-TYPE",
+      "nodetype": "scalar"
+    },
+    "1.3.6.1.2.1.5.17": {
+      "module": "IP-MIB",
+      "object": "icmpOutTimeExcds",
+      "class": "objecttype",
+      "object_type": "OBJECT-TYPE",
+      "nodetype": "scalar"
+    },
+    "1.3.6.1.2.1.5.18": {
+      "module": "IP-MIB",
+      "object": "icmpOutParmProbs",
+      "class": "objecttype",
+      "object_type": "OBJECT-TYPE",
+      "nodetype": "scalar"
+    },
+    "1.3.6.1.2.1.5.19": {
+      "module": "IP-MIB",
+      "object": "icmpOutSrcQuenchs",
+      "class": "objecttype",
+      "object_type": "OBJECT-TYPE",
+      "nodetype": "scalar"
+    },
+    "1.3.6.1.2.1.5.20": {
+      "module": "IP-MIB",
+      "object": "icmpOutRedirects",
+      "class": "objecttype",
+      "object_type": "OBJECT-TYPE",
+      "nodetype": "scalar"
+    },
+    "1.3.6.1.2.1.5.21": {
+      "module": "IP-MIB",
+      "object": "icmpOutEchos",
+      "class": "objecttype",
+      "object_type": "OBJECT-TYPE",
+      "nodetype": "scalar"
+    },
+    "1.3.6.1.2.1.5.22": {
+      "module": "IP-MIB",
+      "object": "icmpOutEchoReps",
+      "class": "objecttype",
+      "object_type": "OBJECT-TYPE",
+      "nodetype": "scalar"
+    },
+    "1.3.6.1.2.1.5.23": {
+      "module": "IP-MIB",
+      "object": "icmpOutTimestamps",
+      "class": "objecttype",
+      "object_type": "OBJECT-TYPE",
+      "nodetype": "scalar"
+    },
+    "1.3.6.1.2.1.5.24": {
+      "module": "IP-MIB",
+      "object": "icmpOutTimestampReps",
+      "class": "objecttype",
+      "object_type": "OBJECT-TYPE",
+      "nodetype": "scalar"
+    },
+    "1.3.6.1.2.1.5.25": {
+      "module": "IP-MIB",
+      "object": "icmpOutAddrMasks",
+      "class": "objecttype",
+      "object_type": "OBJECT-TYPE",
+      "nodetype": "scalar"
+    },
+    "1.3.6.1.2.1.5.26": {
+      "module": "IP-MIB",
+      "object": "icmpOutAddrMaskReps",
+      "class": "objecttype",
+      "object_type": "OBJECT-TYPE",
+      "nodetype": "scalar"
+    },
+    "1.3.6.1.2.1.5.29": {
+      "module": "IP-MIB",
+      "object": "icmpStatsTable",
+      "class": "objecttype",
+      "object_type": "OBJECT-TYPE",
+      "nodetype": "table"
+    },
+    "1.3.6.1.2.1.5.29.1": {
+      "module": "IP-MIB",
+      "object": "icmpStatsEntry",
+      "class": "objecttype",
+      "object_type": "OBJECT-TYPE",
+      "nodetype": "row"
+    },
+    "1.3.6.1.2.1.5.29.1.1": {
+      "module": "IP-MIB",
+      "object": "icmpStatsIPVersion",
+      "class": "objecttype",
+      "object_type": "OBJECT-TYPE",
+      "nodetype": "column"
+    },
+    "1.3.6.1.2.1.5.29.1.2": {
+      "module": "IP-MIB",
+      "object": "icmpStatsInMsgs",
+      "class": "objecttype",
+      "object_type": "OBJECT-TYPE",
+      "nodetype": "column"
+    },
+    "1.3.6.1.2.1.5.29.1.3": {
+      "module": "IP-MIB",
+      "object": "icmpStatsInErrors",
+      "class": "objecttype",
+      "object_type": "OBJECT-TYPE",
+      "nodetype": "column"
+    },
+    "1.3.6.1.2.1.5.29.1.4": {
+      "module": "IP-MIB",
+      "object": "icmpStatsOutMsgs",
+      "class": "objecttype",
+      "object_type": "OBJECT-TYPE",
+      "nodetype": "column"
+    },
+    "1.3.6.1.2.1.5.29.1.5": {
+      "module": "IP-MIB",
+      "object": "icmpStatsOutErrors",
+      "class": "objecttype",
+      "object_type": "OBJECT-TYPE",
+      "nodetype": "column"
+    },
+    "1.3.6.1.2.1.5.30": {
+      "module": "IP-MIB",
+      "object": "icmpMsgStatsTable",
+      "class": "objecttype",
+      "object_type": "OBJECT-TYPE",
+      "nodetype": "table"
+    },
+    "1.3.6.1.2.1.5.30.1": {
+      "module": "IP-MIB",
+      "object": "icmpMsgStatsEntry",
+      "class": "objecttype",
+      "object_type": "OBJECT-TYPE",
+      "nodetype": "row"
+    },
+    "1.3.6.1.2.1.5.30.1.1": {
+      "module": "IP-MIB",
+      "object": "icmpMsgStatsIPVersion",
+      "class": "objecttype",
+      "object_type": "OBJECT-TYPE",
+      "nodetype": "column"
+    },
+    "1.3.6.1.2.1.5.30.1.2": {
+      "module": "IP-MIB",
+      "object": "icmpMsgStatsType",
+      "class": "objecttype",
+      "object_type": "OBJECT-TYPE",
+      "nodetype": "column"
+    },
+    "1.3.6.1.2.1.5.30.1.3": {
+      "module": "IP-MIB",
+      "object": "icmpMsgStatsInPkts",
+      "class": "objecttype",
+      "object_type": "OBJECT-TYPE",
+      "nodetype": "column"
+    },
+    "1.3.6.1.2.1.5.30.1.4": {
+      "module": "IP-MIB",
+      "object": "icmpMsgStatsOutPkts",
+      "class": "objecttype",
+      "object_type": "OBJECT-TYPE",
+      "nodetype": "column"
+    },
+    "1.3.6.1.2.1.6": {
+      "module": "TCP-MIB",
+      "object": "tcp",
+      "class": "objectidentifier",
+      "object_type": "OBJECT IDENTIFIER"
+    },
+    "1.3.6.1.2.1.6.1": {
+      "module": "TCP-MIB",
+      "object": "tcpRtoAlgorithm",
+      "class": "objecttype",
+      "object_type": "OBJECT-TYPE",
+      "nodetype": "scalar"
+    },
+    "1.3.6.1.2.1.6.2": {
+      "module": "TCP-MIB",
+      "object": "tcpRtoMin",
+      "class": "objecttype",
+      "object_type": "OBJECT-TYPE",
+      "nodetype": "scalar"
+    },
+    "1.3.6.1.2.1.6.3": {
+      "module": "TCP-MIB",
+      "object": "tcpRtoMax",
+      "class": "objecttype",
+      "object_type": "OBJECT-TYPE",
+      "nodetype": "scalar"
+    },
+    "1.3.6.1.2.1.6.4": {
+      "module": "TCP-MIB",
+      "object": "tcpMaxConn",
+      "class": "objecttype",
+      "object_type": "OBJECT-TYPE",
+      "nodetype": "scalar"
+    },
+    "1.3.6.1.2.1.6.5": {
+      "module": "TCP-MIB",
+      "object": "tcpActiveOpens",
+      "class": "objecttype",
+      "object_type": "OBJECT-TYPE",
+      "nodetype": "scalar"
+    },
+    "1.3.6.1.2.1.6.6": {
+      "module": "TCP-MIB",
+      "object": "tcpPassiveOpens",
+      "class": "objecttype",
+      "object_type": "OBJECT-TYPE",
+      "nodetype": "scalar"
+    },
+    "1.3.6.1.2.1.6.7": {
+      "module": "TCP-MIB",
+      "object": "tcpAttemptFails",
+      "class": "objecttype",
+      "object_type": "OBJECT-TYPE",
+      "nodetype": "scalar"
+    },
+    "1.3.6.1.2.1.6.8": {
+      "module": "TCP-MIB",
+      "object": "tcpEstabResets",
+      "class": "objecttype",
+      "object_type": "OBJECT-TYPE",
+      "nodetype": "scalar"
+    },
+    "1.3.6.1.2.1.6.9": {
+      "module": "TCP-MIB",
+      "object": "tcpCurrEstab",
+      "class": "objecttype",
+      "object_type": "OBJECT-TYPE",
+      "nodetype": "scalar"
+    },
+    "1.3.6.1.2.1.6.10": {
+      "module": "TCP-MIB",
+      "object": "tcpInSegs",
+      "class": "objecttype",
+      "object_type": "OBJECT-TYPE",
+      "nodetype": "scalar"
+    },
+    "1.3.6.1.2.1.6.11": {
+      "module": "TCP-MIB",
+      "object": "tcpOutSegs",
+      "class": "objecttype",
+      "object_type": "OBJECT-TYPE",
+      "nodetype": "scalar"
+    },
+    "1.3.6.1.2.1.6.12": {
+      "module": "TCP-MIB",
+      "object": "tcpRetransSegs",
+      "class": "objecttype",
+      "object_type": "OBJECT-TYPE",
+      "nodetype": "scalar"
+    },
+    "1.3.6.1.2.1.6.13": {
+      "module": "TCP-MIB",
+      "object": "tcpConnTable",
+      "class": "objecttype",
+      "object_type": "OBJECT-TYPE",
+      "nodetype": "table"
+    },
+    "1.3.6.1.2.1.6.13.1": {
+      "module": "TCP-MIB",
+      "object": "tcpConnEntry",
+      "class": "objecttype",
+      "object_type": "OBJECT-TYPE",
+      "nodetype": "row"
+    },
+    "1.3.6.1.2.1.6.13.1.1": {
+      "module": "TCP-MIB",
+      "object": "tcpConnState",
+      "class": "objecttype",
+      "object_type": "OBJECT-TYPE",
+      "nodetype": "column"
+    },
+    "1.3.6.1.2.1.6.13.1.2": {
+      "module": "TCP-MIB",
+      "object": "tcpConnLocalAddress",
+      "class": "objecttype",
+      "object_type": "OBJECT-TYPE",
+      "nodetype": "column"
+    },
+    "1.3.6.1.2.1.6.13.1.3": {
+      "module": "TCP-MIB",
+      "object": "tcpConnLocalPort",
+      "class": "objecttype",
+      "object_type": "OBJECT-TYPE",
+      "nodetype": "column"
+    },
+    "1.3.6.1.2.1.6.13.1.4": {
+      "module": "TCP-MIB",
+      "object": "tcpConnRemAddress",
+      "class": "objecttype",
+      "object_type": "OBJECT-TYPE",
+      "nodetype": "column"
+    },
+    "1.3.6.1.2.1.6.13.1.5": {
+      "module": "TCP-MIB",
+      "object": "tcpConnRemPort",
+      "class": "objecttype",
+      "object_type": "OBJECT-TYPE",
+      "nodetype": "column"
+    },
+    "1.3.6.1.2.1.6.14": {
+      "module": "TCP-MIB",
+      "object": "tcpInErrs",
+      "class": "objecttype",
+      "object_type": "OBJECT-TYPE",
+      "nodetype": "scalar"
+    },
+    "1.3.6.1.2.1.6.15": {
+      "module": "TCP-MIB",
+      "object": "tcpOutRsts",
+      "class": "objecttype",
+      "object_type": "OBJECT-TYPE",
+      "nodetype": "scalar"
+    },
+    "1.3.6.1.2.1.6.17": {
+      "module": "TCP-MIB",
+      "object": "tcpHCInSegs",
+      "class": "objecttype",
+      "object_type": "OBJECT-TYPE",
+      "nodetype": "scalar"
+    },
+    "1.3.6.1.2.1.6.18": {
+      "module": "TCP-MIB",
+      "object": "tcpHCOutSegs",
+      "class": "objecttype",
+      "object_type": "OBJECT-TYPE",
+      "nodetype": "scalar"
+    },
+    "1.3.6.1.2.1.6.19": {
+      "module": "TCP-MIB",
+      "object": "tcpConnectionTable",
+      "class": "objecttype",
+      "object_type": "OBJECT-TYPE",
+      "nodetype": "table"
+    },
+    "1.3.6.1.2.1.6.19.1": {
+      "module": "TCP-MIB",
+      "object": "tcpConnectionEntry",
+      "class": "objecttype",
+      "object_type": "OBJECT-TYPE",
+      "nodetype": "row"
+    },
+    "1.3.6.1.2.1.6.19.1.1": {
+      "module": "TCP-MIB",
+      "object": "tcpConnectionLocalAddressType",
+      "class": "objecttype",
+      "object_type": "OBJECT-TYPE",
+      "nodetype": "column"
+    },
+    "1.3.6.1.2.1.6.19.1.2": {
+      "module": "TCP-MIB",
+      "object": "tcpConnectionLocalAddress",
+      "class": "objecttype",
+      "object_type": "OBJECT-TYPE",
+      "nodetype": "column"
+    },
+    "1.3.6.1.2.1.6.19.1.3": {
+      "module": "TCP-MIB",
+      "object": "tcpConnectionLocalPort",
+      "class": "objecttype",
+      "object_type": "OBJECT-TYPE",
+      "nodetype": "column"
+    },
+    "1.3.6.1.2.1.6.19.1.4": {
+      "module": "TCP-MIB",
+      "object": "tcpConnectionRemAddressType",
+      "class": "objecttype",
+      "object_type": "OBJECT-TYPE",
+      "nodetype": "column"
+    },
+    "1.3.6.1.2.1.6.19.1.5": {
+      "module": "TCP-MIB",
+      "object": "tcpConnectionRemAddress",
+      "class": "objecttype",
+      "object_type": "OBJECT-TYPE",
+      "nodetype": "column"
+    },
+    "1.3.6.1.2.1.6.19.1.6": {
+      "module": "TCP-MIB",
+      "object": "tcpConnectionRemPort",
+      "class": "objecttype",
+      "object_type": "OBJECT-TYPE",
+      "nodetype": "column"
+    },
+    "1.3.6.1.2.1.6.19.1.7": {
+      "module": "TCP-MIB",
+      "object": "tcpConnectionState",
+      "class": "objecttype",
+      "object_type": "OBJECT-TYPE",
+      "nodetype": "column"
+    },
+    "1.3.6.1.2.1.6.19.1.8": {
+      "module": "TCP-MIB",
+      "object": "tcpConnectionProcess",
+      "class": "objecttype",
+      "object_type": "OBJECT-TYPE",
+      "nodetype": "column"
+    },
+    "1.3.6.1.2.1.6.20": {
+      "module": "TCP-MIB",
+      "object": "tcpListenerTable",
+      "class": "objecttype",
+      "object_type": "OBJECT-TYPE",
+      "nodetype": "table"
+    },
+    "1.3.6.1.2.1.6.20.1": {
+      "module": "TCP-MIB",
+      "object": "tcpListenerEntry",
+      "class": "objecttype",
+      "object_type": "OBJECT-TYPE",
+      "nodetype": "row"
+    },
+    "1.3.6.1.2.1.6.20.1.1": {
+      "module": "TCP-MIB",
+      "object": "tcpListenerLocalAddressType",
+      "class": "objecttype",
+      "object_type": "OBJECT-TYPE",
+      "nodetype": "column"
+    },
+    "1.3.6.1.2.1.6.20.1.2": {
+      "module": "TCP-MIB",
+      "object": "tcpListenerLocalAddress",
+      "class": "objecttype",
+      "object_type": "OBJECT-TYPE",
+      "nodetype": "column"
+    },
+    "1.3.6.1.2.1.6.20.1.3": {
+      "module": "TCP-MIB",
+      "object": "tcpListenerLocalPort",
+      "class": "objecttype",
+      "object_type": "OBJECT-TYPE",
+      "nodetype": "column"
+    },
+    "1.3.6.1.2.1.6.20.1.4": {
+      "module": "TCP-MIB",
+      "object": "tcpListenerProcess",
+      "class": "objecttype",
+      "object_type": "OBJECT-TYPE",
+      "nodetype": "column"
+    },
+    "1.3.6.1.2.1.7": {
+      "module": "UDP-MIB",
+      "object": "udp",
+      "class": "objectidentifier",
+      "object_type": "OBJECT IDENTIFIER"
+    },
+    "1.3.6.1.2.1.7.1": {
+      "module": "UDP-MIB",
+      "object": "udpInDatagrams",
+      "class": "objecttype",
+      "object_type": "OBJECT-TYPE",
+      "nodetype": "scalar"
+    },
+    "1.3.6.1.2.1.7.2": {
+      "module": "UDP-MIB",
+      "object": "udpNoPorts",
+      "class": "objecttype",
+      "object_type": "OBJECT-TYPE",
+      "nodetype": "scalar"
+    },
+    "1.3.6.1.2.1.7.3": {
+      "module": "UDP-MIB",
+      "object": "udpInErrors",
+      "class": "objecttype",
+      "object_type": "OBJECT-TYPE",
+      "nodetype": "scalar"
+    },
+    "1.3.6.1.2.1.7.4": {
+      "module": "UDP-MIB",
+      "object": "udpOutDatagrams",
+      "class": "objecttype",
+      "object_type": "OBJECT-TYPE",
+      "nodetype": "scalar"
+    },
+    "1.3.6.1.2.1.7.5": {
+      "module": "UDP-MIB",
+      "object": "udpTable",
+      "class": "objecttype",
+      "object_type": "OBJECT-TYPE",
+      "nodetype": "table"
+    },
+    "1.3.6.1.2.1.7.5.1": {
+      "module": "UDP-MIB",
+      "object": "udpEntry",
+      "class": "objecttype",
+      "object_type": "OBJECT-TYPE",
+      "nodetype": "row"
+    },
+    "1.3.6.1.2.1.7.5.1.1": {
+      "module": "UDP-MIB",
+      "object": "udpLocalAddress",
+      "class": "objecttype",
+      "object_type": "OBJECT-TYPE",
+      "nodetype": "column"
+    },
+    "1.3.6.1.2.1.7.5.1.2": {
+      "module": "UDP-MIB",
+      "object": "udpLocalPort",
+      "class": "objecttype",
+      "object_type": "OBJECT-TYPE",
+      "nodetype": "column"
+    },
+    "1.3.6.1.2.1.7.7": {
+      "module": "UDP-MIB",
+      "object": "udpEndpointTable",
+      "class": "objecttype",
+      "object_type": "OBJECT-TYPE",
+      "nodetype": "table"
+    },
+    "1.3.6.1.2.1.7.7.1": {
+      "module": "UDP-MIB",
+      "object": "udpEndpointEntry",
+      "class": "objecttype",
+      "object_type": "OBJECT-TYPE",
+      "nodetype": "row"
+    },
+    "1.3.6.1.2.1.7.7.1.1": {
+      "module": "UDP-MIB",
+      "object": "udpEndpointLocalAddressType",
+      "class": "objecttype",
+      "object_type": "OBJECT-TYPE",
+      "nodetype": "column"
+    },
+    "1.3.6.1.2.1.7.7.1.2": {
+      "module": "UDP-MIB",
+      "object": "udpEndpointLocalAddress",
+      "class": "objecttype",
+      "object_type": "OBJECT-TYPE",
+      "nodetype": "column"
+    },
+    "1.3.6.1.2.1.7.7.1.3": {
+      "module": "UDP-MIB",
+      "object": "udpEndpointLocalPort",
+      "class": "objecttype",
+      "object_type": "OBJECT-TYPE",
+      "nodetype": "column"
+    },
+    "1.3.6.1.2.1.7.7.1.4": {
+      "module": "UDP-MIB",
+      "object": "udpEndpointRemoteAddressType",
+      "class": "objecttype",
+      "object_type": "OBJECT-TYPE",
+      "nodetype": "column"
+    },
+    "1.3.6.1.2.1.7.7.1.5": {
+      "module": "UDP-MIB",
+      "object": "udpEndpointRemoteAddress",
+      "class": "objecttype",
+      "object_type": "OBJECT-TYPE",
+      "nodetype": "column"
+    },
+    "1.3.6.1.2.1.7.7.1.6": {
+      "module": "UDP-MIB",
+      "object": "udpEndpointRemotePort",
+      "class": "objecttype",
+      "object_type": "OBJECT-TYPE",
+      "nodetype": "column"
+    },
+    "1.3.6.1.2.1.7.7.1.7": {
+      "module": "UDP-MIB",
+      "object": "udpEndpointInstance",
+      "class": "objecttype",
+      "object_type": "OBJECT-TYPE",
+      "nodetype": "column"
+    },
+    "1.3.6.1.2.1.7.7.1.8": {
+      "module": "UDP-MIB",
+      "object": "udpEndpointProcess",
+      "class": "objecttype",
+      "object_type": "OBJECT-TYPE",
+      "nodetype": "column"
+    },
+    "1.3.6.1.2.1.7.8": {
+      "module": "UDP-MIB",
+      "object": "udpHCInDatagrams",
+      "class": "objecttype",
+      "object_type": "OBJECT-TYPE",
+      "nodetype": "scalar"
+    },
+    "1.3.6.1.2.1.7.9": {
+      "module": "UDP-MIB",
+      "object": "udpHCOutDatagrams",
+      "class": "objecttype",
+      "object_type": "OBJECT-TYPE",
+      "nodetype": "scalar"
+    },
+    "1.3.6.1.2.1.10": {
+      "module": "SNMPv2-SMI",
+      "object": "transmission",
+      "class": "objectidentifier",
+      "object_type": "OBJECT IDENTIFIER"
+    },
+    "1.3.6.1.2.1.11": {
+      "module": "SNMPv2-MIB",
+      "object": "snmp",
+      "class": "objectidentifier",
+      "object_type": "OBJECT IDENTIFIER"
+    },
+    "1.3.6.1.2.1.11.1": {
+      "module": "SNMPv2-MIB",
+      "object": "snmpInPkts",
+      "class": "objecttype",
+      "object_type": "OBJECT-TYPE",
+      "nodetype": "scalar"
+    },
+    "1.3.6.1.2.1.11.2": {
+      "module": "SNMPv2-MIB",
+      "object": "snmpOutPkts",
+      "class": "objecttype",
+      "object_type": "OBJECT-TYPE",
+      "nodetype": "scalar"
+    },
+    "1.3.6.1.2.1.11.3": {
+      "module": "SNMPv2-MIB",
+      "object": "snmpInBadVersions",
+      "class": "objecttype",
+      "object_type": "OBJECT-TYPE",
+      "nodetype": "scalar"
+    },
+    "1.3.6.1.2.1.11.4": {
+      "module": "SNMPv2-MIB",
+      "object": "snmpInBadCommunityNames",
+      "class": "objecttype",
+      "object_type": "OBJECT-TYPE",
+      "nodetype": "scalar"
+    },
+    "1.3.6.1.2.1.11.5": {
+      "module": "SNMPv2-MIB",
+      "object": "snmpInBadCommunityUses",
+      "class": "objecttype",
+      "object_type": "OBJECT-TYPE",
+      "nodetype": "scalar"
+    },
+    "1.3.6.1.2.1.11.6": {
+      "module": "SNMPv2-MIB",
+      "object": "snmpInASNParseErrs",
+      "class": "objecttype",
+      "object_type": "OBJECT-TYPE",
+      "nodetype": "scalar"
+    },
+    "1.3.6.1.2.1.11.8": {
+      "module": "SNMPv2-MIB",
+      "object": "snmpInTooBigs",
+      "class": "objecttype",
+      "object_type": "OBJECT-TYPE",
+      "nodetype": "scalar"
+    },
+    "1.3.6.1.2.1.11.9": {
+      "module": "SNMPv2-MIB",
+      "object": "snmpInNoSuchNames",
+      "class": "objecttype",
+      "object_type": "OBJECT-TYPE",
+      "nodetype": "scalar"
+    },
+    "1.3.6.1.2.1.11.10": {
+      "module": "SNMPv2-MIB",
+      "object": "snmpInBadValues",
+      "class": "objecttype",
+      "object_type": "OBJECT-TYPE",
+      "nodetype": "scalar"
+    },
+    "1.3.6.1.2.1.11.11": {
+      "module": "SNMPv2-MIB",
+      "object": "snmpInReadOnlys",
+      "class": "objecttype",
+      "object_type": "OBJECT-TYPE",
+      "nodetype": "scalar"
+    },
+    "1.3.6.1.2.1.11.12": {
+      "module": "SNMPv2-MIB",
+      "object": "snmpInGenErrs",
+      "class": "objecttype",
+      "object_type": "OBJECT-TYPE",
+      "nodetype": "scalar"
+    },
+    "1.3.6.1.2.1.11.13": {
+      "module": "SNMPv2-MIB",
+      "object": "snmpInTotalReqVars",
+      "class": "objecttype",
+      "object_type": "OBJECT-TYPE",
+      "nodetype": "scalar"
+    },
+    "1.3.6.1.2.1.11.14": {
+      "module": "SNMPv2-MIB",
+      "object": "snmpInTotalSetVars",
+      "class": "objecttype",
+      "object_type": "OBJECT-TYPE",
+      "nodetype": "scalar"
+    },
+    "1.3.6.1.2.1.11.15": {
+      "module": "SNMPv2-MIB",
+      "object": "snmpInGetRequests",
+      "class": "objecttype",
+      "object_type": "OBJECT-TYPE",
+      "nodetype": "scalar"
+    },
+    "1.3.6.1.2.1.11.16": {
+      "module": "SNMPv2-MIB",
+      "object": "snmpInGetNexts",
+      "class": "objecttype",
+      "object_type": "OBJECT-TYPE",
+      "nodetype": "scalar"
+    },
+    "1.3.6.1.2.1.11.17": {
+      "module": "SNMPv2-MIB",
+      "object": "snmpInSetRequests",
+      "class": "objecttype",
+      "object_type": "OBJECT-TYPE",
+      "nodetype": "scalar"
+    },
+    "1.3.6.1.2.1.11.18": {
+      "module": "SNMPv2-MIB",
+      "object": "snmpInGetResponses",
+      "class": "objecttype",
+      "object_type": "OBJECT-TYPE",
+      "nodetype": "scalar"
+    },
+    "1.3.6.1.2.1.11.19": {
+      "module": "SNMPv2-MIB",
+      "object": "snmpInTraps",
+      "class": "objecttype",
+      "object_type": "OBJECT-TYPE",
+      "nodetype": "scalar"
+    },
+    "1.3.6.1.2.1.11.20": {
+      "module": "SNMPv2-MIB",
+      "object": "snmpOutTooBigs",
+      "class": "objecttype",
+      "object_type": "OBJECT-TYPE",
+      "nodetype": "scalar"
+    },
+    "1.3.6.1.2.1.11.21": {
+      "module": "SNMPv2-MIB",
+      "object": "snmpOutNoSuchNames",
+      "class": "objecttype",
+      "object_type": "OBJECT-TYPE",
+      "nodetype": "scalar"
+    },
+    "1.3.6.1.2.1.11.22": {
+      "module": "SNMPv2-MIB",
+      "object": "snmpOutBadValues",
+      "class": "objecttype",
+      "object_type": "OBJECT-TYPE",
+      "nodetype": "scalar"
+    },
+    "1.3.6.1.2.1.11.24": {
+      "module": "SNMPv2-MIB",
+      "object": "snmpOutGenErrs",
+      "class": "objecttype",
+      "object_type": "OBJECT-TYPE",
+      "nodetype": "scalar"
+    },
+    "1.3.6.1.2.1.11.25": {
+      "module": "SNMPv2-MIB",
+      "object": "snmpOutGetRequests",
+      "class": "objecttype",
+      "object_type": "OBJECT-TYPE",
+      "nodetype": "scalar"
+    },
+    "1.3.6.1.2.1.11.26": {
+      "module": "SNMPv2-MIB",
+      "object": "snmpOutGetNexts",
+      "class": "objecttype",
+      "object_type": "OBJECT-TYPE",
+      "nodetype": "scalar"
+    },
+    "1.3.6.1.2.1.11.27": {
+      "module": "SNMPv2-MIB",
+      "object": "snmpOutSetRequests",
+      "class": "objecttype",
+      "object_type": "OBJECT-TYPE",
+      "nodetype": "scalar"
+    },
+    "1.3.6.1.2.1.11.28": {
+      "module": "SNMPv2-MIB",
+      "object": "snmpOutGetResponses",
+      "class": "objecttype",
+      "object_type": "OBJECT-TYPE",
+      "nodetype": "scalar"
+    },
+    "1.3.6.1.2.1.11.29": {
+      "module": "SNMPv2-MIB",
+      "object": "snmpOutTraps",
+      "class": "objecttype",
+      "object_type": "OBJECT-TYPE",
+      "nodetype": "scalar"
+    },
+    "1.3.6.1.2.1.11.30": {
+      "module": "SNMPv2-MIB",
+      "object": "snmpEnableAuthenTraps",
+      "class": "objecttype",
+      "object_type": "OBJECT-TYPE",
+      "nodetype": "scalar"
+    },
+    "1.3.6.1.2.1.11.31": {
+      "module": "SNMPv2-MIB",
+      "object": "snmpSilentDrops",
+      "class": "objecttype",
+      "object_type": "OBJECT-TYPE",
+      "nodetype": "scalar"
+    },
+    "1.3.6.1.2.1.11.32": {
+      "module": "SNMPv2-MIB",
+      "object": "snmpProxyDrops",
+      "class": "objecttype",
+      "object_type": "OBJECT-TYPE",
+      "nodetype": "scalar"
+    },
+    "1.3.6.1.2.1.25": {
+      "module": "HOST-RESOURCES-MIB",
+      "object": "host",
+      "class": "objectidentifier",
+      "object_type": "OBJECT IDENTIFIER"
+    },
+    "1.3.6.1.2.1.25.1": {
+      "module": "HOST-RESOURCES-MIB",
+      "object": "hrSystem",
+      "class": "objectidentifier",
+      "object_type": "OBJECT IDENTIFIER"
+    },
+    "1.3.6.1.2.1.25.1.1": {
+      "module": "HOST-RESOURCES-MIB",
+      "object": "hrSystemUptime",
+      "class": "objecttype",
+      "object_type": "OBJECT-TYPE",
+      "nodetype": "scalar"
+    },
+    "1.3.6.1.2.1.25.1.2": {
+      "module": "HOST-RESOURCES-MIB",
+      "object": "hrSystemDate",
+      "class": "objecttype",
+      "object_type": "OBJECT-TYPE",
+      "nodetype": "scalar"
+    },
+    "1.3.6.1.2.1.25.1.3": {
+      "module": "HOST-RESOURCES-MIB",
+      "object": "hrSystemInitialLoadDevice",
+      "class": "objecttype",
+      "object_type": "OBJECT-TYPE",
+      "nodetype": "scalar"
+    },
+    "1.3.6.1.2.1.25.1.4": {
+      "module": "HOST-RESOURCES-MIB",
+      "object": "hrSystemInitialLoadParameters",
+      "class": "objecttype",
+      "object_type": "OBJECT-TYPE",
+      "nodetype": "scalar"
+    },
+    "1.3.6.1.2.1.25.1.5": {
+      "module": "HOST-RESOURCES-MIB",
+      "object": "hrSystemNumUsers",
+      "class": "objecttype",
+      "object_type": "OBJECT-TYPE",
+      "nodetype": "scalar"
+    },
+    "1.3.6.1.2.1.25.1.6": {
+      "module": "HOST-RESOURCES-MIB",
+      "object": "hrSystemProcesses",
+      "class": "objecttype",
+      "object_type": "OBJECT-TYPE",
+      "nodetype": "scalar"
+    },
+    "1.3.6.1.2.1.25.1.7": {
+      "module": "HOST-RESOURCES-MIB",
+      "object": "hrSystemMaxProcesses",
+      "class": "objecttype",
+      "object_type": "OBJECT-TYPE",
+      "nodetype": "scalar"
+    },
+    "1.3.6.1.2.1.25.2": {
+      "module": "HOST-RESOURCES-MIB",
+      "object": "hrStorage",
+      "class": "objectidentifier",
+      "object_type": "OBJECT IDENTIFIER"
+    },
+    "1.3.6.1.2.1.25.2.1": {
+      "module": "HOST-RESOURCES-MIB",
+      "object": "hrStorageTypes",
+      "class": "objectidentifier",
+      "object_type": "OBJECT IDENTIFIER"
+    },
+    "1.3.6.1.2.1.25.2.2": {
+      "module": "HOST-RESOURCES-MIB",
+      "object": "hrMemorySize",
+      "class": "objecttype",
+      "object_type": "OBJECT-TYPE",
+      "nodetype": "scalar"
+    },
+    "1.3.6.1.2.1.25.2.3": {
+      "module": "HOST-RESOURCES-MIB",
+      "object": "hrStorageTable",
+      "class": "objecttype",
+      "object_type": "OBJECT-TYPE",
+      "nodetype": "table"
+    },
+    "1.3.6.1.2.1.25.2.3.1": {
+      "module": "HOST-RESOURCES-MIB",
+      "object": "hrStorageEntry",
+      "class": "objecttype",
+      "object_type": "OBJECT-TYPE",
+      "nodetype": "row"
+    },
+    "1.3.6.1.2.1.25.2.3.1.1": {
+      "module": "HOST-RESOURCES-MIB",
+      "object": "hrStorageIndex",
+      "class": "objecttype",
+      "object_type": "OBJECT-TYPE",
+      "nodetype": "column"
+    },
+    "1.3.6.1.2.1.25.2.3.1.2": {
+      "module": "HOST-RESOURCES-MIB",
+      "object": "hrStorageType",
+      "class": "objecttype",
+      "object_type": "OBJECT-TYPE",
+      "nodetype": "column"
+    },
+    "1.3.6.1.2.1.25.2.3.1.3": {
+      "module": "HOST-RESOURCES-MIB",
+      "object": "hrStorageDescr",
+      "class": "objecttype",
+      "object_type": "OBJECT-TYPE",
+      "nodetype": "column"
+    },
+    "1.3.6.1.2.1.25.2.3.1.4": {
+      "module": "HOST-RESOURCES-MIB",
+      "object": "hrStorageAllocationUnits",
+      "class": "objecttype",
+      "object_type": "OBJECT-TYPE",
+      "nodetype": "column"
+    },
+    "1.3.6.1.2.1.25.2.3.1.5": {
+      "module": "HOST-RESOURCES-MIB",
+      "object": "hrStorageSize",
+      "class": "objecttype",
+      "object_type": "OBJECT-TYPE",
+      "nodetype": "column"
+    },
+    "1.3.6.1.2.1.25.2.3.1.6": {
+      "module": "HOST-RESOURCES-MIB",
+      "object": "hrStorageUsed",
+      "class": "objecttype",
+      "object_type": "OBJECT-TYPE",
+      "nodetype": "column"
+    },
+    "1.3.6.1.2.1.25.2.3.1.7": {
+      "module": "HOST-RESOURCES-MIB",
+      "object": "hrStorageAllocationFailures",
+      "class": "objecttype",
+      "object_type": "OBJECT-TYPE",
+      "nodetype": "column"
+    },
+    "1.3.6.1.2.1.25.3": {
+      "module": "HOST-RESOURCES-MIB",
+      "object": "hrDevice",
+      "class": "objectidentifier",
+      "object_type": "OBJECT IDENTIFIER"
+    },
+    "1.3.6.1.2.1.25.3.1": {
+      "module": "HOST-RESOURCES-MIB",
+      "object": "hrDeviceTypes",
+      "class": "objectidentifier",
+      "object_type": "OBJECT IDENTIFIER"
+    },
+    "1.3.6.1.2.1.25.3.2": {
+      "module": "HOST-RESOURCES-MIB",
+      "object": "hrDeviceTable",
+      "class": "objecttype",
+      "object_type": "OBJECT-TYPE",
+      "nodetype": "table"
+    },
+    "1.3.6.1.2.1.25.3.2.1": {
+      "module": "HOST-RESOURCES-MIB",
+      "object": "hrDeviceEntry",
+      "class": "objecttype",
+      "object_type": "OBJECT-TYPE",
+      "nodetype": "row"
+    },
+    "1.3.6.1.2.1.25.3.2.1.1": {
+      "module": "HOST-RESOURCES-MIB",
+      "object": "hrDeviceIndex",
+      "class": "objecttype",
+      "object_type": "OBJECT-TYPE",
+      "nodetype": "column"
+    },
+    "1.3.6.1.2.1.25.3.2.1.2": {
+      "module": "HOST-RESOURCES-MIB",
+      "object": "hrDeviceType",
+      "class": "objecttype",
+      "object_type": "OBJECT-TYPE",
+      "nodetype": "column"
+    },
+    "1.3.6.1.2.1.25.3.2.1.3": {
+      "module": "HOST-RESOURCES-MIB",
+      "object": "hrDeviceDescr",
+      "class": "objecttype",
+      "object_type": "OBJECT-TYPE",
+      "nodetype": "column"
+    },
+    "1.3.6.1.2.1.25.3.2.1.4": {
+      "module": "HOST-RESOURCES-MIB",
+      "object": "hrDeviceID",
+      "class": "objecttype",
+      "object_type": "OBJECT-TYPE",
+      "nodetype": "column"
+    },
+    "1.3.6.1.2.1.25.3.2.1.5": {
+      "module": "HOST-RESOURCES-MIB",
+      "object": "hrDeviceStatus",
+      "class": "objecttype",
+      "object_type": "OBJECT-TYPE",
+      "nodetype": "column"
+    },
+    "1.3.6.1.2.1.25.3.2.1.6": {
+      "module": "HOST-RESOURCES-MIB",
+      "object": "hrDeviceErrors",
+      "class": "objecttype",
+      "object_type": "OBJECT-TYPE",
+      "nodetype": "column"
+    },
+    "1.3.6.1.2.1.25.3.3": {
+      "module": "HOST-RESOURCES-MIB",
+      "object": "hrProcessorTable",
+      "class": "objecttype",
+      "object_type": "OBJECT-TYPE",
+      "nodetype": "table"
+    },
+    "1.3.6.1.2.1.25.3.3.1": {
+      "module": "HOST-RESOURCES-MIB",
+      "object": "hrProcessorEntry",
+      "class": "objecttype",
+      "object_type": "OBJECT-TYPE",
+      "nodetype": "row"
+    },
+    "1.3.6.1.2.1.25.3.3.1.1": {
+      "module": "HOST-RESOURCES-MIB",
+      "object": "hrProcessorFrwID",
+      "class": "objecttype",
+      "object_type": "OBJECT-TYPE",
+      "nodetype": "column"
+    },
+    "1.3.6.1.2.1.25.3.3.1.2": {
+      "module": "HOST-RESOURCES-MIB",
+      "object": "hrProcessorLoad",
+      "class": "objecttype",
+      "object_type": "OBJECT-TYPE",
+      "nodetype": "column"
+    },
+    "1.3.6.1.2.1.25.3.4": {
+      "module": "HOST-RESOURCES-MIB",
+      "object": "hrNetworkTable",
+      "class": "objecttype",
+      "object_type": "OBJECT-TYPE",
+      "nodetype": "table"
+    },
+    "1.3.6.1.2.1.25.3.4.1": {
+      "module": "HOST-RESOURCES-MIB",
+      "object": "hrNetworkEntry",
+      "class": "objecttype",
+      "object_type": "OBJECT-TYPE",
+      "nodetype": "row"
+    },
+    "1.3.6.1.2.1.25.3.4.1.1": {
+      "module": "HOST-RESOURCES-MIB",
+      "object": "hrNetworkIfIndex",
+      "class": "objecttype",
+      "object_type": "OBJECT-TYPE",
+      "nodetype": "column"
+    },
+    "1.3.6.1.2.1.25.3.5": {
+      "module": "HOST-RESOURCES-MIB",
+      "object": "hrPrinterTable",
+      "class": "objecttype",
+      "object_type": "OBJECT-TYPE",
+      "nodetype": "table"
+    },
+    "1.3.6.1.2.1.25.3.5.1": {
+      "module": "HOST-RESOURCES-MIB",
+      "object": "hrPrinterEntry",
+      "class": "objecttype",
+      "object_type": "OBJECT-TYPE",
+      "nodetype": "row"
+    },
+    "1.3.6.1.2.1.25.3.5.1.1": {
+      "module": "HOST-RESOURCES-MIB",
+      "object": "hrPrinterStatus",
+      "class": "objecttype",
+      "object_type": "OBJECT-TYPE",
+      "nodetype": "column"
+    },
+    "1.3.6.1.2.1.25.3.5.1.2": {
+      "module": "HOST-RESOURCES-MIB",
+      "object": "hrPrinterDetectedErrorState",
+      "class": "objecttype",
+      "object_type": "OBJECT-TYPE",
+      "nodetype": "column"
+    },
+    "1.3.6.1.2.1.25.3.6": {
+      "module": "HOST-RESOURCES-MIB",
+      "object": "hrDiskStorageTable",
+      "class": "objecttype",
+      "object_type": "OBJECT-TYPE",
+      "nodetype": "table"
+    },
+    "1.3.6.1.2.1.25.3.6.1": {
+      "module": "HOST-RESOURCES-MIB",
+      "object": "hrDiskStorageEntry",
+      "class": "objecttype",
+      "object_type": "OBJECT-TYPE",
+      "nodetype": "row"
+    },
+    "1.3.6.1.2.1.25.3.6.1.1": {
+      "module": "HOST-RESOURCES-MIB",
+      "object": "hrDiskStorageAccess",
+      "class": "objecttype",
+      "object_type": "OBJECT-TYPE",
+      "nodetype": "column"
+    },
+    "1.3.6.1.2.1.25.3.6.1.2": {
+      "module": "HOST-RESOURCES-MIB",
+      "object": "hrDiskStorageMedia",
+      "class": "objecttype",
+      "object_type": "OBJECT-TYPE",
+      "nodetype": "column"
+    },
+    "1.3.6.1.2.1.25.3.6.1.3": {
+      "module": "HOST-RESOURCES-MIB",
+      "object": "hrDiskStorageRemoveble",
+      "class": "objecttype",
+      "object_type": "OBJECT-TYPE",
+      "nodetype": "column"
+    },
+    "1.3.6.1.2.1.25.3.6.1.4": {
+      "module": "HOST-RESOURCES-MIB",
+      "object": "hrDiskStorageCapacity",
+      "class": "objecttype",
+      "object_type": "OBJECT-TYPE",
+      "nodetype": "column"
+    },
+    "1.3.6.1.2.1.25.3.7": {
+      "module": "HOST-RESOURCES-MIB",
+      "object": "hrPartitionTable",
+      "class": "objecttype",
+      "object_type": "OBJECT-TYPE",
+      "nodetype": "table"
+    },
+    "1.3.6.1.2.1.25.3.7.1": {
+      "module": "HOST-RESOURCES-MIB",
+      "object": "hrPartitionEntry",
+      "class": "objecttype",
+      "object_type": "OBJECT-TYPE",
+      "nodetype": "row"
+    },
+    "1.3.6.1.2.1.25.3.7.1.1": {
+      "module": "HOST-RESOURCES-MIB",
+      "object": "hrPartitionIndex",
+      "class": "objecttype",
+      "object_type": "OBJECT-TYPE",
+      "nodetype": "column"
+    },
+    "1.3.6.1.2.1.25.3.7.1.2": {
+      "module": "HOST-RESOURCES-MIB",
+      "object": "hrPartitionLabel",
+      "class": "objecttype",
+      "object_type": "OBJECT-TYPE",
+      "nodetype": "column"
+    },
+    "1.3.6.1.2.1.25.3.7.1.3": {
+      "module": "HOST-RESOURCES-MIB",
+      "object": "hrPartitionID",
+      "class": "objecttype",
+      "object_type": "OBJECT-TYPE",
+      "nodetype": "column"
+    },
+    "1.3.6.1.2.1.25.3.7.1.4": {
+      "module": "HOST-RESOURCES-MIB",
+      "object": "hrPartitionSize",
+      "class": "objecttype",
+      "object_type": "OBJECT-TYPE",
+      "nodetype": "column"
+    },
+    "1.3.6.1.2.1.25.3.7.1.5": {
+      "module": "HOST-RESOURCES-MIB",
+      "object": "hrPartitionFSIndex",
+      "class": "objecttype",
+      "object_type": "OBJECT-TYPE",
+      "nodetype": "column"
+    },
+    "1.3.6.1.2.1.25.3.8": {
+      "module": "HOST-RESOURCES-MIB",
+      "object": "hrFSTable",
+      "class": "objecttype",
+      "object_type": "OBJECT-TYPE",
+      "nodetype": "table"
+    },
+    "1.3.6.1.2.1.25.3.8.1": {
+      "module": "HOST-RESOURCES-MIB",
+      "object": "hrFSEntry",
+      "class": "objecttype",
+      "object_type": "OBJECT-TYPE",
+      "nodetype": "row"
+    },
+    "1.3.6.1.2.1.25.3.8.1.1": {
+      "module": "HOST-RESOURCES-MIB",
+      "object": "hrFSIndex",
+      "class": "objecttype",
+      "object_type": "OBJECT-TYPE",
+      "nodetype": "column"
+    },
+    "1.3.6.1.2.1.25.3.8.1.2": {
+      "module": "HOST-RESOURCES-MIB",
+      "object": "hrFSMountPoint",
+      "class": "objecttype",
+      "object_type": "OBJECT-TYPE",
+      "nodetype": "column"
+    },
+    "1.3.6.1.2.1.25.3.8.1.3": {
+      "module": "HOST-RESOURCES-MIB",
+      "object": "hrFSRemoteMountPoint",
+      "class": "objecttype",
+      "object_type": "OBJECT-TYPE",
+      "nodetype": "column"
+    },
+    "1.3.6.1.2.1.25.3.8.1.4": {
+      "module": "HOST-RESOURCES-MIB",
+      "object": "hrFSType",
+      "class": "objecttype",
+      "object_type": "OBJECT-TYPE",
+      "nodetype": "column"
+    },
+    "1.3.6.1.2.1.25.3.8.1.5": {
+      "module": "HOST-RESOURCES-MIB",
+      "object": "hrFSAccess",
+      "class": "objecttype",
+      "object_type": "OBJECT-TYPE",
+      "nodetype": "column"
+    },
+    "1.3.6.1.2.1.25.3.8.1.6": {
+      "module": "HOST-RESOURCES-MIB",
+      "object": "hrFSBootable",
+      "class": "objecttype",
+      "object_type": "OBJECT-TYPE",
+      "nodetype": "column"
+    },
+    "1.3.6.1.2.1.25.3.8.1.7": {
+      "module": "HOST-RESOURCES-MIB",
+      "object": "hrFSStorageIndex",
+      "class": "objecttype",
+      "object_type": "OBJECT-TYPE",
+      "nodetype": "column"
+    },
+    "1.3.6.1.2.1.25.3.8.1.8": {
+      "module": "HOST-RESOURCES-MIB",
+      "object": "hrFSLastFullBackupDate",
+      "class": "objecttype",
+      "object_type": "OBJECT-TYPE",
+      "nodetype": "column"
+    },
+    "1.3.6.1.2.1.25.3.8.1.9": {
+      "module": "HOST-RESOURCES-MIB",
+      "object": "hrFSLastPartialBackupDate",
+      "class": "objecttype",
+      "object_type": "OBJECT-TYPE",
+      "nodetype": "column"
+    },
+    "1.3.6.1.2.1.25.3.9": {
+      "module": "HOST-RESOURCES-MIB",
+      "object": "hrFSTypes",
+      "class": "objectidentifier",
+      "object_type": "OBJECT IDENTIFIER"
+    },
+    "1.3.6.1.2.1.25.4": {
+      "module": "HOST-RESOURCES-MIB",
+      "object": "hrSWRun",
+      "class": "objectidentifier",
+      "object_type": "OBJECT IDENTIFIER"
+    },
+    "1.3.6.1.2.1.25.4.1": {
+      "module": "HOST-RESOURCES-MIB",
+      "object": "hrSWOSIndex",
+      "class": "objecttype",
+      "object_type": "OBJECT-TYPE",
+      "nodetype": "scalar"
+    },
+    "1.3.6.1.2.1.25.4.2": {
+      "module": "HOST-RESOURCES-MIB",
+      "object": "hrSWRunTable",
+      "class": "objecttype",
+      "object_type": "OBJECT-TYPE",
+      "nodetype": "table"
+    },
+    "1.3.6.1.2.1.25.4.2.1": {
+      "module": "HOST-RESOURCES-MIB",
+      "object": "hrSWRunEntry",
+      "class": "objecttype",
+      "object_type": "OBJECT-TYPE",
+      "nodetype": "row"
+    },
+    "1.3.6.1.2.1.25.4.2.1.1": {
+      "module": "HOST-RESOURCES-MIB",
+      "object": "hrSWRunIndex",
+      "class": "objecttype",
+      "object_type": "OBJECT-TYPE",
+      "nodetype": "column"
+    },
+    "1.3.6.1.2.1.25.4.2.1.2": {
+      "module": "HOST-RESOURCES-MIB",
+      "object": "hrSWRunName",
+      "class": "objecttype",
+      "object_type": "OBJECT-TYPE",
+      "nodetype": "column"
+    },
+    "1.3.6.1.2.1.25.4.2.1.3": {
+      "module": "HOST-RESOURCES-MIB",
+      "object": "hrSWRunID",
+      "class": "objecttype",
+      "object_type": "OBJECT-TYPE",
+      "nodetype": "column"
+    },
+    "1.3.6.1.2.1.25.4.2.1.4": {
+      "module": "HOST-RESOURCES-MIB",
+      "object": "hrSWRunPath",
+      "class": "objecttype",
+      "object_type": "OBJECT-TYPE",
+      "nodetype": "column"
+    },
+    "1.3.6.1.2.1.25.4.2.1.5": {
+      "module": "HOST-RESOURCES-MIB",
+      "object": "hrSWRunParameters",
+      "class": "objecttype",
+      "object_type": "OBJECT-TYPE",
+      "nodetype": "column"
+    },
+    "1.3.6.1.2.1.25.4.2.1.6": {
+      "module": "HOST-RESOURCES-MIB",
+      "object": "hrSWRunType",
+      "class": "objecttype",
+      "object_type": "OBJECT-TYPE",
+      "nodetype": "column"
+    },
+    "1.3.6.1.2.1.25.4.2.1.7": {
+      "module": "HOST-RESOURCES-MIB",
+      "object": "hrSWRunStatus",
+      "class": "objecttype",
+      "object_type": "OBJECT-TYPE",
+      "nodetype": "column"
+    },
+    "1.3.6.1.2.1.25.5": {
+      "module": "HOST-RESOURCES-MIB",
+      "object": "hrSWRunPerf",
+      "class": "objectidentifier",
+      "object_type": "OBJECT IDENTIFIER"
+    },
+    "1.3.6.1.2.1.25.5.1": {
+      "module": "HOST-RESOURCES-MIB",
+      "object": "hrSWRunPerfTable",
+      "class": "objecttype",
+      "object_type": "OBJECT-TYPE",
+      "nodetype": "table"
+    },
+    "1.3.6.1.2.1.25.5.1.1": {
+      "module": "HOST-RESOURCES-MIB",
+      "object": "hrSWRunPerfEntry",
+      "class": "objecttype",
+      "object_type": "OBJECT-TYPE",
+      "nodetype": "row"
+    },
+    "1.3.6.1.2.1.25.5.1.1.1": {
+      "module": "HOST-RESOURCES-MIB",
+      "object": "hrSWRunPerfCPU",
+      "class": "objecttype",
+      "object_type": "OBJECT-TYPE",
+      "nodetype": "column"
+    },
+    "1.3.6.1.2.1.25.5.1.1.2": {
+      "module": "HOST-RESOURCES-MIB",
+      "object": "hrSWRunPerfMem",
+      "class": "objecttype",
+      "object_type": "OBJECT-TYPE",
+      "nodetype": "column"
+    },
+    "1.3.6.1.2.1.25.6": {
+      "module": "HOST-RESOURCES-MIB",
+      "object": "hrSWInstalled",
+      "class": "objectidentifier",
+      "object_type": "OBJECT IDENTIFIER"
+    },
+    "1.3.6.1.2.1.25.6.1": {
+      "module": "HOST-RESOURCES-MIB",
+      "object": "hrSWInstalledLastChange",
+      "class": "objecttype",
+      "object_type": "OBJECT-TYPE",
+      "nodetype": "scalar"
+    },
+    "1.3.6.1.2.1.25.6.2": {
+      "module": "HOST-RESOURCES-MIB",
+      "object": "hrSWInstalledLastUpdateTime",
+      "class": "objecttype",
+      "object_type": "OBJECT-TYPE",
+      "nodetype": "scalar"
+    },
+    "1.3.6.1.2.1.25.6.3": {
+      "module": "HOST-RESOURCES-MIB",
+      "object": "hrSWInstalledTable",
+      "class": "objecttype",
+      "object_type": "OBJECT-TYPE",
+      "nodetype": "table"
+    },
+    "1.3.6.1.2.1.25.6.3.1": {
+      "module": "HOST-RESOURCES-MIB",
+      "object": "hrSWInstalledEntry",
+      "class": "objecttype",
+      "object_type": "OBJECT-TYPE",
+      "nodetype": "row"
+    },
+    "1.3.6.1.2.1.25.6.3.1.1": {
+      "module": "HOST-RESOURCES-MIB",
+      "object": "hrSWInstalledIndex",
+      "class": "objecttype",
+      "object_type": "OBJECT-TYPE",
+      "nodetype": "column"
+    },
+    "1.3.6.1.2.1.25.6.3.1.2": {
+      "module": "HOST-RESOURCES-MIB",
+      "object": "hrSWInstalledName",
+      "class": "objecttype",
+      "object_type": "OBJECT-TYPE",
+      "nodetype": "column"
+    },
+    "1.3.6.1.2.1.25.6.3.1.3": {
+      "module": "HOST-RESOURCES-MIB",
+      "object": "hrSWInstalledID",
+      "class": "objecttype",
+      "object_type": "OBJECT-TYPE",
+      "nodetype": "column"
+    },
+    "1.3.6.1.2.1.25.6.3.1.4": {
+      "module": "HOST-RESOURCES-MIB",
+      "object": "hrSWInstalledType",
+      "class": "objecttype",
+      "object_type": "OBJECT-TYPE",
+      "nodetype": "column"
+    },
+    "1.3.6.1.2.1.25.6.3.1.5": {
+      "module": "HOST-RESOURCES-MIB",
+      "object": "hrSWInstalledDate",
+      "class": "objecttype",
+      "object_type": "OBJECT-TYPE",
+      "nodetype": "column"
+    },
+    "1.3.6.1.2.1.25.7": {
+      "module": "HOST-RESOURCES-MIB",
+      "object": "hrMIBAdminInfo",
+      "class": "objectidentifier",
+      "object_type": "OBJECT IDENTIFIER"
+    },
+    "1.3.6.1.2.1.25.7.1": {
+      "module": "HOST-RESOURCES-MIB",
+      "object": "hostResourcesMibModule",
+      "class": "moduleidentity",
+      "object_type": "MODULE-IDENTITY"
+    },
+    "1.3.6.1.2.1.25.7.2": {
+      "module": "HOST-RESOURCES-MIB",
+      "object": "hrMIBCompliances",
+      "class": "objectidentifier",
+      "object_type": "OBJECT IDENTIFIER"
+    },
+    "1.3.6.1.2.1.25.7.2.1": {
+      "module": "HOST-RESOURCES-MIB",
+      "object": "hrMIBCompliance",
+      "class": "modulecompliance",
+      "object_type": "MODULE-COMPLIANCE"
+    },
+    "1.3.6.1.2.1.25.7.3": {
+      "module": "HOST-RESOURCES-MIB",
+      "object": "hrMIBGroups",
+      "class": "objectidentifier",
+      "object_type": "OBJECT IDENTIFIER"
+    },
+    "1.3.6.1.2.1.25.7.3.1": {
+      "module": "HOST-RESOURCES-MIB",
+      "object": "hrSystemGroup",
+      "class": "objectgroup",
+      "object_type": "OBJECT-GROUP"
+    },
+    "1.3.6.1.2.1.25.7.3.2": {
+      "module": "HOST-RESOURCES-MIB",
+      "object": "hrStorageGroup",
+      "class": "objectgroup",
+      "object_type": "OBJECT-GROUP"
+    },
+    "1.3.6.1.2.1.25.7.3.3": {
+      "module": "HOST-RESOURCES-MIB",
+      "object": "hrDeviceGroup",
+      "class": "objectgroup",
+      "object_type": "OBJECT-GROUP"
+    },
+    "1.3.6.1.2.1.25.7.3.4": {
+      "module": "HOST-RESOURCES-MIB",
+      "object": "hrSWRunGroup",
+      "class": "objectgroup",
+      "object_type": "OBJECT-GROUP"
+    },
+    "1.3.6.1.2.1.25.7.3.5": {
+      "module": "HOST-RESOURCES-MIB",
+      "object": "hrSWRunPerfGroup",
+      "class": "objectgroup",
+      "object_type": "OBJECT-GROUP"
+    },
+    "1.3.6.1.2.1.25.7.3.6": {
+      "module": "HOST-RESOURCES-MIB",
+      "object": "hrSWInstalledGroup",
+      "class": "objectgroup",
+      "object_type": "OBJECT-GROUP"
+    },
+    "1.3.6.1.2.1.30": {
+      "module": "IANAifType-MIB",
+      "object": "ianaifType",
+      "class": "moduleidentity",
+      "object_type": "MODULE-IDENTITY"
+    },
+    "1.3.6.1.2.1.31": {
+      "module": "IF-MIB",
+      "object": "ifMIB",
+      "class": "moduleidentity",
+      "object_type": "MODULE-IDENTITY"
+    },
+    "1.3.6.1.2.1.31.1": {
+      "module": "IF-MIB",
+      "object": "ifMIBObjects",
+      "class": "objectidentifier",
+      "object_type": "OBJECT IDENTIFIER"
+    },
+    "1.3.6.1.2.1.31.1.1": {
+      "module": "IF-MIB",
+      "object": "ifXTable",
+      "class": "objecttype",
+      "object_type": "OBJECT-TYPE",
+      "nodetype": "table"
+    },
+    "1.3.6.1.2.1.31.1.1.1": {
+      "module": "IF-MIB",
+      "object": "ifXEntry",
+      "class": "objecttype",
+      "object_type": "OBJECT-TYPE",
+      "nodetype": "row"
+    },
+    "1.3.6.1.2.1.31.1.1.1.1": {
+      "module": "IF-MIB",
+      "object": "ifName",
+      "class": "objecttype",
+      "object_type": "OBJECT-TYPE",
+      "nodetype": "column"
+    },
+    "1.3.6.1.2.1.31.1.1.1.2": {
+      "module": "IF-MIB",
+      "object": "ifInMulticastPkts",
+      "class": "objecttype",
+      "object_type": "OBJECT-TYPE",
+      "nodetype": "column"
+    },
+    "1.3.6.1.2.1.31.1.1.1.3": {
+      "module": "IF-MIB",
+      "object": "ifInBroadcastPkts",
+      "class": "objecttype",
+      "object_type": "OBJECT-TYPE",
+      "nodetype": "column"
+    },
+    "1.3.6.1.2.1.31.1.1.1.4": {
+      "module": "IF-MIB",
+      "object": "ifOutMulticastPkts",
+      "class": "objecttype",
+      "object_type": "OBJECT-TYPE",
+      "nodetype": "column"
+    },
+    "1.3.6.1.2.1.31.1.1.1.5": {
+      "module": "IF-MIB",
+      "object": "ifOutBroadcastPkts",
+      "class": "objecttype",
+      "object_type": "OBJECT-TYPE",
+      "nodetype": "column"
+    },
+    "1.3.6.1.2.1.31.1.1.1.6": {
+      "module": "IF-MIB",
+      "object": "ifHCInOctets",
+      "class": "objecttype",
+      "object_type": "OBJECT-TYPE",
+      "nodetype": "column"
+    },
+    "1.3.6.1.2.1.31.1.1.1.7": {
+      "module": "IF-MIB",
+      "object": "ifHCInUcastPkts",
+      "class": "objecttype",
+      "object_type": "OBJECT-TYPE",
+      "nodetype": "column"
+    },
+    "1.3.6.1.2.1.31.1.1.1.8": {
+      "module": "IF-MIB",
+      "object": "ifHCInMulticastPkts",
+      "class": "objecttype",
+      "object_type": "OBJECT-TYPE",
+      "nodetype": "column"
+    },
+    "1.3.6.1.2.1.31.1.1.1.9": {
+      "module": "IF-MIB",
+      "object": "ifHCInBroadcastPkts",
+      "class": "objecttype",
+      "object_type": "OBJECT-TYPE",
+      "nodetype": "column"
+    },
+    "1.3.6.1.2.1.31.1.1.1.10": {
+      "module": "IF-MIB",
+      "object": "ifHCOutOctets",
+      "class": "objecttype",
+      "object_type": "OBJECT-TYPE",
+      "nodetype": "column"
+    },
+    "1.3.6.1.2.1.31.1.1.1.11": {
+      "module": "IF-MIB",
+      "object": "ifHCOutUcastPkts",
+      "class": "objecttype",
+      "object_type": "OBJECT-TYPE",
+      "nodetype": "column"
+    },
+    "1.3.6.1.2.1.31.1.1.1.12": {
+      "module": "IF-MIB",
+      "object": "ifHCOutMulticastPkts",
+      "class": "objecttype",
+      "object_type": "OBJECT-TYPE",
+      "nodetype": "column"
+    },
+    "1.3.6.1.2.1.31.1.1.1.13": {
+      "module": "IF-MIB",
+      "object": "ifHCOutBroadcastPkts",
+      "class": "objecttype",
+      "object_type": "OBJECT-TYPE",
+      "nodetype": "column"
+    },
+    "1.3.6.1.2.1.31.1.1.1.14": {
+      "module": "IF-MIB",
+      "object": "ifLinkUpDownTrapEnable",
+      "class": "objecttype",
+      "object_type": "OBJECT-TYPE",
+      "nodetype": "column"
+    },
+    "1.3.6.1.2.1.31.1.1.1.15": {
+      "module": "IF-MIB",
+      "object": "ifHighSpeed",
+      "class": "objecttype",
+      "object_type": "OBJECT-TYPE",
+      "nodetype": "column"
+    },
+    "1.3.6.1.2.1.31.1.1.1.16": {
+      "module": "IF-MIB",
+      "object": "ifPromiscuousMode",
+      "class": "objecttype",
+      "object_type": "OBJECT-TYPE",
+      "nodetype": "column"
+    },
+    "1.3.6.1.2.1.31.1.1.1.17": {
+      "module": "IF-MIB",
+      "object": "ifConnectorPresent",
+      "class": "objecttype",
+      "object_type": "OBJECT-TYPE",
+      "nodetype": "column"
+    },
+    "1.3.6.1.2.1.31.1.1.1.18": {
+      "module": "IF-MIB",
+      "object": "ifAlias",
+      "class": "objecttype",
+      "object_type": "OBJECT-TYPE",
+      "nodetype": "column"
+    },
+    "1.3.6.1.2.1.31.1.1.1.19": {
+      "module": "IF-MIB",
+      "object": "ifCounterDiscontinuityTime",
+      "class": "objecttype",
+      "object_type": "OBJECT-TYPE",
+      "nodetype": "column"
+    },
+    "1.3.6.1.2.1.31.1.2": {
+      "module": "IF-MIB",
+      "object": "ifStackTable",
+      "class": "objecttype",
+      "object_type": "OBJECT-TYPE",
+      "nodetype": "table"
+    },
+    "1.3.6.1.2.1.31.1.2.1": {
+      "module": "IF-MIB",
+      "object": "ifStackEntry",
+      "class": "objecttype",
+      "object_type": "OBJECT-TYPE",
+      "nodetype": "row"
+    },
+    "1.3.6.1.2.1.31.1.2.1.1": {
+      "module": "IF-MIB",
+      "object": "ifStackHigherLayer",
+      "class": "objecttype",
+      "object_type": "OBJECT-TYPE",
+      "nodetype": "column"
+    },
+    "1.3.6.1.2.1.31.1.2.1.2": {
+      "module": "IF-MIB",
+      "object": "ifStackLowerLayer",
+      "class": "objecttype",
+      "object_type": "OBJECT-TYPE",
+      "nodetype": "column"
+    },
+    "1.3.6.1.2.1.31.1.2.1.3": {
+      "module": "IF-MIB",
+      "object": "ifStackStatus",
+      "class": "objecttype",
+      "object_type": "OBJECT-TYPE",
+      "nodetype": "column"
+    },
+    "1.3.6.1.2.1.31.1.3": {
+      "module": "IF-MIB",
+      "object": "ifTestTable",
+      "class": "objecttype",
+      "object_type": "OBJECT-TYPE",
+      "nodetype": "table"
+    },
+    "1.3.6.1.2.1.31.1.3.1": {
+      "module": "IF-MIB",
+      "object": "ifTestEntry",
+      "class": "objecttype",
+      "object_type": "OBJECT-TYPE",
+      "nodetype": "row"
+    },
+    "1.3.6.1.2.1.31.1.3.1.1": {
+      "module": "IF-MIB",
+      "object": "ifTestId",
+      "class": "objecttype",
+      "object_type": "OBJECT-TYPE",
+      "nodetype": "column"
+    },
+    "1.3.6.1.2.1.31.1.3.1.2": {
+      "module": "IF-MIB",
+      "object": "ifTestStatus",
+      "class": "objecttype",
+      "object_type": "OBJECT-TYPE",
+      "nodetype": "column"
+    },
+    "1.3.6.1.2.1.31.1.3.1.3": {
+      "module": "IF-MIB",
+      "object": "ifTestType",
+      "class": "objecttype",
+      "object_type": "OBJECT-TYPE",
+      "nodetype": "column"
+    },
+    "1.3.6.1.2.1.31.1.3.1.4": {
+      "module": "IF-MIB",
+      "object": "ifTestResult",
+      "class": "objecttype",
+      "object_type": "OBJECT-TYPE",
+      "nodetype": "column"
+    },
+    "1.3.6.1.2.1.31.1.3.1.5": {
+      "module": "IF-MIB",
+      "object": "ifTestCode",
+      "class": "objecttype",
+      "object_type": "OBJECT-TYPE",
+      "nodetype": "column"
+    },
+    "1.3.6.1.2.1.31.1.3.1.6": {
+      "module": "IF-MIB",
+      "object": "ifTestOwner",
+      "class": "objecttype",
+      "object_type": "OBJECT-TYPE",
+      "nodetype": "column"
+    },
+    "1.3.6.1.2.1.31.1.4": {
+      "module": "IF-MIB",
+      "object": "ifRcvAddressTable",
+      "class": "objecttype",
+      "object_type": "OBJECT-TYPE",
+      "nodetype": "table"
+    },
+    "1.3.6.1.2.1.31.1.4.1": {
+      "module": "IF-MIB",
+      "object": "ifRcvAddressEntry",
+      "class": "objecttype",
+      "object_type": "OBJECT-TYPE",
+      "nodetype": "row"
+    },
+    "1.3.6.1.2.1.31.1.4.1.1": {
+      "module": "IF-MIB",
+      "object": "ifRcvAddressAddress",
+      "class": "objecttype",
+      "object_type": "OBJECT-TYPE",
+      "nodetype": "column"
+    },
+    "1.3.6.1.2.1.31.1.4.1.2": {
+      "module": "IF-MIB",
+      "object": "ifRcvAddressStatus",
+      "class": "objecttype",
+      "object_type": "OBJECT-TYPE",
+      "nodetype": "column"
+    },
+    "1.3.6.1.2.1.31.1.4.1.3": {
+      "module": "IF-MIB",
+      "object": "ifRcvAddressType",
+      "class": "objecttype",
+      "object_type": "OBJECT-TYPE",
+      "nodetype": "column"
+    },
+    "1.3.6.1.2.1.31.1.5": {
+      "module": "IF-MIB",
+      "object": "ifTableLastChange",
+      "class": "objecttype",
+      "object_type": "OBJECT-TYPE",
+      "nodetype": "scalar"
+    },
+    "1.3.6.1.2.1.31.1.6": {
+      "module": "IF-MIB",
+      "object": "ifStackLastChange",
+      "class": "objecttype",
+      "object_type": "OBJECT-TYPE",
+      "nodetype": "scalar"
+    },
+    "1.3.6.1.2.1.31.2": {
+      "module": "IF-MIB",
+      "object": "ifConformance",
+      "class": "objectidentifier",
+      "object_type": "OBJECT IDENTIFIER"
+    },
+    "1.3.6.1.2.1.31.2.1": {
+      "module": "IF-MIB",
+      "object": "ifGroups",
+      "class": "objectidentifier",
+      "object_type": "OBJECT IDENTIFIER"
+    },
+    "1.3.6.1.2.1.31.2.1.1": {
+      "module": "IF-MIB",
+      "object": "ifGeneralGroup",
+      "class": "objectgroup",
+      "object_type": "OBJECT-GROUP"
+    },
+    "1.3.6.1.2.1.31.2.1.2": {
+      "module": "IF-MIB",
+      "object": "ifFixedLengthGroup",
+      "class": "objectgroup",
+      "object_type": "OBJECT-GROUP"
+    },
+    "1.3.6.1.2.1.31.2.1.3": {
+      "module": "IF-MIB",
+      "object": "ifHCFixedLengthGroup",
+      "class": "objectgroup",
+      "object_type": "OBJECT-GROUP"
+    },
+    "1.3.6.1.2.1.31.2.1.4": {
+      "module": "IF-MIB",
+      "object": "ifPacketGroup",
+      "class": "objectgroup",
+      "object_type": "OBJECT-GROUP"
+    },
+    "1.3.6.1.2.1.31.2.1.5": {
+      "module": "IF-MIB",
+      "object": "ifHCPacketGroup",
+      "class": "objectgroup",
+      "object_type": "OBJECT-GROUP"
+    },
+    "1.3.6.1.2.1.31.2.1.6": {
+      "module": "IF-MIB",
+      "object": "ifVHCPacketGroup",
+      "class": "objectgroup",
+      "object_type": "OBJECT-GROUP"
+    },
+    "1.3.6.1.2.1.31.2.1.7": {
+      "module": "IF-MIB",
+      "object": "ifRcvAddressGroup",
+      "class": "objectgroup",
+      "object_type": "OBJECT-GROUP"
+    },
+    "1.3.6.1.2.1.31.2.1.8": {
+      "module": "IF-MIB",
+      "object": "ifTestGroup",
+      "class": "objectgroup",
+      "object_type": "OBJECT-GROUP"
+    },
+    "1.3.6.1.2.1.31.2.1.9": {
+      "module": "IF-MIB",
+      "object": "ifStackGroup",
+      "class": "objectgroup",
+      "object_type": "OBJECT-GROUP"
+    },
+    "1.3.6.1.2.1.31.2.1.10": {
+      "module": "IF-MIB",
+      "object": "ifGeneralInformationGroup",
+      "class": "objectgroup",
+      "object_type": "OBJECT-GROUP"
+    },
+    "1.3.6.1.2.1.31.2.1.11": {
+      "module": "IF-MIB",
+      "object": "ifStackGroup2",
+      "class": "objectgroup",
+      "object_type": "OBJECT-GROUP"
+    },
+    "1.3.6.1.2.1.31.2.1.12": {
+      "module": "IF-MIB",
+      "object": "ifOldObjectsGroup",
+      "class": "objectgroup",
+      "object_type": "OBJECT-GROUP"
+    },
+    "1.3.6.1.2.1.31.2.1.13": {
+      "module": "IF-MIB",
+      "object": "ifCounterDiscontinuityGroup",
+      "class": "objectgroup",
+      "object_type": "OBJECT-GROUP"
+    },
+    "1.3.6.1.2.1.31.2.1.14": {
+      "module": "IF-MIB",
+      "object": "linkUpDownNotificationsGroup",
+      "class": "notificationgroup",
+      "object_type": "NOTIFICATION-GROUP"
+    },
+    "1.3.6.1.2.1.31.2.2": {
+      "module": "IF-MIB",
+      "object": "ifCompliances",
+      "class": "objectidentifier",
+      "object_type": "OBJECT IDENTIFIER"
+    },
+    "1.3.6.1.2.1.31.2.2.1": {
+      "module": "IF-MIB",
+      "object": "ifCompliance",
+      "class": "modulecompliance",
+      "object_type": "MODULE-COMPLIANCE"
+    },
+    "1.3.6.1.2.1.31.2.2.2": {
+      "module": "IF-MIB",
+      "object": "ifCompliance2",
+      "class": "modulecompliance",
+      "object_type": "MODULE-COMPLIANCE"
+    },
+    "1.3.6.1.2.1.31.2.2.3": {
+      "module": "IF-MIB",
+      "object": "ifCompliance3",
+      "class": "modulecompliance",
+      "object_type": "MODULE-COMPLIANCE"
+    },
+    "1.3.6.1.2.1.47": {
+      "module": "ENTITY-MIB",
+      "object": "entityMIB",
+      "class": "moduleidentity",
+      "object_type": "MODULE-IDENTITY"
+    },
+    "1.3.6.1.2.1.47.1": {
+      "module": "ENTITY-MIB",
+      "object": "entityMIBObjects",
+      "class": "objectidentifier",
+      "object_type": "OBJECT IDENTIFIER"
+    },
+    "1.3.6.1.2.1.47.1.1": {
+      "module": "ENTITY-MIB",
+      "object": "entityPhysical",
+      "class": "objectidentifier",
+      "object_type": "OBJECT IDENTIFIER"
+    },
+    "1.3.6.1.2.1.47.1.1.1": {
+      "module": "ENTITY-MIB",
+      "object": "entPhysicalTable",
+      "class": "objecttype",
+      "object_type": "OBJECT-TYPE",
+      "nodetype": "table"
+    },
+    "1.3.6.1.2.1.47.1.1.1.1": {
+      "module": "ENTITY-MIB",
+      "object": "entPhysicalEntry",
+      "class": "objecttype",
+      "object_type": "OBJECT-TYPE",
+      "nodetype": "row"
+    },
+    "1.3.6.1.2.1.47.1.1.1.1.1": {
+      "module": "ENTITY-MIB",
+      "object": "entPhysicalIndex",
+      "class": "objecttype",
+      "object_type": "OBJECT-TYPE",
+      "nodetype": "column"
+    },
+    "1.3.6.1.2.1.47.1.1.1.1.2": {
+      "module": "ENTITY-MIB",
+      "object": "entPhysicalDescr",
+      "class": "objecttype",
+      "object_type": "OBJECT-TYPE",
+      "nodetype": "column"
+    },
+    "1.3.6.1.2.1.47.1.1.1.1.3": {
+      "module": "ENTITY-MIB",
+      "object": "entPhysicalVendorType",
+      "class": "objecttype",
+      "object_type": "OBJECT-TYPE",
+      "nodetype": "column"
+    },
+    "1.3.6.1.2.1.47.1.1.1.1.4": {
+      "module": "ENTITY-MIB",
+      "object": "entPhysicalContainedIn",
+      "class": "objecttype",
+      "object_type": "OBJECT-TYPE",
+      "nodetype": "column"
+    },
+    "1.3.6.1.2.1.47.1.1.1.1.5": {
+      "module": "ENTITY-MIB",
+      "object": "entPhysicalClass",
+      "class": "objecttype",
+      "object_type": "OBJECT-TYPE",
+      "nodetype": "column"
+    },
+    "1.3.6.1.2.1.47.1.1.1.1.6": {
+      "module": "ENTITY-MIB",
+      "object": "entPhysicalParentRelPos",
+      "class": "objecttype",
+      "object_type": "OBJECT-TYPE",
+      "nodetype": "column"
+    },
+    "1.3.6.1.2.1.47.1.1.1.1.7": {
+      "module": "ENTITY-MIB",
+      "object": "entPhysicalName",
+      "class": "objecttype",
+      "object_type": "OBJECT-TYPE",
+      "nodetype": "column"
+    },
+    "1.3.6.1.2.1.47.1.1.1.1.8": {
+      "module": "ENTITY-MIB",
+      "object": "entPhysicalHardwareRev",
+      "class": "objecttype",
+      "object_type": "OBJECT-TYPE",
+      "nodetype": "column"
+    },
+    "1.3.6.1.2.1.47.1.1.1.1.9": {
+      "module": "ENTITY-MIB",
+      "object": "entPhysicalFirmwareRev",
+      "class": "objecttype",
+      "object_type": "OBJECT-TYPE",
+      "nodetype": "column"
+    },
+    "1.3.6.1.2.1.47.1.1.1.1.10": {
+      "module": "ENTITY-MIB",
+      "object": "entPhysicalSoftwareRev",
+      "class": "objecttype",
+      "object_type": "OBJECT-TYPE",
+      "nodetype": "column"
+    },
+    "1.3.6.1.2.1.47.1.1.1.1.11": {
+      "module": "ENTITY-MIB",
+      "object": "entPhysicalSerialNum",
+      "class": "objecttype",
+      "object_type": "OBJECT-TYPE",
+      "nodetype": "column"
+    },
+    "1.3.6.1.2.1.47.1.1.1.1.12": {
+      "module": "ENTITY-MIB",
+      "object": "entPhysicalMfgName",
+      "class": "objecttype",
+      "object_type": "OBJECT-TYPE",
+      "nodetype": "column"
+    },
+    "1.3.6.1.2.1.47.1.1.1.1.13": {
+      "module": "ENTITY-MIB",
+      "object": "entPhysicalModelName",
+      "class": "objecttype",
+      "object_type": "OBJECT-TYPE",
+      "nodetype": "column"
+    },
+    "1.3.6.1.2.1.47.1.1.1.1.14": {
+      "module": "ENTITY-MIB",
+      "object": "entPhysicalAlias",
+      "class": "objecttype",
+      "object_type": "OBJECT-TYPE",
+      "nodetype": "column"
+    },
+    "1.3.6.1.2.1.47.1.1.1.1.15": {
+      "module": "ENTITY-MIB",
+      "object": "entPhysicalAssetID",
+      "class": "objecttype",
+      "object_type": "OBJECT-TYPE",
+      "nodetype": "column"
+    },
+    "1.3.6.1.2.1.47.1.1.1.1.16": {
+      "module": "ENTITY-MIB",
+      "object": "entPhysicalIsFRU",
+      "class": "objecttype",
+      "object_type": "OBJECT-TYPE",
+      "nodetype": "column"
+    },
+    "1.3.6.1.2.1.47.1.1.1.1.17": {
+      "module": "ENTITY-MIB",
+      "object": "entPhysicalMfgDate",
+      "class": "objecttype",
+      "object_type": "OBJECT-TYPE",
+      "nodetype": "column"
+    },
+    "1.3.6.1.2.1.47.1.1.1.1.18": {
+      "module": "ENTITY-MIB",
+      "object": "entPhysicalUris",
+      "class": "objecttype",
+      "object_type": "OBJECT-TYPE",
+      "nodetype": "column"
+    },
+    "1.3.6.1.2.1.47.1.1.1.1.19": {
+      "module": "ENTITY-MIB",
+      "object": "entPhysicalUUID",
+      "class": "objecttype",
+      "object_type": "OBJECT-TYPE",
+      "nodetype": "column"
+    },
+    "1.3.6.1.2.1.47.1.2": {
+      "module": "ENTITY-MIB",
+      "object": "entityLogical",
+      "class": "objectidentifier",
+      "object_type": "OBJECT IDENTIFIER"
+    },
+    "1.3.6.1.2.1.47.1.2.1": {
+      "module": "ENTITY-MIB",
+      "object": "entLogicalTable",
+      "class": "objecttype",
+      "object_type": "OBJECT-TYPE",
+      "nodetype": "table"
+    },
+    "1.3.6.1.2.1.47.1.2.1.1": {
+      "module": "ENTITY-MIB",
+      "object": "entLogicalEntry",
+      "class": "objecttype",
+      "object_type": "OBJECT-TYPE",
+      "nodetype": "row"
+    },
+    "1.3.6.1.2.1.47.1.2.1.1.1": {
+      "module": "ENTITY-MIB",
+      "object": "entLogicalIndex",
+      "class": "objecttype",
+      "object_type": "OBJECT-TYPE",
+      "nodetype": "column"
+    },
+    "1.3.6.1.2.1.47.1.2.1.1.2": {
+      "module": "ENTITY-MIB",
+      "object": "entLogicalDescr",
+      "class": "objecttype",
+      "object_type": "OBJECT-TYPE",
+      "nodetype": "column"
+    },
+    "1.3.6.1.2.1.47.1.2.1.1.3": {
+      "module": "ENTITY-MIB",
+      "object": "entLogicalType",
+      "class": "objecttype",
+      "object_type": "OBJECT-TYPE",
+      "nodetype": "column"
+    },
+    "1.3.6.1.2.1.47.1.2.1.1.4": {
+      "module": "ENTITY-MIB",
+      "object": "entLogicalCommunity",
+      "class": "objecttype",
+      "object_type": "OBJECT-TYPE",
+      "nodetype": "column"
+    },
+    "1.3.6.1.2.1.47.1.2.1.1.5": {
+      "module": "ENTITY-MIB",
+      "object": "entLogicalTAddress",
+      "class": "objecttype",
+      "object_type": "OBJECT-TYPE",
+      "nodetype": "column"
+    },
+    "1.3.6.1.2.1.47.1.2.1.1.6": {
+      "module": "ENTITY-MIB",
+      "object": "entLogicalTDomain",
+      "class": "objecttype",
+      "object_type": "OBJECT-TYPE",
+      "nodetype": "column"
+    },
+    "1.3.6.1.2.1.47.1.2.1.1.7": {
+      "module": "ENTITY-MIB",
+      "object": "entLogicalContextEngineID",
+      "class": "objecttype",
+      "object_type": "OBJECT-TYPE",
+      "nodetype": "column"
+    },
+    "1.3.6.1.2.1.47.1.2.1.1.8": {
+      "module": "ENTITY-MIB",
+      "object": "entLogicalContextName",
+      "class": "objecttype",
+      "object_type": "OBJECT-TYPE",
+      "nodetype": "column"
+    },
+    "1.3.6.1.2.1.47.1.3": {
+      "module": "ENTITY-MIB",
+      "object": "entityMapping",
+      "class": "objectidentifier",
+      "object_type": "OBJECT IDENTIFIER"
+    },
+    "1.3.6.1.2.1.47.1.3.1": {
+      "module": "ENTITY-MIB",
+      "object": "entLPMappingTable",
+      "class": "objecttype",
+      "object_type": "OBJECT-TYPE",
+      "nodetype": "table"
+    },
+    "1.3.6.1.2.1.47.1.3.1.1": {
+      "module": "ENTITY-MIB",
+      "object": "entLPMappingEntry",
+      "class": "objecttype",
+      "object_type": "OBJECT-TYPE",
+      "nodetype": "row"
+    },
+    "1.3.6.1.2.1.47.1.3.1.1.1": {
+      "module": "ENTITY-MIB",
+      "object": "entLPPhysicalIndex",
+      "class": "objecttype",
+      "object_type": "OBJECT-TYPE",
+      "nodetype": "column"
+    },
+    "1.3.6.1.2.1.47.1.3.2": {
+      "module": "ENTITY-MIB",
+      "object": "entAliasMappingTable",
+      "class": "objecttype",
+      "object_type": "OBJECT-TYPE",
+      "nodetype": "table"
+    },
+    "1.3.6.1.2.1.47.1.3.2.1": {
+      "module": "ENTITY-MIB",
+      "object": "entAliasMappingEntry",
+      "class": "objecttype",
+      "object_type": "OBJECT-TYPE",
+      "nodetype": "row"
+    },
+    "1.3.6.1.2.1.47.1.3.2.1.1": {
+      "module": "ENTITY-MIB",
+      "object": "entAliasLogicalIndexOrZero",
+      "class": "objecttype",
+      "object_type": "OBJECT-TYPE",
+      "nodetype": "column"
+    },
+    "1.3.6.1.2.1.47.1.3.2.1.2": {
+      "module": "ENTITY-MIB",
+      "object": "entAliasMappingIdentifier",
+      "class": "objecttype",
+      "object_type": "OBJECT-TYPE",
+      "nodetype": "column"
+    },
+    "1.3.6.1.2.1.47.1.3.3": {
+      "module": "ENTITY-MIB",
+      "object": "entPhysicalContainsTable",
+      "class": "objecttype",
+      "object_type": "OBJECT-TYPE",
+      "nodetype": "table"
+    },
+    "1.3.6.1.2.1.47.1.3.3.1": {
+      "module": "ENTITY-MIB",
+      "object": "entPhysicalContainsEntry",
+      "class": "objecttype",
+      "object_type": "OBJECT-TYPE",
+      "nodetype": "row"
+    },
+    "1.3.6.1.2.1.47.1.3.3.1.1": {
+      "module": "ENTITY-MIB",
+      "object": "entPhysicalChildIndex",
+      "class": "objecttype",
+      "object_type": "OBJECT-TYPE",
+      "nodetype": "column"
+    },
+    "1.3.6.1.2.1.47.1.4": {
+      "module": "ENTITY-MIB",
+      "object": "entityGeneral",
+      "class": "objectidentifier",
+      "object_type": "OBJECT IDENTIFIER"
+    },
+    "1.3.6.1.2.1.47.1.4.1": {
+      "module": "ENTITY-MIB",
+      "object": "entLastChangeTime",
+      "class": "objecttype",
+      "object_type": "OBJECT-TYPE",
+      "nodetype": "scalar"
+    },
+    "1.3.6.1.2.1.47.2": {
+      "module": "ENTITY-MIB",
+      "object": "entityMIBTraps",
+      "class": "objectidentifier",
+      "object_type": "OBJECT IDENTIFIER"
+    },
+    "1.3.6.1.2.1.47.2.0": {
+      "module": "ENTITY-MIB",
+      "object": "entityMIBTrapPrefix",
+      "class": "objectidentifier",
+      "object_type": "OBJECT IDENTIFIER"
+    },
+    "1.3.6.1.2.1.47.2.0.1": {
+      "module": "ENTITY-MIB",
+      "object": "entConfigChange",
+      "class": "notificationtype",
+      "object_type": "NOTIFICATION-TYPE"
+    },
+    "1.3.6.1.2.1.47.3": {
+      "module": "ENTITY-MIB",
+      "object": "entityConformance",
+      "class": "objectidentifier",
+      "object_type": "OBJECT IDENTIFIER"
+    },
+    "1.3.6.1.2.1.47.3.1": {
+      "module": "ENTITY-MIB",
+      "object": "entityCompliances",
+      "class": "objectidentifier",
+      "object_type": "OBJECT IDENTIFIER"
+    },
+    "1.3.6.1.2.1.47.3.1.1": {
+      "module": "ENTITY-MIB",
+      "object": "entityCompliance",
+      "class": "modulecompliance",
+      "object_type": "MODULE-COMPLIANCE"
+    },
+    "1.3.6.1.2.1.47.3.1.2": {
+      "module": "ENTITY-MIB",
+      "object": "entity2Compliance",
+      "class": "modulecompliance",
+      "object_type": "MODULE-COMPLIANCE"
+    },
+    "1.3.6.1.2.1.47.3.1.3": {
+      "module": "ENTITY-MIB",
+      "object": "entity3Compliance",
+      "class": "modulecompliance",
+      "object_type": "MODULE-COMPLIANCE"
+    },
+    "1.3.6.1.2.1.47.3.1.4": {
+      "module": "ENTITY-MIB",
+      "object": "entity4Compliance",
+      "class": "modulecompliance",
+      "object_type": "MODULE-COMPLIANCE"
+    },
+    "1.3.6.1.2.1.47.3.1.5": {
+      "module": "ENTITY-MIB",
+      "object": "entity4CRCompliance",
+      "class": "modulecompliance",
+      "object_type": "MODULE-COMPLIANCE"
+    },
+    "1.3.6.1.2.1.47.3.2": {
+      "module": "ENTITY-MIB",
+      "object": "entityGroups",
+      "class": "objectidentifier",
+      "object_type": "OBJECT IDENTIFIER"
+    },
+    "1.3.6.1.2.1.47.3.2.1": {
+      "module": "ENTITY-MIB",
+      "object": "entityPhysicalGroup",
+      "class": "objectgroup",
+      "object_type": "OBJECT-GROUP"
+    },
+    "1.3.6.1.2.1.47.3.2.2": {
+      "module": "ENTITY-MIB",
+      "object": "entityLogicalGroup",
+      "class": "objectgroup",
+      "object_type": "OBJECT-GROUP"
+    },
+    "1.3.6.1.2.1.47.3.2.3": {
+      "module": "ENTITY-MIB",
+      "object": "entityMappingGroup",
+      "class": "objectgroup",
+      "object_type": "OBJECT-GROUP"
+    },
+    "1.3.6.1.2.1.47.3.2.4": {
+      "module": "ENTITY-MIB",
+      "object": "entityGeneralGroup",
+      "class": "objectgroup",
+      "object_type": "OBJECT-GROUP"
+    },
+    "1.3.6.1.2.1.47.3.2.5": {
+      "module": "ENTITY-MIB",
+      "object": "entityNotificationsGroup",
+      "class": "notificationgroup",
+      "object_type": "NOTIFICATION-GROUP"
+    },
+    "1.3.6.1.2.1.47.3.2.6": {
+      "module": "ENTITY-MIB",
+      "object": "entityPhysical2Group",
+      "class": "objectgroup",
+      "object_type": "OBJECT-GROUP"
+    },
+    "1.3.6.1.2.1.47.3.2.7": {
+      "module": "ENTITY-MIB",
+      "object": "entityLogical2Group",
+      "class": "objectgroup",
+      "object_type": "OBJECT-GROUP"
+    },
+    "1.3.6.1.2.1.47.3.2.8": {
+      "module": "ENTITY-MIB",
+      "object": "entityPhysical3Group",
+      "class": "objectgroup",
+      "object_type": "OBJECT-GROUP"
+    },
+    "1.3.6.1.2.1.47.3.2.9": {
+      "module": "ENTITY-MIB",
+      "object": "entityPhysical4Group",
+      "class": "objectgroup",
+      "object_type": "OBJECT-GROUP"
+    },
+    "1.3.6.1.2.1.47.3.2.10": {
+      "module": "ENTITY-MIB",
+      "object": "entityPhysicalCRGroup",
+      "class": "objectgroup",
+      "object_type": "OBJECT-GROUP"
+    },
+    "1.3.6.1.2.1.48": {
+      "module": "IP-MIB",
+      "object": "ipMIB",
+      "class": "moduleidentity",
+      "object_type": "MODULE-IDENTITY"
+    },
+    "1.3.6.1.2.1.48.2": {
+      "module": "IP-MIB",
+      "object": "ipMIBConformance",
+      "class": "objectidentifier",
+      "object_type": "OBJECT IDENTIFIER"
+    },
+    "1.3.6.1.2.1.48.2.1": {
+      "module": "IP-MIB",
+      "object": "ipMIBCompliances",
+      "class": "objectidentifier",
+      "object_type": "OBJECT IDENTIFIER"
+    },
+    "1.3.6.1.2.1.48.2.1.1": {
+      "module": "IP-MIB",
+      "object": "ipMIBCompliance",
+      "class": "modulecompliance",
+      "object_type": "MODULE-COMPLIANCE"
+    },
+    "1.3.6.1.2.1.48.2.1.2": {
+      "module": "IP-MIB",
+      "object": "ipMIBCompliance2",
+      "class": "modulecompliance",
+      "object_type": "MODULE-COMPLIANCE"
+    },
+    "1.3.6.1.2.1.48.2.2": {
+      "module": "IP-MIB",
+      "object": "ipMIBGroups",
+      "class": "objectidentifier",
+      "object_type": "OBJECT IDENTIFIER"
+    },
+    "1.3.6.1.2.1.48.2.2.1": {
+      "module": "IP-MIB",
+      "object": "ipGroup",
+      "class": "objectgroup",
+      "object_type": "OBJECT-GROUP"
+    },
+    "1.3.6.1.2.1.48.2.2.2": {
+      "module": "IP-MIB",
+      "object": "icmpGroup",
+      "class": "objectgroup",
+      "object_type": "OBJECT-GROUP"
+    },
+    "1.3.6.1.2.1.48.2.2.3": {
+      "module": "IP-MIB",
+      "object": "ipv4GeneralGroup",
+      "class": "objectgroup",
+      "object_type": "OBJECT-GROUP"
+    },
+    "1.3.6.1.2.1.48.2.2.4": {
+      "module": "IP-MIB",
+      "object": "ipv4IfGroup",
+      "class": "objectgroup",
+      "object_type": "OBJECT-GROUP"
+    },
+    "1.3.6.1.2.1.48.2.2.5": {
+      "module": "IP-MIB",
+      "object": "ipv6GeneralGroup2",
+      "class": "objectgroup",
+      "object_type": "OBJECT-GROUP"
+    },
+    "1.3.6.1.2.1.48.2.2.6": {
+      "module": "IP-MIB",
+      "object": "ipv6IfGroup",
+      "class": "objectgroup",
+      "object_type": "OBJECT-GROUP"
+    },
+    "1.3.6.1.2.1.48.2.2.7": {
+      "module": "IP-MIB",
+      "object": "ipLastChangeGroup",
+      "class": "objectgroup",
+      "object_type": "OBJECT-GROUP"
+    },
+    "1.3.6.1.2.1.48.2.2.8": {
+      "module": "IP-MIB",
+      "object": "ipSystemStatsGroup",
+      "class": "objectgroup",
+      "object_type": "OBJECT-GROUP"
+    },
+    "1.3.6.1.2.1.48.2.2.9": {
+      "module": "IP-MIB",
+      "object": "ipv4SystemStatsGroup",
+      "class": "objectgroup",
+      "object_type": "OBJECT-GROUP"
+    },
+    "1.3.6.1.2.1.48.2.2.10": {
+      "module": "IP-MIB",
+      "object": "ipSystemStatsHCOctetGroup",
+      "class": "objectgroup",
+      "object_type": "OBJECT-GROUP"
+    },
+    "1.3.6.1.2.1.48.2.2.11": {
+      "module": "IP-MIB",
+      "object": "ipSystemStatsHCPacketGroup",
+      "class": "objectgroup",
+      "object_type": "OBJECT-GROUP"
+    },
+    "1.3.6.1.2.1.48.2.2.12": {
+      "module": "IP-MIB",
+      "object": "ipv4SystemStatsHCPacketGroup",
+      "class": "objectgroup",
+      "object_type": "OBJECT-GROUP"
+    },
+    "1.3.6.1.2.1.48.2.2.13": {
+      "module": "IP-MIB",
+      "object": "ipIfStatsGroup",
+      "class": "objectgroup",
+      "object_type": "OBJECT-GROUP"
+    },
+    "1.3.6.1.2.1.48.2.2.14": {
+      "module": "IP-MIB",
+      "object": "ipv4IfStatsGroup",
+      "class": "objectgroup",
+      "object_type": "OBJECT-GROUP"
+    },
+    "1.3.6.1.2.1.48.2.2.15": {
+      "module": "IP-MIB",
+      "object": "ipIfStatsHCOctetGroup",
+      "class": "objectgroup",
+      "object_type": "OBJECT-GROUP"
+    },
+    "1.3.6.1.2.1.48.2.2.16": {
+      "module": "IP-MIB",
+      "object": "ipIfStatsHCPacketGroup",
+      "class": "objectgroup",
+      "object_type": "OBJECT-GROUP"
+    },
+    "1.3.6.1.2.1.48.2.2.17": {
+      "module": "IP-MIB",
+      "object": "ipv4IfStatsHCPacketGroup",
+      "class": "objectgroup",
+      "object_type": "OBJECT-GROUP"
+    },
+    "1.3.6.1.2.1.48.2.2.18": {
+      "module": "IP-MIB",
+      "object": "ipAddressPrefixGroup",
+      "class": "objectgroup",
+      "object_type": "OBJECT-GROUP"
+    },
+    "1.3.6.1.2.1.48.2.2.19": {
+      "module": "IP-MIB",
+      "object": "ipAddressGroup",
+      "class": "objectgroup",
+      "object_type": "OBJECT-GROUP"
+    },
+    "1.3.6.1.2.1.48.2.2.20": {
+      "module": "IP-MIB",
+      "object": "ipNetToPhysicalGroup",
+      "class": "objectgroup",
+      "object_type": "OBJECT-GROUP"
+    },
+    "1.3.6.1.2.1.48.2.2.21": {
+      "module": "IP-MIB",
+      "object": "ipv6ScopeGroup",
+      "class": "objectgroup",
+      "object_type": "OBJECT-GROUP"
+    },
+    "1.3.6.1.2.1.48.2.2.22": {
+      "module": "IP-MIB",
+      "object": "ipDefaultRouterGroup",
+      "class": "objectgroup",
+      "object_type": "OBJECT-GROUP"
+    },
+    "1.3.6.1.2.1.48.2.2.23": {
+      "module": "IP-MIB",
+      "object": "ipv6RouterAdvertGroup",
+      "class": "objectgroup",
+      "object_type": "OBJECT-GROUP"
+    },
+    "1.3.6.1.2.1.48.2.2.24": {
+      "module": "IP-MIB",
+      "object": "icmpStatsGroup",
+      "class": "objectgroup",
+      "object_type": "OBJECT-GROUP"
+    },
+    "1.3.6.1.2.1.49": {
+      "module": "TCP-MIB",
+      "object": "tcpMIB",
+      "class": "moduleidentity",
+      "object_type": "MODULE-IDENTITY"
+    },
+    "1.3.6.1.2.1.49.2": {
+      "module": "TCP-MIB",
+      "object": "tcpMIBConformance",
+      "class": "objectidentifier",
+      "object_type": "OBJECT IDENTIFIER"
+    },
+    "1.3.6.1.2.1.49.2.1": {
+      "module": "TCP-MIB",
+      "object": "tcpMIBCompliances",
+      "class": "objectidentifier",
+      "object_type": "OBJECT IDENTIFIER"
+    },
+    "1.3.6.1.2.1.49.2.1.1": {
+      "module": "TCP-MIB",
+      "object": "tcpMIBCompliance",
+      "class": "modulecompliance",
+      "object_type": "MODULE-COMPLIANCE"
+    },
+    "1.3.6.1.2.1.49.2.1.2": {
+      "module": "TCP-MIB",
+      "object": "tcpMIBCompliance2",
+      "class": "modulecompliance",
+      "object_type": "MODULE-COMPLIANCE"
+    },
+    "1.3.6.1.2.1.49.2.2": {
+      "module": "TCP-MIB",
+      "object": "tcpMIBGroups",
+      "class": "objectidentifier",
+      "object_type": "OBJECT IDENTIFIER"
+    },
+    "1.3.6.1.2.1.49.2.2.1": {
+      "module": "TCP-MIB",
+      "object": "tcpGroup",
+      "class": "objectgroup",
+      "object_type": "OBJECT-GROUP"
+    },
+    "1.3.6.1.2.1.49.2.2.2": {
+      "module": "TCP-MIB",
+      "object": "tcpBaseGroup",
+      "class": "objectgroup",
+      "object_type": "OBJECT-GROUP"
+    },
+    "1.3.6.1.2.1.49.2.2.3": {
+      "module": "TCP-MIB",
+      "object": "tcpConnectionGroup",
+      "class": "objectgroup",
+      "object_type": "OBJECT-GROUP"
+    },
+    "1.3.6.1.2.1.49.2.2.4": {
+      "module": "TCP-MIB",
+      "object": "tcpListenerGroup",
+      "class": "objectgroup",
+      "object_type": "OBJECT-GROUP"
+    },
+    "1.3.6.1.2.1.49.2.2.5": {
+      "module": "TCP-MIB",
+      "object": "tcpHCGroup",
+      "class": "objectgroup",
+      "object_type": "OBJECT-GROUP"
+    },
+    "1.3.6.1.2.1.50": {
+      "module": "UDP-MIB",
+      "object": "udpMIB",
+      "class": "moduleidentity",
+      "object_type": "MODULE-IDENTITY"
+    },
+    "1.3.6.1.2.1.50.2": {
+      "module": "UDP-MIB",
+      "object": "udpMIBConformance",
+      "class": "objectidentifier",
+      "object_type": "OBJECT IDENTIFIER"
+    },
+    "1.3.6.1.2.1.50.2.1": {
+      "module": "UDP-MIB",
+      "object": "udpMIBCompliances",
+      "class": "objectidentifier",
+      "object_type": "OBJECT IDENTIFIER"
+    },
+    "1.3.6.1.2.1.50.2.1.1": {
+      "module": "UDP-MIB",
+      "object": "udpMIBCompliance",
+      "class": "modulecompliance",
+      "object_type": "MODULE-COMPLIANCE"
+    },
+    "1.3.6.1.2.1.50.2.1.2": {
+      "module": "UDP-MIB",
+      "object": "udpMIBCompliance2",
+      "class": "modulecompliance",
+      "object_type": "MODULE-COMPLIANCE"
+    },
+    "1.3.6.1.2.1.50.2.2": {
+      "module": "UDP-MIB",
+      "object": "udpMIBGroups",
+      "class": "objectidentifier",
+      "object_type": "OBJECT IDENTIFIER"
+    },
+    "1.3.6.1.2.1.50.2.2.1": {
+      "module": "UDP-MIB",
+      "object": "udpGroup",
+      "class": "objectgroup",
+      "object_type": "OBJECT-GROUP"
+    },
+    "1.3.6.1.2.1.50.2.2.2": {
+      "module": "UDP-MIB",
+      "object": "udpBaseGroup",
+      "class": "objectgroup",
+      "object_type": "OBJECT-GROUP"
+    },
+    "1.3.6.1.2.1.50.2.2.3": {
+      "module": "UDP-MIB",
+      "object": "udpHCGroup",
+      "class": "objectgroup",
+      "object_type": "OBJECT-GROUP"
+    },
+    "1.3.6.1.2.1.50.2.2.4": {
+      "module": "UDP-MIB",
+      "object": "udpEndpointGroup",
+      "class": "objectgroup",
+      "object_type": "OBJECT-GROUP"
+    },
+    "1.3.6.1.2.1.76": {
+      "module": "INET-ADDRESS-MIB",
+      "object": "inetAddressMIB",
+      "class": "moduleidentity",
+      "object_type": "MODULE-IDENTITY"
+    },
+    "1.3.6.1.2.1.216": {
+      "module": "IANA-ENTITY-MIB",
+      "object": "ianaEntityMIB",
+      "class": "moduleidentity",
+      "object_type": "MODULE-IDENTITY"
+    },
+    "1.3.6.1.2.1.217": {
+      "module": "UUID-TC-MIB",
+      "object": "uuidTCMIB",
+      "class": "moduleidentity",
+      "object_type": "MODULE-IDENTITY"
+    },
+    "1.3.6.1.3": {
+      "module": "SNMPv2-SMI",
+      "object": "experimental",
+      "class": "objectidentifier",
+      "object_type": "OBJECT IDENTIFIER"
+    },
+    "1.3.6.1.4": {
+      "module": "SNMPv2-SMI",
+      "object": "private",
+      "class": "objectidentifier",
+      "object_type": "OBJECT IDENTIFIER"
+    },
+    "1.3.6.1.4.1": {
+      "module": "SNMPv2-SMI",
+      "object": "enterprises",
+      "class": "objectidentifier",
+      "object_type": "OBJECT IDENTIFIER"
+    },
+    "1.3.6.1.5": {
+      "module": "SNMPv2-SMI",
+      "object": "security",
+      "class": "objectidentifier",
+      "object_type": "OBJECT IDENTIFIER"
+    },
+    "1.3.6.1.6": {
+      "module": "SNMPv2-SMI",
+      "object": "snmpV2",
+      "class": "objectidentifier",
+      "object_type": "OBJECT IDENTIFIER"
+    },
+    "1.3.6.1.6.1": {
+      "module": "SNMPv2-SMI",
+      "object": "snmpDomains",
+      "class": "objectidentifier",
+      "object_type": "OBJECT IDENTIFIER"
+    },
+    "1.3.6.1.6.2": {
+      "module": "SNMPv2-SMI",
+      "object": "snmpProxys",
+      "class": "objectidentifier",
+      "object_type": "OBJECT IDENTIFIER"
+    },
+    "1.3.6.1.6.3": {
+      "module": "SNMPv2-SMI",
+      "object": "snmpModules",
+      "class": "objectidentifier",
+      "object_type": "OBJECT IDENTIFIER"
+    },
+    "1.3.6.1.6.3.1": {
+      "module": "SNMPv2-MIB",
+      "object": "snmpMIB",
+      "class": "moduleidentity",
+      "object_type": "MODULE-IDENTITY"
+    },
+    "1.3.6.1.6.3.1.1": {
+      "module": "SNMPv2-MIB",
+      "object": "snmpMIBObjects",
+      "class": "objectidentifier",
+      "object_type": "OBJECT IDENTIFIER"
+    },
+    "1.3.6.1.6.3.1.1.4": {
+      "module": "SNMPv2-MIB",
+      "object": "snmpTrap",
+      "class": "objectidentifier",
+      "object_type": "OBJECT IDENTIFIER"
+    },
+    "1.3.6.1.6.3.1.1.4.1": {
+      "module": "SNMPv2-MIB",
+      "object": "snmpTrapOID",
+      "class": "objecttype",
+      "object_type": "OBJECT-TYPE",
+      "nodetype": "scalar"
+    },
+    "1.3.6.1.6.3.1.1.4.3": {
+      "module": "SNMPv2-MIB",
+      "object": "snmpTrapEnterprise",
+      "class": "objecttype",
+      "object_type": "OBJECT-TYPE",
+      "nodetype": "scalar"
+    },
+    "1.3.6.1.6.3.1.1.5": {
+      "module": "SNMPv2-MIB",
+      "object": "snmpTraps",
+      "class": "objectidentifier",
+      "object_type": "OBJECT IDENTIFIER"
+    },
+    "1.3.6.1.6.3.1.1.5.1": {
+      "module": "SNMPv2-MIB",
+      "object": "coldStart",
+      "class": "notificationtype",
+      "object_type": "NOTIFICATION-TYPE"
+    },
+    "1.3.6.1.6.3.1.1.5.2": {
+      "module": "SNMPv2-MIB",
+      "object": "warmStart",
+      "class": "notificationtype",
+      "object_type": "NOTIFICATION-TYPE"
+    },
+    "1.3.6.1.6.3.1.1.5.3": {
+      "module": "IF-MIB",
+      "object": "linkDown",
+      "class": "notificationtype",
+      "object_type": "NOTIFICATION-TYPE"
+    },
+    "1.3.6.1.6.3.1.1.5.4": {
+      "module": "IF-MIB",
+      "object": "linkUp",
+      "class": "notificationtype",
+      "object_type": "NOTIFICATION-TYPE"
+    },
+    "1.3.6.1.6.3.1.1.5.5": {
+      "module": "SNMPv2-MIB",
+      "object": "authenticationFailure",
+      "class": "notificationtype",
+      "object_type": "NOTIFICATION-TYPE"
+    },
+    "1.3.6.1.6.3.1.1.6": {
+      "module": "SNMPv2-MIB",
+      "object": "snmpSet",
+      "class": "objectidentifier",
+      "object_type": "OBJECT IDENTIFIER"
+    },
+    "1.3.6.1.6.3.1.1.6.1": {
+      "module": "SNMPv2-MIB",
+      "object": "snmpSetSerialNo",
+      "class": "objecttype",
+      "object_type": "OBJECT-TYPE",
+      "nodetype": "scalar"
+    },
+    "1.3.6.1.6.3.1.2": {
+      "module": "SNMPv2-MIB",
+      "object": "snmpMIBConformance",
+      "class": "objectidentifier",
+      "object_type": "OBJECT IDENTIFIER"
+    },
+    "1.3.6.1.6.3.1.2.1": {
+      "module": "SNMPv2-MIB",
+      "object": "snmpMIBCompliances",
+      "class": "objectidentifier",
+      "object_type": "OBJECT IDENTIFIER"
+    },
+    "1.3.6.1.6.3.1.2.1.2": {
+      "module": "SNMPv2-MIB",
+      "object": "snmpBasicCompliance",
+      "class": "modulecompliance",
+      "object_type": "MODULE-COMPLIANCE"
+    },
+    "1.3.6.1.6.3.1.2.1.3": {
+      "module": "SNMPv2-MIB",
+      "object": "snmpBasicComplianceRev2",
+      "class": "modulecompliance",
+      "object_type": "MODULE-COMPLIANCE"
+    },
+    "1.3.6.1.6.3.1.2.2": {
+      "module": "SNMPv2-MIB",
+      "object": "snmpMIBGroups",
+      "class": "objectidentifier",
+      "object_type": "OBJECT IDENTIFIER"
+    },
+    "1.3.6.1.6.3.1.2.2.5": {
+      "module": "SNMPv2-MIB",
+      "object": "snmpSetGroup",
+      "class": "objectgroup",
+      "object_type": "OBJECT-GROUP"
+    },
+    "1.3.6.1.6.3.1.2.2.6": {
+      "module": "SNMPv2-MIB",
+      "object": "systemGroup",
+      "class": "objectgroup",
+      "object_type": "OBJECT-GROUP"
+    },
+    "1.3.6.1.6.3.1.2.2.7": {
+      "module": "SNMPv2-MIB",
+      "object": "snmpBasicNotificationsGroup",
+      "class": "notificationgroup",
+      "object_type": "NOTIFICATION-GROUP"
+    },
+    "1.3.6.1.6.3.1.2.2.8": {
+      "module": "SNMPv2-MIB",
+      "object": "snmpGroup",
+      "class": "objectgroup",
+      "object_type": "OBJECT-GROUP"
+    },
+    "1.3.6.1.6.3.1.2.2.9": {
+      "module": "SNMPv2-MIB",
+      "object": "snmpCommunityGroup",
+      "class": "objectgroup",
+      "object_type": "OBJECT-GROUP"
+    },
+    "1.3.6.1.6.3.1.2.2.10": {
+      "module": "SNMPv2-MIB",
+      "object": "snmpObsoleteGroup",
+      "class": "objectgroup",
+      "object_type": "OBJECT-GROUP"
+    },
+    "1.3.6.1.6.3.1.2.2.11": {
+      "module": "SNMPv2-MIB",
+      "object": "snmpWarmStartNotificationGroup",
+      "class": "notificationgroup",
+      "object_type": "NOTIFICATION-GROUP"
+    },
+    "1.3.6.1.6.3.1.2.2.12": {
+      "module": "SNMPv2-MIB",
+      "object": "snmpNotificationGroup",
+      "class": "objectgroup",
+      "object_type": "OBJECT-GROUP"
+    },
+    "1.3.6.1.6.3.10": {
+      "module": "SNMP-FRAMEWORK-MIB",
+      "object": "snmpFrameworkMIB",
+      "class": "moduleidentity",
+      "object_type": "MODULE-IDENTITY"
+    },
+    "1.3.6.1.6.3.10.1": {
+      "module": "SNMP-FRAMEWORK-MIB",
+      "object": "snmpFrameworkAdmin",
+      "class": "objectidentifier",
+      "object_type": "OBJECT IDENTIFIER"
+    },
+    "1.3.6.1.6.3.10.1.1": {
+      "module": "SNMP-FRAMEWORK-MIB",
+      "object": "snmpAuthProtocols",
+      "class": "objectidentity",
+      "object_type": "OBJECT-IDENTITY"
+    },
+    "1.3.6.1.6.3.10.1.2": {
+      "module": "SNMP-FRAMEWORK-MIB",
+      "object": "snmpPrivProtocols",
+      "class": "objectidentity",
+      "object_type": "OBJECT-IDENTITY"
+    },
+    "1.3.6.1.6.3.10.2": {
+      "module": "SNMP-FRAMEWORK-MIB",
+      "object": "snmpFrameworkMIBObjects",
+      "class": "objectidentifier",
+      "object_type": "OBJECT IDENTIFIER"
+    },
+    "1.3.6.1.6.3.10.2.1": {
+      "module": "SNMP-FRAMEWORK-MIB",
+      "object": "snmpEngine",
+      "class": "objectidentifier",
+      "object_type": "OBJECT IDENTIFIER"
+    },
+    "1.3.6.1.6.3.10.2.1.1": {
+      "module": "SNMP-FRAMEWORK-MIB",
+      "object": "snmpEngineID",
+      "class": "objecttype",
+      "object_type": "OBJECT-TYPE",
+      "nodetype": "scalar"
+    },
+    "1.3.6.1.6.3.10.2.1.2": {
+      "module": "SNMP-FRAMEWORK-MIB",
+      "object": "snmpEngineBoots",
+      "class": "objecttype",
+      "object_type": "OBJECT-TYPE",
+      "nodetype": "scalar"
+    },
+    "1.3.6.1.6.3.10.2.1.3": {
+      "module": "SNMP-FRAMEWORK-MIB",
+      "object": "snmpEngineTime",
+      "class": "objecttype",
+      "object_type": "OBJECT-TYPE",
+      "nodetype": "scalar"
+    },
+    "1.3.6.1.6.3.10.2.1.4": {
+      "module": "SNMP-FRAMEWORK-MIB",
+      "object": "snmpEngineMaxMessageSize",
+      "class": "objecttype",
+      "object_type": "OBJECT-TYPE",
+      "nodetype": "scalar"
+    },
+    "1.3.6.1.6.3.10.3": {
+      "module": "SNMP-FRAMEWORK-MIB",
+      "object": "snmpFrameworkMIBConformance",
+      "class": "objectidentifier",
+      "object_type": "OBJECT IDENTIFIER"
+    },
+    "1.3.6.1.6.3.10.3.1": {
+      "module": "SNMP-FRAMEWORK-MIB",
+      "object": "snmpFrameworkMIBCompliances",
+      "class": "objectidentifier",
+      "object_type": "OBJECT IDENTIFIER"
+    },
+    "1.3.6.1.6.3.10.3.1.1": {
+      "module": "SNMP-FRAMEWORK-MIB",
+      "object": "snmpFrameworkMIBCompliance",
+      "class": "modulecompliance",
+      "object_type": "MODULE-COMPLIANCE"
+    },
+    "1.3.6.1.6.3.10.3.2": {
+      "module": "SNMP-FRAMEWORK-MIB",
+      "object": "snmpFrameworkMIBGroups",
+      "class": "objectidentifier",
+      "object_type": "OBJECT IDENTIFIER"
+    },
+    "1.3.6.1.6.3.10.3.2.1": {
+      "module": "SNMP-FRAMEWORK-MIB",
+      "object": "snmpEngineGroup",
+      "class": "objectgroup",
+      "object_type": "OBJECT-GROUP"
+    }
+  }
+}

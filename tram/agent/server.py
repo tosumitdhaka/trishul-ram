@@ -122,10 +122,20 @@ class ActiveRun:
 class WorkerState:
     """Thread-safe store of currently-active pipeline runs."""
 
-    def __init__(self, worker_id: str, manager_url: str, api_key: str = "") -> None:
+    def __init__(
+        self,
+        worker_id: str,
+        manager_url: str,
+        api_key: str = "",
+        snmp_stack: str = "legacy",
+    ) -> None:
         self.worker_id = worker_id
         self.manager_url = manager_url
         self.api_key = api_key
+        # v1.5.0 (GH #72): the worker's TRAM_SNMP_STACK, selected once at app
+        # creation from AppConfig. Reported in every periodic stats payload so
+        # the manager can warn on a mixed-stack rolling upgrade.
+        self.snmp_stack = snmp_stack
         self._runs: dict[str, ActiveRun] = {}
         self._lock = threading.Lock()
         self.stats_stop = threading.Event()
@@ -319,6 +329,9 @@ def _emit_stats_once(state: WorkerState) -> None:
             "uptime_seconds": max((now - run.started_at_dt).total_seconds(), 0.0),
             "timestamp": now.isoformat(),
             "is_final": False,
+            # v1.5.0 (GH #72): the manager's rolling-upgrade mismatch guard
+            # compares this against its own TRAM_SNMP_STACK.
+            "snmp_stack": state.snmp_stack,
             **run.stats.snapshot_and_reset_window(),
         }
         _post_stats(run.stats_url, payload, api_key=state.api_key)
@@ -383,7 +396,19 @@ def create_worker_app(worker_id: str = "", manager_url: str = "", stats_interval
         stats_interval = int(os.environ.get("TRAM_STATS_INTERVAL", "30"))
     api_key = os.environ.get("TRAM_API_KEY", "")
 
-    state = WorkerState(worker_id=worker_id, manager_url=manager_url, api_key=api_key)
+    # v1.5.0 (GH #72): the worker selects its SNMP stack from settings
+    # (TRAM_SNMP_STACK) at construction — same env the connector layer reads,
+    # same env the manager reads for its mismatch guard. An invalid value
+    # fails the worker app loudly here instead of silently picking a stack.
+    from tram.core.config import AppConfig
+    snmp_stack_value = AppConfig.from_env().snmp_stack
+
+    state = WorkerState(
+        worker_id=worker_id,
+        manager_url=manager_url,
+        api_key=api_key,
+        snmp_stack=snmp_stack_value,
+    )
 
     @asynccontextmanager
     async def lifespan(app: FastAPI):
@@ -638,6 +663,8 @@ def create_worker_app(worker_id: str = "", manager_url: str = "", stats_interval
                             ),
                             "timestamp": datetime.now(UTC).isoformat(),
                             "is_final": True,
+                            # v1.5.0 (GH #72): stack-consistency guard field.
+                            "snmp_stack": state.snmp_stack,
                             **active_run.stats.snapshot_and_reset_window(),
                         }
                         # If stats_url is empty, run-complete still executes below and

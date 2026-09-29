@@ -1,0 +1,5 @@
+{
+  "check": "mib-compile-corpus",
+  "ok": true,
+  "evidence": "15 MIBs requested, 17 JSON artifacts written, statuses={'compiled': 12, 'cached': 3}, 0.4s, deps auto-resolved via FileReader"
+}

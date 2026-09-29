@@ -1,0 +1,1144 @@
+{
+  "module": "TCP-MIB",
+  "language": "SMIv2",
+  "schema_version": "1.1",
+  "producer_version": "0.5.2",
+  "generated_by": "trishul-smi",
+  "generated_at": "1970-01-01T00:00:00Z",
+  "imports": {
+    "SNMPv2-SMI": [
+      "MODULE-IDENTITY",
+      "OBJECT-TYPE",
+      "Integer32",
+      "Unsigned32",
+      "Gauge32",
+      "Counter32",
+      "Counter64",
+      "IpAddress",
+      "mib-2"
+    ],
+    "SNMPv2-CONF": [
+      "MODULE-COMPLIANCE",
+      "OBJECT-GROUP"
+    ],
+    "INET-ADDRESS-MIB": [
+      "InetAddress",
+      "InetAddressType",
+      "InetPortNumber"
+    ]
+  },
+  "objects": {
+    "tcpMIB": {
+      "oid_path": [1, 3, 6, 1, 2, 1, 49],
+      "object_type": "MODULE-IDENTITY",
+      "class": "moduleidentity",
+      "syntax": null,
+      "max_access": null,
+      "status": null,
+      "index": null,
+      "augments": null,
+      "oid": "1.3.6.1.2.1.49",
+      "description": "The MIB module for managing TCP implementations. Copyright (C) The Internet Society (2005). This version of this MIB module is a part of RFC 4022; see the RFC itself for full legal notices."
+    },
+    "tcp": {
+      "oid_path": [1, 3, 6, 1, 2, 1, 6],
+      "object_type": "OBJECT IDENTIFIER",
+      "class": "objectidentifier",
+      "syntax": null,
+      "max_access": null,
+      "status": null,
+      "index": null,
+      "augments": null,
+      "oid": "1.3.6.1.2.1.6",
+      "description": null
+    },
+    "tcpRtoAlgorithm": {
+      "oid_path": [1, 3, 6, 1, 2, 1, 6, 1],
+      "object_type": "OBJECT-TYPE",
+      "class": "objecttype",
+      "syntax": "INTEGER",
+      "max_access": "read-only",
+      "status": "current",
+      "index": null,
+      "augments": null,
+      "oid": "1.3.6.1.2.1.6.1",
+      "nodetype": "scalar",
+      "constraints": {
+        "kind": "enum",
+        "data": [
+          [
+            "other",
+            1
+          ],
+          [
+            "constant",
+            2
+          ],
+          [
+            "rsre",
+            3
+          ],
+          [
+            "vanj",
+            4
+          ],
+          [
+            "rfc2988",
+            5
+          ]
+        ]
+      },
+      "enums": {
+        "other": 1,
+        "constant": 2,
+        "rsre": 3,
+        "vanj": 4,
+        "rfc2988": 5
+      },
+      "description": "The algorithm used to determine the timeout value used for retransmitting unacknowledged octets."
+    },
+    "tcpRtoMin": {
+      "oid_path": [1, 3, 6, 1, 2, 1, 6, 2],
+      "object_type": "OBJECT-TYPE",
+      "class": "objecttype",
+      "syntax": "Integer32",
+      "max_access": "read-only",
+      "status": "current",
+      "index": null,
+      "augments": null,
+      "oid": "1.3.6.1.2.1.6.2",
+      "nodetype": "scalar",
+      "constraints": {
+        "kind": "range",
+        "data": [
+          [0, 2147483647]
+        ]
+      },
+      "units": "milliseconds",
+      "description": "The minimum value permitted by a TCP implementation for the retransmission timeout, measured in milliseconds. More refined semantics for objects of this type depend on the algorithm used to determine the retransmission timeout; in particular, the IETF standard algorithm rfc2988(5) provides a minimum value."
+    },
+    "tcpRtoMax": {
+      "oid_path": [1, 3, 6, 1, 2, 1, 6, 3],
+      "object_type": "OBJECT-TYPE",
+      "class": "objecttype",
+      "syntax": "Integer32",
+      "max_access": "read-only",
+      "status": "current",
+      "index": null,
+      "augments": null,
+      "oid": "1.3.6.1.2.1.6.3",
+      "nodetype": "scalar",
+      "constraints": {
+        "kind": "range",
+        "data": [
+          [0, 2147483647]
+        ]
+      },
+      "units": "milliseconds",
+      "description": "The maximum value permitted by a TCP implementation for the retransmission timeout, measured in milliseconds. More refined semantics for objects of this type depend on the algorithm used to determine the retransmission timeout; in particular, the IETF standard algorithm rfc2988(5) provides an upper bound (as part of an adaptive backoff algorithm)."
+    },
+    "tcpMaxConn": {
+      "oid_path": [1, 3, 6, 1, 2, 1, 6, 4],
+      "object_type": "OBJECT-TYPE",
+      "class": "objecttype",
+      "syntax": "Integer32",
+      "max_access": "read-only",
+      "status": "current",
+      "index": null,
+      "augments": null,
+      "oid": "1.3.6.1.2.1.6.4",
+      "nodetype": "scalar",
+      "constraints": {
+        "kind": "union",
+        "data": [
+          {
+            "kind": "range",
+            "data": [
+              [
+                -1,
+                -1
+              ]
+            ]
+          },
+          {
+            "kind": "range",
+            "data": [
+              [0, 2147483647]
+            ]
+          }
+        ]
+      },
+      "description": "The limit on the total number of TCP connections the entity can support. In entities where the maximum number of connections is dynamic, this object should contain the value -1."
+    },
+    "tcpActiveOpens": {
+      "oid_path": [1, 3, 6, 1, 2, 1, 6, 5],
+      "object_type": "OBJECT-TYPE",
+      "class": "objecttype",
+      "syntax": "Counter32",
+      "max_access": "read-only",
+      "status": "current",
+      "index": null,
+      "augments": null,
+      "oid": "1.3.6.1.2.1.6.5",
+      "nodetype": "scalar",
+      "description": "The number of times that TCP connections have made a direct transition to the SYN-SENT state from the CLOSED state. Discontinuities in the value of this counter are indicated via discontinuities in the value of sysUpTime."
+    },
+    "tcpPassiveOpens": {
+      "oid_path": [1, 3, 6, 1, 2, 1, 6, 6],
+      "object_type": "OBJECT-TYPE",
+      "class": "objecttype",
+      "syntax": "Counter32",
+      "max_access": "read-only",
+      "status": "current",
+      "index": null,
+      "augments": null,
+      "oid": "1.3.6.1.2.1.6.6",
+      "nodetype": "scalar",
+      "description": "The number of times TCP connections have made a direct transition to the SYN-RCVD state from the LISTEN state. Discontinuities in the value of this counter are indicated via discontinuities in the value of sysUpTime."
+    },
+    "tcpAttemptFails": {
+      "oid_path": [1, 3, 6, 1, 2, 1, 6, 7],
+      "object_type": "OBJECT-TYPE",
+      "class": "objecttype",
+      "syntax": "Counter32",
+      "max_access": "read-only",
+      "status": "current",
+      "index": null,
+      "augments": null,
+      "oid": "1.3.6.1.2.1.6.7",
+      "nodetype": "scalar",
+      "description": "The number of times that TCP connections have made a direct transition to the CLOSED state from either the SYN-SENT state or the SYN-RCVD state, plus the number of times that TCP connections have made a direct transition to the LISTEN state from the SYN-RCVD state. Discontinuities in the value of this counter are indicated via discontinuities in the value of sysUpTime."
+    },
+    "tcpEstabResets": {
+      "oid_path": [1, 3, 6, 1, 2, 1, 6, 8],
+      "object_type": "OBJECT-TYPE",
+      "class": "objecttype",
+      "syntax": "Counter32",
+      "max_access": "read-only",
+      "status": "current",
+      "index": null,
+      "augments": null,
+      "oid": "1.3.6.1.2.1.6.8",
+      "nodetype": "scalar",
+      "description": "The number of times that TCP connections have made a direct transition to the CLOSED state from either the ESTABLISHED state or the CLOSE-WAIT state. Discontinuities in the value of this counter are indicated via discontinuities in the value of sysUpTime."
+    },
+    "tcpCurrEstab": {
+      "oid_path": [1, 3, 6, 1, 2, 1, 6, 9],
+      "object_type": "OBJECT-TYPE",
+      "class": "objecttype",
+      "syntax": "Gauge32",
+      "max_access": "read-only",
+      "status": "current",
+      "index": null,
+      "augments": null,
+      "oid": "1.3.6.1.2.1.6.9",
+      "nodetype": "scalar",
+      "description": "The number of TCP connections for which the current state is either ESTABLISHED or CLOSE-WAIT."
+    },
+    "tcpInSegs": {
+      "oid_path": [1, 3, 6, 1, 2, 1, 6, 10],
+      "object_type": "OBJECT-TYPE",
+      "class": "objecttype",
+      "syntax": "Counter32",
+      "max_access": "read-only",
+      "status": "current",
+      "index": null,
+      "augments": null,
+      "oid": "1.3.6.1.2.1.6.10",
+      "nodetype": "scalar",
+      "description": "The total number of segments received, including those received in error. This count includes segments received on currently established connections. Discontinuities in the value of this counter are indicated via discontinuities in the value of sysUpTime."
+    },
+    "tcpOutSegs": {
+      "oid_path": [1, 3, 6, 1, 2, 1, 6, 11],
+      "object_type": "OBJECT-TYPE",
+      "class": "objecttype",
+      "syntax": "Counter32",
+      "max_access": "read-only",
+      "status": "current",
+      "index": null,
+      "augments": null,
+      "oid": "1.3.6.1.2.1.6.11",
+      "nodetype": "scalar",
+      "description": "The total number of segments sent, including those on current connections but excluding those containing only retransmitted octets. Discontinuities in the value of this counter are indicated via discontinuities in the value of sysUpTime."
+    },
+    "tcpRetransSegs": {
+      "oid_path": [1, 3, 6, 1, 2, 1, 6, 12],
+      "object_type": "OBJECT-TYPE",
+      "class": "objecttype",
+      "syntax": "Counter32",
+      "max_access": "read-only",
+      "status": "current",
+      "index": null,
+      "augments": null,
+      "oid": "1.3.6.1.2.1.6.12",
+      "nodetype": "scalar",
+      "description": "The total number of segments retransmitted; that is, the number of TCP segments transmitted containing one or more previously transmitted octets. Discontinuities in the value of this counter are indicated via discontinuities in the value of sysUpTime."
+    },
+    "tcpInErrs": {
+      "oid_path": [1, 3, 6, 1, 2, 1, 6, 14],
+      "object_type": "OBJECT-TYPE",
+      "class": "objecttype",
+      "syntax": "Counter32",
+      "max_access": "read-only",
+      "status": "current",
+      "index": null,
+      "augments": null,
+      "oid": "1.3.6.1.2.1.6.14",
+      "nodetype": "scalar",
+      "description": "The total number of segments received in error (e.g., bad TCP checksums). Discontinuities in the value of this counter are indicated via discontinuities in the value of sysUpTime."
+    },
+    "tcpOutRsts": {
+      "oid_path": [1, 3, 6, 1, 2, 1, 6, 15],
+      "object_type": "OBJECT-TYPE",
+      "class": "objecttype",
+      "syntax": "Counter32",
+      "max_access": "read-only",
+      "status": "current",
+      "index": null,
+      "augments": null,
+      "oid": "1.3.6.1.2.1.6.15",
+      "nodetype": "scalar",
+      "description": "The number of TCP segments sent containing the RST flag. Discontinuities in the value of this counter are indicated via discontinuities in the value of sysUpTime."
+    },
+    "tcpHCInSegs": {
+      "oid_path": [1, 3, 6, 1, 2, 1, 6, 17],
+      "object_type": "OBJECT-TYPE",
+      "class": "objecttype",
+      "syntax": "Counter64",
+      "max_access": "read-only",
+      "status": "current",
+      "index": null,
+      "augments": null,
+      "oid": "1.3.6.1.2.1.6.17",
+      "nodetype": "scalar",
+      "description": "The total number of segments received, including those received in error. This count includes segments received on currently established connections. This object is the 64-bit equivalent of tcpInSegs. Discontinuities in the value of this counter are indicated via discontinuities in the value of sysUpTime."
+    },
+    "tcpHCOutSegs": {
+      "oid_path": [1, 3, 6, 1, 2, 1, 6, 18],
+      "object_type": "OBJECT-TYPE",
+      "class": "objecttype",
+      "syntax": "Counter64",
+      "max_access": "read-only",
+      "status": "current",
+      "index": null,
+      "augments": null,
+      "oid": "1.3.6.1.2.1.6.18",
+      "nodetype": "scalar",
+      "description": "The total number of segments sent, including those on current connections but excluding those containing only retransmitted octets. This object is the 64-bit equivalent of tcpOutSegs. Discontinuities in the value of this counter are indicated via discontinuities in the value of sysUpTime."
+    },
+    "tcpConnectionTable": {
+      "oid_path": [1, 3, 6, 1, 2, 1, 6, 19],
+      "object_type": "OBJECT-TYPE",
+      "class": "objecttype",
+      "syntax": "SEQUENCE OF TcpConnectionEntry",
+      "max_access": "not-accessible",
+      "status": "current",
+      "index": null,
+      "augments": null,
+      "oid": "1.3.6.1.2.1.6.19",
+      "nodetype": "table",
+      "description": "A table containing information about existing TCP connections. Note that unlike earlier TCP MIBs, there is a separate table for connections in the LISTEN state."
+    },
+    "tcpConnectionEntry": {
+      "oid_path": [1, 3, 6, 1, 2, 1, 6, 19, 1],
+      "object_type": "OBJECT-TYPE",
+      "class": "objecttype",
+      "syntax": "TcpConnectionEntry",
+      "max_access": "not-accessible",
+      "status": "current",
+      "index": [
+        "tcpConnectionLocalAddressType",
+        "tcpConnectionLocalAddress",
+        "tcpConnectionLocalPort",
+        "tcpConnectionRemAddressType",
+        "tcpConnectionRemAddress",
+        "tcpConnectionRemPort"
+      ],
+      "augments": null,
+      "oid": "1.3.6.1.2.1.6.19.1",
+      "nodetype": "row",
+      "description": "A conceptual row of the tcpConnectionTable containing information about a particular current TCP connection. Each row of this table is transient in that it ceases to exist when (or soon after) the connection makes the transition to the CLOSED state."
+    },
+    "tcpConnectionLocalAddressType": {
+      "oid_path": [1, 3, 6, 1, 2, 1, 6, 19, 1, 1],
+      "object_type": "OBJECT-TYPE",
+      "class": "objecttype",
+      "syntax": "InetAddressType",
+      "max_access": "not-accessible",
+      "status": "current",
+      "index": null,
+      "augments": null,
+      "oid": "1.3.6.1.2.1.6.19.1.1",
+      "nodetype": "column",
+      "description": "The address type of tcpConnectionLocalAddress."
+    },
+    "tcpConnectionLocalAddress": {
+      "oid_path": [1, 3, 6, 1, 2, 1, 6, 19, 1, 2],
+      "object_type": "OBJECT-TYPE",
+      "class": "objecttype",
+      "syntax": "InetAddress",
+      "max_access": "not-accessible",
+      "status": "current",
+      "index": null,
+      "augments": null,
+      "oid": "1.3.6.1.2.1.6.19.1.2",
+      "nodetype": "column",
+      "description": "The local IP address for this TCP connection. The type of this address is determined by the value of tcpConnectionLocalAddressType. As this object is used in the index for the tcpConnectionTable, implementors should be careful not to create entries that would result in OIDs with more than 128 subidentifiers; otherwise the information cannot be accessed by using SNMPv1, SNMPv2c, or SNMPv3."
+    },
+    "tcpConnectionLocalPort": {
+      "oid_path": [1, 3, 6, 1, 2, 1, 6, 19, 1, 3],
+      "object_type": "OBJECT-TYPE",
+      "class": "objecttype",
+      "syntax": "InetPortNumber",
+      "max_access": "not-accessible",
+      "status": "current",
+      "index": null,
+      "augments": null,
+      "oid": "1.3.6.1.2.1.6.19.1.3",
+      "nodetype": "column",
+      "description": "The local port number for this TCP connection."
+    },
+    "tcpConnectionRemAddressType": {
+      "oid_path": [1, 3, 6, 1, 2, 1, 6, 19, 1, 4],
+      "object_type": "OBJECT-TYPE",
+      "class": "objecttype",
+      "syntax": "InetAddressType",
+      "max_access": "not-accessible",
+      "status": "current",
+      "index": null,
+      "augments": null,
+      "oid": "1.3.6.1.2.1.6.19.1.4",
+      "nodetype": "column",
+      "description": "The address type of tcpConnectionRemAddress."
+    },
+    "tcpConnectionRemAddress": {
+      "oid_path": [1, 3, 6, 1, 2, 1, 6, 19, 1, 5],
+      "object_type": "OBJECT-TYPE",
+      "class": "objecttype",
+      "syntax": "InetAddress",
+      "max_access": "not-accessible",
+      "status": "current",
+      "index": null,
+      "augments": null,
+      "oid": "1.3.6.1.2.1.6.19.1.5",
+      "nodetype": "column",
+      "description": "The remote IP address for this TCP connection. The type of this address is determined by the value of tcpConnectionRemAddressType. As this object is used in the index for the tcpConnectionTable, implementors should be careful not to create entries that would result in OIDs with more than 128 subidentifiers; otherwise the information cannot be accessed by using SNMPv1, SNMPv2c, or SNMPv3."
+    },
+    "tcpConnectionRemPort": {
+      "oid_path": [1, 3, 6, 1, 2, 1, 6, 19, 1, 6],
+      "object_type": "OBJECT-TYPE",
+      "class": "objecttype",
+      "syntax": "InetPortNumber",
+      "max_access": "not-accessible",
+      "status": "current",
+      "index": null,
+      "augments": null,
+      "oid": "1.3.6.1.2.1.6.19.1.6",
+      "nodetype": "column",
+      "description": "The remote port number for this TCP connection."
+    },
+    "tcpConnectionState": {
+      "oid_path": [1, 3, 6, 1, 2, 1, 6, 19, 1, 7],
+      "object_type": "OBJECT-TYPE",
+      "class": "objecttype",
+      "syntax": "INTEGER",
+      "max_access": "read-write",
+      "status": "current",
+      "index": null,
+      "augments": null,
+      "oid": "1.3.6.1.2.1.6.19.1.7",
+      "nodetype": "column",
+      "constraints": {
+        "kind": "enum",
+        "data": [
+          [
+            "closed",
+            1
+          ],
+          [
+            "listen",
+            2
+          ],
+          [
+            "synSent",
+            3
+          ],
+          [
+            "synReceived",
+            4
+          ],
+          [
+            "established",
+            5
+          ],
+          [
+            "finWait1",
+            6
+          ],
+          [
+            "finWait2",
+            7
+          ],
+          [
+            "closeWait",
+            8
+          ],
+          [
+            "lastAck",
+            9
+          ],
+          [
+            "closing",
+            10
+          ],
+          [
+            "timeWait",
+            11
+          ],
+          [
+            "deleteTCB",
+            12
+          ]
+        ]
+      },
+      "enums": {
+        "closed": 1,
+        "listen": 2,
+        "synSent": 3,
+        "synReceived": 4,
+        "established": 5,
+        "finWait1": 6,
+        "finWait2": 7,
+        "closeWait": 8,
+        "lastAck": 9,
+        "closing": 10,
+        "timeWait": 11,
+        "deleteTCB": 12
+      },
+      "description": "The state of this TCP connection. The value listen(2) is included only for parallelism to the old tcpConnTable and should not be used. A connection in LISTEN state should be present in the tcpListenerTable. The only value that may be set by a management station is deleteTCB(12). Accordingly, it is appropriate for an agent to return a `badValue' response if a management station attempts to set this object to any other value. If a management station sets this object to the value deleteTCB(12), then the TCB (as defined in [RFC793]) of the corresponding connection on the managed node is deleted, resulting in immediate termination of the connection. As an implementation-specific option, a RST segment may be sent from the managed node to the other TCP endpoint (note, however, that RST segments are not sent reliably)."
+    },
+    "tcpConnectionProcess": {
+      "oid_path": [1, 3, 6, 1, 2, 1, 6, 19, 1, 8],
+      "object_type": "OBJECT-TYPE",
+      "class": "objecttype",
+      "syntax": "Unsigned32",
+      "max_access": "read-only",
+      "status": "current",
+      "index": null,
+      "augments": null,
+      "oid": "1.3.6.1.2.1.6.19.1.8",
+      "nodetype": "column",
+      "description": "The system's process ID for the process associated with this connection, or zero if there is no such process. This value is expected to be the same as HOST-RESOURCES-MIB:: hrSWRunIndex or SYSAPPL-MIB::sysApplElmtRunIndex for some row in the appropriate tables."
+    },
+    "tcpListenerTable": {
+      "oid_path": [1, 3, 6, 1, 2, 1, 6, 20],
+      "object_type": "OBJECT-TYPE",
+      "class": "objecttype",
+      "syntax": "SEQUENCE OF TcpListenerEntry",
+      "max_access": "not-accessible",
+      "status": "current",
+      "index": null,
+      "augments": null,
+      "oid": "1.3.6.1.2.1.6.20",
+      "nodetype": "table",
+      "description": "A table containing information about TCP listeners. A listening application can be represented in three possible ways: 1. An application that is willing to accept both IPv4 and IPv6 datagrams is represented by a tcpListenerLocalAddressType of unknown (0) and a tcpListenerLocalAddress of ''h (a zero-length octet-string). 2. An application that is willing to accept only IPv4 or IPv6 datagrams is represented by a tcpListenerLocalAddressType of the appropriate address type and a tcpListenerLocalAddress of '0.0.0.0' or '::' respectively. 3. An application that is listening for data destined only to a specific IP address, but from any remote system, is represented by a tcpListenerLocalAddressType of an appropriate address type, with tcpListenerLocalAddress as the specific local address. NOTE: The address type in this table represents the address type used for the communication, irrespective of the higher-layer abstraction. For example, an application using IPv6 'sockets' to communicate via IPv4 between ::ffff:10.0.0.1 and ::ffff:10.0.0.2 would use InetAddressType ipv4(1))."
+    },
+    "tcpListenerEntry": {
+      "oid_path": [1, 3, 6, 1, 2, 1, 6, 20, 1],
+      "object_type": "OBJECT-TYPE",
+      "class": "objecttype",
+      "syntax": "TcpListenerEntry",
+      "max_access": "not-accessible",
+      "status": "current",
+      "index": [
+        "tcpListenerLocalAddressType",
+        "tcpListenerLocalAddress",
+        "tcpListenerLocalPort"
+      ],
+      "augments": null,
+      "oid": "1.3.6.1.2.1.6.20.1",
+      "nodetype": "row",
+      "description": "A conceptual row of the tcpListenerTable containing information about a particular TCP listener."
+    },
+    "tcpListenerLocalAddressType": {
+      "oid_path": [1, 3, 6, 1, 2, 1, 6, 20, 1, 1],
+      "object_type": "OBJECT-TYPE",
+      "class": "objecttype",
+      "syntax": "InetAddressType",
+      "max_access": "not-accessible",
+      "status": "current",
+      "index": null,
+      "augments": null,
+      "oid": "1.3.6.1.2.1.6.20.1.1",
+      "nodetype": "column",
+      "description": "The address type of tcpListenerLocalAddress. The value should be unknown (0) if connection initiations to all local IP addresses are accepted."
+    },
+    "tcpListenerLocalAddress": {
+      "oid_path": [1, 3, 6, 1, 2, 1, 6, 20, 1, 2],
+      "object_type": "OBJECT-TYPE",
+      "class": "objecttype",
+      "syntax": "InetAddress",
+      "max_access": "not-accessible",
+      "status": "current",
+      "index": null,
+      "augments": null,
+      "oid": "1.3.6.1.2.1.6.20.1.2",
+      "nodetype": "column",
+      "description": "The local IP address for this TCP connection. The value of this object can be represented in three possible ways, depending on the characteristics of the listening application: 1. For an application willing to accept both IPv4 and IPv6 datagrams, the value of this object must be ''h (a zero-length octet-string), with the value of the corresponding tcpListenerLocalAddressType object being unknown (0). 2. For an application willing to accept only IPv4 or IPv6 datagrams, the value of this object must be '0.0.0.0' or '::' respectively, with tcpListenerLocalAddressType representing the appropriate address type. 3. For an application which is listening for data destined only to a specific IP address, the value of this object is the specific local address, with tcpListenerLocalAddressType representing the appropriate address type. As this object is used in the index for the tcpListenerTable, implementors should be careful not to create entries that would result in OIDs with more than 128 subidentifiers; otherwise the information cannot be accessed, using SNMPv1, SNMPv2c, or SNMPv3."
+    },
+    "tcpListenerLocalPort": {
+      "oid_path": [1, 3, 6, 1, 2, 1, 6, 20, 1, 3],
+      "object_type": "OBJECT-TYPE",
+      "class": "objecttype",
+      "syntax": "InetPortNumber",
+      "max_access": "not-accessible",
+      "status": "current",
+      "index": null,
+      "augments": null,
+      "oid": "1.3.6.1.2.1.6.20.1.3",
+      "nodetype": "column",
+      "description": "The local port number for this TCP connection."
+    },
+    "tcpListenerProcess": {
+      "oid_path": [1, 3, 6, 1, 2, 1, 6, 20, 1, 4],
+      "object_type": "OBJECT-TYPE",
+      "class": "objecttype",
+      "syntax": "Unsigned32",
+      "max_access": "read-only",
+      "status": "current",
+      "index": null,
+      "augments": null,
+      "oid": "1.3.6.1.2.1.6.20.1.4",
+      "nodetype": "column",
+      "description": "The system's process ID for the process associated with this listener, or zero if there is no such process. This value is expected to be the same as HOST-RESOURCES-MIB:: hrSWRunIndex or SYSAPPL-MIB::sysApplElmtRunIndex for some row in the appropriate tables."
+    },
+    "tcpConnTable": {
+      "oid_path": [1, 3, 6, 1, 2, 1, 6, 13],
+      "object_type": "OBJECT-TYPE",
+      "class": "objecttype",
+      "syntax": "SEQUENCE OF TcpConnEntry",
+      "max_access": "not-accessible",
+      "status": "deprecated",
+      "index": null,
+      "augments": null,
+      "oid": "1.3.6.1.2.1.6.13",
+      "nodetype": "table",
+      "description": "A table containing information about existing IPv4-specific TCP connections or listeners. This table has been deprecated in favor of the version neutral tcpConnectionTable."
+    },
+    "tcpConnEntry": {
+      "oid_path": [1, 3, 6, 1, 2, 1, 6, 13, 1],
+      "object_type": "OBJECT-TYPE",
+      "class": "objecttype",
+      "syntax": "TcpConnEntry",
+      "max_access": "not-accessible",
+      "status": "deprecated",
+      "index": [
+        "tcpConnLocalAddress",
+        "tcpConnLocalPort",
+        "tcpConnRemAddress",
+        "tcpConnRemPort"
+      ],
+      "augments": null,
+      "oid": "1.3.6.1.2.1.6.13.1",
+      "nodetype": "row",
+      "description": "A conceptual row of the tcpConnTable containing information about a particular current IPv4 TCP connection. Each row of this table is transient in that it ceases to exist when (or soon after) the connection makes the transition to the CLOSED state."
+    },
+    "tcpConnState": {
+      "oid_path": [1, 3, 6, 1, 2, 1, 6, 13, 1, 1],
+      "object_type": "OBJECT-TYPE",
+      "class": "objecttype",
+      "syntax": "INTEGER",
+      "max_access": "read-write",
+      "status": "deprecated",
+      "index": null,
+      "augments": null,
+      "oid": "1.3.6.1.2.1.6.13.1.1",
+      "nodetype": "column",
+      "constraints": {
+        "kind": "enum",
+        "data": [
+          [
+            "closed",
+            1
+          ],
+          [
+            "listen",
+            2
+          ],
+          [
+            "synSent",
+            3
+          ],
+          [
+            "synReceived",
+            4
+          ],
+          [
+            "established",
+            5
+          ],
+          [
+            "finWait1",
+            6
+          ],
+          [
+            "finWait2",
+            7
+          ],
+          [
+            "closeWait",
+            8
+          ],
+          [
+            "lastAck",
+            9
+          ],
+          [
+            "closing",
+            10
+          ],
+          [
+            "timeWait",
+            11
+          ],
+          [
+            "deleteTCB",
+            12
+          ]
+        ]
+      },
+      "enums": {
+        "closed": 1,
+        "listen": 2,
+        "synSent": 3,
+        "synReceived": 4,
+        "established": 5,
+        "finWait1": 6,
+        "finWait2": 7,
+        "closeWait": 8,
+        "lastAck": 9,
+        "closing": 10,
+        "timeWait": 11,
+        "deleteTCB": 12
+      },
+      "description": "The state of this TCP connection. The only value that may be set by a management station is deleteTCB(12). Accordingly, it is appropriate for an agent to return a `badValue' response if a management station attempts to set this object to any other value. If a management station sets this object to the value deleteTCB(12), then the TCB (as defined in [RFC793]) of the corresponding connection on the managed node is deleted, resulting in immediate termination of the connection. As an implementation-specific option, a RST segment may be sent from the managed node to the other TCP endpoint (note, however, that RST segments are not sent reliably)."
+    },
+    "tcpConnLocalAddress": {
+      "oid_path": [1, 3, 6, 1, 2, 1, 6, 13, 1, 2],
+      "object_type": "OBJECT-TYPE",
+      "class": "objecttype",
+      "syntax": "IpAddress",
+      "max_access": "read-only",
+      "status": "deprecated",
+      "index": null,
+      "augments": null,
+      "oid": "1.3.6.1.2.1.6.13.1.2",
+      "nodetype": "column",
+      "description": "The local IP address for this TCP connection. In the case of a connection in the listen state willing to accept connections for any IP interface associated with the node, the value 0.0.0.0 is used."
+    },
+    "tcpConnLocalPort": {
+      "oid_path": [1, 3, 6, 1, 2, 1, 6, 13, 1, 3],
+      "object_type": "OBJECT-TYPE",
+      "class": "objecttype",
+      "syntax": "Integer32",
+      "max_access": "read-only",
+      "status": "deprecated",
+      "index": null,
+      "augments": null,
+      "oid": "1.3.6.1.2.1.6.13.1.3",
+      "nodetype": "column",
+      "constraints": {
+        "kind": "range",
+        "data": [
+          [0, 65535]
+        ]
+      },
+      "description": "The local port number for this TCP connection."
+    },
+    "tcpConnRemAddress": {
+      "oid_path": [1, 3, 6, 1, 2, 1, 6, 13, 1, 4],
+      "object_type": "OBJECT-TYPE",
+      "class": "objecttype",
+      "syntax": "IpAddress",
+      "max_access": "read-only",
+      "status": "deprecated",
+      "index": null,
+      "augments": null,
+      "oid": "1.3.6.1.2.1.6.13.1.4",
+      "nodetype": "column",
+      "description": "The remote IP address for this TCP connection."
+    },
+    "tcpConnRemPort": {
+      "oid_path": [1, 3, 6, 1, 2, 1, 6, 13, 1, 5],
+      "object_type": "OBJECT-TYPE",
+      "class": "objecttype",
+      "syntax": "Integer32",
+      "max_access": "read-only",
+      "status": "deprecated",
+      "index": null,
+      "augments": null,
+      "oid": "1.3.6.1.2.1.6.13.1.5",
+      "nodetype": "column",
+      "constraints": {
+        "kind": "range",
+        "data": [
+          [0, 65535]
+        ]
+      },
+      "description": "The remote port number for this TCP connection."
+    },
+    "tcpMIBConformance": {
+      "oid_path": [1, 3, 6, 1, 2, 1, 49, 2],
+      "object_type": "OBJECT IDENTIFIER",
+      "class": "objectidentifier",
+      "syntax": null,
+      "max_access": null,
+      "status": null,
+      "index": null,
+      "augments": null,
+      "oid": "1.3.6.1.2.1.49.2",
+      "description": null
+    },
+    "tcpMIBCompliances": {
+      "oid_path": [1, 3, 6, 1, 2, 1, 49, 2, 1],
+      "object_type": "OBJECT IDENTIFIER",
+      "class": "objectidentifier",
+      "syntax": null,
+      "max_access": null,
+      "status": null,
+      "index": null,
+      "augments": null,
+      "oid": "1.3.6.1.2.1.49.2.1",
+      "description": null
+    },
+    "tcpMIBGroups": {
+      "oid_path": [1, 3, 6, 1, 2, 1, 49, 2, 2],
+      "object_type": "OBJECT IDENTIFIER",
+      "class": "objectidentifier",
+      "syntax": null,
+      "max_access": null,
+      "status": null,
+      "index": null,
+      "augments": null,
+      "oid": "1.3.6.1.2.1.49.2.2",
+      "description": null
+    },
+    "tcpMIBCompliance2": {
+      "oid_path": [1, 3, 6, 1, 2, 1, 49, 2, 1, 2],
+      "object_type": "MODULE-COMPLIANCE",
+      "class": "modulecompliance",
+      "syntax": null,
+      "max_access": null,
+      "status": "current",
+      "index": null,
+      "augments": null,
+      "oid": "1.3.6.1.2.1.49.2.1.2",
+      "members": [
+        {
+          "module": "TCP-MIB",
+          "object": "tcpBaseGroup"
+        },
+        {
+          "module": "TCP-MIB",
+          "object": "tcpConnectionGroup"
+        },
+        {
+          "module": "TCP-MIB",
+          "object": "tcpListenerGroup"
+        },
+        {
+          "module": "TCP-MIB",
+          "object": "tcpHCGroup"
+        }
+      ],
+      "description": "The compliance statement for systems that implement TCP. A number of INDEX objects cannot be represented in the form of OBJECT clauses in SMIv2 but have the following compliance requirements, expressed in OBJECT clause form in this description clause: -- OBJECT tcpConnectionLocalAddressType -- SYNTAX InetAddressType { ipv4(1), ipv6(2) } -- DESCRIPTION -- This MIB requires support for only global IPv4 -- and IPv6 address types. -- -- OBJECT tcpConnectionRemAddressType -- SYNTAX InetAddressType { ipv4(1), ipv6(2) } -- DESCRIPTION -- This MIB requires support for only global IPv4 -- and IPv6 address types. -- -- OBJECT tcpListenerLocalAddressType -- SYNTAX InetAddressType { unknown(0), ipv4(1), -- ipv6(2) } -- DESCRIPTION -- This MIB requires support for only global IPv4 -- and IPv6 address types. The type unknown also -- needs to be supported to identify a special -- case in the listener table: a listen using -- both IPv4 and IPv6 addresses on the device. --"
+    },
+    "tcpMIBCompliance": {
+      "oid_path": [1, 3, 6, 1, 2, 1, 49, 2, 1, 1],
+      "object_type": "MODULE-COMPLIANCE",
+      "class": "modulecompliance",
+      "syntax": null,
+      "max_access": null,
+      "status": "deprecated",
+      "index": null,
+      "augments": null,
+      "oid": "1.3.6.1.2.1.49.2.1.1",
+      "members": [
+        {
+          "module": "TCP-MIB",
+          "object": "tcpGroup"
+        }
+      ],
+      "description": "The compliance statement for IPv4-only systems that implement TCP. In order to be IP version independent, this compliance statement is deprecated in favor of tcpMIBCompliance2. However, agents are still encouraged to implement these objects in order to interoperate with the deployed base of managers."
+    },
+    "tcpGroup": {
+      "oid_path": [1, 3, 6, 1, 2, 1, 49, 2, 2, 1],
+      "object_type": "OBJECT-GROUP",
+      "class": "objectgroup",
+      "syntax": null,
+      "max_access": null,
+      "status": "deprecated",
+      "index": null,
+      "augments": null,
+      "oid": "1.3.6.1.2.1.49.2.2.1",
+      "members": [
+        {
+          "module": "TCP-MIB",
+          "object": "tcpRtoAlgorithm"
+        },
+        {
+          "module": "TCP-MIB",
+          "object": "tcpRtoMin"
+        },
+        {
+          "module": "TCP-MIB",
+          "object": "tcpRtoMax"
+        },
+        {
+          "module": "TCP-MIB",
+          "object": "tcpMaxConn"
+        },
+        {
+          "module": "TCP-MIB",
+          "object": "tcpActiveOpens"
+        },
+        {
+          "module": "TCP-MIB",
+          "object": "tcpPassiveOpens"
+        },
+        {
+          "module": "TCP-MIB",
+          "object": "tcpAttemptFails"
+        },
+        {
+          "module": "TCP-MIB",
+          "object": "tcpEstabResets"
+        },
+        {
+          "module": "TCP-MIB",
+          "object": "tcpCurrEstab"
+        },
+        {
+          "module": "TCP-MIB",
+          "object": "tcpInSegs"
+        },
+        {
+          "module": "TCP-MIB",
+          "object": "tcpOutSegs"
+        },
+        {
+          "module": "TCP-MIB",
+          "object": "tcpRetransSegs"
+        },
+        {
+          "module": "TCP-MIB",
+          "object": "tcpConnState"
+        },
+        {
+          "module": "TCP-MIB",
+          "object": "tcpConnLocalAddress"
+        },
+        {
+          "module": "TCP-MIB",
+          "object": "tcpConnLocalPort"
+        },
+        {
+          "module": "TCP-MIB",
+          "object": "tcpConnRemAddress"
+        },
+        {
+          "module": "TCP-MIB",
+          "object": "tcpConnRemPort"
+        },
+        {
+          "module": "TCP-MIB",
+          "object": "tcpInErrs"
+        },
+        {
+          "module": "TCP-MIB",
+          "object": "tcpOutRsts"
+        }
+      ],
+      "description": "The tcp group of objects providing for management of TCP entities."
+    },
+    "tcpBaseGroup": {
+      "oid_path": [1, 3, 6, 1, 2, 1, 49, 2, 2, 2],
+      "object_type": "OBJECT-GROUP",
+      "class": "objectgroup",
+      "syntax": null,
+      "max_access": null,
+      "status": "current",
+      "index": null,
+      "augments": null,
+      "oid": "1.3.6.1.2.1.49.2.2.2",
+      "members": [
+        {
+          "module": "TCP-MIB",
+          "object": "tcpRtoAlgorithm"
+        },
+        {
+          "module": "TCP-MIB",
+          "object": "tcpRtoMin"
+        },
+        {
+          "module": "TCP-MIB",
+          "object": "tcpRtoMax"
+        },
+        {
+          "module": "TCP-MIB",
+          "object": "tcpMaxConn"
+        },
+        {
+          "module": "TCP-MIB",
+          "object": "tcpActiveOpens"
+        },
+        {
+          "module": "TCP-MIB",
+          "object": "tcpPassiveOpens"
+        },
+        {
+          "module": "TCP-MIB",
+          "object": "tcpAttemptFails"
+        },
+        {
+          "module": "TCP-MIB",
+          "object": "tcpEstabResets"
+        },
+        {
+          "module": "TCP-MIB",
+          "object": "tcpCurrEstab"
+        },
+        {
+          "module": "TCP-MIB",
+          "object": "tcpInSegs"
+        },
+        {
+          "module": "TCP-MIB",
+          "object": "tcpOutSegs"
+        },
+        {
+          "module": "TCP-MIB",
+          "object": "tcpRetransSegs"
+        },
+        {
+          "module": "TCP-MIB",
+          "object": "tcpInErrs"
+        },
+        {
+          "module": "TCP-MIB",
+          "object": "tcpOutRsts"
+        }
+      ],
+      "description": "The group of counters common to TCP entities."
+    },
+    "tcpConnectionGroup": {
+      "oid_path": [1, 3, 6, 1, 2, 1, 49, 2, 2, 3],
+      "object_type": "OBJECT-GROUP",
+      "class": "objectgroup",
+      "syntax": null,
+      "max_access": null,
+      "status": "current",
+      "index": null,
+      "augments": null,
+      "oid": "1.3.6.1.2.1.49.2.2.3",
+      "members": [
+        {
+          "module": "TCP-MIB",
+          "object": "tcpConnectionState"
+        },
+        {
+          "module": "TCP-MIB",
+          "object": "tcpConnectionProcess"
+        }
+      ],
+      "description": "The group provides general information about TCP connections."
+    },
+    "tcpListenerGroup": {
+      "oid_path": [1, 3, 6, 1, 2, 1, 49, 2, 2, 4],
+      "object_type": "OBJECT-GROUP",
+      "class": "objectgroup",
+      "syntax": null,
+      "max_access": null,
+      "status": "current",
+      "index": null,
+      "augments": null,
+      "oid": "1.3.6.1.2.1.49.2.2.4",
+      "members": [
+        {
+          "module": "TCP-MIB",
+          "object": "tcpListenerProcess"
+        }
+      ],
+      "description": "This group has objects providing general information about TCP listeners."
+    },
+    "tcpHCGroup": {
+      "oid_path": [1, 3, 6, 1, 2, 1, 49, 2, 2, 5],
+      "object_type": "OBJECT-GROUP",
+      "class": "objectgroup",
+      "syntax": null,
+      "max_access": null,
+      "status": "current",
+      "index": null,
+      "augments": null,
+      "oid": "1.3.6.1.2.1.49.2.2.5",
+      "members": [
+        {
+          "module": "TCP-MIB",
+          "object": "tcpHCInSegs"
+        },
+        {
+          "module": "TCP-MIB",
+          "object": "tcpHCOutSegs"
+        }
+      ],
+      "description": "The group of objects providing for counters of high speed TCP implementations."
+    }
+  },
+  "types": {
+    "TcpConnectionEntry": {
+      "class": "textualconvention",
+      "base_type": "SEQUENCE",
+      "constraints": null,
+      "display_hint": null,
+      "status": null,
+      "description": null
+    },
+    "TcpListenerEntry": {
+      "class": "textualconvention",
+      "base_type": "SEQUENCE",
+      "constraints": null,
+      "display_hint": null,
+      "status": null,
+      "description": null
+    },
+    "TcpConnEntry": {
+      "class": "textualconvention",
+      "base_type": "SEQUENCE",
+      "constraints": null,
+      "display_hint": null,
+      "status": null,
+      "description": null
+    }
+  },
+  "notifications": {},
+  "module_metadata": {
+    "lastupdated": "2005-02-18",
+    "revisions": [
+      {
+        "date": "2005-02-18",
+        "description": "IP version neutral revision, published as RFC 4022."
+      },
+      {
+        "date": "1994-11-01",
+        "description": "Initial SMIv2 version, published as RFC 2012."
+      },
+      {
+        "date": "1991-03-31",
+        "description": "The initial revision of this MIB module was part of\n            MIB-II."
+      }
+    ],
+    "organization": "IETF IPv6 MIB Revision Team\n            http://www.ietf.org/html.charters/ipv6-charter.html",
+    "contactinfo": "Rajiv Raghunarayan (editor)\n\n            Cisco Systems Inc.\n            170 West Tasman Drive\n            San Jose, CA 95134\n\n            Phone: +1 408 853 9612\n            Email: <raraghun@cisco.com>\n\n            Send comments to <ipv6@ietf.org>",
+    "description": "The MIB module for managing TCP implementations. Copyright (C) The Internet Society (2005). This version of this MIB module is a part of RFC 4022; see the RFC itself for full legal notices."
+  }
+}

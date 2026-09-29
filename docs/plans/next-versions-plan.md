@@ -8,7 +8,7 @@
 
 ## Release model
 
-One branch + one PR per version, progress table in the PR body (same model as PR #25 / v1.4.0). Release gate (`scripts/release-gate.sh`, `docs/release-gate.md`) is mandatory before tagging; never tag past a red gate. All releases stay in the 1.4.x patch series per maintainers' preference (themed waves, not majors).
+One branch + one PR per version, commits in layers (reviewed wave-by-wave), progress table in the PR body (same model as PR #25 / v1.4.0). Release gate (`scripts/release-gate.sh`, `docs/release-gate.md`) is mandatory before tagging; never tag past a red gate. The v1.4.x patch series concluded at v1.4.8; v1.5.0 is a minor — the right vehicle for the DES/3DES config-contract change.
 
 ---
 
@@ -77,28 +77,34 @@ One branch + one PR per version, progress table in the PR body (same model as PR
 
 ---
 
-## v1.5.0 — AI Provider Layer + SNMP Library Swap
+## v1.5.0 — SNMP Library Swap (pysnmp/pysmi → trishul-snmp/tsmp)
 
-> Both scope-defining decisions made by the maintainer on 2026-09-25: (1) vendor treq's `_providers/` layer, (2) option C for the SNMP library swap.
+> Scope-defining decision made by the maintainer on 2026-09-25 (option C); re-scoped 2026-09-28 after the independent plan review + maintainer decisions: this release is the swap only — the AI provider layer is an open design question for after v1.5.0 ships (see below).
 
 | Item | Scope | Issue |
 |---|---|---|
-| treq `_providers/` vendoring | Copy the layer (~1,900 + ~5,400 test lines, no library extraction) with the adaptation list from the feasibility doc (decouple the openai global-settings import, parameterize the Rakuten hostname, add anthropic base_url, keep lazy optional SDK imports). The v1.4.6 security properties — A10 audit rows, A11 base_url policy incl. call-time effective-endpoint enforcement, redaction, three-state config semantics — must be proven to apply on the new call path | #71 |
-| AI Wave C — A9 | Streaming responses end-to-end on the vendored layer | #41 |
-| AI Wave C — B3–B6 | Structured output, tool use, batch, evals (scope per ai-expansion-plan) | #41 |
-| A.2/A.3 | Editor inline-validation UX + per-plugin examples (ungated; confirm scope at wave planning) | #42 |
-| SNMP swap — option C | Full pysnmp/pysmi → trishul-snmp/tsmp swap behind a feature flag (default off): poll + trap paths, v3 USM full crypto matrix, MIB compile/resolve via tsmi | #72 |
+| Packaging & pins | `tram[snmp]` carries both stacks during the flag period; dev extras install both; pin `trishul-smi==0.5.2` / `trishul-snmp==0.6.1` exactly (the wire-validated versions — the globally installed trishul packages are stale); Docker image implications written down | #72 |
+| DES + 3DES rejection | Reject `priv: DES` and `priv: 3DES` at config validation (Pydantic validators on the three config classes) + changelog migration note naming AES128 — DES is obsoleted (RFC 8996 lineage) and upstream-dropped; 3DES was never standardized (expired draft) and upstream #31 makes it a silent-data-loss trap on the target stack; zero in-repo usage. (No separate lint rule: `tram validate` loads + validates before linting, so a lint rule would be unreachable dead code — validation is the gate) | #72 |
+| Swap core (flag-on, default off) | Poll + trap paths, v3 USM full crypto matrix via tsmp; MIB compile/resolve via tsmi JSON IR — including the full serving/sync chain: `files/mibs_compiled/` dual-format corpus, `routers/mibs` JSON serving, `agent/assets` worker JSON sync, Docker `/mibs` layout | #72 |
+| Worker-mode flag consistency | Helm values on manager + worker planes, startup mismatch warning, deployment.md note | #72 |
+| Test hardening | Existing SNMP suite green (three DES mock fixtures → AES128 — forced by the v1.5.0 config contract, not behavioral changes; the flag-off proof); dual-stack decode fixtures (same BER bytes through both stacks); env-gated in-process pysnmp-peer wire suite (catches the #28 defect class in CI, no snmpd needed); USM mapping + MIB resolve roundtrips; live kind verification incl. worker MIB sync | #72 |
 
-**Entry criteria:** v1.4.8 tagged ✓; ~~ON HOLD (maintainer, 2026-09-25)~~ **hold lifted 2026-09-28 — gate MET**: upstream round complete (tsmi 0.5.2 / tsmp 0.6.1), trishul-snmp #28 (SHA-2 HMAC tags, wire-proven) + #29 (DES dropped) resolved, harness re-run green — **GO** (addenda in `docs/ideas/trishul-smi-snmp-migration-feasibility.md` §12–13). Known swap limitation: 3DES-EDE interop with draft-reeder-compliant peers pending upstream #31 (document, don't block). Wave C rows additionally require the vendored AI layer (#71) landed and reviewed.
-**Exit criteria:** flag-off path behavior-identical (full suite green on pysnmp) + flag-on live kind verification (v1/v2c/v3 roundtrips + trap paths) + vendored AI layer with the v1.4.6 security properties test-proven on the new call path + independent diff review + release gate green.
+**Entry criteria:** v1.4.8 tagged ✓; gate MET 2026-09-28 — tsmi 0.5.2 / tsmp 0.6.1 wire-proven (trishul-snmp #28 fixed, #29 DES dropped; addenda §12–13 in `docs/ideas/trishul-smi-snmp-migration-feasibility.md`); harness evidence preserved in `scripts/snmp-wire-harness/` + `docs/reviews/`.
+**Exit criteria:** flag-off path behavior-identical for every config valid under v1.5.0 rules (DES/3DES now rejected at validation — affected configs get a migration note, not silence) + flag-on live kind verification (v1/v2c/v3 roundtrips + trap paths + worker MIB sync) + independent diff review + release gate green.
+
+**Estimate:** 3–4 weeks (the MIB serving/sync chain dominates). **Descope order if squeezed:** trap-sink last.
+
+## Post-v1.5.0 — AI provider layer (open design question)
+
+The treq `_providers/` vendoring (#71), Wave C (A9 streaming; B3–B6 = MIB compile-error explanation, alert-rule authoring, throughput-anomaly explanation, connector test-failure explanation, per `docs/plans/ai-expansion-plan.md`), and A.2/A.3 (plugin docstrings + curated examples) are **not scheduled to a version** — the maintainer runs a design round once v1.5.0 ships. Calibration from the 2026-09-28 plan review: vendor 4–6 days (`ai.py` grew to ~1,094 lines since the 3-day estimate), Wave C 2–3 weeks, A.2/A.3 ~1 week; treq's portable provider tests are ~1,346 lines with no bedrock coverage (TRAM writes its own). Sequencing notes: B3 reads `routers/mibs` (clear after the swap); A.2's SNMP plugin docstrings land after the swap rewrites those files.
 
 ---
 
 ## Standing rules & open decisions
 
-- **Sequencing:** v1.4.6 → v1.4.7 → v1.4.8 shipped; v1.5.0 is next and starts only when its entry criteria are met (upstream SHA-2 fix + green harness re-run).
+- **Sequencing:** v1.4.6 → v1.4.7 → v1.4.8 shipped; v1.5.0 (SNMP swap) entry gate MET 2026-09-28 — executing.
 - **Overlapping files:** lanes touching the same file queue or combine — never concurrent (repo rule).
-- **treq vendor decision — DECIDED 2026-09-25:** vendor `_providers/` in v1.5.0 (GH #71); Wave C (A9, B3–B6) builds on the vendored layer.
+- **treq vendor decision — DECIDED 2026-09-25, re-scoped 2026-09-28:** vendoring `_providers/` remains the direction (GH #71), but as an open design question to be worked after v1.5.0 ships — not scheduled to a version.
 - **SNMP library migration — DECIDED 2026-09-25:** option C in v1.5.0 behind a feature flag (GH #72), gated on upstream trishul-snmp #28 + a green harness re-run.
 - **#41 (AI expansion cycle) and #42 (authoring-UX)** remain the umbrella issues for the AI/UX rows; close them when their last rows ship.
 - Not in these versions (stay in backlog): the roadmap backlog rows now tracked as GH #58–#70.

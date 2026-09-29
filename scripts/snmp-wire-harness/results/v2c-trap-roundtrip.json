@@ -1,0 +1,5 @@
+{
+  "check": "v2c-trap-roundtrip",
+  "ok": true,
+  "evidence": "v2c trap (linkDown) -> listener :11221: 3 varbinds incl. auto-built sysUpTime.0+snmpTrapOID.0 (yes)"
+}

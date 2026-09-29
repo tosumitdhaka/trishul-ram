@@ -5,6 +5,24 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ---
 
+## [1.5.0] - 2026-09-29
+
+### Added
+- `TRAM_SNMP_STACK` env knob (`legacy` | `trishul`, default `legacy`, fail-loud on invalid values) selecting the SNMP library stack — the v1.5.0 swap flag; the manager and every worker must run the same stack (GH #72)
+- Flag-on (`trishul`) MIB chain: manager-side compile via trishul-smi to JSON IR bundles in a dual-format corpus (`.py` + `.json` + manifest/oid_index sidecars), `GET /api/mibs/{name}?format=auto|py|json` serving, both-format worker sync (GH #72)
+- Flag-on (`trishul`) connector paths via trishul-snmp: poll (GET/GETNEXT/WALK), v1/v2c/v3 trap receive + `decode_notification`, trap-sink send — full v3 USM auth/priv matrix; tsmi JSON-bundle resolve in `mib_utils` (GH #72)
+- Worker stats carry `snmp_stack`; the manager logs a once-per-worker warning on stack mismatch (rolling-upgrade guard) (GH #72)
+- Cross-stack decode-equivalence tests (the same trap BER bytes through the pysnmp and tsmp decoders) and an env-gated in-process pysnmp-peer wire suite (`TRAM_TEST_SNMP_WIRE=1`, enabled by the release gate) — catches wire-level breakage the in-stack tests can mask (GH #72)
+- Migration note: a persistent `TRAM_MIB_DIR` holding custom MIBs uploaded before v1.5.0 contains `.py`-only artifacts — a `trishul`-stack worker will not resolve them until they are re-uploaded (from v1.5.0 the manager compiles both formats) (GH #72)
+
+### Fixed
+- SNMP trap sink sends failed in legacy (pysnmp) mode — the varbind list reached pysnmp's varargs `send_notification` as a single positional, raising `SmiError: ObjectType object not fully initialized` on every send (pre-existing since before v1.5.0; surfaced by the v1.5.0 independent review) (GH #72)
+
+### Changed
+- **Breaking (config contract):** `priv_protocol: DES` and `priv_protocol: 3DES` are now rejected at pipeline validation on all three SNMPv3 config classes — DES is obsoleted (RFC 8996 lineage) and dropped by the upstream trishul-snmp stack; 3DES was never standardized (expired draft). Use `AES128` (GH #72)
+- `tram[snmp]` is dual-stack during the flag period: pysnmp stays, with exact wire-validated pins `trishul-smi==0.5.2` + `trishul-snmp[v3]==0.6.1` added (GH #72)
+- `Dockerfile.manager` installs the `snmp` extra (the flag-on compile path requires trishul-smi in the manager image) (GH #72)
+
 ## [1.4.8] - 2026-09-25
 
 ### Fixed

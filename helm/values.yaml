@@ -181,6 +181,14 @@ env:
   ## using them fail validation and the internal endpoints 404. Fails open on
   ## unrecognized values.
   TRAM_STATEFUL_TRANSFORMS: "1"
+  ## SNMP library stack (v1.5.0, GH #72): "legacy" (pysnmp, the pre-v1.5.0
+  ## behavior) | "trishul" (trishul-smi / trishul-snmp). This generic env map
+  ## is applied to BOTH the manager and worker planes — set the SAME value
+  ## everywhere. A mismatched rolling upgrade does NOT fail at startup: the
+  ## manager logs a once-per-worker WARNING and a mixed fleet can serve one
+  ## stack's MIB artifacts (".py" vs ".json") to the other's consumers. An
+  ## invalid value IS a startup error (no silent fallback).
+  # TRAM_SNMP_STACK: legacy
   # TRAM_QUEUE_TTL_SECONDS: "900"  # max wait for capacity before expiry
   # TRAM_NODE_ID: ""            # defaults to hostname (auto-set from pod name in StatefulSet)
   # TRAM_SHUTDOWN_TIMEOUT_SECONDS: "30"  # drain timeout before forced stop

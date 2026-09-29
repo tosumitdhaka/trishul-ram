@@ -1,0 +1,5 @@
+{
+  "check": "walk-boundary-v2c",
+  "ok": true,
+  "evidence": "walk(sys) bulk/seq == [(1, 3, 6, 1, 2, 1, 1, 1, 0), (1, 3, 6, 1, 2, 1, 1, 5, 0), (1, 3, 6, 1, 2, 1, 1, 6, 0)] (exact, no over-read); GETNEXT gap sys->if = (1, 3, 6, 1, 2, 1, 2, 2, 1, 1, 1); GETNEXT past last OID -> EndOfMibViewValue; walk(99999) = [(1, 3, 6, 1, 4, 1, 99999, 2, 0)]"
+}

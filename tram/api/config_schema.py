@@ -197,7 +197,7 @@ _COMMON_FIELD_DESCRIPTIONS: dict[str, str] = {
     "security_name": "SNMPv3 USM username",
     "auth_protocol": "SNMPv3 authentication protocol (MD5, SHA, SHA224, SHA256, SHA384, SHA512)",
     "auth_key": "SNMPv3 authentication passphrase (secret)",
-    "priv_protocol": "SNMPv3 privacy protocol (DES, 3DES, AES, AES128, AES192, AES256)",
+    "priv_protocol": "SNMPv3 privacy protocol (AES, AES128, AES192, AES256; DES and 3DES removed in v1.5.0 — use AES128)",
     "priv_key": "SNMPv3 privacy passphrase (secret)",
     "context_name": "SNMPv3 context name",
     "resolve_oids": "Resolve OIDs to symbolic names using the loaded MIBs",

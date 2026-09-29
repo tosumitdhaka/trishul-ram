@@ -1,0 +1,5 @@
+{
+  "check": "v3-standard-sender-traps",
+  "ok": false,
+  "evidence": "pysnmp 7.1.30 SHA-2-auth'd v3 traps -> tsmp listener: SHA256/AES128: received (2 varbinds, security_level=authPriv); SHA384/AES256: received (2 varbinds, security_level=authPriv); SHA512/3DES: DROPPED (counts={'DropReason.UNDECODABLE_BER': 1}) | offline decode_notification(user=): SHA256/AES128: OK (pdu_type=snmpv2-trap); SHA384/AES256: OK (pdu_type=snmpv2-trap); SHA512/3DES: ProtocolError: Unexpected trailing BER content (v0.5.1: dropped UNDECODABLE_BER)"
+}

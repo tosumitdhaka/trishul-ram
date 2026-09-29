@@ -1,0 +1,83 @@
+{
+  "module": "UUID-TC-MIB",
+  "language": "SMIv2",
+  "schema_version": "1.1",
+  "producer_version": "0.5.2",
+  "generated_by": "trishul-smi",
+  "generated_at": "1970-01-01T00:00:00Z",
+  "imports": {
+    "SNMPv2-SMI": [
+      "MODULE-IDENTITY",
+      "mib-2"
+    ],
+    "SNMPv2-TC": [
+      "TEXTUAL-CONVENTION"
+    ]
+  },
+  "objects": {
+    "uuidTCMIB": {
+      "oid_path": [1, 3, 6, 1, 2, 1, 217],
+      "object_type": "MODULE-IDENTITY",
+      "class": "moduleidentity",
+      "syntax": null,
+      "max_access": null,
+      "status": null,
+      "index": null,
+      "augments": null,
+      "oid": "1.3.6.1.2.1.217",
+      "description": "This MIB module defines TEXTUAL-CONVENTIONs representing Universally Unique IDentifiers (UUIDs). Copyright (c) 2013 IETF Trust and the persons identified as authors of the code. All rights reserved. Redistribution and use in source and binary forms, with or without modification, is permitted pursuant to, and subject to the license terms contained in, the Simplified BSD License set forth in Section 4.c of the IETF Trust's Legal Provisions Relating to IETF Documents (http://trustee.ietf.org/license-info)."
+    }
+  },
+  "types": {
+    "UUID": {
+      "class": "textualconvention",
+      "base_type": "OCTET STRING",
+      "constraints": {
+        "kind": "size",
+        "data": [
+          [16, 16]
+        ]
+      },
+      "display_hint": "4x-2x-2x-1x1x-6x",
+      "status": "current",
+      "description": "Universally Unique Identifier information. The syntax must conform to RFC 4122, Section 4.1."
+    },
+    "UUIDorZero": {
+      "class": "textualconvention",
+      "base_type": "OCTET STRING",
+      "constraints": {
+        "kind": "union",
+        "data": [
+          {
+            "kind": "size",
+            "data": [
+              [0, 0]
+            ]
+          },
+          {
+            "kind": "size",
+            "data": [
+              [16, 16]
+            ]
+          }
+        ]
+      },
+      "display_hint": "4x-2x-2x-1x1x-6x",
+      "status": "current",
+      "description": "Universally Unique Identifier information. The syntax must conform to RFC 4122, Section 4.1. The semantics of the value zero-length OCTET STRING are object-specific and must therefore be defined as part of the description of any object that uses this syntax."
+    }
+  },
+  "notifications": {},
+  "module_metadata": {
+    "lastupdated": "2013-04-05",
+    "revisions": [
+      {
+        "date": "2013-04-05",
+        "description": "Initial version of this MIB as published in\n                     RFC 6933."
+      }
+    ],
+    "organization": "IETF Energy Management Working Group",
+    "contactinfo": "WG Email: eman@ietf.org\n                     Mailing list subscription info:\n                     http://www.ietf.org/mailman/listinfo/eman\n\n                     Dan Romascanu\n                     Avaya\n                     Park Atidim, Bldg. #3\n                     Tel Aviv, 61581\n                     Israel\n                     Phone: +972-3-6458414\n                     Email: dromasca@avaya.com\n\n                     Juergen Quittek\n                     NEC Europe Ltd.\n                     Network Research Division\n                     Kurfuersten-Anlage 36\n                     Heidelberg  69115\n                     Germany\n                     Phone: +49 6221 4342-115\n                     Email: quittek@neclab.eu\n\n                     Mouli Chandramouli\n                     Cisco Systems, Inc.\n                     Sarjapur Outer Ring Road\n                     Bangalore 560103\n                     India\n                     Phone: +91 80 4429 2409\n                     Email: moulchan@cisco.com",
+    "description": "This MIB module defines TEXTUAL-CONVENTIONs representing Universally Unique IDentifiers (UUIDs). Copyright (c) 2013 IETF Trust and the persons identified as authors of the code. All rights reserved. Redistribution and use in source and binary forms, with or without modification, is permitted pursuant to, and subject to the license terms contained in, the Simplified BSD License set forth in Section 4.c of the IETF Trust's Legal Provisions Relating to IETF Documents (http://trustee.ietf.org/license-info)."
+  }
+}

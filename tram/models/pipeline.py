@@ -178,6 +178,34 @@ class SyslogSourceConfig(BaseModel):
     max_connections: int = Field(64, ge=1)
 
 
+# ── SNMPv3 priv-protocol removal (v1.5.0, GH #72) ───────────────────────────
+# DES and 3DES are rejected at config validation on every SNMPv3 config class.
+# DES is obsoleted (RFC 8996 lineage) and dropped upstream (trishul-snmp #29);
+# 3DES was never standardized (expired draft) and upstream #31 makes it a
+# silent-data-loss trap on the trishul stack. AES128 is the replacement.
+
+_SNMP_PRIV_PROTOCOL_REMOVED: dict[str, str] = {
+    "DES": (
+        "DES is obsoleted (RFC 8996 lineage) and dropped by the upstream "
+        "trishul-snmp stack"
+    ),
+    "3DES": (
+        "3DES was never standardized (an expired draft) and is not supported "
+        "by the trishul-snmp stack"
+    ),
+}
+
+
+def _reject_removed_priv_protocol(value: str) -> str:
+    """Reject SNMPv3 privacy protocols removed in v1.5.0 (case-insensitive)."""
+    reason = _SNMP_PRIV_PROTOCOL_REMOVED.get(value.upper())
+    if reason is not None:
+        raise ValueError(
+            f"priv_protocol {value!r} was removed in v1.5.0 — {reason}; use AES128"
+        )
+    return value
+
+
 class SnmpTrapSourceConfig(BaseModel):
     type: Literal["snmp_trap"]
     host: str = "0.0.0.0"
@@ -194,6 +222,11 @@ class SnmpTrapSourceConfig(BaseModel):
     priv_protocol: str = "AES128"
     priv_key: str | None = None
     context_name: str = ""
+
+    @field_validator("priv_protocol")
+    @classmethod
+    def validate_priv_protocol(cls, value: str) -> str:
+        return _reject_removed_priv_protocol(value)
 
 
 class SnmpPollSourceConfig(BaseModel):
@@ -218,9 +251,14 @@ class SnmpPollSourceConfig(BaseModel):
     security_name: str = ""
     auth_protocol: str = "SHA"        # MD5 | SHA | SHA224 | SHA256 | SHA384 | SHA512
     auth_key: str | None = None    # auth passphrase; None → noAuthNoPriv
-    priv_protocol: str = "AES128"     # DES | 3DES | AES | AES128 | AES192 | AES256
+    priv_protocol: str = "AES128"     # AES | AES128 | AES192 | AES256
     priv_key: str | None = None    # priv passphrase; None → authNoPriv
     context_name: str = ""            # SNMPv3 contextName (usually empty)
+
+    @field_validator("priv_protocol")
+    @classmethod
+    def validate_priv_protocol(cls, value: str) -> str:
+        return _reject_removed_priv_protocol(value)
 
 
 class MqttSourceConfig(BaseModel):
@@ -1014,6 +1052,11 @@ class SnmpTrapSinkConfig(SinkCommonFieldsMixin):
     priv_protocol: str = "AES128"
     priv_key: str | None = None
     context_name: str = ""
+
+    @field_validator("priv_protocol")
+    @classmethod
+    def validate_priv_protocol(cls, value: str) -> str:
+        return _reject_removed_priv_protocol(value)
 
 
 

@@ -7,6 +7,7 @@ They are excluded from the public OpenAPI schema and exempt from API key auth.
 from __future__ import annotations
 
 import logging
+import threading
 from datetime import datetime
 
 from fastapi import APIRouter, HTTPException, Request
@@ -49,6 +50,66 @@ class PipelineStatsPayload(BaseModel):
     bytes_out: int = 0
     errors_last_window: list[str] = Field(default_factory=list)
     is_final: bool = False
+    # v1.5.0 (GH #72): the worker's TRAM_SNMP_STACK. Default "legacy" so a
+    # pre-flag worker (which omits the field) reports the stack default — a
+    # legacy worker under a trishul manager still trips the mismatch warning.
+    snmp_stack: str = "legacy"
+
+
+# v1.5.0 (GH #72): rolling-upgrade stack-consistency guard. The manager warns
+# loudly once per worker when the worker's reported SNMP stack differs from
+# its own — a mixed fleet serves one stack's MIB corpus to the other (a
+# trishul worker resolves JSON bundles against a .py consumer and vice versa).
+# Keyed by worker_id so a restart (new pod name) re-warns if the fleet is
+# still mixed; the set is bounded to avoid unbounded growth in a churning K8s
+# fleet (clearing the whole set only costs a re-warn for still-mixed workers).
+_MISMATCH_WARNED_WORKERS: set[str] = set()
+_MISMATCH_WARNED_MAX = 4096
+_MISMATCH_LOCK = threading.Lock()
+
+
+def _manager_snmp_stack(request: Request) -> str:
+    """The manager's TRAM_SNMP_STACK — app.state.config when present (the real
+    app), else the env parse so bare-router test apps behave consistently."""
+    config = getattr(request.app.state, "config", None)
+    if config is not None and hasattr(config, "snmp_stack"):
+        return str(config.snmp_stack)
+    from tram.core.config import AppConfig
+    return AppConfig.from_env().snmp_stack
+
+
+def _warn_snmp_stack_mismatch(payload: PipelineStatsPayload, request: Request) -> None:
+    """Log a WARNING once per worker when its SNMP stack differs from the manager's.
+
+    Called on every stats report (the check is free); the log fires once per
+    worker_id so a mismatched rolling upgrade surfaces loudly without per-
+    report spam.
+    """
+    worker_stack = payload.snmp_stack
+    manager_stack = _manager_snmp_stack(request)
+    if worker_stack == manager_stack:
+        return
+    worker_id = payload.worker_id or "?"
+    with _MISMATCH_LOCK:
+        if worker_id in _MISMATCH_WARNED_WORKERS:
+            return
+        _MISMATCH_WARNED_WORKERS.add(worker_id)
+        if len(_MISMATCH_WARNED_WORKERS) > _MISMATCH_WARNED_MAX:
+            _MISMATCH_WARNED_WORKERS.clear()
+    logger.warning(
+        "SNMP stack mismatch: worker %s reports snmp_stack=%s but the manager "
+        "runs snmp_stack=%s — a mixed-stack fleet serves one stack's MIB "
+        "corpus to the other; align TRAM_SNMP_STACK across every manager and "
+        "worker before enabling the trishul stack",
+        worker_id,
+        worker_stack,
+        manager_stack,
+        extra={
+            "worker_id": worker_id,
+            "worker_snmp_stack": worker_stack,
+            "manager_snmp_stack": manager_stack,
+        },
+    )
 
 
 @router.post("/api/internal/run-complete")
@@ -98,6 +159,10 @@ async def pipeline_stats(payload: PipelineStatsPayload, request: Request) -> dic
     controller = request.app.state.controller
     from tram.metrics.registry import MGR_PIPELINE_STATS_RECEIVED_TOTAL
     MGR_PIPELINE_STATS_RECEIVED_TOTAL.inc()
+
+    # v1.5.0 (GH #72): stack-consistency guard — warn once per worker when the
+    # reported TRAM_SNMP_STACK differs from the manager's.
+    _warn_snmp_stack_mismatch(payload, request)
 
     if payload.is_final:
         store.remove(payload.run_id)

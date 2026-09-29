@@ -1,4 +1,12 @@
-"""SNMP source connectors — trap receiver and polling source."""
+"""SNMP source connectors — trap receiver and polling source.
+
+v1.5.0 (GH #72): dual-stack. ``TRAM_SNMP_STACK=trishul`` runs the poll and
+trap paths over tsmp (``trishul_snmp``: V1/V2c/V3 managers, notification
+listeners, ``decode_notification``); the default ``legacy`` path is the
+byte-identical pysnmp implementation. Shared parse/normalize (MIB resolution,
+row grouping, classification) is stack-agnostic — only the wire layers differ,
+and the flag-off branch is deleted wholesale after the flag period.
+"""
 
 from __future__ import annotations
 
@@ -22,11 +30,13 @@ from tram.connectors.config_utils import (
     snmpv3_usm,
 )
 from tram.connectors.snmp.mib_utils import (
+    build_tsmp_local_engine,
     close_snmp_engine,
     create_udp_transport_target,
     get_hlapi_asyncio,
     hlapi_get_cmd,
     hlapi_next_cmd,
+    snmp_stack,
 )
 from tram.core.exceptions import SourceError
 from tram.interfaces.base_source import BaseSource
@@ -103,7 +113,7 @@ class SNMPTrapSource(BaseSource):
         security_name   (str)   SNMPv3 USM username.
         auth_protocol   (str)   MD5 | SHA | SHA224 | SHA256 | SHA384 | SHA512.
         auth_key        (str)   Auth passphrase (None → noAuthNoPriv).
-        priv_protocol   (str)   DES | 3DES | AES | AES128 | AES192 | AES256.
+        priv_protocol   (str)   AES | AES128 | AES192 | AES256 (DES/3DES rejected at validation).
         priv_key        (str)   Privacy passphrase (None → authNoPriv).
         context_name    (str)   SNMPv3 context name.
     """
@@ -126,6 +136,9 @@ class SNMPTrapSource(BaseSource):
         self.priv_key: str | None = usm["priv_key"]
         self.context_name: str = usm["context_name"]
         self._stop_event: threading.Event = threading.Event()
+        # v1.5.0 (GH #72): wire stack selected by TRAM_SNMP_STACK — the same
+        # YAML config, a different library under it.
+        self._snmp_stack: str = snmp_stack()
 
     def test_connection(self) -> dict:
         """Verify the trap listener port is available by attempting a UDP bind."""
@@ -147,7 +160,15 @@ class SNMPTrapSource(BaseSource):
         self._stop_event.set()
 
     def read(self) -> Iterator[tuple[bytes, dict]]:
-        yield from self._read_raw_udp()
+        """Return the trap stream.
+
+        On the tsmp path the listener binds eagerly — at ``read()`` time,
+        before the first record — so a trap sender started right after
+        ``read()`` can never fire into an unbound socket.
+        """
+        if self._snmp_stack == "trishul":
+            return self._read_tsmp_listener()
+        return self._read_raw_udp()
 
     def _read_raw_udp(self) -> Iterator[tuple[bytes, dict]]:
         """Raw UDP socket receiver — decodes trap bytes and yields per-trap records."""
@@ -179,27 +200,8 @@ class SNMPTrapSource(BaseSource):
                 source_ip, src_port = addr
                 raw_bindings = self._decode_trap(raw)
 
-                # Optional MIB-based OID resolution
-                if self.resolve_oids and (self.mib_dirs or self.mib_modules):
-                    try:
-                        from tram.connectors.snmp.mib_utils import (
-                            get_mib_view,
-                            oid_str_to_tuple,
-                            resolve_oid,
-                        )
-                        mib_view = get_mib_view(self.mib_dirs, self.mib_modules)
-                        bindings = {
-                            resolve_oid(mib_view, oid_str_to_tuple(oid)): val
-                            for oid, val in raw_bindings.items()
-                            if not oid.startswith("_")
-                        }
-                        if "_raw" in raw_bindings:
-                            bindings["_raw"] = raw_bindings["_raw"]
-                    except Exception as _exc:
-                        logger.warning("MIB OID resolution failed for trap: %s", _exc)
-                        bindings = raw_bindings
-                else:
-                    bindings = raw_bindings
+                # Optional MIB-based OID resolution (shared with the tsmp path)
+                bindings = self._resolve_trap_bindings(raw_bindings)
 
                 meta = {
                     "source_ip": source_ip,
@@ -218,8 +220,199 @@ class SNMPTrapSource(BaseSource):
             except Exception:
                 pass
 
+    # ── tsmp listener path (v1.5.0 flag-on) ─────────────────────────────────
+
+    def _build_tsmp_listener(self):
+        """Build the tsmp notification listener for the configured version.
+
+        v1/v2c share the community listener (it decodes v1 Trap-PDUs with
+        their Trap-PDU metadata); v3 uses the per-user USM listener with a
+        deterministic local engine (senders discover it via USM discovery
+        probes, which the listener answers automatically). A UDP bind check
+        mirrors the legacy loud bind failure.
+        """
+        try:
+            sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+            sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+            sock.bind((self.host, self.port))
+            sock.close()
+        except OSError as exc:
+            raise SourceError(
+                f"SNMP trap UDP bind failed on {self.host}:{self.port} — {exc}"
+            ) from exc
+
+        from trishul_snmp import V2cNotificationListener, V3NotificationListener
+
+        if self.version == "3":
+            from tram.connectors.snmp.mib_utils import build_v3_usm_user
+
+            user = build_v3_usm_user(
+                security_name=self.security_name,
+                auth_protocol=self.auth_protocol,
+                auth_key=self.auth_key,
+                priv_protocol=self.priv_protocol,
+                priv_key=self.priv_key,
+            )
+            local_engine = build_tsmp_local_engine(
+                f"tram:trap:{self.host}:{self.port}:{self.security_name}"
+            )
+            return V3NotificationListener(
+                host=self.host, port=self.port, user=user, local_engine=local_engine
+            )
+        # The community listener accepts any community (parity with the legacy
+        # decode-everything behavior); the configured community is only meta.
+        return V2cNotificationListener(host=self.host, port=self.port, communities=None)
+
+    def _tsmp_listener_loop(self, listener, q, thread_stop: threading.Event, ready: threading.Event) -> None:
+        """Run the tsmp listener on its own event loop, pushing events to *q*.
+
+        ``ready`` is set once the listener socket is bound, so the reader can
+        wait before consuming — a trap sent before bind would otherwise be
+        silently dropped (UDP has no receiver for it).
+        """
+        import asyncio
+        import queue
+
+        async def _serve() -> None:
+            async with listener:
+                ready.set()
+                while not thread_stop.is_set() and not self._stop_event.is_set():
+                    try:
+                        event = await asyncio.wait_for(listener.receive(), timeout=1.0)
+                    except TimeoutError:
+                        continue
+                    except Exception as exc:
+                        logger.warning("SNMP trap listener error: %s", exc)
+                        continue
+                    try:
+                        q.put(event, timeout=1.0)
+                    except queue.Full:
+                        logger.warning("SNMP trap event queue full — dropping event")
+
+        try:
+            asyncio.run(_serve())
+        except Exception as exc:
+            logger.warning("SNMP trap tsmp listener thread failed: %s", exc)
+
+    def _read_tsmp_listener(self) -> Iterator[tuple[bytes, dict]]:
+        """Trap stream over tsmp listeners (V1/V2c community or V3 USM).
+
+        The listener is asyncio-based; a dedicated thread runs its event loop
+        and bridges received ``NotificationEvent`` objects into a queue that
+        the returned generator drains — one record per trap, exactly like the
+        legacy UDP loop. The listener binds eagerly (the thread waits for the
+        socket to be ready before returning) so a sender started after
+        ``read()`` cannot drop its trap into an unbound socket.
+        """
+        import queue
+
+        q: queue.Queue = queue.Queue(maxsize=100)
+        thread_stop = threading.Event()
+        ready = threading.Event()
+        listener = self._build_tsmp_listener()
+        thread = threading.Thread(
+            target=self._tsmp_listener_loop,
+            args=(listener, q, thread_stop, ready),
+            daemon=True,
+            name=f"tram-snmp-trap-tsmp-{self.host}:{self.port}",
+        )
+        thread.start()
+        if not ready.wait(timeout=5.0):
+            thread_stop.set()
+            thread.join(timeout=5.0)
+            raise SourceError(
+                f"SNMP trap tsmp listener failed to start on {self.host}:{self.port} — "
+                "see log for the listener error"
+            )
+
+        def _stream() -> Iterator[tuple[bytes, dict]]:
+            try:
+                while not self._stop_event.is_set():
+                    try:
+                        event = q.get(timeout=1.0)
+                    except queue.Empty:
+                        continue
+                    yield self._tsmp_event_record(event)
+            finally:
+                thread_stop.set()
+                thread.join(timeout=5.0)
+
+        return _stream()
+
+    @staticmethod
+    def _tsmp_val_to_legacy_str(val_obj) -> str:
+        """Render a tsmp value exactly like the legacy trap path's ``str(val)``.
+
+        The legacy ``_decode_trap`` binds ``str(pysnmp_proto_value)``; this is
+        the parity contract for ``_tsmp_event_record`` (C3/C4): raw bytes come
+        back as latin-1 text (``OctetString``/``Opaque``) and an IpAddress as
+        its raw 4 octets — pysnmp's ``__str__`` forms, which are ugly but are
+        what the flag-off path emits. Equivalence is the contract; these spots
+        are post-swap cleanup candidates (hex/pretty rendering).
+        """
+        cls = type(val_obj).__name__
+        if cls == "OctetStringValue":
+            return bytes(val_obj.value).decode("latin-1")
+        if cls == "OpaqueValue":
+            return bytes(val_obj.value).decode("latin-1")
+        if cls == "IpAddressValue":
+            return "".join(chr(int(part)) for part in str(val_obj.value).split("."))
+        if cls == "ObjectIdentifierValue":
+            return ".".join(str(arc) for arc in val_obj.value)
+        return val_obj.to_display_string()
+
+    def _tsmp_event_record(self, event) -> tuple[bytes, dict]:
+        """Convert a tsmp NotificationEvent to the legacy (json, meta) shape."""
+        import json
+
+        raw_bindings = {
+            vb.oid_str: self._tsmp_val_to_legacy_str(vb.value) for vb in event.varbinds
+        }
+        bindings = self._resolve_trap_bindings(raw_bindings)
+
+        meta = {
+            "source_ip": event.source_host or "",
+            "port": event.source_port,
+            "community": event.community or self.community,
+            "version": self.version,
+        }
+        logger.debug(
+            "SNMP trap received",
+            extra={"source_ip": meta["source_ip"], "bindings": len(bindings)},
+        )
+        return json.dumps(bindings).encode("utf-8"), meta
+
+    def _resolve_trap_bindings(self, raw_bindings: dict) -> dict:
+        """Optional MIB-based OID resolution shared by both trap paths."""
+        if self.resolve_oids and (self.mib_dirs or self.mib_modules):
+            try:
+                from tram.connectors.snmp.mib_utils import (
+                    get_mib_view,
+                    oid_str_to_tuple,
+                    resolve_oid,
+                )
+                mib_view = get_mib_view(self.mib_dirs, self.mib_modules)
+                bindings = {
+                    resolve_oid(mib_view, oid_str_to_tuple(oid)): val
+                    for oid, val in raw_bindings.items()
+                    if not oid.startswith("_")
+                }
+                if "_raw" in raw_bindings:
+                    bindings["_raw"] = raw_bindings["_raw"]
+            except Exception as _exc:
+                logger.warning("MIB OID resolution failed for trap: %s", _exc)
+                bindings = raw_bindings
+        else:
+            bindings = raw_bindings
+        return bindings
+
     def _decode_trap(self, raw: bytes) -> dict:
-        """Decode a raw SNMP trap PDU using pyasn1 BER decoder + pysnmp proto API."""
+        """Decode a raw SNMP trap PDU using pyasn1 BER decoder + pysnmp proto API.
+
+        Legacy-path only (v1.5.0, GH #72): the flag-on trap stream decodes
+        inside the tsmp listeners (``_tsmp_event_record``), so this method is
+        never called on the trishul stack.
+        """
         try:
             from pyasn1.codec.ber import decoder as ber_decoder
             from pysnmp.proto.api import v2c as pMod
@@ -267,7 +460,7 @@ class SNMPPollSource(BaseSource):
         security_name   (str)   SNMPv3 USM username.
         auth_protocol   (str)   MD5 | SHA | SHA224 | SHA256 | SHA384 | SHA512.
         auth_key        (str)   Auth passphrase (None → noAuthNoPriv).
-        priv_protocol   (str)   DES | 3DES | AES | AES128 | AES192 | AES256.
+        priv_protocol   (str)   AES | AES128 | AES192 | AES256 (DES/3DES rejected at validation).
         priv_key        (str)   Privacy passphrase (None → authNoPriv).
         context_name    (str)   SNMPv3 context name.
     """
@@ -320,6 +513,128 @@ class SNMPPollSource(BaseSource):
         self.priv_protocol: str = usm["priv_protocol"]
         self.priv_key: str | None = usm["priv_key"]
         self.context_name: str = usm["context_name"]
+        # v1.5.0 (GH #72): wire stack selected by TRAM_SNMP_STACK — the same
+        # YAML config, a different library under it.
+        self._snmp_stack: str = snmp_stack()
+
+    # ── tsmp wire layer (v1.5.0 flag-on) ────────────────────────────────────
+
+    # tsmp value type names → the legacy wire-class names the shared classify
+    # layer keys on (GH #35 fixed tables). ``integer`` maps to ``Integer`` —
+    # the wire-accurate class name at lookupMib=False.
+    _TSMP_TYPE_TO_WIRE = {
+        "octet-string": "OctetString",
+        "integer": "Integer",
+        "counter32": "Counter32",
+        "counter64": "Counter64",
+        "gauge32": "Gauge32",
+        "timeticks": "TimeTicks",
+        "ip-address": "IpAddress",
+        "object-identifier": "ObjectIdentifier",
+        "opaque": "Opaque",
+        "null": "Null",
+        "no-such-object": "NoSuchObject",
+        "no-such-instance": "NoSuchInstance",
+        "end-of-mib-view": "EndOfMibView",
+    }
+
+    @staticmethod
+    def _tsmp_type_name(val_obj) -> str:
+        """Map a tsmp SnmpValue type name to the legacy wire-class spelling."""
+        return SNMPPollSource._TSMP_TYPE_TO_WIRE.get(
+            getattr(val_obj, "type_name", ""), type(val_obj).__name__
+        )
+
+    @staticmethod
+    def _tsmp_val_to_str(val_obj) -> str:
+        """Serialize a tsmp SNMP value to the legacy ``_snmp_val_to_str`` shape.
+
+        Parity contract (C3/C4): OctetString values containing non-printable
+        bytes are hex-encoded (6-byte → MAC format, otherwise ``0x``-prefixed)
+        exactly like the legacy path; IpAddress and Opaque render as their raw
+        octets in latin-1 text — pysnmp's ``str()`` forms, ugly but what the
+        flag-off path emits (post-swap cleanup candidates). All other types
+        use the tsmp display string, which matches the legacy decimal/dotted
+        rendering.
+        """
+        type_name = type(val_obj).__name__
+        if type_name == "OctetStringValue":
+            raw = bytes(val_obj.value)
+            if all(0x20 <= b < 0x7F for b in raw):
+                return raw.decode("ascii")
+            if len(raw) == 6:
+                return ":".join(f"{b:02x}" for b in raw)
+            return "0x" + raw.hex()
+        if type_name == "ObjectIdentifierValue":
+            return ".".join(str(arc) for arc in val_obj.value)
+        if type_name == "IpAddressValue":
+            return "".join(chr(int(part)) for part in str(val_obj.value).split("."))
+        if type_name == "OpaqueValue":
+            return bytes(val_obj.value).decode("latin-1")
+        return val_obj.to_display_string()
+
+    def _build_tsmp_manager(self):
+        """Build the tsmp manager context manager for the configured version."""
+        from trishul_snmp import V1Manager, V2cManager, V3Manager
+
+        common = {
+            "host": self.host,
+            "port": self.port,
+            "timeout": self.timeout,
+            "retries": self.retries,
+        }
+        if self.version == "3":
+            from tram.connectors.snmp.mib_utils import build_v3_usm_user
+
+            user = build_v3_usm_user(
+                security_name=self.security_name,
+                auth_protocol=self.auth_protocol,
+                auth_key=self.auth_key,
+                priv_protocol=self.priv_protocol,
+                priv_key=self.priv_key,
+            )
+            return V3Manager(
+                user=user,
+                context_name=self.context_name.encode("utf-8"),
+                **common,
+            )
+        cls = V1Manager if self.version == "1" else V2cManager
+        return cls(community=self.community, **common)
+
+    async def _do_get_tsmp(self, typed: bool = False) -> dict:
+        resolved_oids = self._resolved_source_oids()
+        async with self._build_tsmp_manager() as mgr:
+            resp = await mgr.get(*resolved_oids)
+        if resp.error_status != 0:
+            raise SourceError(
+                f"SNMP GET PDU error: {resp.error_status.name} at index "
+                f"{resp.error_index or '?'}"
+            )
+        if typed:
+            return {
+                vb.oid_str: (self._tsmp_val_to_str(vb.value), self._tsmp_type_name(vb.value))
+                for vb in resp.varbinds
+            }
+        return {vb.oid_str: self._tsmp_val_to_str(vb.value) for vb in resp.varbinds}
+
+    async def _do_walk_tsmp(self, typed: bool = False) -> dict:
+        """tsmp walk: GETNEXT loop mode (``bulk=False``), mirroring the legacy
+        ``nextCmd`` loop; subtree boundaries and no-progress quirks are
+        handled inside tsmp's ``walk``."""
+        resolved_oids = self._resolved_source_oids()
+        bindings: dict = {}
+        async with self._build_tsmp_manager() as mgr:
+            for base_oid in resolved_oids:
+                walked = await mgr.walk(base_oid, bulk=False)
+                for vb in walked:
+                    if typed:
+                        bindings[vb.oid_str] = (
+                            self._tsmp_val_to_str(vb.value),
+                            self._tsmp_type_name(vb.value),
+                        )
+                    else:
+                        bindings[vb.oid_str] = self._tsmp_val_to_str(vb.value)
+        return bindings
 
     @staticmethod
     def _numeric_part(part: int | str) -> int | str:
@@ -432,6 +747,8 @@ class SNMPPollSource(BaseSource):
         community = self.config.get("community", "public")
         version   = str(self.config.get("version", "2c"))
         t0 = time.monotonic()
+        if self._snmp_stack == "trishul":
+            return self._test_connection_tsmp(host, port, t0)
         try:
             hlapi = get_hlapi_asyncio()
         except ImportError:
@@ -470,6 +787,29 @@ class SNMPPollSource(BaseSource):
                 sysDescr = loop.run_until_complete(_probe())
             finally:
                 loop.close()
+            latency = int((time.monotonic() - t0) * 1000)
+            detail = f"SNMP {host}:{port} OK"
+            if sysDescr:
+                detail += f" — sysDescr: {sysDescr[:80]}"
+            return {"ok": True, "latency_ms": latency, "detail": detail}
+        except Exception as exc:
+            latency = int((time.monotonic() - t0) * 1000)
+            return {"ok": False, "latency_ms": latency, "error": f"SNMP {host}:{port} — {exc}"}
+
+    def _test_connection_tsmp(self, host: str, port: int, t0: float) -> dict:
+        """tsmp GET probe for sysDescr.0 (v1.5.0 flag-on path)."""
+        import asyncio
+        import time
+
+        async def _probe() -> str:
+            async with self._build_tsmp_manager() as mgr:
+                resp = await mgr.get("1.3.6.1.2.1.1.1.0")
+            if resp.error_status != 0:
+                raise OSError(resp.error_status.name)
+            return self._tsmp_val_to_str(resp.varbinds[0].value) if resp.varbinds else ""
+
+        try:
+            sysDescr = asyncio.run(_probe())
             latency = int((time.monotonic() - t0) * 1000)
             detail = f"SNMP {host}:{port} OK"
             if sysDescr:
@@ -613,6 +953,19 @@ class SNMPPollSource(BaseSource):
         """
         if mib_view is None or not mod_name or not sym_name:
             return None
+        # tsmi JSON-bundle path (v1.5.0 flag-on): node.enums is a label→number
+        # map (the tsmi IR enums field) — reverse-lookup the value's label.
+        if not hasattr(mib_view, "mibBuilder") and hasattr(mib_view, "lookup"):
+            try:
+                node = mib_view.resolve_node(mod_name, sym_name)
+                if node is None or not node.enums:
+                    return None
+                for label, number in node.enums.items():
+                    if number == int(value):
+                        return label
+                return None
+            except Exception:
+                return None
         try:
             mib_builder = getattr(mib_view, "mibBuilder", None)
             if mib_builder is None:
@@ -742,6 +1095,8 @@ class SNMPPollSource(BaseSource):
         return str(val_obj)
 
     async def _do_get(self, hlapi_mod, typed: bool = False) -> dict:
+        if self._snmp_stack == "trishul":
+            return await self._do_get_tsmp(typed=typed)
         engine = hlapi_mod.SnmpEngine()
         auth_data = self._build_auth(hlapi_mod)
         try:
@@ -782,6 +1137,8 @@ class SNMPPollSource(BaseSource):
             close_snmp_engine(engine)
 
     async def _do_walk(self, hlapi_mod, typed: bool = False) -> dict:
+        if self._snmp_stack == "trishul":
+            return await self._do_walk_tsmp(typed=typed)
         engine = hlapi_mod.SnmpEngine()
         auth_data = self._build_auth(hlapi_mod)
         try:
@@ -845,12 +1202,16 @@ class SNMPPollSource(BaseSource):
 
     def read(self) -> Iterator[tuple[bytes, dict]]:
         import json
-        try:
-            _hlapi = get_hlapi_asyncio()
-        except Exception as exc:
-            raise SourceError(
-                "SNMP poll source requires pysnmp — install with: pip install tram[snmp]"
-            ) from exc
+        if self._snmp_stack != "trishul":
+            try:
+                _hlapi = get_hlapi_asyncio()
+            except Exception as exc:
+                raise SourceError(
+                    "SNMP poll source requires pysnmp — install with: pip install tram[snmp]"
+                ) from exc
+        else:
+            # tsmp path (v1.5.0 flag-on): no pysnmp requirement.
+            _hlapi = None
 
         if self.classify and not self.resolve_oids:
             logger.warning(

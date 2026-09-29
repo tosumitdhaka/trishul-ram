@@ -1,0 +1,5 @@
+{
+  "check": "mib-bundle-cross-module",
+  "ok": true,
+  "evidence": "IF-MIB bundle (IANAifType dep auto-resolved): resolve(ifNumber)=(1, 3, 6, 1, 2, 1, 2, 1)"
+}
