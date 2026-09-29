@@ -1,0 +1,19 @@
+{
+  "module": "SNMPv2-CONF",
+  "language": "SMIv1",
+  "schema_version": "1.1",
+  "producer_version": "0.5.2",
+  "generated_by": "trishul-smi",
+  "generated_at": "1970-01-01T00:00:00Z",
+  "imports": {},
+  "objects": {},
+  "types": {},
+  "notifications": {},
+  "module_metadata": {
+    "lastupdated": null,
+    "revisions": [],
+    "organization": null,
+    "contactinfo": null,
+    "description": null
+  }
+}

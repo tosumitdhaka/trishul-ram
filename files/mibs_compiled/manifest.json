@@ -1,0 +1,71 @@
+{
+  "schema_version": "1.1",
+  "producer_version": "0.5.2",
+  "generated_by": "trishul-smi",
+  "generated_at": "1970-01-01T00:00:00Z",
+  "modules": [
+    {
+      "module": "ENTITY-MIB",
+      "file": "ENTITY-MIB.json"
+    },
+    {
+      "module": "HOST-RESOURCES-MIB",
+      "file": "HOST-RESOURCES-MIB.json"
+    },
+    {
+      "module": "IANA-ENTITY-MIB",
+      "file": "IANA-ENTITY-MIB.json"
+    },
+    {
+      "module": "IANAifType-MIB",
+      "file": "IANAifType-MIB.json"
+    },
+    {
+      "module": "IF-MIB",
+      "file": "IF-MIB.json"
+    },
+    {
+      "module": "INET-ADDRESS-MIB",
+      "file": "INET-ADDRESS-MIB.json"
+    },
+    {
+      "module": "IP-MIB",
+      "file": "IP-MIB.json"
+    },
+    {
+      "module": "SNMP-FRAMEWORK-MIB",
+      "file": "SNMP-FRAMEWORK-MIB.json"
+    },
+    {
+      "module": "SNMPv2-CONF",
+      "file": "SNMPv2-CONF.json"
+    },
+    {
+      "module": "SNMPv2-MIB",
+      "file": "SNMPv2-MIB.json"
+    },
+    {
+      "module": "SNMPv2-SMI",
+      "file": "SNMPv2-SMI.json"
+    },
+    {
+      "module": "SNMPv2-TC",
+      "file": "SNMPv2-TC.json"
+    },
+    {
+      "module": "TCP-MIB",
+      "file": "TCP-MIB.json"
+    },
+    {
+      "module": "UDP-MIB",
+      "file": "UDP-MIB.json"
+    },
+    {
+      "module": "UUID-TC-MIB",
+      "file": "UUID-TC-MIB.json"
+    }
+  ],
+  "sidecars": {
+    "oid_index": "oid_index.json"
+  }
+}

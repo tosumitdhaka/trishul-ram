@@ -1,0 +1,379 @@
+{
+  "module": "SNMPv2-SMI",
+  "language": "SMIv1",
+  "schema_version": "1.1",
+  "producer_version": "0.5.2",
+  "generated_by": "trishul-smi",
+  "generated_at": "1970-01-01T00:00:00Z",
+  "imports": {},
+  "objects": {
+    "org": {
+      "oid_path": [1, 3],
+      "object_type": "OBJECT IDENTIFIER",
+      "class": "objectidentifier",
+      "syntax": null,
+      "max_access": null,
+      "status": null,
+      "index": null,
+      "augments": null,
+      "oid": "1.3",
+      "description": null
+    },
+    "dod": {
+      "oid_path": [1, 3, 6],
+      "object_type": "OBJECT IDENTIFIER",
+      "class": "objectidentifier",
+      "syntax": null,
+      "max_access": null,
+      "status": null,
+      "index": null,
+      "augments": null,
+      "oid": "1.3.6",
+      "description": null
+    },
+    "internet": {
+      "oid_path": [1, 3, 6, 1],
+      "object_type": "OBJECT IDENTIFIER",
+      "class": "objectidentifier",
+      "syntax": null,
+      "max_access": null,
+      "status": null,
+      "index": null,
+      "augments": null,
+      "oid": "1.3.6.1",
+      "description": null
+    },
+    "directory": {
+      "oid_path": [1, 3, 6, 1, 1],
+      "object_type": "OBJECT IDENTIFIER",
+      "class": "objectidentifier",
+      "syntax": null,
+      "max_access": null,
+      "status": null,
+      "index": null,
+      "augments": null,
+      "oid": "1.3.6.1.1",
+      "description": null
+    },
+    "mgmt": {
+      "oid_path": [1, 3, 6, 1, 2],
+      "object_type": "OBJECT IDENTIFIER",
+      "class": "objectidentifier",
+      "syntax": null,
+      "max_access": null,
+      "status": null,
+      "index": null,
+      "augments": null,
+      "oid": "1.3.6.1.2",
+      "description": null
+    },
+    "mib-2": {
+      "oid_path": [1, 3, 6, 1, 2, 1],
+      "object_type": "OBJECT IDENTIFIER",
+      "class": "objectidentifier",
+      "syntax": null,
+      "max_access": null,
+      "status": null,
+      "index": null,
+      "augments": null,
+      "oid": "1.3.6.1.2.1",
+      "description": null
+    },
+    "transmission": {
+      "oid_path": [1, 3, 6, 1, 2, 1, 10],
+      "object_type": "OBJECT IDENTIFIER",
+      "class": "objectidentifier",
+      "syntax": null,
+      "max_access": null,
+      "status": null,
+      "index": null,
+      "augments": null,
+      "oid": "1.3.6.1.2.1.10",
+      "description": null
+    },
+    "experimental": {
+      "oid_path": [1, 3, 6, 1, 3],
+      "object_type": "OBJECT IDENTIFIER",
+      "class": "objectidentifier",
+      "syntax": null,
+      "max_access": null,
+      "status": null,
+      "index": null,
+      "augments": null,
+      "oid": "1.3.6.1.3",
+      "description": null
+    },
+    "private": {
+      "oid_path": [1, 3, 6, 1, 4],
+      "object_type": "OBJECT IDENTIFIER",
+      "class": "objectidentifier",
+      "syntax": null,
+      "max_access": null,
+      "status": null,
+      "index": null,
+      "augments": null,
+      "oid": "1.3.6.1.4",
+      "description": null
+    },
+    "enterprises": {
+      "oid_path": [1, 3, 6, 1, 4, 1],
+      "object_type": "OBJECT IDENTIFIER",
+      "class": "objectidentifier",
+      "syntax": null,
+      "max_access": null,
+      "status": null,
+      "index": null,
+      "augments": null,
+      "oid": "1.3.6.1.4.1",
+      "description": null
+    },
+    "security": {
+      "oid_path": [1, 3, 6, 1, 5],
+      "object_type": "OBJECT IDENTIFIER",
+      "class": "objectidentifier",
+      "syntax": null,
+      "max_access": null,
+      "status": null,
+      "index": null,
+      "augments": null,
+      "oid": "1.3.6.1.5",
+      "description": null
+    },
+    "snmpV2": {
+      "oid_path": [1, 3, 6, 1, 6],
+      "object_type": "OBJECT IDENTIFIER",
+      "class": "objectidentifier",
+      "syntax": null,
+      "max_access": null,
+      "status": null,
+      "index": null,
+      "augments": null,
+      "oid": "1.3.6.1.6",
+      "description": null
+    },
+    "snmpDomains": {
+      "oid_path": [1, 3, 6, 1, 6, 1],
+      "object_type": "OBJECT IDENTIFIER",
+      "class": "objectidentifier",
+      "syntax": null,
+      "max_access": null,
+      "status": null,
+      "index": null,
+      "augments": null,
+      "oid": "1.3.6.1.6.1",
+      "description": null
+    },
+    "snmpProxys": {
+      "oid_path": [1, 3, 6, 1, 6, 2],
+      "object_type": "OBJECT IDENTIFIER",
+      "class": "objectidentifier",
+      "syntax": null,
+      "max_access": null,
+      "status": null,
+      "index": null,
+      "augments": null,
+      "oid": "1.3.6.1.6.2",
+      "description": null
+    },
+    "snmpModules": {
+      "oid_path": [1, 3, 6, 1, 6, 3],
+      "object_type": "OBJECT IDENTIFIER",
+      "class": "objectidentifier",
+      "syntax": null,
+      "max_access": null,
+      "status": null,
+      "index": null,
+      "augments": null,
+      "oid": "1.3.6.1.6.3",
+      "description": null
+    },
+    "zeroDotZero": {
+      "oid_path": [0, 0],
+      "object_type": "OBJECT-IDENTITY",
+      "class": "objectidentity",
+      "syntax": null,
+      "max_access": null,
+      "status": "current",
+      "index": null,
+      "augments": null,
+      "oid": "0.0",
+      "description": "A value used for null identifiers."
+    }
+  },
+  "types": {
+    "ExtUTCTime": {
+      "class": "textualconvention",
+      "base_type": "OCTET STRING",
+      "constraints": {
+        "kind": "union",
+        "data": [
+          {
+            "kind": "size",
+            "data": [
+              [11, 11]
+            ]
+          },
+          {
+            "kind": "size",
+            "data": [
+              [13, 13]
+            ]
+          }
+        ]
+      },
+      "display_hint": null,
+      "status": null,
+      "description": null
+    },
+    "ObjectName": {
+      "class": "textualconvention",
+      "base_type": "OBJECT IDENTIFIER",
+      "constraints": null,
+      "display_hint": null,
+      "status": null,
+      "description": null
+    },
+    "NotificationName": {
+      "class": "textualconvention",
+      "base_type": "OBJECT IDENTIFIER",
+      "constraints": null,
+      "display_hint": null,
+      "status": null,
+      "description": null
+    },
+    "ObjectSyntax": {
+      "class": "textualconvention",
+      "base_type": "CHOICE",
+      "constraints": null,
+      "display_hint": null,
+      "status": null,
+      "description": null
+    },
+    "SimpleSyntax": {
+      "class": "textualconvention",
+      "base_type": "CHOICE",
+      "constraints": null,
+      "display_hint": null,
+      "status": null,
+      "description": null
+    },
+    "Integer32": {
+      "class": "textualconvention",
+      "base_type": "INTEGER",
+      "constraints": {
+        "kind": "range",
+        "data": [
+          [
+            -2147483648,
+            2147483647
+          ]
+        ]
+      },
+      "display_hint": null,
+      "status": null,
+      "description": null
+    },
+    "ApplicationSyntax": {
+      "class": "textualconvention",
+      "base_type": "CHOICE",
+      "constraints": null,
+      "display_hint": null,
+      "status": null,
+      "description": null
+    },
+    "IpAddress": {
+      "class": "textualconvention",
+      "base_type": "OCTET STRING",
+      "constraints": {
+        "kind": "size",
+        "data": [
+          [4, 4]
+        ]
+      },
+      "display_hint": null,
+      "status": null,
+      "description": null
+    },
+    "Counter32": {
+      "class": "textualconvention",
+      "base_type": "INTEGER",
+      "constraints": {
+        "kind": "range",
+        "data": [
+          [0, 4294967295]
+        ]
+      },
+      "display_hint": null,
+      "status": null,
+      "description": null
+    },
+    "Gauge32": {
+      "class": "textualconvention",
+      "base_type": "INTEGER",
+      "constraints": {
+        "kind": "range",
+        "data": [
+          [0, 4294967295]
+        ]
+      },
+      "display_hint": null,
+      "status": null,
+      "description": null
+    },
+    "Unsigned32": {
+      "class": "textualconvention",
+      "base_type": "INTEGER",
+      "constraints": {
+        "kind": "range",
+        "data": [
+          [0, 4294967295]
+        ]
+      },
+      "display_hint": null,
+      "status": null,
+      "description": null
+    },
+    "TimeTicks": {
+      "class": "textualconvention",
+      "base_type": "INTEGER",
+      "constraints": {
+        "kind": "range",
+        "data": [
+          [0, 4294967295]
+        ]
+      },
+      "display_hint": null,
+      "status": null,
+      "description": null
+    },
+    "Opaque": {
+      "class": "textualconvention",
+      "base_type": "OCTET STRING",
+      "constraints": null,
+      "display_hint": null,
+      "status": null,
+      "description": null
+    },
+    "Counter64": {
+      "class": "textualconvention",
+      "base_type": "INTEGER",
+      "constraints": {
+        "kind": "range",
+        "data": [
+          [0, 18446744073709551615]
+        ]
+      },
+      "display_hint": null,
+      "status": null,
+      "description": null
+    }
+  },
+  "notifications": {},
+  "module_metadata": {
+    "lastupdated": null,
+    "revisions": [],
+    "organization": null,
+    "contactinfo": null,
+    "description": null
+  }
+}

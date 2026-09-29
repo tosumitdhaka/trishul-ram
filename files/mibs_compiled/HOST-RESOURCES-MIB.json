@@ -1,0 +1,2186 @@
+{
+  "module": "HOST-RESOURCES-MIB",
+  "language": "SMIv2",
+  "schema_version": "1.1",
+  "producer_version": "0.5.2",
+  "generated_by": "trishul-smi",
+  "generated_at": "1970-01-01T00:00:00Z",
+  "imports": {
+    "SNMPv2-SMI": [
+      "MODULE-IDENTITY",
+      "OBJECT-TYPE",
+      "mib-2",
+      "Integer32",
+      "Counter32",
+      "Gauge32",
+      "TimeTicks"
+    ],
+    "SNMPv2-TC": [
+      "TEXTUAL-CONVENTION",
+      "DisplayString",
+      "TruthValue",
+      "DateAndTime",
+      "AutonomousType"
+    ],
+    "SNMPv2-CONF": [
+      "MODULE-COMPLIANCE",
+      "OBJECT-GROUP"
+    ],
+    "IF-MIB": [
+      "InterfaceIndexOrZero"
+    ]
+  },
+  "objects": {
+    "hostResourcesMibModule": {
+      "oid_path": [1, 3, 6, 1, 2, 1, 25, 7, 1],
+      "object_type": "MODULE-IDENTITY",
+      "class": "moduleidentity",
+      "syntax": null,
+      "max_access": null,
+      "status": null,
+      "index": null,
+      "augments": null,
+      "oid": "1.3.6.1.2.1.25.7.1",
+      "description": "This MIB is for use in managing host systems. The term `host' is construed to mean any computer that communicates with other similar computers attached to the internet and that is directly used by one or more human beings. Although this MIB does not necessarily apply to devices whose primary function is communications services (e.g., terminal servers, routers, bridges, monitoring equipment), such relevance is not explicitly precluded. This MIB instruments attributes common to all internet hosts including, for example, both personal computers and systems that run variants of Unix."
+    },
+    "host": {
+      "oid_path": [1, 3, 6, 1, 2, 1, 25],
+      "object_type": "OBJECT IDENTIFIER",
+      "class": "objectidentifier",
+      "syntax": null,
+      "max_access": null,
+      "status": null,
+      "index": null,
+      "augments": null,
+      "oid": "1.3.6.1.2.1.25",
+      "description": null
+    },
+    "hrSystem": {
+      "oid_path": [1, 3, 6, 1, 2, 1, 25, 1],
+      "object_type": "OBJECT IDENTIFIER",
+      "class": "objectidentifier",
+      "syntax": null,
+      "max_access": null,
+      "status": null,
+      "index": null,
+      "augments": null,
+      "oid": "1.3.6.1.2.1.25.1",
+      "description": null
+    },
+    "hrStorage": {
+      "oid_path": [1, 3, 6, 1, 2, 1, 25, 2],
+      "object_type": "OBJECT IDENTIFIER",
+      "class": "objectidentifier",
+      "syntax": null,
+      "max_access": null,
+      "status": null,
+      "index": null,
+      "augments": null,
+      "oid": "1.3.6.1.2.1.25.2",
+      "description": null
+    },
+    "hrDevice": {
+      "oid_path": [1, 3, 6, 1, 2, 1, 25, 3],
+      "object_type": "OBJECT IDENTIFIER",
+      "class": "objectidentifier",
+      "syntax": null,
+      "max_access": null,
+      "status": null,
+      "index": null,
+      "augments": null,
+      "oid": "1.3.6.1.2.1.25.3",
+      "description": null
+    },
+    "hrSWRun": {
+      "oid_path": [1, 3, 6, 1, 2, 1, 25, 4],
+      "object_type": "OBJECT IDENTIFIER",
+      "class": "objectidentifier",
+      "syntax": null,
+      "max_access": null,
+      "status": null,
+      "index": null,
+      "augments": null,
+      "oid": "1.3.6.1.2.1.25.4",
+      "description": null
+    },
+    "hrSWRunPerf": {
+      "oid_path": [1, 3, 6, 1, 2, 1, 25, 5],
+      "object_type": "OBJECT IDENTIFIER",
+      "class": "objectidentifier",
+      "syntax": null,
+      "max_access": null,
+      "status": null,
+      "index": null,
+      "augments": null,
+      "oid": "1.3.6.1.2.1.25.5",
+      "description": null
+    },
+    "hrSWInstalled": {
+      "oid_path": [1, 3, 6, 1, 2, 1, 25, 6],
+      "object_type": "OBJECT IDENTIFIER",
+      "class": "objectidentifier",
+      "syntax": null,
+      "max_access": null,
+      "status": null,
+      "index": null,
+      "augments": null,
+      "oid": "1.3.6.1.2.1.25.6",
+      "description": null
+    },
+    "hrMIBAdminInfo": {
+      "oid_path": [1, 3, 6, 1, 2, 1, 25, 7],
+      "object_type": "OBJECT IDENTIFIER",
+      "class": "objectidentifier",
+      "syntax": null,
+      "max_access": null,
+      "status": null,
+      "index": null,
+      "augments": null,
+      "oid": "1.3.6.1.2.1.25.7",
+      "description": null
+    },
+    "hrSystemUptime": {
+      "oid_path": [1, 3, 6, 1, 2, 1, 25, 1, 1],
+      "object_type": "OBJECT-TYPE",
+      "class": "objecttype",
+      "syntax": "TimeTicks",
+      "max_access": "read-only",
+      "status": "current",
+      "index": null,
+      "augments": null,
+      "oid": "1.3.6.1.2.1.25.1.1",
+      "nodetype": "scalar",
+      "description": "The amount of time since this host was last initialized. Note that this is different from sysUpTime in the SNMPv2-MIB [RFC1907] because sysUpTime is the uptime of the network management portion of the system."
+    },
+    "hrSystemDate": {
+      "oid_path": [1, 3, 6, 1, 2, 1, 25, 1, 2],
+      "object_type": "OBJECT-TYPE",
+      "class": "objecttype",
+      "syntax": "DateAndTime",
+      "max_access": "read-write",
+      "status": "current",
+      "index": null,
+      "augments": null,
+      "oid": "1.3.6.1.2.1.25.1.2",
+      "nodetype": "scalar",
+      "description": "The host's notion of the local date and time of day."
+    },
+    "hrSystemInitialLoadDevice": {
+      "oid_path": [1, 3, 6, 1, 2, 1, 25, 1, 3],
+      "object_type": "OBJECT-TYPE",
+      "class": "objecttype",
+      "syntax": "Integer32",
+      "max_access": "read-write",
+      "status": "current",
+      "index": null,
+      "augments": null,
+      "oid": "1.3.6.1.2.1.25.1.3",
+      "nodetype": "scalar",
+      "constraints": {
+        "kind": "range",
+        "data": [
+          [1, 2147483647]
+        ]
+      },
+      "description": "The index of the hrDeviceEntry for the device from which this host is configured to load its initial operating system configuration (i.e., which operating system code and/or boot parameters). Note that writing to this object just changes the configuration that will be used the next time the operating system is loaded and does not actually cause the reload to occur."
+    },
+    "hrSystemInitialLoadParameters": {
+      "oid_path": [1, 3, 6, 1, 2, 1, 25, 1, 4],
+      "object_type": "OBJECT-TYPE",
+      "class": "objecttype",
+      "syntax": "InternationalDisplayString",
+      "max_access": "read-write",
+      "status": "current",
+      "index": null,
+      "augments": null,
+      "oid": "1.3.6.1.2.1.25.1.4",
+      "nodetype": "scalar",
+      "constraints": {
+        "kind": "size",
+        "data": [
+          [0, 128]
+        ]
+      },
+      "description": "This object contains the parameters (e.g. a pathname and parameter) supplied to the load device when requesting the initial operating system configuration from that device. Note that writing to this object just changes the configuration that will be used the next time the operating system is loaded and does not actually cause the reload to occur."
+    },
+    "hrSystemNumUsers": {
+      "oid_path": [1, 3, 6, 1, 2, 1, 25, 1, 5],
+      "object_type": "OBJECT-TYPE",
+      "class": "objecttype",
+      "syntax": "Gauge32",
+      "max_access": "read-only",
+      "status": "current",
+      "index": null,
+      "augments": null,
+      "oid": "1.3.6.1.2.1.25.1.5",
+      "nodetype": "scalar",
+      "description": "The number of user sessions for which this host is storing state information. A session is a collection of processes requiring a single act of user authentication and possibly subject to collective job control."
+    },
+    "hrSystemProcesses": {
+      "oid_path": [1, 3, 6, 1, 2, 1, 25, 1, 6],
+      "object_type": "OBJECT-TYPE",
+      "class": "objecttype",
+      "syntax": "Gauge32",
+      "max_access": "read-only",
+      "status": "current",
+      "index": null,
+      "augments": null,
+      "oid": "1.3.6.1.2.1.25.1.6",
+      "nodetype": "scalar",
+      "description": "The number of process contexts currently loaded or running on this system."
+    },
+    "hrSystemMaxProcesses": {
+      "oid_path": [1, 3, 6, 1, 2, 1, 25, 1, 7],
+      "object_type": "OBJECT-TYPE",
+      "class": "objecttype",
+      "syntax": "Integer32",
+      "max_access": "read-only",
+      "status": "current",
+      "index": null,
+      "augments": null,
+      "oid": "1.3.6.1.2.1.25.1.7",
+      "nodetype": "scalar",
+      "constraints": {
+        "kind": "range",
+        "data": [
+          [0, 2147483647]
+        ]
+      },
+      "description": "The maximum number of process contexts this system can support. If there is no fixed maximum, the value should be zero. On systems that have a fixed maximum, this object can help diagnose failures that occur when this maximum is reached."
+    },
+    "hrStorageTypes": {
+      "oid_path": [1, 3, 6, 1, 2, 1, 25, 2, 1],
+      "object_type": "OBJECT IDENTIFIER",
+      "class": "objectidentifier",
+      "syntax": null,
+      "max_access": null,
+      "status": null,
+      "index": null,
+      "augments": null,
+      "oid": "1.3.6.1.2.1.25.2.1",
+      "description": null
+    },
+    "hrMemorySize": {
+      "oid_path": [1, 3, 6, 1, 2, 1, 25, 2, 2],
+      "object_type": "OBJECT-TYPE",
+      "class": "objecttype",
+      "syntax": "KBytes",
+      "max_access": "read-only",
+      "status": "current",
+      "index": null,
+      "augments": null,
+      "oid": "1.3.6.1.2.1.25.2.2",
+      "nodetype": "scalar",
+      "units": "KBytes",
+      "description": "The amount of physical read-write main memory, typically RAM, contained by the host."
+    },
+    "hrStorageTable": {
+      "oid_path": [1, 3, 6, 1, 2, 1, 25, 2, 3],
+      "object_type": "OBJECT-TYPE",
+      "class": "objecttype",
+      "syntax": "SEQUENCE OF HrStorageEntry",
+      "max_access": "not-accessible",
+      "status": "current",
+      "index": null,
+      "augments": null,
+      "oid": "1.3.6.1.2.1.25.2.3",
+      "nodetype": "table",
+      "description": "The (conceptual) table of logical storage areas on the host. An entry shall be placed in the storage table for each logical area of storage that is allocated and has fixed resource limits. The amount of storage represented in an entity is the amount actually usable by the requesting entity, and excludes loss due to formatting or file system reference information. These entries are associated with logical storage areas, as might be seen by an application, rather than physical storage entities which are typically seen by an operating system. Storage such as tapes and floppies without file systems on them are typically not allocated in chunks by the operating system to requesting applications, and therefore shouldn't appear in this table. Examples of valid storage for this table include disk partitions, file systems, ram (for some architectures this is further segmented into regular memory, extended memory, and so on), backing store for virtual memory (`swap space'). This table is intended to be a useful diagnostic for `out of memory' and `out of buffers' types of failures. In addition, it can be a useful performance monitoring tool for tracking memory, disk, or buffer usage."
+    },
+    "hrStorageEntry": {
+      "oid_path": [1, 3, 6, 1, 2, 1, 25, 2, 3, 1],
+      "object_type": "OBJECT-TYPE",
+      "class": "objecttype",
+      "syntax": "HrStorageEntry",
+      "max_access": "not-accessible",
+      "status": "current",
+      "index": [
+        "hrStorageIndex"
+      ],
+      "augments": null,
+      "oid": "1.3.6.1.2.1.25.2.3.1",
+      "nodetype": "row",
+      "description": "A (conceptual) entry for one logical storage area on the host. As an example, an instance of the hrStorageType object might be named hrStorageType.3"
+    },
+    "hrStorageIndex": {
+      "oid_path": [1, 3, 6, 1, 2, 1, 25, 2, 3, 1, 1],
+      "object_type": "OBJECT-TYPE",
+      "class": "objecttype",
+      "syntax": "Integer32",
+      "max_access": "read-only",
+      "status": "current",
+      "index": null,
+      "augments": null,
+      "oid": "1.3.6.1.2.1.25.2.3.1.1",
+      "nodetype": "column",
+      "constraints": {
+        "kind": "range",
+        "data": [
+          [1, 2147483647]
+        ]
+      },
+      "description": "A unique value for each logical storage area contained by the host."
+    },
+    "hrStorageType": {
+      "oid_path": [1, 3, 6, 1, 2, 1, 25, 2, 3, 1, 2],
+      "object_type": "OBJECT-TYPE",
+      "class": "objecttype",
+      "syntax": "AutonomousType",
+      "max_access": "read-only",
+      "status": "current",
+      "index": null,
+      "augments": null,
+      "oid": "1.3.6.1.2.1.25.2.3.1.2",
+      "nodetype": "column",
+      "description": "The type of storage represented by this entry."
+    },
+    "hrStorageDescr": {
+      "oid_path": [1, 3, 6, 1, 2, 1, 25, 2, 3, 1, 3],
+      "object_type": "OBJECT-TYPE",
+      "class": "objecttype",
+      "syntax": "DisplayString",
+      "max_access": "read-only",
+      "status": "current",
+      "index": null,
+      "augments": null,
+      "oid": "1.3.6.1.2.1.25.2.3.1.3",
+      "nodetype": "column",
+      "description": "A description of the type and instance of the storage described by this entry."
+    },
+    "hrStorageAllocationUnits": {
+      "oid_path": [1, 3, 6, 1, 2, 1, 25, 2, 3, 1, 4],
+      "object_type": "OBJECT-TYPE",
+      "class": "objecttype",
+      "syntax": "Integer32",
+      "max_access": "read-only",
+      "status": "current",
+      "index": null,
+      "augments": null,
+      "oid": "1.3.6.1.2.1.25.2.3.1.4",
+      "nodetype": "column",
+      "constraints": {
+        "kind": "range",
+        "data": [
+          [1, 2147483647]
+        ]
+      },
+      "units": "Bytes",
+      "description": "The size, in bytes, of the data objects allocated from this pool. If this entry is monitoring sectors, blocks, buffers, or packets, for example, this number will commonly be greater than one. Otherwise this number will typically be one."
+    },
+    "hrStorageSize": {
+      "oid_path": [1, 3, 6, 1, 2, 1, 25, 2, 3, 1, 5],
+      "object_type": "OBJECT-TYPE",
+      "class": "objecttype",
+      "syntax": "Integer32",
+      "max_access": "read-write",
+      "status": "current",
+      "index": null,
+      "augments": null,
+      "oid": "1.3.6.1.2.1.25.2.3.1.5",
+      "nodetype": "column",
+      "constraints": {
+        "kind": "range",
+        "data": [
+          [0, 2147483647]
+        ]
+      },
+      "description": "The size of the storage represented by this entry, in units of hrStorageAllocationUnits. This object is writable to allow remote configuration of the size of the storage area in those cases where such an operation makes sense and is possible on the underlying system. For example, the amount of main memory allocated to a buffer pool might be modified or the amount of disk space allocated to virtual memory might be modified."
+    },
+    "hrStorageUsed": {
+      "oid_path": [1, 3, 6, 1, 2, 1, 25, 2, 3, 1, 6],
+      "object_type": "OBJECT-TYPE",
+      "class": "objecttype",
+      "syntax": "Integer32",
+      "max_access": "read-only",
+      "status": "current",
+      "index": null,
+      "augments": null,
+      "oid": "1.3.6.1.2.1.25.2.3.1.6",
+      "nodetype": "column",
+      "constraints": {
+        "kind": "range",
+        "data": [
+          [0, 2147483647]
+        ]
+      },
+      "description": "The amount of the storage represented by this entry that is allocated, in units of hrStorageAllocationUnits."
+    },
+    "hrStorageAllocationFailures": {
+      "oid_path": [1, 3, 6, 1, 2, 1, 25, 2, 3, 1, 7],
+      "object_type": "OBJECT-TYPE",
+      "class": "objecttype",
+      "syntax": "Counter32",
+      "max_access": "read-only",
+      "status": "current",
+      "index": null,
+      "augments": null,
+      "oid": "1.3.6.1.2.1.25.2.3.1.7",
+      "nodetype": "column",
+      "description": "The number of requests for storage represented by this entry that could not be honored due to not enough storage. It should be noted that as this object has a SYNTAX of Counter32, that it does not have a defined initial value. However, it is recommended that this object be initialized to zero, even though management stations must not depend on such an initialization."
+    },
+    "hrDeviceTypes": {
+      "oid_path": [1, 3, 6, 1, 2, 1, 25, 3, 1],
+      "object_type": "OBJECT IDENTIFIER",
+      "class": "objectidentifier",
+      "syntax": null,
+      "max_access": null,
+      "status": null,
+      "index": null,
+      "augments": null,
+      "oid": "1.3.6.1.2.1.25.3.1",
+      "description": null
+    },
+    "hrDeviceTable": {
+      "oid_path": [1, 3, 6, 1, 2, 1, 25, 3, 2],
+      "object_type": "OBJECT-TYPE",
+      "class": "objecttype",
+      "syntax": "SEQUENCE OF HrDeviceEntry",
+      "max_access": "not-accessible",
+      "status": "current",
+      "index": null,
+      "augments": null,
+      "oid": "1.3.6.1.2.1.25.3.2",
+      "nodetype": "table",
+      "description": "The (conceptual) table of devices contained by the host."
+    },
+    "hrDeviceEntry": {
+      "oid_path": [1, 3, 6, 1, 2, 1, 25, 3, 2, 1],
+      "object_type": "OBJECT-TYPE",
+      "class": "objecttype",
+      "syntax": "HrDeviceEntry",
+      "max_access": "not-accessible",
+      "status": "current",
+      "index": [
+        "hrDeviceIndex"
+      ],
+      "augments": null,
+      "oid": "1.3.6.1.2.1.25.3.2.1",
+      "nodetype": "row",
+      "description": "A (conceptual) entry for one device contained by the host. As an example, an instance of the hrDeviceType object might be named hrDeviceType.3"
+    },
+    "hrDeviceIndex": {
+      "oid_path": [1, 3, 6, 1, 2, 1, 25, 3, 2, 1, 1],
+      "object_type": "OBJECT-TYPE",
+      "class": "objecttype",
+      "syntax": "Integer32",
+      "max_access": "read-only",
+      "status": "current",
+      "index": null,
+      "augments": null,
+      "oid": "1.3.6.1.2.1.25.3.2.1.1",
+      "nodetype": "column",
+      "constraints": {
+        "kind": "range",
+        "data": [
+          [1, 2147483647]
+        ]
+      },
+      "description": "A unique value for each device contained by the host. The value for each device must remain constant at least from one re-initialization of the agent to the next re-initialization."
+    },
+    "hrDeviceType": {
+      "oid_path": [1, 3, 6, 1, 2, 1, 25, 3, 2, 1, 2],
+      "object_type": "OBJECT-TYPE",
+      "class": "objecttype",
+      "syntax": "AutonomousType",
+      "max_access": "read-only",
+      "status": "current",
+      "index": null,
+      "augments": null,
+      "oid": "1.3.6.1.2.1.25.3.2.1.2",
+      "nodetype": "column",
+      "description": "An indication of the type of device. If this value is `hrDeviceProcessor { hrDeviceTypes 3 }' then an entry exists in the hrProcessorTable which corresponds to this device. If this value is `hrDeviceNetwork { hrDeviceTypes 4 }', then an entry exists in the hrNetworkTable which corresponds to this device. If this value is `hrDevicePrinter { hrDeviceTypes 5 }', then an entry exists in the hrPrinterTable which corresponds to this device. If this value is `hrDeviceDiskStorage { hrDeviceTypes 6 }', then an entry exists in the hrDiskStorageTable which corresponds to this device."
+    },
+    "hrDeviceDescr": {
+      "oid_path": [1, 3, 6, 1, 2, 1, 25, 3, 2, 1, 3],
+      "object_type": "OBJECT-TYPE",
+      "class": "objecttype",
+      "syntax": "DisplayString",
+      "max_access": "read-only",
+      "status": "current",
+      "index": null,
+      "augments": null,
+      "oid": "1.3.6.1.2.1.25.3.2.1.3",
+      "nodetype": "column",
+      "constraints": {
+        "kind": "size",
+        "data": [
+          [0, 64]
+        ]
+      },
+      "description": "A textual description of this device, including the device's manufacturer and revision, and optionally, its serial number."
+    },
+    "hrDeviceID": {
+      "oid_path": [1, 3, 6, 1, 2, 1, 25, 3, 2, 1, 4],
+      "object_type": "OBJECT-TYPE",
+      "class": "objecttype",
+      "syntax": "ProductID",
+      "max_access": "read-only",
+      "status": "current",
+      "index": null,
+      "augments": null,
+      "oid": "1.3.6.1.2.1.25.3.2.1.4",
+      "nodetype": "column",
+      "description": "The product ID for this device."
+    },
+    "hrDeviceStatus": {
+      "oid_path": [1, 3, 6, 1, 2, 1, 25, 3, 2, 1, 5],
+      "object_type": "OBJECT-TYPE",
+      "class": "objecttype",
+      "syntax": "INTEGER",
+      "max_access": "read-only",
+      "status": "current",
+      "index": null,
+      "augments": null,
+      "oid": "1.3.6.1.2.1.25.3.2.1.5",
+      "nodetype": "column",
+      "constraints": {
+        "kind": "enum",
+        "data": [
+          [
+            "unknown",
+            1
+          ],
+          [
+            "running",
+            2
+          ],
+          [
+            "warning",
+            3
+          ],
+          [
+            "testing",
+            4
+          ],
+          [
+            "down",
+            5
+          ]
+        ]
+      },
+      "enums": {
+        "unknown": 1,
+        "running": 2,
+        "warning": 3,
+        "testing": 4,
+        "down": 5
+      },
+      "description": "The current operational state of the device described by this row of the table. A value unknown(1) indicates that the current state of the device is unknown. running(2) indicates that the device is up and running and that no unusual error conditions are known. The warning(3) state indicates that agent has been informed of an unusual error condition by the operational software (e.g., a disk device driver) but that the device is still 'operational'. An example would be a high number of soft errors on a disk. A value of testing(4), indicates that the device is not available for use because it is in the testing state. The state of down(5) is used only when the agent has been informed that the device is not available for any use."
+    },
+    "hrDeviceErrors": {
+      "oid_path": [1, 3, 6, 1, 2, 1, 25, 3, 2, 1, 6],
+      "object_type": "OBJECT-TYPE",
+      "class": "objecttype",
+      "syntax": "Counter32",
+      "max_access": "read-only",
+      "status": "current",
+      "index": null,
+      "augments": null,
+      "oid": "1.3.6.1.2.1.25.3.2.1.6",
+      "nodetype": "column",
+      "description": "The number of errors detected on this device. It should be noted that as this object has a SYNTAX of Counter32, that it does not have a defined initial value. However, it is recommended that this object be initialized to zero, even though management stations must not depend on such an initialization."
+    },
+    "hrProcessorTable": {
+      "oid_path": [1, 3, 6, 1, 2, 1, 25, 3, 3],
+      "object_type": "OBJECT-TYPE",
+      "class": "objecttype",
+      "syntax": "SEQUENCE OF HrProcessorEntry",
+      "max_access": "not-accessible",
+      "status": "current",
+      "index": null,
+      "augments": null,
+      "oid": "1.3.6.1.2.1.25.3.3",
+      "nodetype": "table",
+      "description": "The (conceptual) table of processors contained by the host. Note that this table is potentially sparse: a (conceptual) entry exists only if the correspondent value of the hrDeviceType object is `hrDeviceProcessor'."
+    },
+    "hrProcessorEntry": {
+      "oid_path": [1, 3, 6, 1, 2, 1, 25, 3, 3, 1],
+      "object_type": "OBJECT-TYPE",
+      "class": "objecttype",
+      "syntax": "HrProcessorEntry",
+      "max_access": "not-accessible",
+      "status": "current",
+      "index": [
+        "hrDeviceIndex"
+      ],
+      "augments": null,
+      "oid": "1.3.6.1.2.1.25.3.3.1",
+      "nodetype": "row",
+      "description": "A (conceptual) entry for one processor contained by the host. The hrDeviceIndex in the index represents the entry in the hrDeviceTable that corresponds to the hrProcessorEntry. As an example of how objects in this table are named, an instance of the hrProcessorFrwID object might be named hrProcessorFrwID.3"
+    },
+    "hrProcessorFrwID": {
+      "oid_path": [1, 3, 6, 1, 2, 1, 25, 3, 3, 1, 1],
+      "object_type": "OBJECT-TYPE",
+      "class": "objecttype",
+      "syntax": "ProductID",
+      "max_access": "read-only",
+      "status": "current",
+      "index": null,
+      "augments": null,
+      "oid": "1.3.6.1.2.1.25.3.3.1.1",
+      "nodetype": "column",
+      "description": "The product ID of the firmware associated with the processor."
+    },
+    "hrProcessorLoad": {
+      "oid_path": [1, 3, 6, 1, 2, 1, 25, 3, 3, 1, 2],
+      "object_type": "OBJECT-TYPE",
+      "class": "objecttype",
+      "syntax": "Integer32",
+      "max_access": "read-only",
+      "status": "current",
+      "index": null,
+      "augments": null,
+      "oid": "1.3.6.1.2.1.25.3.3.1.2",
+      "nodetype": "column",
+      "constraints": {
+        "kind": "range",
+        "data": [
+          [0, 100]
+        ]
+      },
+      "description": "The average, over the last minute, of the percentage of time that this processor was not idle. Implementations may approximate this one minute smoothing period if necessary."
+    },
+    "hrNetworkTable": {
+      "oid_path": [1, 3, 6, 1, 2, 1, 25, 3, 4],
+      "object_type": "OBJECT-TYPE",
+      "class": "objecttype",
+      "syntax": "SEQUENCE OF HrNetworkEntry",
+      "max_access": "not-accessible",
+      "status": "current",
+      "index": null,
+      "augments": null,
+      "oid": "1.3.6.1.2.1.25.3.4",
+      "nodetype": "table",
+      "description": "The (conceptual) table of network devices contained by the host. Note that this table is potentially sparse: a (conceptual) entry exists only if the correspondent value of the hrDeviceType object is `hrDeviceNetwork'."
+    },
+    "hrNetworkEntry": {
+      "oid_path": [1, 3, 6, 1, 2, 1, 25, 3, 4, 1],
+      "object_type": "OBJECT-TYPE",
+      "class": "objecttype",
+      "syntax": "HrNetworkEntry",
+      "max_access": "not-accessible",
+      "status": "current",
+      "index": [
+        "hrDeviceIndex"
+      ],
+      "augments": null,
+      "oid": "1.3.6.1.2.1.25.3.4.1",
+      "nodetype": "row",
+      "description": "A (conceptual) entry for one network device contained by the host. The hrDeviceIndex in the index represents the entry in the hrDeviceTable that corresponds to the hrNetworkEntry. As an example of how objects in this table are named, an instance of the hrNetworkIfIndex object might be named hrNetworkIfIndex.3"
+    },
+    "hrNetworkIfIndex": {
+      "oid_path": [1, 3, 6, 1, 2, 1, 25, 3, 4, 1, 1],
+      "object_type": "OBJECT-TYPE",
+      "class": "objecttype",
+      "syntax": "InterfaceIndexOrZero",
+      "max_access": "read-only",
+      "status": "current",
+      "index": null,
+      "augments": null,
+      "oid": "1.3.6.1.2.1.25.3.4.1.1",
+      "nodetype": "column",
+      "description": "The value of ifIndex which corresponds to this network device. If this device is not represented in the ifTable, then this value shall be zero."
+    },
+    "hrPrinterTable": {
+      "oid_path": [1, 3, 6, 1, 2, 1, 25, 3, 5],
+      "object_type": "OBJECT-TYPE",
+      "class": "objecttype",
+      "syntax": "SEQUENCE OF HrPrinterEntry",
+      "max_access": "not-accessible",
+      "status": "current",
+      "index": null,
+      "augments": null,
+      "oid": "1.3.6.1.2.1.25.3.5",
+      "nodetype": "table",
+      "description": "The (conceptual) table of printers local to the host. Note that this table is potentially sparse: a (conceptual) entry exists only if the correspondent value of the hrDeviceType object is `hrDevicePrinter'."
+    },
+    "hrPrinterEntry": {
+      "oid_path": [1, 3, 6, 1, 2, 1, 25, 3, 5, 1],
+      "object_type": "OBJECT-TYPE",
+      "class": "objecttype",
+      "syntax": "HrPrinterEntry",
+      "max_access": "not-accessible",
+      "status": "current",
+      "index": [
+        "hrDeviceIndex"
+      ],
+      "augments": null,
+      "oid": "1.3.6.1.2.1.25.3.5.1",
+      "nodetype": "row",
+      "description": "A (conceptual) entry for one printer local to the host. The hrDeviceIndex in the index represents the entry in the hrDeviceTable that corresponds to the hrPrinterEntry. As an example of how objects in this table are named, an instance of the hrPrinterStatus object might be named hrPrinterStatus.3"
+    },
+    "hrPrinterStatus": {
+      "oid_path": [1, 3, 6, 1, 2, 1, 25, 3, 5, 1, 1],
+      "object_type": "OBJECT-TYPE",
+      "class": "objecttype",
+      "syntax": "INTEGER",
+      "max_access": "read-only",
+      "status": "current",
+      "index": null,
+      "augments": null,
+      "oid": "1.3.6.1.2.1.25.3.5.1.1",
+      "nodetype": "column",
+      "constraints": {
+        "kind": "enum",
+        "data": [
+          [
+            "other",
+            1
+          ],
+          [
+            "unknown",
+            2
+          ],
+          [
+            "idle",
+            3
+          ],
+          [
+            "printing",
+            4
+          ],
+          [
+            "warmup",
+            5
+          ]
+        ]
+      },
+      "enums": {
+        "other": 1,
+        "unknown": 2,
+        "idle": 3,
+        "printing": 4,
+        "warmup": 5
+      },
+      "description": "The current status of this printer device."
+    },
+    "hrPrinterDetectedErrorState": {
+      "oid_path": [1, 3, 6, 1, 2, 1, 25, 3, 5, 1, 2],
+      "object_type": "OBJECT-TYPE",
+      "class": "objecttype",
+      "syntax": "OCTET STRING",
+      "max_access": "read-only",
+      "status": "current",
+      "index": null,
+      "augments": null,
+      "oid": "1.3.6.1.2.1.25.3.5.1.2",
+      "nodetype": "column",
+      "description": "This object represents any error conditions detected by the printer. The error conditions are encoded as bits in an octet string, with the following definitions: Condition Bit # lowPaper 0 noPaper 1 lowToner 2 noToner 3 doorOpen 4 jammed 5 offline 6 serviceRequested 7 inputTrayMissing 8 outputTrayMissing 9 markerSupplyMissing 10 outputNearFull 11 outputFull 12 inputTrayEmpty 13 overduePreventMaint 14 Bits are numbered starting with the most significant bit of the first byte being bit 0, the least significant bit of the first byte being bit 7, the most significant bit of the second byte being bit 8, and so on. A one bit encodes that the condition was detected, while a zero bit encodes that the condition was not detected. This object is useful for alerting an operator to specific warning or error conditions that may occur, especially those requiring human intervention."
+    },
+    "hrDiskStorageTable": {
+      "oid_path": [1, 3, 6, 1, 2, 1, 25, 3, 6],
+      "object_type": "OBJECT-TYPE",
+      "class": "objecttype",
+      "syntax": "SEQUENCE OF HrDiskStorageEntry",
+      "max_access": "not-accessible",
+      "status": "current",
+      "index": null,
+      "augments": null,
+      "oid": "1.3.6.1.2.1.25.3.6",
+      "nodetype": "table",
+      "description": "The (conceptual) table of long-term storage devices contained by the host. In particular, disk devices accessed remotely over a network are not included here. Note that this table is potentially sparse: a (conceptual) entry exists only if the correspondent value of the hrDeviceType object is `hrDeviceDiskStorage'."
+    },
+    "hrDiskStorageEntry": {
+      "oid_path": [1, 3, 6, 1, 2, 1, 25, 3, 6, 1],
+      "object_type": "OBJECT-TYPE",
+      "class": "objecttype",
+      "syntax": "HrDiskStorageEntry",
+      "max_access": "not-accessible",
+      "status": "current",
+      "index": [
+        "hrDeviceIndex"
+      ],
+      "augments": null,
+      "oid": "1.3.6.1.2.1.25.3.6.1",
+      "nodetype": "row",
+      "description": "A (conceptual) entry for one long-term storage device contained by the host. The hrDeviceIndex in the index represents the entry in the hrDeviceTable that corresponds to the hrDiskStorageEntry. As an example, an instance of the hrDiskStorageCapacity object might be named hrDiskStorageCapacity.3"
+    },
+    "hrDiskStorageAccess": {
+      "oid_path": [1, 3, 6, 1, 2, 1, 25, 3, 6, 1, 1],
+      "object_type": "OBJECT-TYPE",
+      "class": "objecttype",
+      "syntax": "INTEGER",
+      "max_access": "read-only",
+      "status": "current",
+      "index": null,
+      "augments": null,
+      "oid": "1.3.6.1.2.1.25.3.6.1.1",
+      "nodetype": "column",
+      "constraints": {
+        "kind": "enum",
+        "data": [
+          [
+            "readWrite",
+            1
+          ],
+          [
+            "readOnly",
+            2
+          ]
+        ]
+      },
+      "enums": {
+        "readWrite": 1,
+        "readOnly": 2
+      },
+      "description": "An indication if this long-term storage device is readable and writable or only readable. This should reflect the media type, any write-protect mechanism, and any device configuration that affects the entire device."
+    },
+    "hrDiskStorageMedia": {
+      "oid_path": [1, 3, 6, 1, 2, 1, 25, 3, 6, 1, 2],
+      "object_type": "OBJECT-TYPE",
+      "class": "objecttype",
+      "syntax": "INTEGER",
+      "max_access": "read-only",
+      "status": "current",
+      "index": null,
+      "augments": null,
+      "oid": "1.3.6.1.2.1.25.3.6.1.2",
+      "nodetype": "column",
+      "constraints": {
+        "kind": "enum",
+        "data": [
+          [
+            "other",
+            1
+          ],
+          [
+            "unknown",
+            2
+          ],
+          [
+            "hardDisk",
+            3
+          ],
+          [
+            "floppyDisk",
+            4
+          ],
+          [
+            "opticalDiskROM",
+            5
+          ],
+          [
+            "opticalDiskWORM",
+            6
+          ],
+          [
+            "opticalDiskRW",
+            7
+          ],
+          [
+            "ramDisk",
+            8
+          ]
+        ]
+      },
+      "enums": {
+        "other": 1,
+        "unknown": 2,
+        "hardDisk": 3,
+        "floppyDisk": 4,
+        "opticalDiskROM": 5,
+        "opticalDiskWORM": 6,
+        "opticalDiskRW": 7,
+        "ramDisk": 8
+      },
+      "description": "An indication of the type of media used in this long- term storage device."
+    },
+    "hrDiskStorageRemoveble": {
+      "oid_path": [1, 3, 6, 1, 2, 1, 25, 3, 6, 1, 3],
+      "object_type": "OBJECT-TYPE",
+      "class": "objecttype",
+      "syntax": "TruthValue",
+      "max_access": "read-only",
+      "status": "current",
+      "index": null,
+      "augments": null,
+      "oid": "1.3.6.1.2.1.25.3.6.1.3",
+      "nodetype": "column",
+      "description": "Denotes whether or not the disk media may be removed from the drive."
+    },
+    "hrDiskStorageCapacity": {
+      "oid_path": [1, 3, 6, 1, 2, 1, 25, 3, 6, 1, 4],
+      "object_type": "OBJECT-TYPE",
+      "class": "objecttype",
+      "syntax": "KBytes",
+      "max_access": "read-only",
+      "status": "current",
+      "index": null,
+      "augments": null,
+      "oid": "1.3.6.1.2.1.25.3.6.1.4",
+      "nodetype": "column",
+      "units": "KBytes",
+      "description": "The total size for this long-term storage device. If the media is removable and is currently removed, this value should be zero."
+    },
+    "hrPartitionTable": {
+      "oid_path": [1, 3, 6, 1, 2, 1, 25, 3, 7],
+      "object_type": "OBJECT-TYPE",
+      "class": "objecttype",
+      "syntax": "SEQUENCE OF HrPartitionEntry",
+      "max_access": "not-accessible",
+      "status": "current",
+      "index": null,
+      "augments": null,
+      "oid": "1.3.6.1.2.1.25.3.7",
+      "nodetype": "table",
+      "description": "The (conceptual) table of partitions for long-term storage devices contained by the host. In particular, partitions accessed remotely over a network are not included here."
+    },
+    "hrPartitionEntry": {
+      "oid_path": [1, 3, 6, 1, 2, 1, 25, 3, 7, 1],
+      "object_type": "OBJECT-TYPE",
+      "class": "objecttype",
+      "syntax": "HrPartitionEntry",
+      "max_access": "not-accessible",
+      "status": "current",
+      "index": [
+        "hrDeviceIndex",
+        "hrPartitionIndex"
+      ],
+      "augments": null,
+      "oid": "1.3.6.1.2.1.25.3.7.1",
+      "nodetype": "row",
+      "description": "A (conceptual) entry for one partition. The hrDeviceIndex in the index represents the entry in the hrDeviceTable that corresponds to the hrPartitionEntry. As an example of how objects in this table are named, an instance of the hrPartitionSize object might be named hrPartitionSize.3.1"
+    },
+    "hrPartitionIndex": {
+      "oid_path": [1, 3, 6, 1, 2, 1, 25, 3, 7, 1, 1],
+      "object_type": "OBJECT-TYPE",
+      "class": "objecttype",
+      "syntax": "Integer32",
+      "max_access": "read-only",
+      "status": "current",
+      "index": null,
+      "augments": null,
+      "oid": "1.3.6.1.2.1.25.3.7.1.1",
+      "nodetype": "column",
+      "constraints": {
+        "kind": "range",
+        "data": [
+          [1, 2147483647]
+        ]
+      },
+      "description": "A unique value for each partition on this long-term storage device. The value for each long-term storage device must remain constant at least from one re- initialization of the agent to the next re- initialization."
+    },
+    "hrPartitionLabel": {
+      "oid_path": [1, 3, 6, 1, 2, 1, 25, 3, 7, 1, 2],
+      "object_type": "OBJECT-TYPE",
+      "class": "objecttype",
+      "syntax": "InternationalDisplayString",
+      "max_access": "read-only",
+      "status": "current",
+      "index": null,
+      "augments": null,
+      "oid": "1.3.6.1.2.1.25.3.7.1.2",
+      "nodetype": "column",
+      "constraints": {
+        "kind": "size",
+        "data": [
+          [0, 128]
+        ]
+      },
+      "description": "A textual description of this partition."
+    },
+    "hrPartitionID": {
+      "oid_path": [1, 3, 6, 1, 2, 1, 25, 3, 7, 1, 3],
+      "object_type": "OBJECT-TYPE",
+      "class": "objecttype",
+      "syntax": "OCTET STRING",
+      "max_access": "read-only",
+      "status": "current",
+      "index": null,
+      "augments": null,
+      "oid": "1.3.6.1.2.1.25.3.7.1.3",
+      "nodetype": "column",
+      "description": "A descriptor which uniquely represents this partition to the responsible operating system. On some systems, this might take on a binary representation."
+    },
+    "hrPartitionSize": {
+      "oid_path": [1, 3, 6, 1, 2, 1, 25, 3, 7, 1, 4],
+      "object_type": "OBJECT-TYPE",
+      "class": "objecttype",
+      "syntax": "KBytes",
+      "max_access": "read-only",
+      "status": "current",
+      "index": null,
+      "augments": null,
+      "oid": "1.3.6.1.2.1.25.3.7.1.4",
+      "nodetype": "column",
+      "units": "KBytes",
+      "description": "The size of this partition."
+    },
+    "hrPartitionFSIndex": {
+      "oid_path": [1, 3, 6, 1, 2, 1, 25, 3, 7, 1, 5],
+      "object_type": "OBJECT-TYPE",
+      "class": "objecttype",
+      "syntax": "Integer32",
+      "max_access": "read-only",
+      "status": "current",
+      "index": null,
+      "augments": null,
+      "oid": "1.3.6.1.2.1.25.3.7.1.5",
+      "nodetype": "column",
+      "constraints": {
+        "kind": "range",
+        "data": [
+          [0, 2147483647]
+        ]
+      },
+      "description": "The index of the file system mounted on this partition. If no file system is mounted on this partition, then this value shall be zero. Note that multiple partitions may point to one file system, denoting that that file system resides on those partitions. Multiple file systems may not reside on one partition."
+    },
+    "hrFSTypes": {
+      "oid_path": [1, 3, 6, 1, 2, 1, 25, 3, 9],
+      "object_type": "OBJECT IDENTIFIER",
+      "class": "objectidentifier",
+      "syntax": null,
+      "max_access": null,
+      "status": null,
+      "index": null,
+      "augments": null,
+      "oid": "1.3.6.1.2.1.25.3.9",
+      "description": null
+    },
+    "hrFSTable": {
+      "oid_path": [1, 3, 6, 1, 2, 1, 25, 3, 8],
+      "object_type": "OBJECT-TYPE",
+      "class": "objecttype",
+      "syntax": "SEQUENCE OF HrFSEntry",
+      "max_access": "not-accessible",
+      "status": "current",
+      "index": null,
+      "augments": null,
+      "oid": "1.3.6.1.2.1.25.3.8",
+      "nodetype": "table",
+      "description": "The (conceptual) table of file systems local to this host or remotely mounted from a file server. File systems that are in only one user's environment on a multi-user system will not be included in this table."
+    },
+    "hrFSEntry": {
+      "oid_path": [1, 3, 6, 1, 2, 1, 25, 3, 8, 1],
+      "object_type": "OBJECT-TYPE",
+      "class": "objecttype",
+      "syntax": "HrFSEntry",
+      "max_access": "not-accessible",
+      "status": "current",
+      "index": [
+        "hrFSIndex"
+      ],
+      "augments": null,
+      "oid": "1.3.6.1.2.1.25.3.8.1",
+      "nodetype": "row",
+      "description": "A (conceptual) entry for one file system local to this host or remotely mounted from a file server. File systems that are in only one user's environment on a multi-user system will not be included in this table. As an example of how objects in this table are named, an instance of the hrFSMountPoint object might be named hrFSMountPoint.3"
+    },
+    "hrFSIndex": {
+      "oid_path": [1, 3, 6, 1, 2, 1, 25, 3, 8, 1, 1],
+      "object_type": "OBJECT-TYPE",
+      "class": "objecttype",
+      "syntax": "Integer32",
+      "max_access": "read-only",
+      "status": "current",
+      "index": null,
+      "augments": null,
+      "oid": "1.3.6.1.2.1.25.3.8.1.1",
+      "nodetype": "column",
+      "constraints": {
+        "kind": "range",
+        "data": [
+          [1, 2147483647]
+        ]
+      },
+      "description": "A unique value for each file system local to this host. The value for each file system must remain constant at least from one re-initialization of the agent to the next re-initialization."
+    },
+    "hrFSMountPoint": {
+      "oid_path": [1, 3, 6, 1, 2, 1, 25, 3, 8, 1, 2],
+      "object_type": "OBJECT-TYPE",
+      "class": "objecttype",
+      "syntax": "InternationalDisplayString",
+      "max_access": "read-only",
+      "status": "current",
+      "index": null,
+      "augments": null,
+      "oid": "1.3.6.1.2.1.25.3.8.1.2",
+      "nodetype": "column",
+      "constraints": {
+        "kind": "size",
+        "data": [
+          [0, 128]
+        ]
+      },
+      "description": "The path name of the root of this file system."
+    },
+    "hrFSRemoteMountPoint": {
+      "oid_path": [1, 3, 6, 1, 2, 1, 25, 3, 8, 1, 3],
+      "object_type": "OBJECT-TYPE",
+      "class": "objecttype",
+      "syntax": "InternationalDisplayString",
+      "max_access": "read-only",
+      "status": "current",
+      "index": null,
+      "augments": null,
+      "oid": "1.3.6.1.2.1.25.3.8.1.3",
+      "nodetype": "column",
+      "constraints": {
+        "kind": "size",
+        "data": [
+          [0, 128]
+        ]
+      },
+      "description": "A description of the name and/or address of the server that this file system is mounted from. This may also include parameters such as the mount point on the remote file system. If this is not a remote file system, this string should have a length of zero."
+    },
+    "hrFSType": {
+      "oid_path": [1, 3, 6, 1, 2, 1, 25, 3, 8, 1, 4],
+      "object_type": "OBJECT-TYPE",
+      "class": "objecttype",
+      "syntax": "AutonomousType",
+      "max_access": "read-only",
+      "status": "current",
+      "index": null,
+      "augments": null,
+      "oid": "1.3.6.1.2.1.25.3.8.1.4",
+      "nodetype": "column",
+      "description": "The value of this object identifies the type of this file system."
+    },
+    "hrFSAccess": {
+      "oid_path": [1, 3, 6, 1, 2, 1, 25, 3, 8, 1, 5],
+      "object_type": "OBJECT-TYPE",
+      "class": "objecttype",
+      "syntax": "INTEGER",
+      "max_access": "read-only",
+      "status": "current",
+      "index": null,
+      "augments": null,
+      "oid": "1.3.6.1.2.1.25.3.8.1.5",
+      "nodetype": "column",
+      "constraints": {
+        "kind": "enum",
+        "data": [
+          [
+            "readWrite",
+            1
+          ],
+          [
+            "readOnly",
+            2
+          ]
+        ]
+      },
+      "enums": {
+        "readWrite": 1,
+        "readOnly": 2
+      },
+      "description": "An indication if this file system is logically configured by the operating system to be readable and writable or only readable. This does not represent any local access-control policy, except one that is applied to the file system as a whole."
+    },
+    "hrFSBootable": {
+      "oid_path": [1, 3, 6, 1, 2, 1, 25, 3, 8, 1, 6],
+      "object_type": "OBJECT-TYPE",
+      "class": "objecttype",
+      "syntax": "TruthValue",
+      "max_access": "read-only",
+      "status": "current",
+      "index": null,
+      "augments": null,
+      "oid": "1.3.6.1.2.1.25.3.8.1.6",
+      "nodetype": "column",
+      "description": "A flag indicating whether this file system is bootable."
+    },
+    "hrFSStorageIndex": {
+      "oid_path": [1, 3, 6, 1, 2, 1, 25, 3, 8, 1, 7],
+      "object_type": "OBJECT-TYPE",
+      "class": "objecttype",
+      "syntax": "Integer32",
+      "max_access": "read-only",
+      "status": "current",
+      "index": null,
+      "augments": null,
+      "oid": "1.3.6.1.2.1.25.3.8.1.7",
+      "nodetype": "column",
+      "constraints": {
+        "kind": "range",
+        "data": [
+          [0, 2147483647]
+        ]
+      },
+      "description": "The index of the hrStorageEntry that represents information about this file system. If there is no such information available, then this value shall be zero. The relevant storage entry will be useful in tracking the percent usage of this file system and diagnosing errors that may occur when it runs out of space."
+    },
+    "hrFSLastFullBackupDate": {
+      "oid_path": [1, 3, 6, 1, 2, 1, 25, 3, 8, 1, 8],
+      "object_type": "OBJECT-TYPE",
+      "class": "objecttype",
+      "syntax": "DateAndTime",
+      "max_access": "read-write",
+      "status": "current",
+      "index": null,
+      "augments": null,
+      "oid": "1.3.6.1.2.1.25.3.8.1.8",
+      "nodetype": "column",
+      "description": "The last date at which this complete file system was copied to another storage device for backup. This information is useful for ensuring that backups are being performed regularly. If this information is not known, then this variable shall have the value corresponding to January 1, year 0000, 00:00:00.0, which is encoded as (hex)'00 00 01 01 00 00 00 00'."
+    },
+    "hrFSLastPartialBackupDate": {
+      "oid_path": [1, 3, 6, 1, 2, 1, 25, 3, 8, 1, 9],
+      "object_type": "OBJECT-TYPE",
+      "class": "objecttype",
+      "syntax": "DateAndTime",
+      "max_access": "read-write",
+      "status": "current",
+      "index": null,
+      "augments": null,
+      "oid": "1.3.6.1.2.1.25.3.8.1.9",
+      "nodetype": "column",
+      "description": "The last date at which a portion of this file system was copied to another storage device for backup. This information is useful for ensuring that backups are being performed regularly. If this information is not known, then this variable shall have the value corresponding to January 1, year 0000, 00:00:00.0, which is encoded as (hex)'00 00 01 01 00 00 00 00'."
+    },
+    "hrSWOSIndex": {
+      "oid_path": [1, 3, 6, 1, 2, 1, 25, 4, 1],
+      "object_type": "OBJECT-TYPE",
+      "class": "objecttype",
+      "syntax": "Integer32",
+      "max_access": "read-only",
+      "status": "current",
+      "index": null,
+      "augments": null,
+      "oid": "1.3.6.1.2.1.25.4.1",
+      "nodetype": "scalar",
+      "constraints": {
+        "kind": "range",
+        "data": [
+          [1, 2147483647]
+        ]
+      },
+      "description": "The value of the hrSWRunIndex for the hrSWRunEntry that represents the primary operating system running on this host. This object is useful for quickly and uniquely identifying that primary operating system."
+    },
+    "hrSWRunTable": {
+      "oid_path": [1, 3, 6, 1, 2, 1, 25, 4, 2],
+      "object_type": "OBJECT-TYPE",
+      "class": "objecttype",
+      "syntax": "SEQUENCE OF HrSWRunEntry",
+      "max_access": "not-accessible",
+      "status": "current",
+      "index": null,
+      "augments": null,
+      "oid": "1.3.6.1.2.1.25.4.2",
+      "nodetype": "table",
+      "description": "The (conceptual) table of software running on the host."
+    },
+    "hrSWRunEntry": {
+      "oid_path": [1, 3, 6, 1, 2, 1, 25, 4, 2, 1],
+      "object_type": "OBJECT-TYPE",
+      "class": "objecttype",
+      "syntax": "HrSWRunEntry",
+      "max_access": "not-accessible",
+      "status": "current",
+      "index": [
+        "hrSWRunIndex"
+      ],
+      "augments": null,
+      "oid": "1.3.6.1.2.1.25.4.2.1",
+      "nodetype": "row",
+      "description": "A (conceptual) entry for one piece of software running on the host Note that because the installed software table only contains information for software stored locally on this host, not every piece of running software will be found in the installed software table. This is true of software that was loaded and run from a non-local source, such as a network-mounted file system. As an example of how objects in this table are named, an instance of the hrSWRunName object might be named hrSWRunName.1287"
+    },
+    "hrSWRunIndex": {
+      "oid_path": [1, 3, 6, 1, 2, 1, 25, 4, 2, 1, 1],
+      "object_type": "OBJECT-TYPE",
+      "class": "objecttype",
+      "syntax": "Integer32",
+      "max_access": "read-only",
+      "status": "current",
+      "index": null,
+      "augments": null,
+      "oid": "1.3.6.1.2.1.25.4.2.1.1",
+      "nodetype": "column",
+      "constraints": {
+        "kind": "range",
+        "data": [
+          [1, 2147483647]
+        ]
+      },
+      "description": "A unique value for each piece of software running on the host. Wherever possible, this should be the system's native, unique identification number."
+    },
+    "hrSWRunName": {
+      "oid_path": [1, 3, 6, 1, 2, 1, 25, 4, 2, 1, 2],
+      "object_type": "OBJECT-TYPE",
+      "class": "objecttype",
+      "syntax": "InternationalDisplayString",
+      "max_access": "read-only",
+      "status": "current",
+      "index": null,
+      "augments": null,
+      "oid": "1.3.6.1.2.1.25.4.2.1.2",
+      "nodetype": "column",
+      "constraints": {
+        "kind": "size",
+        "data": [
+          [0, 64]
+        ]
+      },
+      "description": "A textual description of this running piece of software, including the manufacturer, revision, and the name by which it is commonly known. If this software was installed locally, this should be the same string as used in the corresponding hrSWInstalledName."
+    },
+    "hrSWRunID": {
+      "oid_path": [1, 3, 6, 1, 2, 1, 25, 4, 2, 1, 3],
+      "object_type": "OBJECT-TYPE",
+      "class": "objecttype",
+      "syntax": "ProductID",
+      "max_access": "read-only",
+      "status": "current",
+      "index": null,
+      "augments": null,
+      "oid": "1.3.6.1.2.1.25.4.2.1.3",
+      "nodetype": "column",
+      "description": "The product ID of this running piece of software."
+    },
+    "hrSWRunPath": {
+      "oid_path": [1, 3, 6, 1, 2, 1, 25, 4, 2, 1, 4],
+      "object_type": "OBJECT-TYPE",
+      "class": "objecttype",
+      "syntax": "InternationalDisplayString",
+      "max_access": "read-only",
+      "status": "current",
+      "index": null,
+      "augments": null,
+      "oid": "1.3.6.1.2.1.25.4.2.1.4",
+      "nodetype": "column",
+      "constraints": {
+        "kind": "size",
+        "data": [
+          [0, 128]
+        ]
+      },
+      "description": "A description of the location on long-term storage (e.g. a disk drive) from which this software was loaded."
+    },
+    "hrSWRunParameters": {
+      "oid_path": [1, 3, 6, 1, 2, 1, 25, 4, 2, 1, 5],
+      "object_type": "OBJECT-TYPE",
+      "class": "objecttype",
+      "syntax": "InternationalDisplayString",
+      "max_access": "read-only",
+      "status": "current",
+      "index": null,
+      "augments": null,
+      "oid": "1.3.6.1.2.1.25.4.2.1.5",
+      "nodetype": "column",
+      "constraints": {
+        "kind": "size",
+        "data": [
+          [0, 128]
+        ]
+      },
+      "description": "A description of the parameters supplied to this software when it was initially loaded."
+    },
+    "hrSWRunType": {
+      "oid_path": [1, 3, 6, 1, 2, 1, 25, 4, 2, 1, 6],
+      "object_type": "OBJECT-TYPE",
+      "class": "objecttype",
+      "syntax": "INTEGER",
+      "max_access": "read-only",
+      "status": "current",
+      "index": null,
+      "augments": null,
+      "oid": "1.3.6.1.2.1.25.4.2.1.6",
+      "nodetype": "column",
+      "constraints": {
+        "kind": "enum",
+        "data": [
+          [
+            "unknown",
+            1
+          ],
+          [
+            "operatingSystem",
+            2
+          ],
+          [
+            "deviceDriver",
+            3
+          ],
+          [
+            "application",
+            4
+          ]
+        ]
+      },
+      "enums": {
+        "unknown": 1,
+        "operatingSystem": 2,
+        "deviceDriver": 3,
+        "application": 4
+      },
+      "description": "The type of this software."
+    },
+    "hrSWRunStatus": {
+      "oid_path": [1, 3, 6, 1, 2, 1, 25, 4, 2, 1, 7],
+      "object_type": "OBJECT-TYPE",
+      "class": "objecttype",
+      "syntax": "INTEGER",
+      "max_access": "read-write",
+      "status": "current",
+      "index": null,
+      "augments": null,
+      "oid": "1.3.6.1.2.1.25.4.2.1.7",
+      "nodetype": "column",
+      "constraints": {
+        "kind": "enum",
+        "data": [
+          [
+            "running",
+            1
+          ],
+          [
+            "runnable",
+            2
+          ],
+          [
+            "notRunnable",
+            3
+          ],
+          [
+            "invalid",
+            4
+          ]
+        ]
+      },
+      "enums": {
+        "running": 1,
+        "runnable": 2,
+        "notRunnable": 3,
+        "invalid": 4
+      },
+      "description": "The status of this running piece of software. Setting this value to invalid(4) shall cause this software to stop running and to be unloaded. Sets to other values are not valid."
+    },
+    "hrSWRunPerfTable": {
+      "oid_path": [1, 3, 6, 1, 2, 1, 25, 5, 1],
+      "object_type": "OBJECT-TYPE",
+      "class": "objecttype",
+      "syntax": "SEQUENCE OF HrSWRunPerfEntry",
+      "max_access": "not-accessible",
+      "status": "current",
+      "index": null,
+      "augments": null,
+      "oid": "1.3.6.1.2.1.25.5.1",
+      "nodetype": "table",
+      "description": "The (conceptual) table of running software performance metrics."
+    },
+    "hrSWRunPerfEntry": {
+      "oid_path": [1, 3, 6, 1, 2, 1, 25, 5, 1, 1],
+      "object_type": "OBJECT-TYPE",
+      "class": "objecttype",
+      "syntax": "HrSWRunPerfEntry",
+      "max_access": "not-accessible",
+      "status": "current",
+      "index": null,
+      "augments": "hrSWRunEntry",
+      "oid": "1.3.6.1.2.1.25.5.1.1",
+      "nodetype": "row",
+      "description": "A (conceptual) entry containing software performance metrics. As an example, an instance of the hrSWRunPerfCPU object might be named hrSWRunPerfCPU.1287"
+    },
+    "hrSWRunPerfCPU": {
+      "oid_path": [1, 3, 6, 1, 2, 1, 25, 5, 1, 1, 1],
+      "object_type": "OBJECT-TYPE",
+      "class": "objecttype",
+      "syntax": "Integer32",
+      "max_access": "read-only",
+      "status": "current",
+      "index": null,
+      "augments": null,
+      "oid": "1.3.6.1.2.1.25.5.1.1.1",
+      "nodetype": "column",
+      "constraints": {
+        "kind": "range",
+        "data": [
+          [0, 2147483647]
+        ]
+      },
+      "description": "The number of centi-seconds of the total system's CPU resources consumed by this process. Note that on a multi-processor system, this value may increment by more than one centi-second in one centi-second of real (wall clock) time."
+    },
+    "hrSWRunPerfMem": {
+      "oid_path": [1, 3, 6, 1, 2, 1, 25, 5, 1, 1, 2],
+      "object_type": "OBJECT-TYPE",
+      "class": "objecttype",
+      "syntax": "KBytes",
+      "max_access": "read-only",
+      "status": "current",
+      "index": null,
+      "augments": null,
+      "oid": "1.3.6.1.2.1.25.5.1.1.2",
+      "nodetype": "column",
+      "units": "KBytes",
+      "description": "The total amount of real system memory allocated to this process."
+    },
+    "hrSWInstalledLastChange": {
+      "oid_path": [1, 3, 6, 1, 2, 1, 25, 6, 1],
+      "object_type": "OBJECT-TYPE",
+      "class": "objecttype",
+      "syntax": "TimeTicks",
+      "max_access": "read-only",
+      "status": "current",
+      "index": null,
+      "augments": null,
+      "oid": "1.3.6.1.2.1.25.6.1",
+      "nodetype": "scalar",
+      "description": "The value of sysUpTime when an entry in the hrSWInstalledTable was last added, renamed, or deleted. Because this table is likely to contain many entries, polling of this object allows a management station to determine when re-downloading of the table might be useful."
+    },
+    "hrSWInstalledLastUpdateTime": {
+      "oid_path": [1, 3, 6, 1, 2, 1, 25, 6, 2],
+      "object_type": "OBJECT-TYPE",
+      "class": "objecttype",
+      "syntax": "TimeTicks",
+      "max_access": "read-only",
+      "status": "current",
+      "index": null,
+      "augments": null,
+      "oid": "1.3.6.1.2.1.25.6.2",
+      "nodetype": "scalar",
+      "description": "The value of sysUpTime when the hrSWInstalledTable was last completely updated. Because caching of this data will be a popular implementation strategy, retrieval of this object allows a management station to obtain a guarantee that no data in this table is older than the indicated time."
+    },
+    "hrSWInstalledTable": {
+      "oid_path": [1, 3, 6, 1, 2, 1, 25, 6, 3],
+      "object_type": "OBJECT-TYPE",
+      "class": "objecttype",
+      "syntax": "SEQUENCE OF HrSWInstalledEntry",
+      "max_access": "not-accessible",
+      "status": "current",
+      "index": null,
+      "augments": null,
+      "oid": "1.3.6.1.2.1.25.6.3",
+      "nodetype": "table",
+      "description": "The (conceptual) table of software installed on this host."
+    },
+    "hrSWInstalledEntry": {
+      "oid_path": [1, 3, 6, 1, 2, 1, 25, 6, 3, 1],
+      "object_type": "OBJECT-TYPE",
+      "class": "objecttype",
+      "syntax": "HrSWInstalledEntry",
+      "max_access": "not-accessible",
+      "status": "current",
+      "index": [
+        "hrSWInstalledIndex"
+      ],
+      "augments": null,
+      "oid": "1.3.6.1.2.1.25.6.3.1",
+      "nodetype": "row",
+      "description": "A (conceptual) entry for a piece of software installed on this host. As an example of how objects in this table are named, an instance of the hrSWInstalledName object might be named hrSWInstalledName.96"
+    },
+    "hrSWInstalledIndex": {
+      "oid_path": [1, 3, 6, 1, 2, 1, 25, 6, 3, 1, 1],
+      "object_type": "OBJECT-TYPE",
+      "class": "objecttype",
+      "syntax": "Integer32",
+      "max_access": "read-only",
+      "status": "current",
+      "index": null,
+      "augments": null,
+      "oid": "1.3.6.1.2.1.25.6.3.1.1",
+      "nodetype": "column",
+      "constraints": {
+        "kind": "range",
+        "data": [
+          [1, 2147483647]
+        ]
+      },
+      "description": "A unique value for each piece of software installed on the host. This value shall be in the range from 1 to the number of pieces of software installed on the host."
+    },
+    "hrSWInstalledName": {
+      "oid_path": [1, 3, 6, 1, 2, 1, 25, 6, 3, 1, 2],
+      "object_type": "OBJECT-TYPE",
+      "class": "objecttype",
+      "syntax": "InternationalDisplayString",
+      "max_access": "read-only",
+      "status": "current",
+      "index": null,
+      "augments": null,
+      "oid": "1.3.6.1.2.1.25.6.3.1.2",
+      "nodetype": "column",
+      "constraints": {
+        "kind": "size",
+        "data": [
+          [0, 64]
+        ]
+      },
+      "description": "A textual description of this installed piece of software, including the manufacturer, revision, the name by which it is commonly known, and optionally, its serial number."
+    },
+    "hrSWInstalledID": {
+      "oid_path": [1, 3, 6, 1, 2, 1, 25, 6, 3, 1, 3],
+      "object_type": "OBJECT-TYPE",
+      "class": "objecttype",
+      "syntax": "ProductID",
+      "max_access": "read-only",
+      "status": "current",
+      "index": null,
+      "augments": null,
+      "oid": "1.3.6.1.2.1.25.6.3.1.3",
+      "nodetype": "column",
+      "description": "The product ID of this installed piece of software."
+    },
+    "hrSWInstalledType": {
+      "oid_path": [1, 3, 6, 1, 2, 1, 25, 6, 3, 1, 4],
+      "object_type": "OBJECT-TYPE",
+      "class": "objecttype",
+      "syntax": "INTEGER",
+      "max_access": "read-only",
+      "status": "current",
+      "index": null,
+      "augments": null,
+      "oid": "1.3.6.1.2.1.25.6.3.1.4",
+      "nodetype": "column",
+      "constraints": {
+        "kind": "enum",
+        "data": [
+          [
+            "unknown",
+            1
+          ],
+          [
+            "operatingSystem",
+            2
+          ],
+          [
+            "deviceDriver",
+            3
+          ],
+          [
+            "application",
+            4
+          ]
+        ]
+      },
+      "enums": {
+        "unknown": 1,
+        "operatingSystem": 2,
+        "deviceDriver": 3,
+        "application": 4
+      },
+      "description": "The type of this software."
+    },
+    "hrSWInstalledDate": {
+      "oid_path": [1, 3, 6, 1, 2, 1, 25, 6, 3, 1, 5],
+      "object_type": "OBJECT-TYPE",
+      "class": "objecttype",
+      "syntax": "DateAndTime",
+      "max_access": "read-only",
+      "status": "current",
+      "index": null,
+      "augments": null,
+      "oid": "1.3.6.1.2.1.25.6.3.1.5",
+      "nodetype": "column",
+      "description": "The last-modification date of this application as it would appear in a directory listing. If this information is not known, then this variable shall have the value corresponding to January 1, year 0000, 00:00:00.0, which is encoded as (hex)'00 00 01 01 00 00 00 00'."
+    },
+    "hrMIBCompliances": {
+      "oid_path": [1, 3, 6, 1, 2, 1, 25, 7, 2],
+      "object_type": "OBJECT IDENTIFIER",
+      "class": "objectidentifier",
+      "syntax": null,
+      "max_access": null,
+      "status": null,
+      "index": null,
+      "augments": null,
+      "oid": "1.3.6.1.2.1.25.7.2",
+      "description": null
+    },
+    "hrMIBGroups": {
+      "oid_path": [1, 3, 6, 1, 2, 1, 25, 7, 3],
+      "object_type": "OBJECT IDENTIFIER",
+      "class": "objectidentifier",
+      "syntax": null,
+      "max_access": null,
+      "status": null,
+      "index": null,
+      "augments": null,
+      "oid": "1.3.6.1.2.1.25.7.3",
+      "description": null
+    },
+    "hrMIBCompliance": {
+      "oid_path": [1, 3, 6, 1, 2, 1, 25, 7, 2, 1],
+      "object_type": "MODULE-COMPLIANCE",
+      "class": "modulecompliance",
+      "syntax": null,
+      "max_access": null,
+      "status": "current",
+      "index": null,
+      "augments": null,
+      "oid": "1.3.6.1.2.1.25.7.2.1",
+      "members": [
+        {
+          "module": "HOST-RESOURCES-MIB",
+          "object": "hrSystemGroup"
+        },
+        {
+          "module": "HOST-RESOURCES-MIB",
+          "object": "hrStorageGroup"
+        },
+        {
+          "module": "HOST-RESOURCES-MIB",
+          "object": "hrDeviceGroup"
+        },
+        {
+          "module": "HOST-RESOURCES-MIB",
+          "object": "hrSWRunGroup"
+        },
+        {
+          "module": "HOST-RESOURCES-MIB",
+          "object": "hrSWRunPerfGroup"
+        },
+        {
+          "module": "HOST-RESOURCES-MIB",
+          "object": "hrSWInstalledGroup"
+        }
+      ],
+      "description": "The requirements for conformance to the Host Resources MIB."
+    },
+    "hrSystemGroup": {
+      "oid_path": [1, 3, 6, 1, 2, 1, 25, 7, 3, 1],
+      "object_type": "OBJECT-GROUP",
+      "class": "objectgroup",
+      "syntax": null,
+      "max_access": null,
+      "status": "current",
+      "index": null,
+      "augments": null,
+      "oid": "1.3.6.1.2.1.25.7.3.1",
+      "members": [
+        {
+          "module": "HOST-RESOURCES-MIB",
+          "object": "hrSystemUptime"
+        },
+        {
+          "module": "HOST-RESOURCES-MIB",
+          "object": "hrSystemDate"
+        },
+        {
+          "module": "HOST-RESOURCES-MIB",
+          "object": "hrSystemInitialLoadDevice"
+        },
+        {
+          "module": "HOST-RESOURCES-MIB",
+          "object": "hrSystemInitialLoadParameters"
+        },
+        {
+          "module": "HOST-RESOURCES-MIB",
+          "object": "hrSystemNumUsers"
+        },
+        {
+          "module": "HOST-RESOURCES-MIB",
+          "object": "hrSystemProcesses"
+        },
+        {
+          "module": "HOST-RESOURCES-MIB",
+          "object": "hrSystemMaxProcesses"
+        }
+      ],
+      "description": "The Host Resources System Group."
+    },
+    "hrStorageGroup": {
+      "oid_path": [1, 3, 6, 1, 2, 1, 25, 7, 3, 2],
+      "object_type": "OBJECT-GROUP",
+      "class": "objectgroup",
+      "syntax": null,
+      "max_access": null,
+      "status": "current",
+      "index": null,
+      "augments": null,
+      "oid": "1.3.6.1.2.1.25.7.3.2",
+      "members": [
+        {
+          "module": "HOST-RESOURCES-MIB",
+          "object": "hrMemorySize"
+        },
+        {
+          "module": "HOST-RESOURCES-MIB",
+          "object": "hrStorageIndex"
+        },
+        {
+          "module": "HOST-RESOURCES-MIB",
+          "object": "hrStorageType"
+        },
+        {
+          "module": "HOST-RESOURCES-MIB",
+          "object": "hrStorageDescr"
+        },
+        {
+          "module": "HOST-RESOURCES-MIB",
+          "object": "hrStorageAllocationUnits"
+        },
+        {
+          "module": "HOST-RESOURCES-MIB",
+          "object": "hrStorageSize"
+        },
+        {
+          "module": "HOST-RESOURCES-MIB",
+          "object": "hrStorageUsed"
+        },
+        {
+          "module": "HOST-RESOURCES-MIB",
+          "object": "hrStorageAllocationFailures"
+        }
+      ],
+      "description": "The Host Resources Storage Group."
+    },
+    "hrDeviceGroup": {
+      "oid_path": [1, 3, 6, 1, 2, 1, 25, 7, 3, 3],
+      "object_type": "OBJECT-GROUP",
+      "class": "objectgroup",
+      "syntax": null,
+      "max_access": null,
+      "status": "current",
+      "index": null,
+      "augments": null,
+      "oid": "1.3.6.1.2.1.25.7.3.3",
+      "members": [
+        {
+          "module": "HOST-RESOURCES-MIB",
+          "object": "hrDeviceIndex"
+        },
+        {
+          "module": "HOST-RESOURCES-MIB",
+          "object": "hrDeviceType"
+        },
+        {
+          "module": "HOST-RESOURCES-MIB",
+          "object": "hrDeviceDescr"
+        },
+        {
+          "module": "HOST-RESOURCES-MIB",
+          "object": "hrDeviceID"
+        },
+        {
+          "module": "HOST-RESOURCES-MIB",
+          "object": "hrDeviceStatus"
+        },
+        {
+          "module": "HOST-RESOURCES-MIB",
+          "object": "hrDeviceErrors"
+        },
+        {
+          "module": "HOST-RESOURCES-MIB",
+          "object": "hrProcessorFrwID"
+        },
+        {
+          "module": "HOST-RESOURCES-MIB",
+          "object": "hrProcessorLoad"
+        },
+        {
+          "module": "HOST-RESOURCES-MIB",
+          "object": "hrNetworkIfIndex"
+        },
+        {
+          "module": "HOST-RESOURCES-MIB",
+          "object": "hrPrinterStatus"
+        },
+        {
+          "module": "HOST-RESOURCES-MIB",
+          "object": "hrPrinterDetectedErrorState"
+        },
+        {
+          "module": "HOST-RESOURCES-MIB",
+          "object": "hrDiskStorageAccess"
+        },
+        {
+          "module": "HOST-RESOURCES-MIB",
+          "object": "hrDiskStorageMedia"
+        },
+        {
+          "module": "HOST-RESOURCES-MIB",
+          "object": "hrDiskStorageRemoveble"
+        },
+        {
+          "module": "HOST-RESOURCES-MIB",
+          "object": "hrDiskStorageCapacity"
+        },
+        {
+          "module": "HOST-RESOURCES-MIB",
+          "object": "hrPartitionIndex"
+        },
+        {
+          "module": "HOST-RESOURCES-MIB",
+          "object": "hrPartitionLabel"
+        },
+        {
+          "module": "HOST-RESOURCES-MIB",
+          "object": "hrPartitionID"
+        },
+        {
+          "module": "HOST-RESOURCES-MIB",
+          "object": "hrPartitionSize"
+        },
+        {
+          "module": "HOST-RESOURCES-MIB",
+          "object": "hrPartitionFSIndex"
+        },
+        {
+          "module": "HOST-RESOURCES-MIB",
+          "object": "hrFSIndex"
+        },
+        {
+          "module": "HOST-RESOURCES-MIB",
+          "object": "hrFSMountPoint"
+        },
+        {
+          "module": "HOST-RESOURCES-MIB",
+          "object": "hrFSRemoteMountPoint"
+        },
+        {
+          "module": "HOST-RESOURCES-MIB",
+          "object": "hrFSType"
+        },
+        {
+          "module": "HOST-RESOURCES-MIB",
+          "object": "hrFSAccess"
+        },
+        {
+          "module": "HOST-RESOURCES-MIB",
+          "object": "hrFSBootable"
+        },
+        {
+          "module": "HOST-RESOURCES-MIB",
+          "object": "hrFSStorageIndex"
+        },
+        {
+          "module": "HOST-RESOURCES-MIB",
+          "object": "hrFSLastFullBackupDate"
+        },
+        {
+          "module": "HOST-RESOURCES-MIB",
+          "object": "hrFSLastPartialBackupDate"
+        }
+      ],
+      "description": "The Host Resources Device Group."
+    },
+    "hrSWRunGroup": {
+      "oid_path": [1, 3, 6, 1, 2, 1, 25, 7, 3, 4],
+      "object_type": "OBJECT-GROUP",
+      "class": "objectgroup",
+      "syntax": null,
+      "max_access": null,
+      "status": "current",
+      "index": null,
+      "augments": null,
+      "oid": "1.3.6.1.2.1.25.7.3.4",
+      "members": [
+        {
+          "module": "HOST-RESOURCES-MIB",
+          "object": "hrSWOSIndex"
+        },
+        {
+          "module": "HOST-RESOURCES-MIB",
+          "object": "hrSWRunIndex"
+        },
+        {
+          "module": "HOST-RESOURCES-MIB",
+          "object": "hrSWRunName"
+        },
+        {
+          "module": "HOST-RESOURCES-MIB",
+          "object": "hrSWRunID"
+        },
+        {
+          "module": "HOST-RESOURCES-MIB",
+          "object": "hrSWRunPath"
+        },
+        {
+          "module": "HOST-RESOURCES-MIB",
+          "object": "hrSWRunParameters"
+        },
+        {
+          "module": "HOST-RESOURCES-MIB",
+          "object": "hrSWRunType"
+        },
+        {
+          "module": "HOST-RESOURCES-MIB",
+          "object": "hrSWRunStatus"
+        }
+      ],
+      "description": "The Host Resources Running Software Group."
+    },
+    "hrSWRunPerfGroup": {
+      "oid_path": [1, 3, 6, 1, 2, 1, 25, 7, 3, 5],
+      "object_type": "OBJECT-GROUP",
+      "class": "objectgroup",
+      "syntax": null,
+      "max_access": null,
+      "status": "current",
+      "index": null,
+      "augments": null,
+      "oid": "1.3.6.1.2.1.25.7.3.5",
+      "members": [
+        {
+          "module": "HOST-RESOURCES-MIB",
+          "object": "hrSWRunPerfCPU"
+        },
+        {
+          "module": "HOST-RESOURCES-MIB",
+          "object": "hrSWRunPerfMem"
+        }
+      ],
+      "description": "The Host Resources Running Software Performance Group."
+    },
+    "hrSWInstalledGroup": {
+      "oid_path": [1, 3, 6, 1, 2, 1, 25, 7, 3, 6],
+      "object_type": "OBJECT-GROUP",
+      "class": "objectgroup",
+      "syntax": null,
+      "max_access": null,
+      "status": "current",
+      "index": null,
+      "augments": null,
+      "oid": "1.3.6.1.2.1.25.7.3.6",
+      "members": [
+        {
+          "module": "HOST-RESOURCES-MIB",
+          "object": "hrSWInstalledLastChange"
+        },
+        {
+          "module": "HOST-RESOURCES-MIB",
+          "object": "hrSWInstalledLastUpdateTime"
+        },
+        {
+          "module": "HOST-RESOURCES-MIB",
+          "object": "hrSWInstalledIndex"
+        },
+        {
+          "module": "HOST-RESOURCES-MIB",
+          "object": "hrSWInstalledName"
+        },
+        {
+          "module": "HOST-RESOURCES-MIB",
+          "object": "hrSWInstalledID"
+        },
+        {
+          "module": "HOST-RESOURCES-MIB",
+          "object": "hrSWInstalledType"
+        },
+        {
+          "module": "HOST-RESOURCES-MIB",
+          "object": "hrSWInstalledDate"
+        }
+      ],
+      "description": "The Host Resources Installed Software Group."
+    }
+  },
+  "types": {
+    "KBytes": {
+      "class": "textualconvention",
+      "base_type": "Integer32",
+      "constraints": {
+        "kind": "range",
+        "data": [
+          [0, 2147483647]
+        ]
+      },
+      "display_hint": null,
+      "status": "current",
+      "description": "Storage size, expressed in units of 1024 bytes."
+    },
+    "ProductID": {
+      "class": "textualconvention",
+      "base_type": "OBJECT IDENTIFIER",
+      "constraints": null,
+      "display_hint": null,
+      "status": "current",
+      "description": "This textual convention is intended to identify the manufacturer, model, and version of a specific hardware or software product. It is suggested that these OBJECT IDENTIFIERs are allocated such that all products from a particular manufacturer are registered under a subtree distinct to that manufacturer. In addition, all versions of a product should be registered under a subtree distinct to that product. With this strategy, a management station may uniquely determine the manufacturer and/or model of a product whose productID is unknown to the management station. Objects of this type may be useful for inventory purposes or for automatically detecting incompatibilities or version mismatches between various hardware and software components on a system. For example, the product ID for the ACME 4860 66MHz clock doubled processor might be: enterprises.acme.acmeProcessors.a4860DX2.MHz66 A software product might be registered as: enterprises.acme.acmeOperatingSystems.acmeDOS.six(6).one(1)"
+    },
+    "InternationalDisplayString": {
+      "class": "textualconvention",
+      "base_type": "OCTET STRING",
+      "constraints": null,
+      "display_hint": null,
+      "status": "current",
+      "description": "This data type is used to model textual information in some character set. A network management station should use a local algorithm to determine which character set is in use and how it should be displayed. Note that this character set may be encoded with more than one octet per symbol, but will most often be NVT ASCII. When a size clause is specified for an object of this type, the size refers to the length in octets, not the number of symbols."
+    },
+    "HrStorageEntry": {
+      "class": "textualconvention",
+      "base_type": "SEQUENCE",
+      "constraints": null,
+      "display_hint": null,
+      "status": null,
+      "description": null
+    },
+    "HrDeviceEntry": {
+      "class": "textualconvention",
+      "base_type": "SEQUENCE",
+      "constraints": null,
+      "display_hint": null,
+      "status": null,
+      "description": null
+    },
+    "HrProcessorEntry": {
+      "class": "textualconvention",
+      "base_type": "SEQUENCE",
+      "constraints": null,
+      "display_hint": null,
+      "status": null,
+      "description": null
+    },
+    "HrNetworkEntry": {
+      "class": "textualconvention",
+      "base_type": "SEQUENCE",
+      "constraints": null,
+      "display_hint": null,
+      "status": null,
+      "description": null
+    },
+    "HrPrinterEntry": {
+      "class": "textualconvention",
+      "base_type": "SEQUENCE",
+      "constraints": null,
+      "display_hint": null,
+      "status": null,
+      "description": null
+    },
+    "HrDiskStorageEntry": {
+      "class": "textualconvention",
+      "base_type": "SEQUENCE",
+      "constraints": null,
+      "display_hint": null,
+      "status": null,
+      "description": null
+    },
+    "HrPartitionEntry": {
+      "class": "textualconvention",
+      "base_type": "SEQUENCE",
+      "constraints": null,
+      "display_hint": null,
+      "status": null,
+      "description": null
+    },
+    "HrFSEntry": {
+      "class": "textualconvention",
+      "base_type": "SEQUENCE",
+      "constraints": null,
+      "display_hint": null,
+      "status": null,
+      "description": null
+    },
+    "HrSWRunEntry": {
+      "class": "textualconvention",
+      "base_type": "SEQUENCE",
+      "constraints": null,
+      "display_hint": null,
+      "status": null,
+      "description": null
+    },
+    "HrSWRunPerfEntry": {
+      "class": "textualconvention",
+      "base_type": "SEQUENCE",
+      "constraints": null,
+      "display_hint": null,
+      "status": null,
+      "description": null
+    },
+    "HrSWInstalledEntry": {
+      "class": "textualconvention",
+      "base_type": "SEQUENCE",
+      "constraints": null,
+      "display_hint": null,
+      "status": null,
+      "description": null
+    }
+  },
+  "notifications": {},
+  "module_metadata": {
+    "lastupdated": "2000-03-06",
+    "revisions": [
+      {
+        "date": "2000-03-06",
+        "description": "Clarifications and bug fixes based on implementation\n          experience.  This revision was also reformatted in the SMIv2\n          format. The revisions made were:\n\n          New RFC document standards:\n             Added Copyright notice, updated introduction to SNMP\n             Framework, updated references section, added reference to\n             RFC 2119, and added a meaningful Security Considerations\n             section.\n\n          New IANA considerations section for registration of new types\n\n          Conversion to new SMIv2 syntax for the following types and\n          macros:\n              Counter32, Integer32, Gauge32, MODULE-IDENTITY,\n              OBJECT-TYPE, TEXTUAL-CONVENTION, OBJECT-IDENTITY,\n              MODULE-COMPLIANCE, OBJECT-GROUP\n\n          Used new Textual Conventions:\n              TruthValue, DateAndTime, AutonomousType,\n              InterfaceIndexOrZero\n\n          Fixed typo in hrPrinterStatus.\n\n          Added missing error bits to hrPrinterDetectedErrorState and\n          clarified confusion resulting from suggested mappings to\n          hrPrinterStatus.\n\n\n          Clarified that size of objects of type\n          InternationalDisplayString is number of octets, not number\n          of encoded symbols.\n\n          Clarified the use of the following objects based on\n          implementation experience:\n              hrSystemInitialLoadDevice, hrSystemInitialLoadParameters,\n              hrMemorySize, hrStorageSize, hrStorageAllocationFailures,\n              hrDeviceErrors, hrProcessorLoad, hrNetworkIfIndex,\n              hrDiskStorageCapacity, hrSWRunStatus, hrSWRunPerfCPU,\n              and hrSWInstalledDate.\n\n          Clarified implementation technique for hrSWInstalledTable.\n\n          Used new AUGMENTS clause for hrSWRunPerfTable.\n\n          Added Internationalization Considerations section.\n\n   This revision published as RFC2790."
+      },
+      {
+        "date": "1999-10-20",
+        "description": "The original version of this MIB, published as\n          RFC1514."
+      }
+    ],
+    "organization": "IETF Host Resources MIB Working Group",
+    "contactinfo": "Steve Waldbusser\n          Postal: Lucent Technologies, Inc.\n                  1213 Innsbruck Dr.\n                  Sunnyvale, CA 94089\n                  USA\n          Phone:  650-318-1251\n          Fax:    650-318-1633\n          Email:  waldbusser@lucent.com\n\n\n          In addition, the Host Resources MIB mailing list is\n          dedicated to discussion of this MIB. To join the\n          mailing list, send a request message to\n          hostmib-request@andrew.cmu.edu. The mailing list\n          address is hostmib@andrew.cmu.edu.",
+    "description": "This MIB is for use in managing host systems. The term `host' is construed to mean any computer that communicates with other similar computers attached to the internet and that is directly used by one or more human beings. Although this MIB does not necessarily apply to devices whose primary function is communications services (e.g., terminal servers, routers, bridges, monitoring equipment), such relevance is not explicitly precluded. This MIB instruments attributes common to all internet hosts including, for example, both personal computers and systems that run variants of Unix."
+  }
+}

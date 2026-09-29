@@ -1,11 +1,24 @@
-"""Shared SNMP MIB source-store and compilation helpers."""
+"""Shared SNMP MIB source-store and compilation helpers.
+
+v1.5.0 (GH #72): the compile path is stack-aware. With the default
+``TRAM_SNMP_STACK=legacy`` the pysmi pipeline compiles to ``.py`` exactly as
+before. With ``TRAM_SNMP_STACK=trishul`` the tsmi compiler (trishul-smi)
+produces its JSON IR bundles (``<MODULE>.json`` plus ``manifest.json`` /
+``oid_index.json`` sidecars) into the same ``TRAM_MIB_DIR`` — a dual-format
+corpus where ``IF-MIB.py`` and ``IF-MIB.json`` coexist.
+"""
 
 from __future__ import annotations
 
+import asyncio
+import json
 import os
-from collections.abc import Iterable
+from collections.abc import Awaitable, Callable, Iterable
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
 from pathlib import Path
+
+from tram.core.config import snmp_stack
 
 MIB_HTTP_SOURCE_URL = "https://mibs.pysnmp.com/asn1/@mib@"
 MIB_SOURCE_EXTENSIONS = ("", ".txt", ".mib", ".my")
@@ -14,11 +27,11 @@ _MIB_SOURCE_SUFFIXES = {ext for ext in MIB_SOURCE_EXTENSIONS if ext}
 
 
 class MibSupportUnavailable(RuntimeError):
-    """Raised when optional pysmi support is not installed."""
+    """Raised when the compile backend for the active stack is not installed."""
 
 
 class MibCompileFailure(RuntimeError):
-    """Raised when pysmi fails to compile one or more MIBs."""
+    """Raised when the active compile backend fails to compile one or more MIBs."""
 
 
 @dataclass(frozen=True)
@@ -109,13 +122,39 @@ def bundled_mib_source_dirs() -> list[str]:
     return list(dict.fromkeys(path for path in candidates if os.path.isdir(path)))
 
 
+def is_mib_bundle_json(path: str | Path) -> bool:
+    """Return whether *path* holds a tsmi JSON IR bundle (not a sidecar).
+
+    The tsmi compile path writes one ``<MODULE>.json`` per module plus the
+    ``manifest.json`` / ``oid_index.json`` sidecars into the same directory.
+    A bundle is a JSON object carrying a ``module`` name and ``objects`` key;
+    the sidecars do not, so this cheap content check keeps the directory
+    scans (list / available / delete) from treating them as modules.
+    """
+    try:
+        with open(path, encoding="utf-8") as fh:
+            data = json.load(fh)
+    except (OSError, ValueError):
+        return False
+    return (
+        isinstance(data, dict)
+        and isinstance(data.get("module"), str)
+        and bool(data.get("module"))
+        and isinstance(data.get("objects"), dict)
+    )
+
+
 def available_compiled_mibs(mib_dir: str) -> set[str]:
     names: set[str] = set()
     if not os.path.isdir(mib_dir):
         return names
     for fname in os.listdir(mib_dir):
-        if fname.endswith(".py") and not fname.startswith("_"):
+        if fname.startswith("_"):
+            continue
+        if fname.endswith(".py"):
             names.update(mib_candidates(fname[:-3]))
+        elif fname.endswith(".json") and is_mib_bundle_json(os.path.join(mib_dir, fname)):
+            names.update(mib_candidates(fname[:-5]))
     return names
 
 
@@ -145,17 +184,21 @@ def delete_mib_artifacts(
     compiled_dir: str,
     source_dir: str | None = None,
 ) -> MibDeleteResult:
-    """Delete compiled `.py` artifacts plus matching raw source files."""
+    """Delete compiled artifacts (``.py`` and tsmi ``.json`` bundles) plus
+    matching raw sources."""
     deleted_compiled: list[str] = []
     deleted_sources: list[str] = []
     seen_paths: set[str] = set()
 
     for candidate in mib_candidates(mib_name):
-        compiled_path = Path(compiled_dir) / f"{candidate}.py"
-        if compiled_path.is_file():
-            compiled_path.unlink()
-            deleted_compiled.append(compiled_path.name)
-            seen_paths.add(str(compiled_path))
+        for suffix in (".py", ".json"):
+            compiled_path = Path(compiled_dir) / f"{candidate}{suffix}"
+            if compiled_path.is_file() and (
+                suffix == ".py" or is_mib_bundle_json(compiled_path)
+            ):
+                compiled_path.unlink()
+                deleted_compiled.append(compiled_path.name)
+                seen_paths.add(str(compiled_path))
 
     if source_dir and Path(source_dir).is_dir():
         candidate_names = set(mib_candidates(mib_name))
@@ -183,11 +226,28 @@ def compile_mibs(
     source_dirs: Iterable[str] = (),
     resolve_missing: bool = False,
     remote_cache_dir: str | None = None,
+    stack: str | None = None,
 ) -> MibCompileResult:
-    """Compile one or more MIBs using local raw sources plus optional remote fallback."""
+    """Compile one or more MIBs using local raw sources plus optional remote fallback.
+
+    The backend follows the active ``TRAM_SNMP_STACK`` flag: ``legacy``
+    compiles via pysmi to ``.py`` (byte-identical behavior), ``trishul``
+    compiles via trishul-smi to JSON IR bundles in the same directory. An
+    explicit *stack* overrides the flag (used by tests and by callers that
+    must pin a backend regardless of the process environment).
+    """
     requested = [name for name in mib_names if name]
     if not requested:
         return MibCompileResult(results={}, compiled=[], builtin_names=set())
+
+    active = stack if stack is not None else snmp_stack()
+    if active == "trishul":
+        return _compile_mibs_trishul(
+            requested,
+            compiled_dir,
+            source_dirs=source_dirs,
+            resolve_missing=resolve_missing,
+        )
 
     try:
         from pysmi.codegen.pysnmp import PySnmpCodeGen
@@ -237,6 +297,88 @@ def compile_mibs(
         compiled=[name for name, status in results.items() if status == "compiled"],
         builtin_names=normalize_name_set(set(PySnmpCodeGen.baseMibs + PySnmpCodeGen.fakeMibs)),
     )
+
+
+def _compile_mibs_trishul(
+    requested: list[str],
+    compiled_dir: str,
+    *,
+    source_dirs: Iterable[str],
+    resolve_missing: bool,
+) -> MibCompileResult:
+    """Compile MIBs via trishul-smi to its native JSON IR bundle format.
+
+    This is the ``TRAM_SNMP_STACK=trishul`` backend. Output layout matches
+    the snmp-wire-harness reference (scripts/snmp-wire-harness/scripts/
+    02_compile_mibs.py): one ``<MODULE>.json`` per compiled module plus the
+    ``manifest.json`` and ``oid_index.json`` sidecars, written alongside the
+    pysmi ``.py`` corpus in *compiled_dir* (dual-format corpus). The JSON
+    bundle format is tsmi's native output — the exact format trishul-snmp's
+    ``load_bundle`` consumes.
+    """
+    try:
+        from trishul_smi import CompilerConfig, FileReader, MibCompiler
+    except ImportError as exc:
+        raise MibSupportUnavailable(
+            "MIB compilation requires trishul-smi — install with: pip install tram[snmp]"
+        ) from exc
+
+    os.makedirs(compiled_dir, exist_ok=True)
+
+    config = CompilerConfig(
+        output_dir=Path(compiled_dir),
+        formats=["json"],
+        emit_manifest=True,
+        emit_oid_index=True,
+        reproducible=True,
+        cache_dir=None,
+    )
+    compiler = MibCompiler(config)
+    for source_dir in dict.fromkeys(str(path) for path in source_dirs if path):
+        compiler.add_reader(FileReader(source_dir))
+
+    async def _run() -> list:
+        if resolve_missing:
+            from trishul_smi import HttpReader
+
+            async with HttpReader(MIB_HTTP_SOURCE_URL) as http_reader:
+                compiler.add_reader(http_reader)
+                return await compiler.compile(*requested)
+        return await compiler.compile(*requested)
+
+    try:
+        results = _run_async(_run)
+    except Exception as exc:
+        raise MibCompileFailure(str(exc)) from exc
+
+    # tsmi CompileResult.status ∈ {"compiled", "cached", "failed", "missing"}; the
+    # routers' classification understands "compiled"/"failed", matching pysmi.
+    try:
+        from trishul_smi.parser._constants import BASE_MIBS as _TSMI_BASE_MIBS
+    except ImportError:  # pragma: no cover - pinned trishul-smi==0.5.2 always ships it
+        _TSMI_BASE_MIBS = frozenset()
+
+    return MibCompileResult(
+        results={r.name: r.status for r in results},
+        compiled=[r.name for r in results if r.status == "compiled"],
+        builtin_names=normalize_name_set(_TSMI_BASE_MIBS),
+    )
+
+
+def _run_async[T](coro_factory: Callable[[], Awaitable[T]]) -> T:
+    """Run an async coroutine from sync code, safe inside a running loop.
+
+    tsmi's ``MibCompiler.compile()`` is async. ``asyncio.run`` raises when an
+    event loop is already running (FastAPI endpoints), so the coroutine runs
+    in a fresh loop on a worker thread in that case. This mirrors the async
+    bridge pattern used by the trishul-snmp-suite reference consumer.
+    """
+    try:
+        asyncio.get_running_loop()
+    except RuntimeError:
+        return asyncio.run(coro_factory())
+    with ThreadPoolExecutor(max_workers=1) as pool:
+        return pool.submit(asyncio.run, coro_factory()).result()
 
 
 class _CachingReader:

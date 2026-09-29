@@ -41,6 +41,16 @@ def _env_snmp_stack() -> str:
     return raw
 
 
+def snmp_stack() -> str:
+    """Active SNMP stack — ``legacy`` (pysnmp/pysmi) | ``trishul`` (tsmi/tsmp).
+
+    v1.5.0 layer 3 flag reader (GH #72). Reads ``TRAM_SNMP_STACK`` each call
+    so a re-exec'd worker picks up the value the process was started with;
+    invalid values fail loud via ``_env_snmp_stack``.
+    """
+    return _env_snmp_stack()
+
+
 def stateful_transforms_enabled() -> bool:
     """``TRAM_STATEFUL_TRANSFORMS`` feature flag (F.1 §9) — default ON, fails open.
 

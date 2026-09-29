@@ -22,6 +22,14 @@ MIBs
     Custom/vendor MIBs uploaded via the UI live on the manager's PVC
     and are pulled here into the emptyDir /data/mibs directory.
 
+    v1.5.0 dual-format sync (GH #72): each referenced MIB is fetched in
+    BOTH compiled formats — the pysmi ``.py`` module and the tsmi JSON IR
+    bundle — via GET /api/mibs/{name}?format=py and ?format=json. There is
+    no per-worker format negotiation; every worker pulls both and its own
+    SNMP stack loads whichever file it understands (legacy loads the ``.py``,
+    trishul loads the ``.json``). Missing formats 404 and are skipped — a
+    manager that only has one format for a MIB still syncs cleanly.
+
 Auth
     If TRAM_API_KEY is set on the worker, it is forwarded as
     X-API-Key on every request to the manager.
@@ -151,20 +159,28 @@ def _sync_all_schemas(client: httpx.Client, schema_dir: Path) -> None:
 
 
 def _sync_mib(client: httpx.Client, mib_name: str, mib_dir: Path) -> None:
-    """Fetch a compiled MIB .py file from GET /api/mibs/{mib_name}."""
-    dest = mib_dir / f"{mib_name}.py"
+    """Fetch a compiled MIB in both formats from GET /api/mibs/{mib_name}.
+
+    v1.5.0 (GH #72): requests ``?format=py`` and ``?format=json`` so the
+    worker's emptyDir holds whatever its SNMP stack needs regardless of the
+    manager's compile backend. A 404 for a format means the manager has no
+    artifact of that kind (standard MIBs baked into the image return 404 for
+    both) — that is fine and skipped.
+    """
     mib_dir.mkdir(parents=True, exist_ok=True)
-    try:
-        resp = client.get(f"/api/mibs/{mib_name}")
-        if resp.status_code == 404:
-            # Standard MIBs baked into image — not present on manager, that's fine
-            logger.debug("MIB %s not on manager (likely baked into image)", mib_name)
-            return
-        resp.raise_for_status()
-        if _content_matches(dest, resp.content):
-            logger.debug("MIB %s unchanged, skipping write", mib_name)
-            return
-        dest.write_bytes(resp.content)
-        logger.debug("Synced MIB %s", mib_name)
-    except Exception as exc:
-        logger.warning("Failed to fetch MIB %s: %s", mib_name, exc)
+    for fmt in ("py", "json"):
+        dest = mib_dir / f"{mib_name}.{fmt}"
+        try:
+            resp = client.get(f"/api/mibs/{mib_name}", params={"format": fmt})
+            if resp.status_code == 404:
+                # Standard MIBs baked into image — not present on manager, that's fine
+                logger.debug("MIB %s.%s not on manager (likely baked into image)", mib_name, fmt)
+                continue
+            resp.raise_for_status()
+            if _content_matches(dest, resp.content):
+                logger.debug("MIB %s.%s unchanged, skipping write", mib_name, fmt)
+                continue
+            dest.write_bytes(resp.content)
+            logger.debug("Synced MIB %s.%s", mib_name, fmt)
+        except Exception as exc:
+            logger.warning("Failed to fetch MIB %s (%s): %s", mib_name, fmt, exc)

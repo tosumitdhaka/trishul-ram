@@ -11,6 +11,7 @@ from fastapi import APIRouter, File, HTTPException, Query, UploadFile
 from pydantic import BaseModel
 
 from tram.api.routers._errors import internal_error_detail
+from tram.core.config import snmp_stack
 from tram.core.mib_compiler import (
     SUPPORTED_MIB_SOURCE_FILE_HINT,
     MibCompileFailure,
@@ -20,6 +21,7 @@ from tram.core.mib_compiler import (
     bundled_mib_source_dirs,
     compile_mibs,
     delete_mib_artifacts,
+    is_mib_bundle_json,
     is_supported_mib_source_filename,
     list_mib_source_files,
     mib_candidates,
@@ -106,21 +108,38 @@ def _mib_key(name: str) -> str:
 
 
 def _scan_compiled_entries(mib_dir: str) -> dict[str, dict]:
+    """Scan ``TRAM_MIB_DIR`` for compiled artifacts in both formats.
+
+    v1.5.0 dual-format corpus: pysmi ``.py`` modules and tsmi JSON IR bundles
+    (``<MODULE>.json``) coexist in the same directory. The tsmi ``manifest.json``
+    / ``oid_index.json`` sidecars are not modules and are skipped. The
+    backward-compat ``file``/``size_bytes`` fields prefer the ``.py`` artifact
+    when both exist; ``formats`` lists every available format.
+    """
     entries: dict[str, dict] = {}
     if not os.path.isdir(mib_dir):
         return entries
 
     for fname in sorted(os.listdir(mib_dir)):
-        if not fname.endswith(".py") or fname.startswith("_"):
+        if fname.startswith("_"):
             continue
-        stem = fname[:-3]
-        key = _mib_key(stem)
         path = os.path.join(mib_dir, fname)
-        entries[key] = {
-            "name": stem,
-            "file": fname,
-            "size_bytes": os.path.getsize(path),
-        }
+        if fname.endswith(".py"):
+            stem, fmt = fname[:-3], "py"
+        elif fname.endswith(".json") and is_mib_bundle_json(path):
+            stem, fmt = fname[:-5], "json"
+        else:
+            continue
+
+        key = _mib_key(stem)
+        entry = entries.setdefault(
+            key,
+            {"name": stem, "formats": [], "file": None, "size_bytes": 0},
+        )
+        entry["formats"].append(fmt)
+        if fmt == "py" or entry["file"] is None:
+            entry["file"] = fname
+            entry["size_bytes"] = os.path.getsize(path)
     return entries
 
 
@@ -190,6 +209,7 @@ def list_mibs() -> list[dict]:
             "compiled_available": compiled is not None,
             "compiled_file": compiled["file"] if compiled else None,
             "compiled_size_bytes": compiled["size_bytes"] if compiled else None,
+            "compiled_formats": compiled["formats"] if compiled else None,
         })
     return rows
 
@@ -213,7 +233,10 @@ async def upload_mib(
     ``TRAM_MIB_DIR``. When ``resolve_missing=true``, missing imports are also
     fetched from ``mibs.pysnmp.com`` and cached locally.
 
-    Requires ``tram[mib]``.
+    Requires the compile backend for the active ``TRAM_SNMP_STACK``:
+    ``tram[mib]`` (pysmi) for ``legacy``, ``tram[snmp]`` (trishul-smi) for
+    ``trishul``. The trishul backend writes the tsmi JSON IR bundle
+    (``<MODULE>.json``) into ``TRAM_MIB_DIR`` instead of a ``.py`` module.
     """
     filename = file.filename or ""
     if not is_supported_mib_source_filename(filename):
@@ -290,6 +313,7 @@ async def upload_mib(
         "mib_source_dir": source_dir,
         "results": compile_result.results,
         "resolve_missing": resolve_missing,
+        "stack": snmp_stack(),
         **classification,
     }
 
@@ -306,9 +330,11 @@ def download_mibs(body: MibDownloadRequest) -> dict:
     """Download and compile MIB modules by name from mibs.pysnmp.com.
 
     Downloads the named modules plus their dependencies and compiles them to
-    Python format in ``TRAM_MIB_DIR`` while also caching raw ASN.1 sources in
-    the local source-store directory. Requires internet access at the time of
-    the call and ``tram[mib]``.
+    ``TRAM_MIB_DIR`` while also caching raw ASN.1 sources in the local
+    source-store directory. The output format follows the active
+    ``TRAM_SNMP_STACK``: Python ``.py`` modules (pysmi, ``legacy``) or tsmi
+    JSON IR bundles (``trishul``). Requires internet access at the time of
+    the call and the matching compile backend (``tram[mib]`` / ``tram[snmp]``).
 
     Example request body::
 
@@ -346,6 +372,7 @@ def download_mibs(body: MibDownloadRequest) -> dict:
         "mib_dir": mib_dir,
         "mib_source_dir": source_dir,
         "results": compile_result.results,
+        "stack": snmp_stack(),
     }
 
 
@@ -371,8 +398,11 @@ def get_mib_source(mib_name: str):
 
 
 @router.get("/{mib_name}")
-def get_mib(mib_name: str):
-    """Return the compiled Python source of a MIB module.
+def get_mib(
+    mib_name: str,
+    format: str = Query("auto", pattern="^(auto|py|json)$"),
+):
+    """Return a compiled MIB artifact in the requested format.
 
     Used by worker agents to pull custom MIB files from the manager on
     demand before executing a pipeline.  Standard MIBs baked into the
@@ -380,17 +410,46 @@ def get_mib(mib_name: str):
     those is expected and handled gracefully by the worker.
 
     Accepts both dash and underscore naming (e.g. ``IF-MIB`` or ``IF_MIB``).
+
+    v1.5.0 dual-format serving: the pysmi ``.py`` module and the tsmi JSON
+    IR bundle for the same MIB may coexist in ``TRAM_MIB_DIR``. ``format``
+    selects which is served — ``auto`` (default) prefers ``.py`` and falls
+    back to the JSON bundle, ``py`` serves only the ``.py``, ``json`` only
+    the bundle. Legacy callers (the web UI, older workers) use ``auto`` and
+    are unchanged; workers sync both formats explicitly during the flag
+    period.
     """
     from fastapi.responses import PlainTextResponse
 
     mib_dir = _mib_dir()
-    # pysnmp compiles MIB names with dashes replaced by underscores in filenames
+    py_path: str | None = None
+    json_path: str | None = None
+    # pysnmp compiles MIB names with dashes replaced by underscores in filenames;
+    # tsmi keeps the declared module name. Accept both spellings.
     for candidate in mib_candidates(mib_name):
-        fpath = os.path.join(mib_dir, f"{candidate}.py")
-        if os.path.isfile(fpath):
-            with open(fpath, "rb") as fh:
-                return PlainTextResponse(content=fh.read().decode("utf-8", errors="replace"))
-    raise HTTPException(status_code=404, detail=f"MIB '{mib_name}' not found")
+        candidate_py = os.path.join(mib_dir, f"{candidate}.py")
+        if py_path is None and os.path.isfile(candidate_py):
+            py_path = candidate_py
+        candidate_json = os.path.join(mib_dir, f"{candidate}.json")
+        if (
+            json_path is None
+            and os.path.isfile(candidate_json)
+            and is_mib_bundle_json(candidate_json)
+        ):
+            json_path = candidate_json
+
+    if format == "py":
+        selected = py_path
+    elif format == "json":
+        selected = json_path
+    else:  # auto — prefer the legacy .py, fall back to the JSON bundle
+        selected = py_path or json_path
+
+    if selected is None:
+        raise HTTPException(status_code=404, detail=f"MIB '{mib_name}' not found")
+
+    with open(selected, "rb") as fh:
+        return PlainTextResponse(content=fh.read().decode("utf-8", errors="replace"))
 
 
 # ── DELETE /api/mibs/{mib_name} ──────────────────────────────────────────────
