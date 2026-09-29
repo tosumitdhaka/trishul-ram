@@ -2,8 +2,8 @@
 
 > **Status (2026-09-29): flag-on runtime record for the v1.5.0 SNMP stack swap.**
 > Layer 4b of the v1.5.0 plan — the live `TRAM_SNMP_STACK=trishul` verification
-> on kind required by the issue #72 acceptance criteria. Kept uncommitted for
-> orchestrator review.
+> on kind required by the issue #72 acceptance criteria. Committed (8e08470); a
+> re-run at final HEAD including a v1 sink check follows below.
 
 Date: 2026-09-29 · Cluster: `tram-dev` (kind, 4 nodes) · Release: `trishul-ram` @ images `local-20260929034651` (branch `release/v1.5.0`, HEAD d3a51c8, tree clean) · Mode: manager+worker (1 manager, 3 workers, 1Gi limits) · Flag: `TRAM_SNMP_STACK=trishul` on **both** planes.
 
