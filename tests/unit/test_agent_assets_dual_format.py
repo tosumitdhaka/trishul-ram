@@ -131,13 +131,13 @@ class TestSyncAssetsDualFormat:
             return_value=httpx.Response(200, content=b"# mib py")
         )
         respx.get("http://manager/api/mibs/CUSTOM-MIB", params={"format": "json"}).mock(
-            return_value=httpx.Response(200, content=b'{"module": "CUSTOM-MIB"}')
+            return_value=httpx.Response(200, content=b'{"module": "CUSTOM-MIB", "objects": {}}')
         )
 
         sync_assets(cfg, manager_url="http://manager", data_dir=str(tmp_path), api_key="k")
 
         assert (tmp_path / "mibs" / "CUSTOM-MIB.py").read_bytes() == b"# mib py"
-        assert (tmp_path / "mibs" / "CUSTOM-MIB.json").read_bytes() == b'{"module": "CUSTOM-MIB"}'
+        assert (tmp_path / "mibs" / "CUSTOM-MIB.json").read_bytes() == b'{"module": "CUSTOM-MIB", "objects": {}}'
         assert len(respx.calls) == 3  # schemas + py + json
         for call in respx.calls:
             assert call.request.headers.get("x-api-key") == "k"

@@ -250,6 +250,40 @@ class TestSyncMib:
         with httpx.Client(base_url="http://manager") as client:
             _sync_mib(client, "CUSTOM-MIB", mib_dir)   # must not raise
 
+    @respx.mock
+    def test_json_body_not_a_bundle_is_skipped(self, tmp_path):
+        """Review C7: a pre-v1.5.0 manager serves .py content with HTTP 200
+        even for ?format=json — the worker must not write it as a .json
+        bundle (a mixed-stack upgrade would otherwise corrupt the tsmi corpus)."""
+        mib_dir = tmp_path / "mibs"
+        # the mock answers the same content for every format (old manager)
+        respx.get("http://manager/api/mibs/IF-MIB").mock(
+            return_value=httpx.Response(200, content=b"# IF-MIB compiled")
+        )
+        with httpx.Client(base_url="http://manager") as client:
+            _sync_mib(client, "IF-MIB", mib_dir)
+
+        assert (mib_dir / "IF-MIB.py").read_bytes() == b"# IF-MIB compiled"
+        assert not (mib_dir / "IF-MIB.json").exists()
+
+    @respx.mock
+    def test_genuine_json_bundle_is_written(self, tmp_path):
+        """A body that IS a tsmi JSON IR bundle for ?format=json is written."""
+        mib_dir = tmp_path / "mibs"
+        bundle = b'{"module": "IF-MIB", "objects": {}}'
+
+        def _route(request):
+            if request.url.params.get("format") == "json":
+                return httpx.Response(200, content=bundle)
+            return httpx.Response(200, content=b"# IF-MIB compiled")
+
+        respx.get("http://manager/api/mibs/IF-MIB").mock(side_effect=_route)
+        with httpx.Client(base_url="http://manager") as client:
+            _sync_mib(client, "IF-MIB", mib_dir)
+
+        assert (mib_dir / "IF-MIB.py").read_bytes() == b"# IF-MIB compiled"
+        assert (mib_dir / "IF-MIB.json").read_bytes() == bundle
+
 
 # ── sync_assets: end-to-end ────────────────────────────────────────────────
 

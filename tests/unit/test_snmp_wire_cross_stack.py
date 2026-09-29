@@ -62,6 +62,46 @@ def _free_port() -> int:
         return sock.getsockname()[1]
 
 
+def _capture_datagram(send_to_port) -> bytes:
+    """Bind a raw UDP capture socket, run *send_to_port* against it, return the datagram.
+
+    Used for wire-level assertions (e.g. the v1 Trap-PDU enterprise/specific
+    fields) where a receiver's callback only exposes decoded varbinds.
+    """
+    captured: list[bytes] = []
+    port = _free_port()
+
+    class _Grab(asyncio.DatagramProtocol):
+        def datagram_received(self, data, addr):
+            captured.append(data)
+
+    def _run():
+        loop = asyncio.new_event_loop()
+        asyncio.set_event_loop(loop)
+
+        async def _grab():
+            transport, _ = await loop.create_datagram_endpoint(
+                _Grab, local_addr=("127.0.0.1", port)
+            )
+            try:
+                await asyncio.sleep(2.0)
+            finally:
+                transport.close()
+
+        loop.run_until_complete(_grab())
+        loop.close()
+
+    thread = threading.Thread(target=_run, daemon=True)
+    thread.start()
+    time.sleep(0.3)  # let the capture endpoint bind before the sender fires
+    send_to_port(port)
+    deadline = time.monotonic() + 3.0
+    while not captured and time.monotonic() < deadline:
+        time.sleep(0.05)
+    assert captured, "no datagram captured"
+    return captured[0]
+
+
 # ── in-process pysnmp agent (reference: scripts/.../pysnmp_agent.py) ────────
 
 
@@ -370,6 +410,36 @@ class TestTrapSinkToPysnmpReceiver:
         # the notifier auto-built the sysUpTime.0 + snmpTrapOID.0 varbinds
         assert "1.3.6.1.2.1.1.3.0" in pairs
         assert "1.3.6.1.6.3.1.1.4.1.0" in pairs
+
+    def test_v1_send_trap_wire_enterprise_specific(self):
+        """Review BUG 1 — wire level: the v1 Trap-PDU carries the RFC 2576
+        §3.2 enterprise/specific split (enterprise ``1.3.6.1.4.1``, specific
+        99999, generic 6), NOT the raw trap OID as the enterprise with
+        specific=0 (which would mis-encode ``enterprise.specific``)."""
+        from pyasn1.codec.ber import decoder as ber_decoder
+        from pysnmp.proto.api import v1 as v1api
+
+        from tram.connectors.snmp.sink import SNMPTrapSink
+
+        def _send(port):
+            SNMPTrapSink({
+                "host": "127.0.0.1", "port": port, "version": "1",
+                "trap_oid": "1.3.6.1.4.1.99999", "community": "public",
+                "timeout": 1.0, "retries": 1,
+            }).write(json.dumps({"1.3.6.1.4.1.99999.1.0": "wire-v1"}).encode(), {})
+
+        raw = _capture_datagram(_send)
+        msg, _ = ber_decoder.decode(raw, asn1Spec=v1api.Message())
+        pdu = v1api.apiMessage.get_pdu(msg)
+        assert tuple(v1api.apiTrapPDU.get_enterprise(pdu)) == (1, 3, 6, 1, 4, 1)
+        assert v1api.apiTrapPDU.get_generic_trap(pdu) == 6
+        assert v1api.apiTrapPDU.get_specific_trap(pdu) == 99999
+        # RFC 2576 reconstruction enterprise.specific == the configured trap OID
+        enterprise = tuple(v1api.apiTrapPDU.get_enterprise(pdu))
+        specific = v1api.apiTrapPDU.get_specific_trap(pdu)
+        assert enterprise + (specific,) == (1, 3, 6, 1, 4, 1, 99999)
+        varbind_oids = [tuple(vb[0]) for vb in v1api.apiTrapPDU.get_varbinds(pdu)]
+        assert (1, 3, 6, 1, 4, 1, 99999, 1, 0) in varbind_oids
 
 
 # ── trap source (tsmp listener) ← pysnmp sender ─────────────────────────────

@@ -168,18 +168,6 @@ def _build_tsmi_bundle(mib_dirs: list[str], mib_modules: list[str]):
             logger.debug("Could not load tsmi bundle directory %s: %s", d, exc)
 
     if not bundles:
-        # No directory corpus — fall back to per-module files named directly
-        # (the legacy path loads named modules from its default sources).
-        for module in mib_modules:
-            for candidate in (f"{module}.json", os.path.join(module, "module.json")):
-                if os.path.isfile(candidate):
-                    try:
-                        bundles.append(load_bundle(candidate))
-                    except Exception as exc:
-                        logger.debug("Could not load tsmi module %s: %s", module, exc)
-                    break
-
-    if not bundles:
         logger.debug(
             "No tsmi JSON MIB bundles found in mib_dirs=%s — MIB resolution unavailable",
             mib_dirs,
@@ -243,7 +231,8 @@ def build_v3_auth(
         auth_protocol:  Auth algorithm — MD5 | SHA | SHA224 | SHA256 | SHA384 | SHA512.
                         Defaults to SHA.  Unknown values fall back to SHA.
         auth_key:       Auth passphrase.  ``None`` → noAuthNoPriv.
-        priv_protocol:  Privacy algorithm — DES | 3DES | AES | AES128 | AES192 | AES256.
+        priv_protocol:  Privacy algorithm — AES | AES128 | AES192 | AES256
+                        (DES/3DES rejected at validation).
                         Defaults to AES128.  Unknown values fall back to AES128.
         priv_key:       Privacy passphrase.  ``None`` → authNoPriv (when auth_key set).
 

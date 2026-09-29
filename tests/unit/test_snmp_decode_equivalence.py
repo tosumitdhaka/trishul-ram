@@ -3,7 +3,8 @@
 The SAME trap BER bytes decoded through both wire stacks:
 
 * legacy pysnmp ``SNMPTrapSource._decode_trap`` (flag off)
-* tsmp ``decode_notification`` / ``_decode_trap_tsmp`` (flag on)
+* tsmp ``decode_notification`` (flag on — called directly, the same decoder
+  the tsmp listener path uses; there is no connector-level offline decoder)
 
 and the parsed records compared. Fixture bytes are produced by pysnmp's own
 encoder (both stacks are installed in the dev env), so this module is the
@@ -172,6 +173,22 @@ def _capture_pysnmp_v3_trap(*, username: str, authpw: str | None = None, privpw:
 # ── stack-side decoders ─────────────────────────────────────────────────────
 
 
+@pytest.fixture(autouse=True)
+def _clean_snmp_stack_env():
+    """Save/restore TRAM_SNMP_STACK around every test (NIT 11).
+
+    The legacy source construction reads the flag; nothing here should leak a
+    trishul value into the rest of the suite.
+    """
+    saved = os.environ.get("TRAM_SNMP_STACK")
+    os.environ.pop("TRAM_SNMP_STACK", None)
+    yield
+    if saved is None:
+        os.environ.pop("TRAM_SNMP_STACK", None)
+    else:
+        os.environ["TRAM_SNMP_STACK"] = saved
+
+
 def _decode_legacy(raw: bytes, version: str = "2c", **_ignored) -> dict:
     """Decode with the flag-off pysnmp path.
 
@@ -179,16 +196,39 @@ def _decode_legacy(raw: bytes, version: str = "2c", **_ignored) -> dict:
     ignored — the legacy decoder is version/community only and never touches
     USM credentials.
     """
-    os.environ.pop("TRAM_SNMP_STACK", None)
     source = SNMPTrapSource({"port": 162, "version": version})
     return source._decode_trap(raw)
 
 
 def _decode_tsmp(raw: bytes, version: str = "2c", **usm) -> dict:
-    """Decode with the flag-on tsmp path."""
-    os.environ["TRAM_SNMP_STACK"] = "trishul"
-    config = {"port": 162, "version": version, **usm}
-    return SNMPTrapSource(config)._decode_trap(raw)
+    """Decode with tsmp's ``decode_notification`` directly (C6).
+
+    The flag-on trap stream decodes inside the tsmp listeners (there is no
+    connector-level offline decoder), so the equivalence proof calls the
+    same decoder the listener path uses. Values render with the trap-path
+    parity formatter (``_tsmp_val_to_legacy_str``) so the records are
+    comparable to the legacy ``str(val)`` output.
+    """
+    from trishul_snmp import decode_notification
+
+    from tram.connectors.snmp.source import SNMPTrapSource
+
+    user = None
+    if version == "3":
+        from tram.connectors.snmp.mib_utils import build_v3_usm_user
+
+        user = build_v3_usm_user(
+            security_name=usm["security_name"],
+            auth_protocol=usm.get("auth_protocol", "SHA"),
+            auth_key=usm.get("auth_key"),
+            priv_protocol=usm.get("priv_protocol", "AES128"),
+            priv_key=usm.get("priv_key"),
+        )
+    event = decode_notification(raw, user=user)
+    return {
+        vb.oid_str: SNMPTrapSource._tsmp_val_to_legacy_str(vb.value)
+        for vb in event.varbinds
+    }
 
 
 def _v3_usm_config() -> dict:
@@ -279,8 +319,16 @@ class TestV3DecodeEquivalence:
 
 
 class TestDecodeGarbageEquivalence:
-    def test_garbage_falls_back_to_raw_on_both_stacks(self):
-        """Undecodable bytes fall back to _raw on both stacks."""
+    def test_legacy_raw_fallback(self):
+        """Legacy decoder falls back to _raw hex on undecodable bytes."""
         garbage = b"\x00\x01\x02garbage"
         assert _decode_legacy(garbage) == {"_raw": garbage.hex()}
-        assert _decode_tsmp(garbage) == {"_raw": garbage.hex()}
+
+    def test_tsmp_decode_notification_rejects_garbage(self):
+        """decode_notification raises on undecodable bytes — the listener path
+        treats a decode failure as a drop (there is no connector-level _raw
+        fallback on the flag-on stack)."""
+        from trishul_snmp import decode_notification
+
+        with pytest.raises(Exception):
+            decode_notification(b"\x00\x01\x02garbage")

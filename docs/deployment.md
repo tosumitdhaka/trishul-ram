@@ -91,8 +91,12 @@ unaffected until they opt in. During the flag period **both** stacks must be
 installed on every plane (`tram[snmp]` pins pysnmp/pyasn1 **and**
 `trishul-smi==0.5.2` / `trishul-snmp[v3]==0.6.1`), because the flag is read at
 startup and rollback is a redeploy with the flag off. Manager/worker mismatch
-handling (a mismatched rolling upgrade must fail loudly, not serve one stack's
-MIB artifacts to the other) ships with the flag reader in v1.5.0 layer 3.
+handling: a mismatched rolling upgrade does **not** fail at startup — the
+manager logs a WARNING (once per worker) when a worker's reported stack
+differs from its own, and a mixed fleet can serve one stack's MIB artifacts
+(`.py` vs `.json`) to the other's consumers, so align the value across every
+plane before enabling `trishul`. An invalid value is still a startup error
+(no silent fallback).
 
 ### Database backends (v0.7.0)
 

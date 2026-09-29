@@ -1650,12 +1650,18 @@ class TestSNMPTrapSinkBuildVarBinds:
 class TestSNMPTrapSinkSendTrap:
     """Tests for _send_trap using asyncio.run."""
 
-    def test_send_trap_passes_varbinds_as_list(self):
-        """Async HLAPI expects varBinds as one list argument, not variadic args."""
+    def test_send_trap_passes_varbinds_as_varargs(self):
+        """sendNotification takes varBinds as variadic args (review BUG 2).
+
+        The pre-fix code passed the varbind list as ONE positional, which
+        pysnmp treats as a single varBind and rejects with ``SmiError:
+        ObjectType object not fully initialized`` on every legacy send. The
+        sink must splat each ObjectType as its own positional argument.
+        """
         captured = {}
         mock_hlapi = _make_mock_hlapi()
 
-        async def _fake_send(snmpEngine, authData, transportTarget, contextData, notifyType, varBinds, **options):
+        async def _fake_send(snmpEngine, authData, transportTarget, contextData, notifyType, *varBinds, **options):
             captured["notifyType"] = notifyType
             captured["varBinds"] = varBinds
             return (None, None, None, [])
@@ -1672,8 +1678,9 @@ class TestSNMPTrapSinkSendTrap:
         asyncio.run(sink._send_trap(mock_hlapi, {"1.3.6.1": "val"}))
 
         assert captured["notifyType"] == "trap"
-        assert isinstance(captured["varBinds"], list)
-        assert len(captured["varBinds"]) >= 2
+        # sysUpTime.0 + snmpTrapOID.0 + the payload varbind, each as its own arg
+        assert len(captured["varBinds"]) >= 3
+        assert all(not isinstance(vb, list) for vb in captured["varBinds"])
 
     def test_send_trap_v2c(self):
         """v2c trap: uses CommunityData, calls sendNotification."""

@@ -605,31 +605,36 @@ class TestTrapSourceTsmp:
         finally:
             blocker.close()
 
-    def test_decode_trap_tsmp_v2c(self, monkeypatch):
-        """decode_notification path: send a trap to a capture socket, decode it."""
+    def test_decode_notification_v2c(self, monkeypatch):
+        """decode_notification path: send a trap to a capture socket, decode it.
+
+        Calls tsmp's ``decode_notification`` directly (C6): the flag-on trap
+        stream has no connector-level offline decoder — the listener path
+        uses ``decode_notification`` internally, which is what this exercises.
+        """
         monkeypatch.setenv("TRAM_SNMP_STACK", "trishul")
+        from trishul_snmp import decode_notification
+
         datagrams, port = self._capture_one_trap()
-
-        src = SNMPTrapSource({"host": "127.0.0.1", "port": port, "version": "2c"})
         assert datagrams, "no datagram captured"
-        result = src._decode_trap(datagrams[0])
+        event = decode_notification(datagrams[0])
+        result = {vb.oid_str: vb.value.to_display_string() for vb in event.varbinds}
         assert result["1.3.6.1.2.1.2.2.1.1.1"] == "eth0"
-        assert "_raw" not in result
 
-    def test_decode_trap_tsmp_v3_with_user(self, monkeypatch):
+    def test_decode_notification_v3_with_user(self, monkeypatch):
         """decode_notification with user: offline USM authPriv trap decode."""
         monkeypatch.setenv("TRAM_SNMP_STACK", "trishul")
-        datagrams, port = self._capture_one_trap(version="3")
+        from trishul_snmp import decode_notification
 
-        src = SNMPTrapSource({
-            "host": "127.0.0.1", "port": port, "version": "3",
-            "security_name": "trapuser", "auth_protocol": "SHA256", "auth_key": "authpass",
-            "priv_protocol": "AES128", "priv_key": "privpass",
-        })
+        datagrams, port = self._capture_one_trap(version="3")
         assert datagrams, "no datagram captured"
-        result = src._decode_trap(datagrams[0])
+        user = build_v3_usm_user(
+            security_name="trapuser", auth_protocol="SHA256", auth_key="authpass",
+            priv_protocol="AES128", priv_key="privpass",
+        )
+        event = decode_notification(datagrams[0], user=user)
+        result = {vb.oid_str: vb.value.to_display_string() for vb in event.varbinds}
         assert result["1.3.6.1.2.1.2.2.1.1.1"] == "eth0"
-        assert "_raw" not in result
 
     @staticmethod
     def _capture_one_trap(version: str = "2c") -> tuple[list[bytes], int]:
@@ -667,11 +672,14 @@ class TestTrapSourceTsmp:
             time.sleep(0.05)
         return captured, port
 
-    def test_decode_trap_garbage_falls_back_to_raw(self, monkeypatch):
+    def test_decode_notification_rejects_garbage(self, monkeypatch):
+        """decode_notification raises on undecodable bytes (the listener path
+        drops them; there is no flag-on _raw fallback)."""
         monkeypatch.setenv("TRAM_SNMP_STACK", "trishul")
-        src = SNMPTrapSource({"host": "127.0.0.1", "port": _free_port(), "version": "2c"})
-        result = src._decode_trap(b"\x00\x01\x02garbage")
-        assert result == {"_raw": b"\x00\x01\x02garbage".hex()}
+        from trishul_snmp import decode_notification
+
+        with pytest.raises(Exception):
+            decode_notification(b"\x00\x01\x02garbage")
 
 
 # ── trap sink tsmp path ─────────────────────────────────────────────────────
@@ -773,6 +781,14 @@ class TestTrapSinkTsmp:
         assert varbinds["1.3.6.1.4.1.99999.1.0"] == "v3-alarm"
 
     def test_v1_send_trap_pdu_metadata(self, monkeypatch):
+        """v1 Trap-PDU fields split per RFC 2576 §3.2 (review BUG 1).
+
+        trap_oid ``1.3.6.1.4.1.99999`` must be encoded as enterprise
+        ``1.3.6.1.4.1`` + specific ``99999`` (generic 6) — an RFC
+        2576-conformant NMS reconstructs ``enterprise.specific`` =
+        ``1.3.6.1.4.1.99999``. The old behavior passed the raw OID as the
+        enterprise with specific=0, mis-encoding the trap OID.
+        """
         monkeypatch.setenv("TRAM_SNMP_STACK", "trishul")
         port = _free_port()
         listener = _CaptureListener(port)
@@ -786,9 +802,32 @@ class TestTrapSinkTsmp:
         d = listener.event.to_dict()
         assert d["pdu_type"] == "trap"
         assert d["generic_trap"] == 6
-        assert str(d["enterprise"]).endswith("99999")
+        assert d["enterprise"] == "1.3.6.1.4.1"
+        assert d["specific_trap"] == 99999
+        # RFC 2576 reconstruction: enterprise.specific == the configured trap OID
+        assert f"{d['enterprise']}.{d['specific_trap']}" == "1.3.6.1.4.1.99999"
         varbinds = {vb.oid_str: vb.value.to_display_string() for vb in listener.event.varbinds}
         assert varbinds["1.3.6.1.4.1.99999.1.0"] == "v1-alarm"
+        # the v1 PDU carries sysUpTime in its header — no snmpTrapOID varbind
+        assert "1.3.6.1.6.3.1.1.4.1.0" not in varbinds
+        assert "1.3.6.1.2.1.1.3.0" in varbinds  # tsmp auto-prepends sysUpTime.0
+
+    def test_v1_send_standard_trap_maps_to_generic(self, monkeypatch):
+        """Standard trap OIDs map to generic traps 0-5 (RFC 2576 §3.2.3)."""
+        monkeypatch.setenv("TRAM_SNMP_STACK", "trishul")
+        port = _free_port()
+        listener = _CaptureListener(port)
+        listener.start()
+        sink = SNMPTrapSink({
+            "host": "127.0.0.1", "port": port, "version": "1",
+            "trap_oid": "1.3.6.1.6.3.1.1.5.2",  # warmStart
+            "community": "public",
+        })
+        sink.write(json.dumps({"1.3.6.1.4.1.99999.1.0": "warm"}).encode(), {})
+        listener.join()
+        d = listener.event.to_dict()
+        assert d["generic_trap"] == 1  # warmStart
+        assert d["specific_trap"] == 0
 
     def test_varbind_spec_with_symbolic_oid(self, tmp_path, monkeypatch):
         """Explicit varbind spec resolves symbolic OIDs against the tsmi corpus."""
@@ -810,6 +849,49 @@ class TestTrapSinkTsmp:
         varbinds = {vb.oid_str: vb.value.to_display_string() for vb in listener.event.varbinds}
         assert varbinds["1.3.6.1.2.1.2.2.1.2.1"] == "eth0"
         assert varbinds["1.3.6.1.4.1.99999.1.2"] == "77"
+
+
+class TestTrapSinkLegacyRegression:
+    """Review BUG 2: the legacy pysnmp send path passed the varbind list as ONE
+    positional to ``sendNotification`` (``SmiError: ObjectType object not fully
+    initialized`` on every send). These are real, unmocked sends against an
+    in-process tsmp listener — no ``hlapi_send_notification`` mocking."""
+
+    def test_legacy_v2c_send_against_tsmp_listener(self, monkeypatch):
+        monkeypatch.delenv("TRAM_SNMP_STACK", raising=False)  # legacy / flag off
+        port = _free_port()
+        listener = _CaptureListener(port)
+        listener.start()
+        sink = SNMPTrapSink({
+            "host": "127.0.0.1", "port": port, "trap_oid": "1.3.6.1.4.1.99999",
+            "version": "2c",
+        })
+        sink.write(json.dumps({"1.3.6.1.4.1.99999.1.0": "legacy-alarm"}).encode(), {})
+        listener.join()
+        varbinds = {vb.oid_str: vb.value.to_display_string() for vb in listener.event.varbinds}
+        assert varbinds["1.3.6.1.4.1.99999.1.0"] == "legacy-alarm"
+        assert varbinds["1.3.6.1.6.3.1.1.4.1.0"] == "1.3.6.1.4.1.99999"
+        assert "1.3.6.1.2.1.1.3.0" in varbinds
+
+    def test_legacy_v1_send_against_tsmp_listener(self, monkeypatch):
+        monkeypatch.delenv("TRAM_SNMP_STACK", raising=False)  # legacy / flag off
+        port = _free_port()
+        listener = _CaptureListener(port)
+        listener.start()
+        sink = SNMPTrapSink({
+            "host": "127.0.0.1", "port": port, "trap_oid": "1.3.6.1.4.1.99999",
+            "version": "1", "community": "public",
+        })
+        sink.write(json.dumps({"1.3.6.1.4.1.99999.1.0": "legacy-v1"}).encode(), {})
+        listener.join()
+        varbinds = {vb.oid_str: vb.value.to_display_string() for vb in listener.event.varbinds}
+        assert varbinds["1.3.6.1.4.1.99999.1.0"] == "legacy-v1"
+        # pysnmp's v1 conversion carries the RFC 2576 enterprise/specific
+        # split (the same BUG 1 semantics the tsmp path now emits).
+        d = listener.event.to_dict()
+        assert d["generic_trap"] == 6
+        assert d["enterprise"] == "1.3.6.1.4.1"
+        assert d["specific_trap"] == 99999
 
 
 # ── worker stats payload + manager mismatch guard ───────────────────────────

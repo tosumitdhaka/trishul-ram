@@ -15,6 +15,9 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - Cross-stack decode-equivalence tests (the same trap BER bytes through the pysnmp and tsmp decoders) and an env-gated in-process pysnmp-peer wire suite (`TRAM_TEST_SNMP_WIRE=1`, enabled by the release gate) — catches wire-level breakage the in-stack tests can mask (GH #72)
 - Migration note: a persistent `TRAM_MIB_DIR` holding custom MIBs uploaded before v1.5.0 contains `.py`-only artifacts — a `trishul`-stack worker will not resolve them until they are re-uploaded (from v1.5.0 the manager compiles both formats) (GH #72)
 
+### Fixed
+- SNMP trap sink sends failed in legacy (pysnmp) mode — the varbind list reached pysnmp's varargs `send_notification` as a single positional, raising `SmiError: ObjectType object not fully initialized` on every send (pre-existing since before v1.5.0; surfaced by the v1.5.0 independent review) (GH #72)
+
 ### Changed
 - **Breaking (config contract):** `priv_protocol: DES` and `priv_protocol: 3DES` are now rejected at pipeline validation on all three SNMPv3 config classes — DES is obsoleted (RFC 8996 lineage) and dropped by the upstream trishul-snmp stack; 3DES was never standardized (expired draft). Use `AES128` (GH #72)
 - `tram[snmp]` is dual-stack during the flag period: pysnmp stays, with exact wire-validated pins `trishul-smi==0.5.2` + `trishul-snmp[v3]==0.6.1` added (GH #72)

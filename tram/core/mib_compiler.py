@@ -122,6 +122,30 @@ def bundled_mib_source_dirs() -> list[str]:
     return list(dict.fromkeys(path for path in candidates if os.path.isdir(path)))
 
 
+def is_mib_bundle_content(content: bytes | str) -> bool:
+    """Return whether *content* is a tsmi JSON IR bundle (not a sidecar).
+
+    A bundle is a JSON object carrying a ``module`` name and ``objects`` key;
+    the ``manifest.json`` / ``oid_index.json`` sidecars do not. Bytes-based so
+    callers (e.g. the worker asset sync) can validate a fetched body before
+    writing it as ``<MODULE>.json`` — a pre-v1.5.0 manager serves ``.py``
+    content with HTTP 200 even for ``?format=json``.
+    """
+    try:
+        if isinstance(content, bytes):
+            data = json.loads(content.decode("utf-8"))
+        else:
+            data = json.loads(content)
+    except (ValueError, UnicodeDecodeError):
+        return False
+    return (
+        isinstance(data, dict)
+        and isinstance(data.get("module"), str)
+        and bool(data.get("module"))
+        and isinstance(data.get("objects"), dict)
+    )
+
+
 def is_mib_bundle_json(path: str | Path) -> bool:
     """Return whether *path* holds a tsmi JSON IR bundle (not a sidecar).
 
@@ -133,15 +157,9 @@ def is_mib_bundle_json(path: str | Path) -> bool:
     """
     try:
         with open(path, encoding="utf-8") as fh:
-            data = json.load(fh)
-    except (OSError, ValueError):
+            return is_mib_bundle_content(fh.read())
+    except OSError:
         return False
-    return (
-        isinstance(data, dict)
-        and isinstance(data.get("module"), str)
-        and bool(data.get("module"))
-        and isinstance(data.get("objects"), dict)
-    )
 
 
 def available_compiled_mibs(mib_dir: str) -> set[str]:
@@ -247,6 +265,7 @@ def compile_mibs(
             compiled_dir,
             source_dirs=source_dirs,
             resolve_missing=resolve_missing,
+            remote_cache_dir=remote_cache_dir,
         )
 
     try:
@@ -305,6 +324,7 @@ def _compile_mibs_trishul(
     *,
     source_dirs: Iterable[str],
     resolve_missing: bool,
+    remote_cache_dir: str | None,
 ) -> MibCompileResult:
     """Compile MIBs via trishul-smi to its native JSON IR bundle format.
 
@@ -315,6 +335,11 @@ def _compile_mibs_trishul(
     pysmi ``.py`` corpus in *compiled_dir* (dual-format corpus). The JSON
     bundle format is tsmi's native output — the exact format trishul-snmp's
     ``load_bundle`` consumes.
+
+    ``remote_cache_dir`` mirrors the pysmi backend: fetched remote sources are
+    persisted there (same persistence as ``_CachingReader``) and served from
+    that store on later compiles — no re-downloads, and the source-store
+    delete path can remove them.
     """
     try:
         from trishul_smi import CompilerConfig, FileReader, MibCompiler
@@ -342,7 +367,10 @@ def _compile_mibs_trishul(
             from trishul_smi import HttpReader
 
             async with HttpReader(MIB_HTTP_SOURCE_URL) as http_reader:
-                compiler.add_reader(http_reader)
+                remote_reader: object = http_reader
+                if remote_cache_dir:
+                    remote_reader = _TsmiCachingReader(http_reader, remote_cache_dir)
+                compiler.add_reader(remote_reader)
                 return await compiler.compile(*requested)
         return await compiler.compile(*requested)
 
@@ -416,3 +444,44 @@ def _reader_get(reader: object, mibname: str, **options):
     if getter is None:
         raise AttributeError(f"{type(reader).__name__!s} reader has no getData/get_data method")
     return getter(mibname, **options)
+
+
+def _find_cached_source(cache_dir: str, mib_name: str) -> str | None:
+    """Return a previously persisted raw source for *mib_name*, or None.
+
+    Fetched remote sources land in the source store under their module name;
+    this scans the store for the dash/underscore name variants so a later
+    compile serves from the cache instead of re-downloading.
+    """
+    candidates = mib_candidates(mib_name)
+    for path in list_mib_source_files(cache_dir, recursive=True):
+        if mib_source_module_name(path.name) in candidates:
+            try:
+                return path.read_text(encoding="utf-8")
+            except OSError:
+                return None
+    return None
+
+
+class _TsmiCachingReader:
+    """Wrap a tsmi async reader and persist fetched raw ASN.1 source locally.
+
+    The tsmi analogue of ``_CachingReader`` (which wraps the pysmi remote
+    reader): fetched sources land in *cache_dir* (the source store) and are
+    served from there on later compiles — no re-downloads, no ``/source``
+    404s, and fetched sources become removable by the source-store delete
+    path. Structural ``FetchProtocol`` (``async def fetch``) so trishul-smi's
+    compiler accepts it like any other reader.
+    """
+
+    def __init__(self, reader: object, cache_dir: str):
+        self._reader = reader
+        self._cache_dir = cache_dir
+
+    async def fetch(self, mib_name: str) -> str:
+        cached = _find_cached_source(self._cache_dir, mib_name)
+        if cached is not None:
+            return cached
+        text = await self._reader.fetch(mib_name)
+        persist_mib_source(self._cache_dir, f"{mib_name}.txt", text)
+        return text

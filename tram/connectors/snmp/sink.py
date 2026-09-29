@@ -29,6 +29,24 @@ from tram.registry.registry import register_sink
 
 logger = logging.getLogger(__name__)
 
+# RFC 2576 §3.2 v2→v1 trap mapping — mirrors pysnmp's proxy rfc2576.v2_to_v1
+# so a v1 trap emitted by the tsmp sink carries the same Trap-PDU fields the
+# legacy path produces. Standard notification OIDs map to generic traps 0-5
+# under the snmpTraps enterprise root; enterprise-specific OIDs split into
+# enterprise + specific-trap with generic=6 (an RFC 2576-conformant NMS
+# reconstructs the trap OID as enterprise.specific).
+_STANDARD_TRAP_OIDS: dict[tuple[int, ...], int] = {
+    (1, 3, 6, 1, 6, 3, 1, 1, 5, 1): 0,  # coldStart
+    (1, 3, 6, 1, 6, 3, 1, 1, 5, 2): 1,  # warmStart
+    (1, 3, 6, 1, 6, 3, 1, 1, 5, 3): 2,  # linkDown
+    (1, 3, 6, 1, 6, 3, 1, 1, 5, 4): 3,  # linkUp
+    (1, 3, 6, 1, 6, 3, 1, 1, 5, 5): 4,  # authenticationFailure
+    (1, 3, 6, 1, 6, 3, 1, 1, 5, 6): 5,  # egpNeighborLoss
+}
+_SNMP_TRAPS_ROOT = (1, 3, 6, 1, 6, 3, 1, 1, 5)
+_SYS_UPTIME_INSTANCE_OID = (1, 3, 6, 1, 2, 1, 1, 3, 0)
+_SNMP_TRAP_OID_INSTANCE_OID = (1, 3, 6, 1, 6, 3, 1, 1, 4, 1, 0)
+
 
 @register_sink("snmp_trap")
 class SNMPTrapSink(BaseSink):
@@ -53,7 +71,7 @@ class SNMPTrapSink(BaseSink):
         security_name   (str)   SNMPv3 USM username.
         auth_protocol   (str)   MD5 | SHA | SHA224 | SHA256 | SHA384 | SHA512.
         auth_key        (str)   Auth passphrase (None → noAuthNoPriv).
-        priv_protocol   (str)   DES | 3DES | AES | AES128 | AES192 | AES256.
+        priv_protocol   (str)   AES | AES128 | AES192 | AES256 (DES/3DES rejected at validation).
         priv_key        (str)   Privacy passphrase (None → authNoPriv).
         context_name    (str)   SNMPv3 context name.
     """
@@ -293,14 +311,44 @@ class SNMPTrapSink(BaseSink):
         elif self.version == "1":
             from trishul_snmp import V1Notifier
 
+            from tram.connectors.snmp.mib_utils import oid_str_to_tuple
+
+            # RFC 2576 §3.2 v2→v1 mapping (parity with pysnmp's proxy
+            # v2_to_v1): the trap OID becomes the Trap-PDU's
+            # enterprise/generic/specific fields — never the raw OID as the
+            # enterprise, which would mis-encode an enterprise-specific trap.
+            trap_oid_tuple = oid_str_to_tuple(self.trap_oid)
+            if trap_oid_tuple in _STANDARD_TRAP_OIDS:
+                enterprise = _SNMP_TRAPS_ROOT
+                generic_trap = _STANDARD_TRAP_OIDS[trap_oid_tuple]
+                specific_trap = 0
+            else:
+                # Strip a trailing ".0" separator arc when present (pysnmp's
+                # v2_to_v1: ``[-2] == 0`` → drop two arcs).
+                if trap_oid_tuple[-2] == 0:
+                    enterprise = trap_oid_tuple[:-2]
+                else:
+                    enterprise = trap_oid_tuple[:-1]
+                generic_trap = 6
+                specific_trap = trap_oid_tuple[-1]
+            # The v1 Trap-PDU carries sysUpTime + enterprise/generic/specific
+            # in its header — drop the v2c-style mandatory varbinds (tsmp
+            # auto-prepends sysUpTime.0 to the v1 varbind list).
+            v1_varbinds = [
+                (oid, val) for oid, val in var_binds
+                if oid_str_to_tuple(oid) not in (
+                    _SYS_UPTIME_INSTANCE_OID,
+                    _SNMP_TRAP_OID_INSTANCE_OID,
+                )
+            ]
             async with V1Notifier(community=self.community, **common) as notifier:
                 await notifier.send_trap(
-                    self.trap_oid,
+                    enterprise,
                     agent_addr="0.0.0.0",
-                    generic_trap=6,
-                    specific_trap=0,
+                    generic_trap=generic_trap,
+                    specific_trap=specific_trap,
                     timestamp=uptime_ticks,
-                    varbinds=var_binds,
+                    varbinds=v1_varbinds,
                 )
         else:
             from trishul_snmp import V2cNotifier
@@ -371,7 +419,8 @@ class SNMPTrapSink(BaseSink):
                 target,
                 context,
                 "trap",
-                mandatory_vbs + var_binds,
+                *mandatory_vbs,
+                *var_binds,
             )
             if errInd:
                 raise SinkError(f"SNMP trap send error: {errInd}")

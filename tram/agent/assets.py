@@ -166,7 +166,15 @@ def _sync_mib(client: httpx.Client, mib_name: str, mib_dir: Path) -> None:
     manager's compile backend. A 404 for a format means the manager has no
     artifact of that kind (standard MIBs baked into the image return 404 for
     both) — that is fine and skipped.
+
+    The ``json`` body is validated before writing (C7): a pre-v1.5.0 manager
+    serves ``.py`` content with HTTP 200 even for ``?format=json`` — a
+    mixed-stack rolling upgrade would otherwise write a ``.py`` module under
+    a ``.json`` name and the trishul stack would choke on it later. Content
+    that is not a tsmi JSON IR bundle is logged and skipped.
     """
+    from tram.core.mib_compiler import is_mib_bundle_content
+
     mib_dir.mkdir(parents=True, exist_ok=True)
     for fmt in ("py", "json"):
         dest = mib_dir / f"{mib_name}.{fmt}"
@@ -177,6 +185,14 @@ def _sync_mib(client: httpx.Client, mib_name: str, mib_dir: Path) -> None:
                 logger.debug("MIB %s.%s not on manager (likely baked into image)", mib_name, fmt)
                 continue
             resp.raise_for_status()
+            if fmt == "json" and not is_mib_bundle_content(resp.content):
+                logger.warning(
+                    "MIB %s.json from manager is not a tsmi JSON bundle — "
+                    "skipping (mixed-stack upgrade guard; an older manager "
+                    "may have served the .py artifact for ?format=json)",
+                    mib_name,
+                )
+                continue
             if _content_matches(dest, resp.content):
                 logger.debug("MIB %s.%s unchanged, skipping write", mib_name, fmt)
                 continue

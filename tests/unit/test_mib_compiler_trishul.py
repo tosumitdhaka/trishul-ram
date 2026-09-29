@@ -28,6 +28,7 @@ from tram.core.mib_compiler import (  # noqa: E402
     available_compiled_mibs,
     compile_mibs,
     delete_mib_artifacts,
+    is_mib_bundle_content,
     is_mib_bundle_json,
 )
 
@@ -217,6 +218,79 @@ class TestTsmiCorpusHelpers:
             path = tmp_path / name
             path.write_text(content)
             assert not is_mib_bundle_json(path), name
+
+    def test_is_mib_bundle_content_bytes_discriminator(self):
+        """Review C7: the bytes-level discriminator rejects .py content that a
+        pre-v1.5.0 manager would serve with HTTP 200 for ?format=json."""
+        assert is_mib_bundle_content(b'{"module": "IF-MIB", "objects": {}}')
+        assert not is_mib_bundle_content(b"# IF-MIB compiled")
+        assert not is_mib_bundle_content(b'{"manifest": []}')
+        assert not is_mib_bundle_content(b"not json at all")
+        assert not is_mib_bundle_content(b"")
+        assert not is_mib_bundle_content('\x00\xff binary'.encode("latin-1"))
+
+    def test_tsmi_caching_reader_persists_and_serves_from_cache(self, tmp_path):
+        """Review C5: the trishul backend's remote-reader wrapper persists
+        fetched sources to the cache dir and serves from there on later
+        compiles (no re-downloads; fetched sources become removable)."""
+        from tram.core.mib_compiler import _TsmiCachingReader
+
+        cache_dir = str(tmp_path / "source-cache")
+        fetched: list[str] = []
+
+        class _FakeRemote:
+            async def fetch(self, mib_name):
+                fetched.append(mib_name)
+                return f"-- {mib_name} ASN.1 source --"
+
+        import asyncio
+
+        reader = _TsmiCachingReader(_FakeRemote(), cache_dir)
+        assert asyncio.run(reader.fetch("SELF-MIB")) == "-- SELF-MIB ASN.1 source --"
+        assert fetched == ["SELF-MIB"]
+        assert (tmp_path / "source-cache" / "SELF-MIB.txt").is_file()
+
+        # second fetch on the same instance and a fresh instance both serve
+        # from the local store — the remote reader is not hit again
+        assert asyncio.run(reader.fetch("SELF-MIB")) == "-- SELF-MIB ASN.1 source --"
+        assert asyncio.run(_TsmiCachingReader(_FakeRemote(), cache_dir).fetch("SELF-MIB")) == "-- SELF-MIB ASN.1 source --"
+        assert fetched == ["SELF-MIB"]
+
+    def test_compile_trishul_wires_remote_cache_dir(self, tmp_path):
+        """Review C5: compile_mibs forwards remote_cache_dir into the trishul
+        backend, which wraps the remote reader in the caching reader."""
+        from tram.core.mib_compiler import _TsmiCachingReader
+
+        source_dir = _write_source_dir(tmp_path, {"SELF-MIB": SELF_MIB})
+        compiled_dir = tmp_path / "compiled"
+        cache_dir = tmp_path / "source-cache"
+
+        class _FakeHttp:
+            async def __aenter__(self):
+                return self
+
+            async def __aexit__(self, *exc):
+                return False
+
+            async def fetch(self, mib_name):
+                return f"-- {mib_name} --"
+
+        with (
+            patch("tram.core.mib_compiler._TsmiCachingReader", wraps=_TsmiCachingReader) as caching_mock,
+            patch("trishul_smi.HttpReader", return_value=_FakeHttp()),
+        ):
+            compile_mibs(
+                ["SELF-MIB"],
+                str(compiled_dir),
+                source_dirs=[str(source_dir)],
+                resolve_missing=True,
+                remote_cache_dir=str(cache_dir),
+                stack="trishul",
+            )
+
+        assert caching_mock.called
+        assert caching_mock.call_args.args[1] == str(cache_dir)
+        assert (compiled_dir / "SELF-MIB.json").is_file()
 
     def test_delete_mib_artifacts_removes_both_formats(self, tmp_path):
         compiled_dir = tmp_path / "compiled"

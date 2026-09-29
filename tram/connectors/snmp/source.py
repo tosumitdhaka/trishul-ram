@@ -113,7 +113,7 @@ class SNMPTrapSource(BaseSource):
         security_name   (str)   SNMPv3 USM username.
         auth_protocol   (str)   MD5 | SHA | SHA224 | SHA256 | SHA384 | SHA512.
         auth_key        (str)   Auth passphrase (None → noAuthNoPriv).
-        priv_protocol   (str)   DES | 3DES | AES | AES128 | AES192 | AES256.
+        priv_protocol   (str)   AES | AES128 | AES192 | AES256 (DES/3DES rejected at validation).
         priv_key        (str)   Privacy passphrase (None → authNoPriv).
         context_name    (str)   SNMPv3 context name.
     """
@@ -339,12 +339,34 @@ class SNMPTrapSource(BaseSource):
 
         return _stream()
 
+    @staticmethod
+    def _tsmp_val_to_legacy_str(val_obj) -> str:
+        """Render a tsmp value exactly like the legacy trap path's ``str(val)``.
+
+        The legacy ``_decode_trap`` binds ``str(pysnmp_proto_value)``; this is
+        the parity contract for ``_tsmp_event_record`` (C3/C4): raw bytes come
+        back as latin-1 text (``OctetString``/``Opaque``) and an IpAddress as
+        its raw 4 octets — pysnmp's ``__str__`` forms, which are ugly but are
+        what the flag-off path emits. Equivalence is the contract; these spots
+        are post-swap cleanup candidates (hex/pretty rendering).
+        """
+        cls = type(val_obj).__name__
+        if cls == "OctetStringValue":
+            return bytes(val_obj.value).decode("latin-1")
+        if cls == "OpaqueValue":
+            return bytes(val_obj.value).decode("latin-1")
+        if cls == "IpAddressValue":
+            return "".join(chr(int(part)) for part in str(val_obj.value).split("."))
+        if cls == "ObjectIdentifierValue":
+            return ".".join(str(arc) for arc in val_obj.value)
+        return val_obj.to_display_string()
+
     def _tsmp_event_record(self, event) -> tuple[bytes, dict]:
         """Convert a tsmp NotificationEvent to the legacy (json, meta) shape."""
         import json
 
         raw_bindings = {
-            vb.oid_str: vb.value.to_display_string() for vb in event.varbinds
+            vb.oid_str: self._tsmp_val_to_legacy_str(vb.value) for vb in event.varbinds
         }
         bindings = self._resolve_trap_bindings(raw_bindings)
 
@@ -385,14 +407,12 @@ class SNMPTrapSource(BaseSource):
         return bindings
 
     def _decode_trap(self, raw: bytes) -> dict:
-        """Decode a raw trap PDU — stack-specific wire layer.
+        """Decode a raw SNMP trap PDU using pyasn1 BER decoder + pysnmp proto API.
 
-        v1.5.0 (GH #72): the trishul path decodes via tsmp's
-        ``decode_notification`` (v1/v2c/v3 USM, the full auth/priv matrix);
-        the legacy path keeps the pyasn1 BER + pysnmp proto decoder.
+        Legacy-path only (v1.5.0, GH #72): the flag-on trap stream decodes
+        inside the tsmp listeners (``_tsmp_event_record``), so this method is
+        never called on the trishul stack.
         """
-        if self._snmp_stack == "trishul":
-            return self._decode_trap_tsmp(raw)
         try:
             from pyasn1.codec.ber import decoder as ber_decoder
             from pysnmp.proto.api import v2c as pMod
@@ -404,34 +424,6 @@ class SNMPTrapSource(BaseSource):
             return bindings
         except Exception:
             # Fall back to hex representation for undecodable packets
-            return {"_raw": raw.hex()}
-
-    def _decode_trap_tsmp(self, raw: bytes) -> dict:
-        """Decode a raw trap PDU via tsmp ``decode_notification`` (flag-on).
-
-        v3 messages authenticate/decrypt against the configured USM user when
-        credentials are present; undecodable datagrams fall back to ``_raw``
-        hex exactly like the legacy decoder.
-        """
-        try:
-            from trishul_snmp import decode_notification
-
-            user = None
-            if self.version == "3":
-                from tram.connectors.snmp.mib_utils import build_v3_usm_user
-
-                user = build_v3_usm_user(
-                    security_name=self.security_name,
-                    auth_protocol=self.auth_protocol,
-                    auth_key=self.auth_key,
-                    priv_protocol=self.priv_protocol,
-                    priv_key=self.priv_key,
-                )
-            event = decode_notification(raw, user=user)
-            return {
-                vb.oid_str: vb.value.to_display_string() for vb in event.varbinds
-            }
-        except Exception:
             return {"_raw": raw.hex()}
 
 
@@ -468,7 +460,7 @@ class SNMPPollSource(BaseSource):
         security_name   (str)   SNMPv3 USM username.
         auth_protocol   (str)   MD5 | SHA | SHA224 | SHA256 | SHA384 | SHA512.
         auth_key        (str)   Auth passphrase (None → noAuthNoPriv).
-        priv_protocol   (str)   DES | 3DES | AES | AES128 | AES192 | AES256.
+        priv_protocol   (str)   AES | AES128 | AES192 | AES256 (DES/3DES rejected at validation).
         priv_key        (str)   Privacy passphrase (None → authNoPriv).
         context_name    (str)   SNMPv3 context name.
     """
@@ -557,9 +549,13 @@ class SNMPPollSource(BaseSource):
     def _tsmp_val_to_str(val_obj) -> str:
         """Serialize a tsmp SNMP value to the legacy ``_snmp_val_to_str`` shape.
 
-        OctetString values containing non-printable bytes are hex-encoded
-        (6-byte → MAC format, otherwise ``0x``-prefixed) — identical policy
-        to the legacy path; all other types use the tsmp display string.
+        Parity contract (C3/C4): OctetString values containing non-printable
+        bytes are hex-encoded (6-byte → MAC format, otherwise ``0x``-prefixed)
+        exactly like the legacy path; IpAddress and Opaque render as their raw
+        octets in latin-1 text — pysnmp's ``str()`` forms, ugly but what the
+        flag-off path emits (post-swap cleanup candidates). All other types
+        use the tsmp display string, which matches the legacy decimal/dotted
+        rendering.
         """
         type_name = type(val_obj).__name__
         if type_name == "OctetStringValue":
@@ -571,8 +567,10 @@ class SNMPPollSource(BaseSource):
             return "0x" + raw.hex()
         if type_name == "ObjectIdentifierValue":
             return ".".join(str(arc) for arc in val_obj.value)
+        if type_name == "IpAddressValue":
+            return "".join(chr(int(part)) for part in str(val_obj.value).split("."))
         if type_name == "OpaqueValue":
-            return "0x" + bytes(val_obj.value).hex()
+            return bytes(val_obj.value).decode("latin-1")
         return val_obj.to_display_string()
 
     def _build_tsmp_manager(self):
