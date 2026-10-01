@@ -10,10 +10,12 @@
 #   ✓  mib          — pysmi: compile uploaded MIBs → shared volume
 #   ✓  protobuf_ser — grpcio-tools: compile uploaded .proto → shared volume
 #   ✓  asn1         — validate/cache .asn schemas uploaded via UI
+#   ✓  avro         — fastavro serializer parity with worker images (GH #79)
 #   ✓  ai-anthropic / ai-openai — AI features are UI/API driven (manager-side)
 #   ✓  Web UI assets
 #
-#   ✗  kafka, snmp, avro, jmespath, sql, websocket, prometheus_rw — execution connectors
+#   ✗  kafka, jmespath, sql, websocket, prometheus_rw — execution connectors
+#   ✗  snmp is installed only for the MIB compile path (trishul-smi); no SNMP execution runs here
 #   ✗  protobuf runtime (worker-only)
 #
 # Stage 0  ui-builder  — builds tram-ui static assets (Node 20)
@@ -62,15 +64,17 @@ RUN apt-get update && \
 #   mib          — pysmi MIB compilation
 #   protobuf_ser — grpcio-tools .proto compilation
 #   asn1         — .asn schema validation/caching
+#   avro         — fastavro serializer parity with worker images (GH #79)
 #   ai-anthropic / ai-openai — UI/API-driven AI features
 #
-# Excluded: execution connectors (kafka, snmp, avro, jmespath, sql connector,
-#   websocket, prometheus_rw) — those belong in the worker image.
+# Excluded: execution connectors (kafka, jmespath, sql connector, websocket,
+#   prometheus_rw) — those belong in the worker image. snmp is installed for the
+#   MIB compile path only; no SNMP execution connectors run here.
 # corba (omniORBpy) excluded: not on PyPI; install python3-omniorb via apt in a custom layer.
 COPY --from=builder /build/dist/*.whl .
 RUN --mount=type=cache,target=/root/.cache/pip whl=$(ls *.whl) && \
     pip install \
-        "${whl}[manager,k8s,metrics,watch,mib,protobuf_ser,asn1,ai-anthropic,ai-openai,snmp]" && \
+        "${whl}[manager,k8s,metrics,watch,mib,protobuf_ser,asn1,avro,ai-anthropic,ai-openai,snmp]" && \
     rm *.whl
 
 COPY files/mibs_compiled/ /mibs/
