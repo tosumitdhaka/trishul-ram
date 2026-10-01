@@ -1,0 +1,62 @@
+## Capacity study — bench base values (manager+worker topology, Phase 2a).
+##
+## Layers on top of the deployed release (applied with --reuse-values so the
+## manager PVC / envSecret wiring carries forward):
+##
+##   helm upgrade trishul-ram helm/ -n trishul-ram --reuse-values \
+##     -f scripts/perf/infra/values-bench.yaml \
+##     -f scripts/perf/infra/values-res-M.yaml        # L/M/H per cell
+##
+## Contents (vs values-mgrworker.yaml):
+##   * same mgr+worker topology base (manager + 3 workers, NodePorts 30001/30002)
+##   * image tags pinned to the v1.5.1 bench build (main @ 326d9dd)
+##   * env additions:
+##     - TRAM_RATE_LIMIT=0        runbook workaround #2 — disable the 50 req/window
+##                                 limiter on /api/* + /webhooks/* for flood paths
+##     - TRAM_STATEFUL_TRANSFORMS=1  Matrix C prerequisite (harmless for A)
+##     - baseline env carried forward explicitly (TRAM_SNMP_STACK=legacy etc.)
+##     - PERF_* template variables so the scenario templates resolve against the
+##       bench fixtures (runbook workarounds #3–#5, #7): mock REST + SNMP
+##       responder run on the HOST (kind bridge gateway 172.19.0.1, bound
+##       0.0.0.0); SFTP is the in-cluster sftp service (creds perf/perfpw).
+
+manager:
+  enabled: true
+  image:
+    registry: ""
+    repository: trishul-ram-manager
+    tag: local-20260929135930
+
+worker:
+  replicas: 3
+  image:
+    registry: ""
+    repository: trishul-ram-worker
+    tag: local-20260929135930
+  ingressService:
+    enabled: true
+    type: NodePort
+    port: 8767
+    nodePort: 30002
+
+service:
+  type: NodePort
+  port: 8765
+  nodePort: 30001
+
+env:
+  TRAM_LOG_FORMAT: json
+  TRAM_LOG_LEVEL: INFO
+  TRAM_QUEUE_MANUAL_RUNS: "1"
+  TRAM_SNMP_STACK: legacy
+  TRAM_STATEFUL_TRANSFORMS: "1"
+  TRAM_STREAM_SINGLE_PLACEMENT: "1"
+  TRAM_RATE_LIMIT: "0"
+  PERF_REST_URL: http://172.19.0.1:18080/records
+  PERF_REST_SINK_URL: http://172.19.0.1:18080/collect
+  PERF_SNMP_HOST: "172.19.0.1"
+  PERF_SFTP_HOST: sftp
+  PERF_SFTP_PORT: "22"
+  PERF_SFTP_USER: perf
+  PERF_SFTP_PASS: perfpw
+  PERF_SFTP_REMOTE: /home/perf/upload/in

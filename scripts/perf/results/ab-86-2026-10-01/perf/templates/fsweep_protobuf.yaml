@@ -1,0 +1,38 @@
+version: "1"
+
+pipeline:
+  name: fsweep-protobuf
+  description: >
+    Format sweep — Protobuf. Local protobuf-encoded files in → protobuf out.
+    Input file format: length-delimited framed CdrRecord messages (schema
+    /data/schemas/cdr.proto, message class CdrRecord — see runbook for the
+    corpus-generation recipe). Requires protobuf + grpcio-tools
+    (pip install tram[protobuf_ser]).
+  enabled: true
+
+  schedule:
+    type: manual
+
+  source:
+    type: local
+    path: ${PERF_IN_DIR:-/data/perf/in}
+    file_pattern: "*.pb"
+
+  serializer_in:
+    type: protobuf
+    schema_file: ${PERF_PROTO_SCHEMA:-/data/schemas/cdr.proto}
+    message_class: CdrRecord
+    framing: length_delimited
+
+  serializer_out:
+    type: protobuf
+    schema_file: ${PERF_PROTO_SCHEMA:-/data/schemas/cdr.proto}
+    message_class: CdrRecord
+    framing: length_delimited
+
+  sinks:
+    - type: local
+      path: ${PERF_OUT_DIR:-/data/perf/out}
+      filename_template: "fsweep_protobuf_{pipeline}_{timestamp}.pb"
+
+  on_error: continue

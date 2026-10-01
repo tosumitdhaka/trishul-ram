@@ -1,0 +1,37 @@
+version: "1"
+
+pipeline:
+  name: fsweep-pm-xml
+  description: >
+    Format sweep — 3GPP PM XML. Local measData files in → measData out.
+    Input file format: file_gen.py --format pm_xml (a <measData> document
+    with one <measValue> per bench record; counters declared as <measType>
+    elements). The out-side pm_xml serializer re-emits measData.
+  enabled: true
+
+  schedule:
+    type: manual
+
+  source:
+    type: local
+    path: ${PERF_IN_DIR:-/data/perf/in}
+    file_pattern: "*.xml"
+
+  serializer_in:
+    type: pm_xml
+    add_managed_element: true
+    add_duration: false
+    numeric_values: true
+
+  serializer_out:
+    type: pm_xml
+    add_managed_element: true
+    add_duration: false
+    numeric_values: true
+
+  sinks:
+    - type: local
+      path: ${PERF_OUT_DIR:-/data/perf/out}
+      filename_template: "fsweep_pmxml_{pipeline}_{timestamp}.xml"
+
+  on_error: continue

@@ -1,0 +1,33 @@
+version: "1"
+
+pipeline:
+  name: s7-local-kafka
+  description: >
+    Perf scenario S7 — local JSONL source → Kafka sink. Reads the batch
+    files materialized by file_gen.py --format jsonl and produces one Kafka
+    message per record (acks=all). Requires kafka-python (Phase 1b).
+  enabled: true
+
+  schedule:
+    type: manual
+
+  source:
+    type: local
+    path: ${PERF_IN_DIR:-/data/perf/in}
+    file_pattern: "*.jsonl"
+
+  serializer_in:
+    type: json
+
+  serializer_out:
+    type: json
+
+  sinks:
+    - type: kafka
+      brokers:
+        - ${PERF_KAFKA_BROKERS:-kafka:9092}
+      topic: ${PERF_KAFKA_OUT_TOPIC:-perf-cdr-out}
+      acks: all
+      key_field: record_id
+
+  on_error: continue

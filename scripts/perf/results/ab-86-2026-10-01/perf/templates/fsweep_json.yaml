@@ -1,0 +1,32 @@
+version: "1"
+
+pipeline:
+  name: fsweep-json
+  description: >
+    Format sweep — JSON. Local JSON files in → JSON out. Input file format:
+    a JSON document containing an array of records (gen_corpus --format json
+    writes NDJSON lines; a JSON-array file is produced by wrapping the
+    corpus — see runbook for the exact input layout the json serializer
+    expects: an array, one array element per record).
+  enabled: true
+
+  schedule:
+    type: manual
+
+  source:
+    type: local
+    path: ${PERF_IN_DIR:-/data/perf/in}
+    file_pattern: "*.json"
+
+  serializer_in:
+    type: json
+
+  serializer_out:
+    type: json
+
+  sinks:
+    - type: local
+      path: ${PERF_OUT_DIR:-/data/perf/out}
+      filename_template: "fsweep_json_{pipeline}_{timestamp}.json"
+
+  on_error: continue

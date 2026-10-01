@@ -1,0 +1,1 @@
+[{"run_id":"376756a1-585d-4b0c-9a9c-73ab5891276c","pipeline":"s3-rest-rest-p1000","status":"success","started_at":"2026-10-01T11:19:55.251474+00:00","finished_at":"2026-10-01T11:19:58.672564+00:00","records_in":100000,"records_out":100000,"records_skipped":0,"bytes_in":52279718,"bytes_out":56279616,"dlq_count":0,"error":null,"errors":[],"node":"trishul-ram-worker-0"}]

@@ -1,0 +1,32 @@
+version: "1"
+
+pipeline:
+  name: fsweep-csv
+  description: >
+    Format sweep — CSV. Local CSV files in → CSV out. Input file format:
+    file_gen.py --format csv (header + rows, canonical flat CDR fields).
+  enabled: true
+
+  schedule:
+    type: manual
+
+  source:
+    type: local
+    path: ${PERF_IN_DIR:-/data/perf/in}
+    file_pattern: "*.csv"
+
+  serializer_in:
+    type: csv
+    has_header: true
+    delimiter: ","
+
+  serializer_out:
+    type: csv
+    has_header: true
+
+  sinks:
+    - type: local
+      path: ${PERF_OUT_DIR:-/data/perf/out}
+      filename_template: "fsweep_csv_{pipeline}_{timestamp}.csv"
+
+  on_error: continue

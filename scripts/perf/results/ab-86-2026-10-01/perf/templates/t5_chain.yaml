@@ -1,0 +1,61 @@
+version: "1"
+
+pipeline:
+  name: t5-chain
+  description: >
+    Transform bench T5 — five-transform chain over the flat CDR corpus:
+    rename (field aliasing) -> cast (type coercion) -> add_field (computed
+    field) -> filter (predicate) -> project (final reshape). Measures the
+    cost of a representative multi-transform pipeline body.
+  enabled: true
+
+  schedule:
+    type: manual
+
+  source:
+    type: local
+    path: ${PERF_IN_DIR:-/data/perf/in}
+    file_pattern: "*.jsonl"
+
+  serializer_in:
+    type: json
+
+  transforms:
+    - type: rename
+      fields:
+        msisdn: subscriber
+        cell_id: sector_id
+
+    - type: cast
+      fields:
+        duration_s: int
+        charge_amount: float
+
+    - type: add_field
+      fields:
+        kb_down: "bytes_down / 1024"
+        source_tag: "'perf-t5'"
+
+    - type: filter
+      condition: "bytes_down >= 0"
+
+    - type: project
+      fields:
+        record_id: record_id
+        subscriber: subscriber
+        sector_id: sector_id
+        event_type: event_type
+        direction: direction
+        duration_s: duration_s
+        kb_down: kb_down
+        source_tag: source_tag
+
+  serializer_out:
+    type: json
+
+  sinks:
+    - type: local
+      path: ${PERF_OUT_DIR:-/data/perf/out}
+      filename_template: "t5_{pipeline}_{timestamp}.json"
+
+  on_error: continue

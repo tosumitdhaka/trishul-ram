@@ -1,0 +1,31 @@
+version: "1"
+
+pipeline:
+  name: s1-webhook-local
+  description: >
+    Perf scenario S1 — webhook source → local sink. Stream pipeline; the
+    loadgen_webhook.py flood POSTs canonical CDR records one-per-request to
+    /webhooks/{PERF_WEBHOOK_PATH} and every record is written as JSON to the
+    local sink directory.
+  enabled: true
+
+  schedule:
+    type: stream
+
+  source:
+    type: webhook
+    path: ${PERF_WEBHOOK_PATH:-ingest}
+    max_queue_size: 10000
+
+  serializer_in:
+    type: json
+
+  serializer_out:
+    type: json
+
+  sinks:
+    - type: local
+      path: ${PERF_OUT_DIR:-/data/perf/out}
+      filename_template: "s1_{pipeline}_{timestamp}.json"
+
+  on_error: continue
