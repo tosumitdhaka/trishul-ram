@@ -512,6 +512,11 @@ class RollingWriter:
         self._current_paths: dict[tuple[tuple[str, str], ...], str] = {}
         self._part_counters: dict[tuple[tuple[str, str], ...], int] = {}
         self._staged_targets: dict[tuple[str, str, str], dict[tuple[tuple[str, str], ...], StagedFileTarget]] = {}
+        # Fail-loud cap accounting (issue #77): per state key, how many records
+        # were dropped because part_index exceeded max_index. Every past-cap
+        # write still raises so the executor never counts a dropped record as
+        # written (records_out stays honest); this counter exposes the total.
+        self._dropped_after_cap: dict[tuple[tuple[str, str], ...], int] = {}
         if self._file_mode == "append" and any(
             value is not None for value in (self._max_records, self._max_time, self._max_bytes)
         ):
@@ -529,6 +534,21 @@ class RollingWriter:
         reads (review E3)."""
         return self._filename_template
 
+    @property
+    def max_index(self) -> int:
+        """Highest allowed file part index (issue #77 fail-loud accounting)."""
+        return self._max_index
+
+    @property
+    def dropped_past_cap_total(self) -> int:
+        """Total records dropped past ``max_index`` across all state keys.
+
+        Every dropped record also raises (so the run records errors and never
+        counts the record as written); this counter exposes the total for the
+        run's final loud surface (issue #77).
+        """
+        return sum(self._dropped_after_cap.values())
+
     def _next_path(
         self,
         backend: RollingFileBackend,
@@ -539,9 +559,29 @@ class RollingWriter:
     ) -> tuple[str, FilePartState]:
         part_index = self._part_counters.get(state_key, 0) + 1
         if part_index > self._max_index:
+            # Fail-loud (issue #77): records past the cap are dropped — never
+            # silently written — and every past-cap write raises so the run
+            # carries an error and records_out never counts a dropped record.
+            # Log the condition once per state key (no per-record log spam);
+            # the raise message carries the running dropped count.
+            self._dropped_after_cap[state_key] = self._dropped_after_cap.get(state_key, 0) + 1
+            dropped = self._dropped_after_cap[state_key]
+            if dropped == 1:
+                self._logger.error(
+                    "%s sink exceeded max_index=%d; records past the cap are "
+                    "being skipped — increase max_index or adjust rollover "
+                    "thresholds",
+                    self._sink_name,
+                    self._max_index,
+                    extra={
+                        "sink": self._sink_name,
+                        "max_index": self._max_index,
+                    },
+                )
             raise SinkError(
                 f"{self._sink_name} sink exceeded max_index={self._max_index}; "
-                "increase max_index or adjust rollover thresholds"
+                f"{dropped} record(s) past the cap skipped — increase max_index "
+                "or adjust rollover thresholds"
             )
         self._part_counters[state_key] = part_index
         state = FilePartState(part_index=part_index, opened_at=now)
@@ -678,6 +718,9 @@ class RollingWriter:
                 self._states.pop(state_key, None)
                 self._current_paths.pop(state_key, None)
                 self._part_counters.pop(state_key, None)
+                # Drop counter follows the part-counter lifecycle: a finalized
+                # source unit starts a fresh cap budget (issue #77).
+                self._dropped_after_cap.pop(state_key, None)
             except SinkError:
                 raise
             except Exception as exc:

@@ -246,7 +246,7 @@ _COMMON_FIELD_DESCRIPTIONS: dict[str, str] = {
     "max_records": "Roll to a new file part when the next write would exceed this record count",
     "max_time": "Roll to a new file part after this many seconds",
     "max_bytes": "Roll to a new file part when the byte count would exceed this",
-    "max_index": "Highest file part index before the oldest part is deleted",
+    "max_index": "Highest file part index (default 99999); writes past the cap fail loudly and past-cap records are counted as skipped (streams consume one part per record)",
     "overwrite": "Overwrite an existing object or file with the same name",
     "content_type": "Content type assigned to written objects or messages",
     "passive": "Use passive FTP mode",
