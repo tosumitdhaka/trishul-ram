@@ -51,7 +51,15 @@ async def dry_run_pipeline(request: Request) -> dict:
 
     from tram.pipeline.executor import PipelineExecutor
     result = PipelineExecutor().dry_run(config)
-    warnings = [finding.message for finding in lint(config) if finding.severity == "warning"]
+    lint_findings = lint(config)
+    # Issue #85: lint errors (e.g. an unbound filter condition) are
+    # registration-rejecting — surface them as dry-run issues too, so the
+    # dry-run endpoint agrees with registration.
+    errors = [finding.message for finding in lint_findings if finding.severity == "error"]
+    if errors:
+        result["issues"] = list(result.get("issues", [])) + errors
+        result["valid"] = False
+    warnings = [finding.message for finding in lint_findings if finding.severity == "warning"]
     if warnings:
         result["warnings"] = warnings
     return result
@@ -110,6 +118,14 @@ async def register_pipeline(request: Request) -> dict:
         config = load_pipeline_from_yaml(yaml_text)
     except ConfigError as exc:
         raise HTTPException(status_code=400, detail=str(exc))
+
+    # Issue #85: registration-time lint — deterministic validation failures
+    # (e.g. a filter condition referencing the unbound `record` name) reject
+    # the registration instead of producing 100% record loss at run time.
+    error_findings = [f for f in lint(config) if f.severity == "error"]
+    if error_findings:
+        detail = "; ".join(f"[{f.rule_id}] {f.message}" for f in error_findings)
+        raise HTTPException(status_code=400, detail=detail)
 
     try:
         state = controller.register(config, yaml_text=yaml_text, source="api")
