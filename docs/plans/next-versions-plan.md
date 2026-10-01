@@ -1,10 +1,10 @@
-# Next-Versions Plan — v1.4.6 → v1.5.0
+# Next-Versions Plan — v1.4.6 → v1.6.0
 
-> v1.4.6, v1.4.7, and v1.4.8 shipped (2026-09-24/25); their sections below are the release records. v1.5.0 is the active plan.
+> v1.4.6–v1.4.8 and v1.5.0/v1.5.1 shipped (2026-09-24/25/29); their sections below are the release records. v1.6.0 is the active plan.
 
-**Date:** 2026-09-24
-**Provenance:** the 2026-09-24 independent full-repo review (`docs/reviews/independent-review-2026-09-24.md`, 59 findings) and open-items inventory (`docs/ideas/open-items-inventory-2026-09-24.md`). All review findings are now tracked as GH issues #43–#52 (clubbed by fix domain).
-**Decision (maintainer, 2026-09-24):** fixes first — the security/integrity cluster takes v1.4.6; the AI-expansion cut points from `docs/plans/ai-expansion-plan.md` (originally v1.4.6 = Wave B + A.4, v1.4.7 = A.1 + Wave C) **shift one version each**. That plan's item definitions still stand; only the version slots changed.
+**Date:** 2026-09-24 (v1.6.0 section added 2026-09-30)
+**Provenance:** the 2026-09-24 independent full-repo review (`docs/reviews/independent-review-2026-09-24.md`, 59 findings) and open-items inventory (`docs/ideas/open-items-inventory-2026-09-24.md`); the v1.6.0 section derives from the 2026-10 performance/capacity study (`docs/ideas/perf-capacity-analysis-2026-10.md`, `docs/ideas/perf-improvement-candidates.md`, `docs/ideas/perf-sizing-calculator-2026-10.md`; raw data + re-runnable harness in `scripts/perf/`).
+**Decision (maintainer, 2026-09-30):** all capacity-study product findings and improvement candidates go into v1.6.0; after it ships, re-measure with the committed harness and **reevaluate** (that re-measure is the input for the next version's direction). The AI provider-layer design round (below) sits behind v1.6.0.
 
 ## Release model
 
@@ -94,15 +94,42 @@ One branch + one PR per version, commits in layers (reviewed wave-by-wave), prog
 
 **Estimate:** 3–4 weeks (the MIB serving/sync chain dominates). **Descope order if squeezed:** trap-sink last.
 
-## Post-v1.5.0 — AI provider layer (open design question)
+---
 
-The treq `_providers/` vendoring (#71), Wave C (A9 streaming; B3–B6 = MIB compile-error explanation, alert-rule authoring, throughput-anomaly explanation, connector test-failure explanation, per `docs/plans/ai-expansion-plan.md`), and A.2/A.3 (plugin docstrings + curated examples) are **not scheduled to a version** — the maintainer runs a design round once v1.5.0 ships. Calibration from the 2026-09-28 plan review: vendor 4–6 days (`ai.py` grew to ~1,094 lines since the 3-day estimate), Wave C 2–3 weeks, A.2/A.3 ~1 week; treq's portable provider tests are ~1,346 lines with no bedrock coverage (TRAM writes its own). Sequencing notes: B3 reads `routers/mibs` (clear after the swap); A.2's SNMP plugin docstrings land after the swap rewrites those files.
+## v1.6.0 — Performance & Integrity (capacity-study follow-up)
+
+**Theme:** close every product finding from the 2026-10 capacity study, land the high-ROI optimizations, then **re-measure with the committed harness** (`scripts/perf/`) — the re-measured numbers are the maintainer's reevaluation input for the next version.
+
+| Wave | Issue | What | Class |
+|---|---|---|---|
+| 1 — integrity | #77 | local-sink part-cap fail-loud/rollover (silent skip past 99,999/placement) | [P] |
+| 1 | #76 | kafka sink bounded-batch sends (silent 100% loss on >1MB batches; → ~13k rec/s @ 2cpu) | [P]+[O] |
+| 1 | #81 | single-topology observability (TRAM_MANAGER_URL default + stream run-history) | [P] |
+| 1 | #82 | webhook placement race (registration gating / ingress hold-retry) | [P] |
+| 1 | #84 | counter hygiene (records_skipped double-count + misleading no-sink error) | [P] |
+| 1 | #85 | registration-time filter-condition validation | [P] |
+| 2 — performance | #78 | **stream micro-batching** — highest capacity ROI: webhook ~360 → 1,000+ rps, kafka ~1,000 → 2,500+ msg/s per 500m worker | [O] |
+| 2 | #80 | transform engine: window_aggregate O(log g) + simpleeval compile-once + deepcopy elimination | [O] |
+| 2 | #83 | protobuf E2E amplification (batch decode + configurable key conversion) | [O] |
+| 2 | #86 | mw-vs-single many-small-batch 2× gap — controlled re-run, then fix if confirmed | [O] |
+| 3 — packaging + re-measure | #79 | serializer extras in worker/standalone images | [X] |
+| 3 | harness re-run | same matrices on v1.6.0; refresh the sizing calculator doc with measured numbers | exit criterion |
+
+**Entry criteria:** none — start immediately (v1.5.1 shipped 2026-09-29).
+**Exit criteria:** all issues closed with regression tests (per-issue Notes name them); harness re-run demonstrates the targets — webhook ≥2×, kafka stream ≥2×, t5 chain ≥1.5×, add_field ≥5×, high-cardinality window_aggregate ≥4×, file→kafka functional at any batch size; independent full-diff review (fresh oracle, same discipline as v1.4.6–v1.5.1); release gate green; changelog migration notes for kafka-sink chunking semantics and any behavior flips.
+**Design care:** #78 and #76 both touch delivery semantics — at-least-once must hold across chunk/flush boundaries (bounded latency budget, configurable); per-sink batch-vs-record error handling decided explicitly. #86 is investigation-first: no code budget before the controlled re-run confirms the effect is real (shared-host artifact is the competing hypothesis).
+**Lane hints:** Wave 1 splits into (a) sinks (#77+#76, `file_sink_common.py` + kafka sink), (b) controller/agent (#81+#82), (c) validate/counters (#85+#84) — no file overlap; (a) and (c) can run parallel, (b) queues behind or parallel per the overlap rule. Wave 2: #78 owns the stream executor (serialize with nothing), #80 owns `tram/transforms/`, #83 owns the protobuf serializer, #86 is run-only.
+**Estimate:** ~3 weeks — Wave 1 ~1 wk, Wave 2 ~1–1.5 wk (#78 dominates), Wave 3 ~3 days + re-measure ~1 day.
+
+## Post-v1.5.0 — AI provider layer (open design question; sits behind v1.6.0)
+
+The treq `_providers/` vendoring (#71), Wave C (A9 streaming; B3–B6 = MIB compile-error explanation, alert-rule authoring, throughput-anomaly explanation, connector test-failure explanation, per `docs/plans/ai-expansion-plan.md`), and A.2/A.3 (plugin docstrings + curated examples) are **not scheduled to a version** — the maintainer runs a design round after the v1.6.0 re-measurement reevaluation. Calibration from the 2026-09-28 plan review: vendor 4–6 days (`ai.py` grew to ~1,094 lines since the 3-day estimate), Wave C 2–3 weeks, A.2/A.3 ~1 week; treq's portable provider tests are ~1,346 lines with no bedrock coverage (TRAM writes its own). Sequencing notes: B3 reads `routers/mibs` (clear after the swap); A.2's SNMP plugin docstrings land after the swap rewrites those files.
 
 ---
 
 ## Standing rules & open decisions
 
-- **Sequencing:** v1.4.6 → v1.4.7 → v1.4.8 → v1.5.0 shipped (2026-09-29, PR #74, tag `v1.5.0`); legacy pysnmp/pysmi deletion deliberately deferred to a future release per the flag-period design (maintainer decision 2026-09-29).
+- **Sequencing:** v1.4.6 → v1.4.7 → v1.4.8 → v1.5.0 (2026-09-29, PR #74) → v1.5.1 (2026-09-29, PR #75) shipped; **v1.6.0 is active** (issues #76–#86, maintainer decision 2026-09-30); legacy pysnmp/pysmi deletion deliberately deferred to a future release per the flag-period design (maintainer decision 2026-09-29).
 - **Overlapping files:** lanes touching the same file queue or combine — never concurrent (repo rule).
 - **treq vendor decision — DECIDED 2026-09-25, re-scoped 2026-09-28:** vendoring `_providers/` remains the direction (GH #71), but as an open design question to be worked after v1.5.0 ships — not scheduled to a version.
 - **SNMP library migration — DECIDED 2026-09-25:** option C in v1.5.0 behind a feature flag (GH #72), gated on upstream trishul-snmp #28 + a green harness re-run.

@@ -144,9 +144,18 @@ unconfirmed work lives in the backlog at the bottom.
 - [ ] **Worker-mode flag consistency (GH #72)** — helm values on manager + worker planes, startup mismatch warning, deployment.md note
 - [ ] **Test hardening (GH #72)** — existing SNMP suite green unmodified (the flag-off proof); dual-stack decode fixtures (same BER bytes both stacks); env-gated in-process pysnmp-peer wire suite (catches the #28 defect class in CI); live kind verification incl. worker MIB sync → `docs/reviews/`
 
+## v1.6.0 — Performance & Integrity (capacity-study follow-up)
+
+> Decided 2026-09-30: all 2026-10 capacity-study product findings + improvement candidates go into v1.6.0 (`docs/ideas/perf-capacity-analysis-2026-10.md`, `docs/ideas/perf-improvement-candidates.md`, sizing model in `docs/ideas/perf-sizing-calculator-2026-10.md`; raw data + re-runnable harness in `scripts/perf/`). After it ships, re-measure with the harness and **reevaluate**. Full plan in `docs/plans/next-versions-plan.md`.
+
+- [ ] **Wave 1 — integrity (GH #76, #77, #81, #82, #84, #85)** — kafka sink bounded-batch sends (silent 100% loss on >1MB batches); local-sink part-cap fail-loud/rollover (silent skip past 99,999/placement); single-topology observability (`TRAM_MANAGER_URL` default + stream run-history); webhook placement race; counter hygiene (`records_skipped` double-count + misleading no-sink error); registration-time filter-condition validation
+- [ ] **Wave 2 — performance (GH #78, #80, #83, #86)** — stream micro-batching (webhook ~360 → 1,000+ rps, kafka ~1,000 → 2,500+ msg/s per 500m worker; at-least-once across flush boundaries); transform engine (window_aggregate O(log g), simpleeval compile-once, deepcopy elimination); protobuf E2E amplification; mw-vs-single many-small-batch gap (investigation-first)
+- [ ] **Wave 3 — packaging + re-measure (GH #79)** — serializer extras in worker/standalone images; harness re-run on v1.6.0 (same matrices); sizing-calculator doc refreshed with measured numbers
+- [ ] Independent full-diff review + release gate + tag
+
 ## Post-v1.5.0 — AI Provider Layer (open design question)
 
-- [ ] treq `_providers/` vendoring (GH #71) + Wave C (A9 streaming; B3–B6 = MIB compile-error explanation, alert-rule authoring, throughput-anomaly explanation, connector test-failure explanation, per `docs/plans/ai-expansion-plan.md`) + A.2/A.3 plugin docstrings/examples (GH #41/#42) — **not scheduled to a version**; the maintainer runs a design round once v1.5.0 ships. Calibration from the 2026-09-28 plan review: vendor 4–6 days, Wave C 2–3 weeks, A.2/A.3 ~1 week; treq's portable tests ~1,346 lines, no bedrock coverage.
+- [ ] treq `_providers/` vendoring (GH #71) + Wave C (A9 streaming; B3–B6 = MIB compile-error explanation, alert-rule authoring, throughput-anomaly explanation, connector test-failure explanation, per `docs/plans/ai-expansion-plan.md`) + A.2/A.3 plugin docstrings/examples (GH #41/#42) — **not scheduled to a version**; the maintainer runs a design round after the v1.6.0 re-measurement reevaluation. Calibration from the 2026-09-28 plan review: vendor 4–6 days, Wave C 2–3 weeks, A.2/A.3 ~1 week; treq's portable tests ~1,346 lines, no bedrock coverage.
 
 ---
 
