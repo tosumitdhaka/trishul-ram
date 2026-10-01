@@ -39,6 +39,7 @@ All configuration is via environment variables (12-factor).
 | `TRAM_API_KEY` | _(empty)_ | API key for request authentication via the `X-API-Key` header (empty = auth disabled; the legacy `?api_key=` query param was removed) |
 | `TRAM_INTERNAL_AUTH_MODE` | `warn` | How internal machine-to-machine surfaces (`/api/internal/*` on the manager, `/agent/*` on workers) treat requests with a missing/invalid key: `off` (pass through, no log), `warn` (log at WARNING, still serve), `enforce` (reject with 401). Default `warn` — flipping to `enforce` in a later phase requires no code changes |
 | `TRAM_WEBHOOK_MAX_BODY_BYTES` | `10485760` | Maximum accepted webhook request body size in bytes; oversized payloads are rejected with 413 (v1.4.0) |
+| `TRAM_WEBHOOK_PLACEMENT_WINDOW_SECONDS` | `10` | Bounded hold for unmatched webhook paths (v1.6.0, GH #82). After a webhook stream is registered there is a ~5–11 s window where traffic routed to a worker whose placement has not propagated yet would 404; the ingress instead polls for up to this many seconds before 404ing as before. `0` restores the pre-v1.6.0 immediate-404 behavior. Every request is bounded by this window (DoS-safe: small poll sleeps, no unbounded blocking) |
 | `TRAM_AUTH_USERS` | _(empty)_ | Comma-separated `user:password` pairs for browser UI login (v1.0.8); issues 8-hour HMAC session tokens; coexists with `TRAM_API_KEY` |
 | `TRAM_AUTH_SECRET` | _(random)_ | Shared HMAC signing secret for session tokens (v1.0.8); **required in cluster mode** — without a shared secret each pod signs tokens independently and cross-pod requests return 401 |
 | `TRAM_RATE_LIMIT` | `50` | Max requests per sliding window per IP for `/api/*` (excluding `/api/internal/*`) and `/webhooks/*`; `0` = disabled. Default `50` since v1.4.6 (previously `0` = disabled) — lower it for sensitive surfaces or raise it for high-traffic webhook ingress / multi-tab NOC usage |
@@ -74,7 +75,7 @@ All configuration is via environment variables (12-factor).
 | `TRAM_WORKER_NAMESPACE` | `default` | Kubernetes namespace where worker pods run (v1.2.0) |
 | `TRAM_WORKER_PORT` | `8766` | Port that worker pods listen on (v1.2.0) |
 | `TRAM_WORKER_INGRESS_PORT` | `8767` | Public ingress port on worker pods for `/webhooks/*` push traffic (v1.3.0) |
-| `TRAM_MANAGER_URL` | _(empty)_ | Manager base URL used by worker pods for run-complete callbacks (v1.2.0) |
+| `TRAM_MANAGER_URL` | `http://localhost:8765` (standalone) / _(empty)_ (manager, worker) | Manager base URL used for run-complete callbacks (v1.2.0). Since v1.6.0 (GH #81) standalone mode defaults to `http://localhost:8765` when unset, so run-history rows are never silently dropped (an explicit value — including a remote manager in a hybrid setup — always wins). Manager and worker modes are never defaulted: their manager is remote, and a worker defaulting to localhost would post its own callbacks to itself |
 | `TRAM_DATA_DIR` | `/data` | Base directory for worker-synced schemas and custom MIBs in worker mode; if overridden, keep `TRAM_SCHEMA_DIR` and `TRAM_MIB_DIR` under the same root |
 | `TRAM_STATS_INTERVAL` | `30` | Seconds between worker periodic stats reports; also controls `PlacementReconciler` tick interval (`min(TRAM_STATS_INTERVAL, 10)s`) and stale-slot threshold (`3 × interval`) (v1.3.0) |
 | `TRAM_STREAM_SINGLE_PLACEMENT` | `1` | Durable placement for count=1 streams (v1.4.0, GH #17). `1` (default) routes count=1 stream dispatch through the broadcast-placement machinery: every dispatch produces a persisted 1-slot placement row, so manager-restart adoption, worker-death recovery, and stale-config detection are reconciler-driven. `0` keeps the legacy count=1 single-dispatch path (stream tracked in manager memory only). Rollback is `0` + manager restart; placement rows already created keep working under either value because the placement machinery is flag-independent |
@@ -125,6 +126,19 @@ section](#postgresql-subchart-v108)) or point `TRAM_DB_URL` at a managed databas
 (`PRAGMA busy_timeout`), so transient `database is locked` contention retries for up to
 30s instead of failing fast. Treat SQLite as a single-writer store and move to PostgreSQL
 when multiple writers or sustained throughput are expected.
+
+### Standalone stream observability (v1.6.0, GH #81)
+
+Single-topology stream runs are visible in run history with in/out/error
+counts: each stats tick that closes a segment with activity records one
+`SUCCESS` row carrying that segment's DELTA counts (`<run_id>-seg<N>`), and
+the stream's stop (or crash) always records a final lifecycle row under the
+stream's own `run_id` — `SUCCESS` on a clean stop, `FAILED` with the crash
+text on an exception. Quiet segments produce no row, and a single lifecycle
+stops producing periodic rows after 500 rollups, so a long-lived stream cannot
+spam run history (live dashboard stats continue regardless). The sum of all
+rows equals the lifecycle totals, keeping `/api/stats` aggregations correct.
+Segment cadence follows `TRAM_STATS_INTERVAL`.
 
 ## Manager + Worker Mode (v1.2.0)
 
