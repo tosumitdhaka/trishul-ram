@@ -5,6 +5,12 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ---
 
+## [Unreleased]
+
+### Added
+- Single-topology stream observability (GH #81): standalone stream runs now reach run history with in/out/error counts — one `SUCCESS` row per stats tick with segment DELTA counts (`<run_id>-seg<N>`, quiet segments skipped) plus a final lifecycle row on stop (`SUCCESS`) or crash (`FAILED` with the crash text). Rows are bounded (≤500 periodic rollups per lifecycle; the sum of all rows equals the lifecycle totals, so `/api/stats` stays correct)
+- `TRAM_MANAGER_URL` now defaults to `http://localhost:8765` in standalone mode when unset (GH #81) — the run-complete callback URL is never empty, so run-history rows are no longer silently dropped in single topology. An explicit value always wins; manager/worker modes are never defaulted (their manager is remote)
+
 ## [1.5.1] - 2026-09-29
 
 ### Added

@@ -185,6 +185,18 @@ class AppConfig:
     @classmethod
     def from_env(cls) -> AppConfig:
         node_id = os.environ.get("TRAM_NODE_ID", socket.gethostname())
+        tram_mode = os.environ.get("TRAM_MODE", "standalone").lower()
+        # v1.6.0 (GH #81): standalone mode defaults TRAM_MANAGER_URL to the
+        # local daemon so the run-complete callback URL is never empty — an
+        # empty URL silently drops every run-history row in single topology.
+        # An explicitly-set value always wins (a hybrid standalone that reports
+        # to a remote manager keeps working), and manager/worker modes are
+        # deliberately NOT defaulted: their manager is remote, and a worker
+        # defaulting to localhost would POST its own run-complete callbacks to
+        # itself (tram/agent/server.py.create_worker_app reads the env raw).
+        manager_url = os.environ.get("TRAM_MANAGER_URL", "")
+        if tram_mode == "standalone" and not manager_url:
+            manager_url = "http://localhost:8765"
         stream_single_placement_raw = os.environ.get("TRAM_STREAM_SINGLE_PLACEMENT", "1")
         if stream_single_placement_raw not in ("0", "1"):
             # Fail open: anything other than an explicit "0" enables the
@@ -234,8 +246,8 @@ class AppConfig:
             ui_dir=os.environ.get("TRAM_UI_DIR", "/ui"),
             auth_users=os.environ.get("TRAM_AUTH_USERS", ""),
             templates_dir=os.environ.get("TRAM_TEMPLATES_DIR", "/tram-templates"),
-            tram_mode=os.environ.get("TRAM_MODE", "standalone").lower(),
-            manager_url=os.environ.get("TRAM_MANAGER_URL", ""),
+            tram_mode=tram_mode,
+            manager_url=manager_url,
             stats_interval=_env_int("TRAM_STATS_INTERVAL", 30),
             stream_single_placement=stream_single_placement_raw != "0",
             queue_manual_runs=queue_manual_runs_raw != "0",

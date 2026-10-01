@@ -24,7 +24,7 @@ import re
 import threading
 import uuid
 from concurrent.futures import ThreadPoolExecutor
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import UTC, datetime, timedelta
 from functools import partial
 from typing import TYPE_CHECKING, Literal
@@ -42,6 +42,13 @@ if TYPE_CHECKING:
 
 logger = logging.getLogger(__name__)
 
+# v1.6.0 (GH #81): maximum periodic run-history rollup rows per standalone
+# stream lifecycle. Matches PipelineManager's per-pipeline _MAX_RUN_HISTORY
+# deque cap (500), so one lifecycle can never fill more than a full run-history
+# page with segment rows; after the cap the live StatsStore stats remain the
+# visibility channel and the final lifecycle row still lands at stop.
+_STREAM_ROLLUP_ROWS_MAX = 500
+
 
 @dataclass
 class _LocalRun:
@@ -50,6 +57,14 @@ class _LocalRun:
     schedule_type: str
     started_at: datetime
     stats: PipelineStats
+    # v1.6.0 (GH #81): single-topology stream run-history rollups. Cumulative
+    # counters at the previous segment boundary (segment rows record DELTAs so
+    # the sum of all rows equals the lifecycle totals), the boundary timestamp,
+    # and a per-lifecycle row count used as a hard cap. Batch _LocalRuns never
+    # populate these (all rollup call sites gate on schedule_type == "stream").
+    last_rollup: dict[str, int] = field(default_factory=dict)
+    last_rollup_at: datetime | None = None
+    rollup_rows: int = 0
 
 
 @dataclass
@@ -1675,6 +1690,12 @@ class PipelineController:
 
     def _stream_worker(self, config: PipelineConfig, stop_event: threading.Event) -> None:
         run_id: str | None = None
+        local_run = None
+        # v1.6.0 (GH #81): crash tracking for the final lifecycle row — a
+        # stream that raises records a FAILED row with the crash text instead
+        # of a success row.
+        crashed = False
+        crash_error: str | None = None
         if self._worker_pool is None and self._stats_store is not None:
             from tram.agent.metrics import PipelineStats
             run_id = str(uuid.uuid4())
@@ -1704,6 +1725,8 @@ class PipelineController:
                 config, stop_event, stats=stats, config_sha256=config_sha256
             )
         except Exception as exc:
+            crashed = True
+            crash_error = str(exc)
             logger.error("Stream pipeline crashed",
                          extra={"pipeline": config.name, "error": str(exc)}, exc_info=True)
             with self._lock:
@@ -1712,13 +1735,21 @@ class PipelineController:
                     if state.config is config:
                         self.manager.set_status(config.name, "error")
         finally:
+            final_row = None
             if run_id is not None:
                 # Remove from dict and StatsStore atomically under the same lock so
                 # _emit_local_stats_once() cannot resurrect the entry after removal.
+                # The final lifecycle row is computed under the same lock: it reads
+                # last_rollup/last_rollup_at, which the stats tick writes only while
+                # holding it, so the final segment's delta can never race a rollup.
                 with self._local_stats_lock:
                     self._local_active_stats.pop(run_id, None)
                     if self._stats_store is not None:
                         self._stats_store.remove(run_id)
+                    if local_run is not None:
+                        final_row = self._final_stream_row(
+                            local_run, datetime.now(UTC), crashed=crashed, error=crash_error
+                        )
             with self._lock:
                 # Identity-check the pops: if a newer stream was started for the
                 # same name while this (old) thread was stopping, this thread's
@@ -1727,6 +1758,10 @@ class PipelineController:
                     self._stream_threads.pop(config.name, None)
                 if self._stop_events.get(config.name) is stop_event:
                     self._stop_events.pop(config.name, None)
+                if final_row is not None:
+                    # B10-guarded inside _commit_stream_row: a pipeline deleted
+                    # mid-run is not resurrected by a late lifecycle row.
+                    self._commit_stream_row(final_row)
                 if self.manager.exists(config.name):
                     state = self.manager.get(config.name)
                     # Only transition status when the registered config is still
@@ -2187,6 +2222,156 @@ class PipelineController:
 
     # ── Standalone live stats ──────────────────────────────────────────────
 
+    @staticmethod
+    def _segment_delta(snapshot: dict, last_rollup: dict[str, int] | None) -> dict[str, int]:
+        """Per-segment counters: cumulative snapshot minus the previous boundary.
+
+        With no previous boundary (first segment) the whole snapshot is the
+        segment. All stream run-history rows use deltas so the sum of the rows
+        equals the lifecycle totals — /api/stats aggregations over run history
+        stay correct (v1.6.0, GH #81).
+        """
+        keys = (
+            "records_in", "records_out", "records_skipped",
+            "dlq_count", "bytes_in", "bytes_out",
+        )
+        if last_rollup:
+            return {k: int(snapshot.get(k, 0)) - int(last_rollup.get(k, 0)) for k in keys}
+        return {k: int(snapshot.get(k, 0)) for k in keys}
+
+    def _commit_stream_row(self, result: RunResult) -> None:
+        """Commit one stream run-history row (v1.6.0, GH #81).
+
+        Called under the lifecycle lock. B10-guarded like every other
+        record_run site: a pipeline deleted while the stream was in flight must
+        not be resurrected by a late row.
+        """
+        with self._lock:
+            if not self.manager.exists(result.pipeline_name):
+                logger.warning(
+                    "Stream row skipped: pipeline no longer registered",
+                    extra={"pipeline": result.pipeline_name, "run_id": result.run_id},
+                )
+                return
+            self.manager.record_run(result.pipeline_name, result)
+
+    def _record_stream_segment(
+        self,
+        *,
+        run_id: str,
+        local_run: _LocalRun,
+        snapshot: dict,
+        started_at: datetime,
+        finished_at: datetime,
+        status: RunStatus,
+        error: str | None = None,
+    ) -> None:
+        """Record one stream segment row into run history (v1.6.0, GH #81).
+
+        ``snapshot`` carries the segment's DELTA counters plus the segment's
+        ``errors_last_window`` strings.
+        """
+        result = RunResult(
+            run_id=run_id,
+            pipeline_name=local_run.pipeline_name,
+            status=status,
+            started_at=started_at,
+            finished_at=finished_at,
+            records_in=int(snapshot.get("records_in", 0)),
+            records_out=int(snapshot.get("records_out", 0)),
+            records_skipped=int(snapshot.get("records_skipped", 0)),
+            bytes_in=int(snapshot.get("bytes_in", 0)),
+            bytes_out=int(snapshot.get("bytes_out", 0)),
+            dlq_count=int(snapshot.get("dlq_count", 0)),
+            error=error,
+            node_id=self._node_id,
+            errors=list(snapshot.get("errors_last_window", [])),
+        )
+        self._commit_stream_row(result)
+
+    def _maybe_record_stream_rollup(
+        self, local_run: _LocalRun, now: datetime, snapshot: dict
+    ) -> None:
+        """Periodic single-topology stream run-history rollup (v1.6.0, GH #81).
+
+        A long-lived stream never reaches run history otherwise — batch runs
+        persist via ``_finalize_batch_result``, but ``_stream_worker`` only
+        ever wrote live stats. Each tick that closes a segment with activity
+        records one SUCCESS row with DELTA counts, so the stream is visible in
+        run history with in/out/error counts while it runs.
+
+        Bounded row growth for a long-lived stream: quiet segments produce no
+        row (no 0-count noise), and a lifecycle stops producing rollup rows
+        after ``_STREAM_ROLLUP_ROWS_MAX`` — live StatsStore stats continue and
+        the final lifecycle row still lands at stop. Segment rows carry a
+        ``-segN`` run_id suffix because ``run_history.run_id`` is the primary
+        key; the lifecycle run_id itself is reserved for the final row.
+
+        Caller holds ``_local_stats_lock`` (the same guard that proves the run
+        is still active, so a rollup can never land after the final row).
+        """
+        if local_run.rollup_rows >= _STREAM_ROLLUP_ROWS_MAX:
+            return
+        errors = list(snapshot.get("errors_last_window", []))
+        delta = self._segment_delta(snapshot, local_run.last_rollup)
+        activity = (
+            delta["records_in"] + delta["records_out"]
+            + delta["records_skipped"] + delta["dlq_count"]
+        )
+        if activity <= 0 and not errors:
+            return  # quiet segment — don't record 0-count noise
+        started_at = local_run.last_rollup_at or local_run.started_at
+        local_run.last_rollup = {k: int(snapshot.get(k, 0)) for k in delta}
+        local_run.last_rollup_at = now
+        local_run.rollup_rows += 1
+        segment_run_id = f"{local_run.run_id}-seg{local_run.rollup_rows}"
+        self._record_stream_segment(
+            run_id=segment_run_id,
+            local_run=local_run,
+            snapshot={**delta, "errors_last_window": errors},
+            started_at=started_at,
+            finished_at=now,
+            status=RunStatus.SUCCESS,
+        )
+
+    def _final_stream_row(
+        self, local_run: _LocalRun, now: datetime, *, crashed: bool, error: str | None
+    ) -> RunResult | None:
+        """The final lifecycle row for a standalone stream (v1.6.0, GH #81).
+
+        Always recorded (even a 0-count start→stop lifecycle leaves one row),
+        carrying the DELTA of the final partial segment since the last rollup
+        boundary and the lifecycle ``run_id`` itself — the id the live stats /
+        placement views expose. Status is SUCCESS on a clean stop and FAILED on
+        a crash, with the crash text as the row error.
+
+        Caller holds ``_local_stats_lock`` so ``last_rollup`` cannot race a
+        concurrent stats tick; the row is committed by ``_commit_stream_row``
+        under the lifecycle lock after this returns.
+        """
+        if local_run.schedule_type != "stream":
+            return None
+        snapshot = local_run.stats.snapshot()
+        delta = self._segment_delta(snapshot, local_run.last_rollup)
+        status = RunStatus.SUCCESS if not crashed else RunStatus.FAILED
+        started_at = local_run.last_rollup_at or local_run.started_at
+        return RunResult(
+            run_id=local_run.run_id,
+            pipeline_name=local_run.pipeline_name,
+            status=status,
+            started_at=started_at,
+            finished_at=now,
+            records_in=int(delta["records_in"]),
+            records_out=int(delta["records_out"]),
+            records_skipped=int(delta["records_skipped"]),
+            bytes_in=int(delta["bytes_in"]),
+            bytes_out=int(delta["bytes_out"]),
+            dlq_count=int(delta["dlq_count"]),
+            error=error if crashed else None,
+            node_id=self._node_id,
+            errors=list(snapshot.get("errors_last_window", [])),
+        )
+
     def _emit_local_stats_once(self) -> None:
         """Snapshot all active standalone stream runs into StatsStore."""
         if self._stats_store is None:
@@ -2210,10 +2395,16 @@ class PipelineController:
             )
             # Re-check under lock: _stream_worker finally removes from dict and
             # StatsStore atomically, so if the run_id is gone here the stream has
-            # already stopped and we must not re-insert it.
+            # already stopped and we must not re-insert it (nor record a phantom
+            # rollup row after the final lifecycle row). Holding the lock while
+            # rolling up also serializes against the stream thread's final-row
+            # commit, so a rollup can never land out of order.
             with self._local_stats_lock:
-                if run_id in self._local_active_stats:
-                    self._stats_store.update(payload)
+                if run_id not in self._local_active_stats:
+                    continue
+                self._stats_store.update(payload)
+                if local_run.schedule_type == "stream":
+                    self._maybe_record_stream_rollup(local_run, now, snapshot)
 
     def _local_stats_loop(self, interval: int) -> None:
         while not self._local_stats_stop.wait(interval):
