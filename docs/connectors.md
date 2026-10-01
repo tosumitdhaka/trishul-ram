@@ -1021,6 +1021,15 @@ Produces messages to a Kafka topic.
 | `sasl_mechanism` | — | SASL mechanism |
 | `sasl_username` | — | SASL username |
 | `sasl_password` | — | SASL password |
+| `chunk_records` | `1000` | Maximum records serialized into one Kafka message; larger batches are split across messages |
+| `chunk_bytes` | `524288` | Maximum serialized bytes per Kafka message (512 KiB); must be `<= max_request_size` |
+| `max_request_size` | `1048576` | Kafka producer `max_request_size` in bytes (1 MiB); passed to the client |
+
+Notes:
+- Bounded-batch sends: a source batch that exceeds `chunk_records` or `chunk_bytes` is delivered as multiple messages, split at record boundaries with the batch's order preserved. A batch within both caps is still sent as one message, byte-for-byte unchanged.
+- Delivery is at-least-once across chunk boundaries: a failed chunk surfaces as a run error (never a silent skip) reporting how many chunks were already delivered; on retry the whole batch is re-sent from the first chunk and already-delivered chunks are not retracted, so duplicates are possible.
+- Each chunk message is independently framed with the pipeline's out serializer (e.g. every CSV chunk carries its own header, every Avro chunk is its own container).
+- Keep `chunk_bytes <= max_request_size` (validated at `tram validate` time); a single record larger than the broker limit cannot be split and the send fails loudly.
 
 ```yaml
 sinks:
@@ -1028,6 +1037,8 @@ sinks:
     brokers: [kafka:9092]
     topic: pm-normalized
     key_field: ne_id
+    chunk_records: 1000
+    chunk_bytes: 524288
     serializer_out:
       type: avro
       schema_file: /schemas/pm.avsc
