@@ -1286,6 +1286,10 @@ class ProtobufSerializerConfig(BaseModel):
     schema_registry_subject: str | None = None
     schema_registry_id: int | None = None
     use_magic_bytes: bool = True
+    # Keep original proto field names (snake_case) in decoded records instead of
+    # converting to lowerCamelCase (GH #83). The key convention is wire-visible
+    # to downstream consumers, so the default preserves today's camelCase output.
+    preserve_keys: bool = False
 
 
 class ParquetSerializerConfig(BaseModel):
