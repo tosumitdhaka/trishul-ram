@@ -289,6 +289,7 @@ _COMMON_FIELD_DESCRIPTIONS: dict[str, str] = {
     "schema_registry_subject": "Schema registry subject name",
     "schema_registry_id": "Schema registry schema ID",
     "use_magic_bytes": "Expect/write the Confluent magic byte + schema ID prefix",
+    "preserve_keys": "Keep original proto field names (snake_case) in decoded records; false converts to lowerCamelCase (backward-compatible default)",
     "message_class": "Top-level message/type name to decode",
     "framing": "Protobuf message framing (length_delimited or none)",
     "delimiter": "Field delimiter character",

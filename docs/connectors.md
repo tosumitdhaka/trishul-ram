@@ -1572,6 +1572,7 @@ Protocol Buffers encoding. Compiles `.proto` files on first use with `grpcio-too
 | `schema_registry_subject` | — | Registry subject name |
 | `schema_registry_id` | — | Registry schema ID |
 | `use_magic_bytes` | `true` | Confluent magic bytes prefix |
+| `preserve_keys` | `false` | Keep original proto field names (`snake_case`) in decoded records instead of converting to lowerCamelCase |
 
 ```yaml
 serializer_in:
@@ -1585,6 +1586,14 @@ serializer_out:
   schema_file: /schemas/pm_counter.proto
   message_class: PmCounter
 ```
+
+**Key convention (wire-visible):** decoded record keys default to lowerCamelCase
+(`eventType`, `timestampMs` — protobuf's JSON `json_name`), which downstream
+consumers may depend on. Set `preserve_keys: true` to keep the original proto
+field names (`event_type`, `timestamp_ms`); serialization accepts both
+conventions regardless of the setting. Length-delimited streams are decoded and
+encoded in batch (single pass over the frame buffer, one reused message object)
+— no per-record object construction on the hot path.
 
 ---
 
