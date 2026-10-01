@@ -21,11 +21,15 @@ class ValueMapTransform(BaseTransform):
         self.field: str = config["field"]
         self.mapping: dict[str, Any] = {str(k): v for k, v in config.get("mapping", {}).items()}
         self.default: Any = config.get("default", _SENTINEL)
+        # Issue #80 cost center 3: a dotted field path mutates nested containers
+        # via set_path; a top-level field only replaces the record's own key, so
+        # a shallow copy is provably safe there (mutation tests).
+        self._needs_deepcopy = "." in self.field
 
     def apply(self, records: list[dict]) -> list[dict]:
         result = []
         for record in records:
-            new_record = deepcopy(record)
+            new_record = deepcopy(record) if self._needs_deepcopy else dict(record)
             found, value = get_path(new_record, self.field)
             if found:
                 key = str(value)

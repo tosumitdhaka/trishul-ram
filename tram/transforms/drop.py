@@ -16,11 +16,18 @@ class DropTransform(BaseTransform):
         fields = config.get("fields", [])
         self.fields: list[str] = fields if isinstance(fields, list) else []
         self.conditional_fields: dict[str, list] = fields if isinstance(fields, dict) else {}
+        # Issue #80 cost center 3: dotted paths delete inside nested containers
+        # (shared by a shallow copy), so they need a deepcopy; top-level drops
+        # only delete the record's own keys — shallow is provably safe.
+        self._needs_deepcopy = any(
+            "." in field
+            for field in self.fields + list(self.conditional_fields)
+        )
 
     def apply(self, records: list[dict]) -> list[dict]:
         result = []
         for record in records:
-            new_record = deepcopy(record)
+            new_record = deepcopy(record) if self._needs_deepcopy else dict(record)
             for field in self.fields:
                 delete_path(new_record, field)
             for field, drop_values in self.conditional_fields.items():

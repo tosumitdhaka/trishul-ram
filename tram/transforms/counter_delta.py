@@ -103,6 +103,14 @@ class CounterDeltaTransform(BaseTransform, StatefulTransform):
         if self.on_error not in ("raise", "null", "keep"):
             raise TransformError("counter_delta: 'on_error' must be 'raise', 'null', or 'keep'")
 
+        # Issue #80 cost center 3: outputs are written into dotted paths (e.g.
+        # ``_metrics.ifInOctets_delta``) for dotted fields, which a shallow
+        # copy would share with the caller's nested dicts — those keep the
+        # full deepcopy. All-top-level fields only write top-level keys
+        # (``ifInOctets_delta``), so a shallow copy is provably safe there
+        # (mutation tests in test_transform_mutation_safety).
+        self._needs_deepcopy = any("." in field for field in self.fields)
+
         self._meta: dict = {}
         # {identity: {"v": int, "t": float epoch-seconds}}
         self._state: dict[str, dict] = {}
@@ -217,8 +225,9 @@ class CounterDeltaTransform(BaseTransform, StatefulTransform):
         for record in records:
             # Deep copy: outputs are written into dotted paths (e.g.
             # ``_metrics.ifInOctets_delta``), so a shallow copy would mutate the
-            # caller's nested dicts.
-            new_record = copy.deepcopy(record)
+            # caller's nested dicts. All-top-level-field configs take the
+            # shallow path (see ``self._needs_deepcopy``).
+            new_record = copy.deepcopy(record) if self._needs_deepcopy else dict(record)
 
             try:
                 t_now = self._resolve_timestamp(new_record)

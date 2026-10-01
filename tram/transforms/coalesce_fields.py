@@ -2,8 +2,6 @@
 
 from __future__ import annotations
 
-from copy import deepcopy
-
 from tram.interfaces.base_transform import BaseTransform
 from tram.registry.registry import register_transform
 from tram.transforms.path_utils import get_path
@@ -20,7 +18,11 @@ class CoalesceFieldsTransform(BaseTransform):
     def apply(self, records: list[dict]) -> list[dict]:
         result = []
         for record in records:
-            new_record = deepcopy(record)
+            # Issue #80 cost center 3: coalesce only writes top-level output
+            # keys (``new_record[output_field]``) and reads via get_path — it
+            # never mutates a nested container, so a shallow copy is provably
+            # safe (mutation tests in test_transform_mutation_safety).
+            new_record = dict(record)
             for output_field, rule in self.fields.items():
                 chosen = rule.get("default")
                 empty_values = list(rule.get("empty_values", [None, ""]))
