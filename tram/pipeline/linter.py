@@ -6,7 +6,9 @@ Produces LintResult findings (warnings/errors) without executing any I/O.
 from __future__ import annotations
 
 import os
+import re
 from dataclasses import dataclass
+from types import SimpleNamespace
 from typing import TYPE_CHECKING
 
 from tram.connectors.file_sink_common import extract_field_paths
@@ -57,6 +59,7 @@ def lint(
     findings.extend(_l012_udp_push_requires_kubernetes(config, resolved_mode))
     findings.extend(_l013_stateful_transform_with_broadcast_stream(config))
     findings.extend(_l014_kafka_multi_worker_at_least_once(config))
+    findings.extend(_l015_condition_dry_run(config))
 
     return findings
 
@@ -346,3 +349,162 @@ def _l011_risky_filename_partition_fields(config: PipelineConfig) -> list[LintRe
             ),
         ))
     return findings
+
+
+# ── L015 — filter/add_field condition dry-run (issue #85) ─────────────────
+
+
+def _l015_condition_dry_run(config: PipelineConfig) -> list[LintResult]:
+    """L015 — dry-run filter/add_field expressions against a sample record.
+
+    Filter/add_field conditions run under simpleeval with the record's
+    *fields* as the namespace. A condition that references an unbound
+    container name (``record.get('event_type')`` in a filter — simpleeval
+    exposes field names, not ``record``) passes registration and silently
+    loses 100% of records at run time. This rule replays each expression
+    against a synthetic sample record built from the names the expression
+    itself references, using the same evaluators the transforms use at
+    runtime, so:
+
+    * deterministic failures — unparseable expressions, and filter conditions
+      referencing names the filter context never binds (``record``/``pipeline``)
+      — are errors (registration-rejecting);
+    * data-dependent failures (type/shape assumptions a real record might
+      satisfy) are warnings;
+    * valid and intentionally dynamic expressions evaluate clean.
+    """
+    entries: list[tuple[str, str, str]] = []  # (transform_type, owner, expression)
+
+    def _collect(transforms: list, owner_prefix: str) -> None:
+        for t in transforms:
+            if t.type == "filter":
+                entries.append(("filter", f"{owner_prefix}filter", t.condition))
+            elif t.type == "add_field":
+                for field_name, expr in t.fields.items():
+                    entries.append((
+                        "add_field", f"{owner_prefix}add_field '{field_name}'", expr,
+                    ))
+
+    _collect(config.transforms, "")
+    for sink in config.sinks:
+        _collect(getattr(sink, "transforms", []) or [], f"sink '{sink.type}' ")
+
+    findings: list[LintResult] = []
+    for transform_type, owner, expression in entries:
+        findings.extend(_l015_check_expression(config, transform_type, owner, expression))
+    return findings
+
+
+def _l015_check_expression(
+    config: PipelineConfig,
+    transform_type: str,
+    owner: str,
+    expression: str,
+) -> list[LintResult]:
+    """Dry-run one simpleeval expression and classify the outcome."""
+    import ast
+
+    try:
+        tree = ast.parse(expression, mode="eval")
+    except SyntaxError as exc:
+        return [LintResult(
+            rule_id="L015",
+            severity="error",
+            message=(
+                f"Pipeline '{config.name}': {owner} condition {expression!r} is not "
+                f"parseable — it will fail for every record: {exc}"
+            ),
+        )]
+
+    called = {
+        node.func.id
+        for node in ast.walk(tree)
+        if isinstance(node, ast.Call) and isinstance(node.func, ast.Name)
+    }
+    referenced = {
+        node.id for node in ast.walk(tree) if isinstance(node, ast.Name)
+    } - called - {"True", "False", "None"}
+
+    # filter evaluates with names = the record's fields ONLY — the record
+    # container and pipeline metadata are never exposed, so referencing them
+    # fails for every record (deterministic). add_field binds `record` and
+    # `pipeline` explicitly, so it has no never-bound names.
+    never_bound = {"record", "pipeline"} if transform_type == "filter" else set()
+
+    from tram.transforms.add_field import (
+        _EVAL_FUNCS as _ADD_FIELD_FUNCS,
+    )
+    from tram.transforms.add_field import (
+        _EvalCls as _AddFieldEvalCls,
+    )
+    from tram.transforms.filter_rows import (
+        _EVAL_FUNCS as _FILTER_FUNCS,
+    )
+    from tram.transforms.filter_rows import (
+        _EvalCls as _FilterEvalCls,
+    )
+
+    # Several seed types are tried because no single seed satisfies numeric
+    # comparisons (`bytes_down >= 0`), string operations (`len(msisdn)`,
+    # `field.startswith(...)`) and list operations (`sum(field)`).
+    # Never-bound names are deliberately left out of the sample record so an
+    # expression referencing them fails with the same unbound-name error the
+    # runtime would hit on every record.
+    last_exc: Exception | None = None
+    for seed in (0, "", []):
+        sample = {name: seed for name in referenced if name not in never_bound}
+        try:
+            if transform_type == "filter":
+                evaluator = _FilterEvalCls(names=sample, functions=_FILTER_FUNCS)
+            else:
+                evaluator = _AddFieldEvalCls(
+                    names={
+                        **sample,
+                        "record": sample,
+                        "pipeline": SimpleNamespace(name=config.name, source={}),
+                    },
+                    functions=_ADD_FIELD_FUNCS,
+                )
+            evaluator.eval(expression)
+            return []
+        except Exception as exc:
+            last_exc = exc
+
+    assert last_exc is not None
+    name = _unbound_name(last_exc)
+    if name is not None and transform_type == "filter" and name in never_bound:
+        return [LintResult(
+            rule_id="L015",
+            severity="error",
+            message=(
+                f"Pipeline '{config.name}': {owner} condition {expression!r} "
+                f"references '{name}', which the filter evaluation context never "
+                "binds (simpleeval exposes record fields, not the record container) "
+                "— this condition fails for every record."
+            ),
+        )]
+    return [LintResult(
+        rule_id="L015",
+        severity="warning",
+        message=(
+            f"Pipeline '{config.name}': {owner} condition {expression!r} could not "
+            f"be evaluated against a sample record ({last_exc}). If the expression "
+            "assumes a type/shape real records satisfy, this is expected; otherwise "
+            "records will fail at run time."
+        ),
+    )]
+
+
+def _unbound_name(exc: Exception) -> str | None:
+    """Return the offending name for unbound-name exceptions, else None.
+
+    simpleeval's ``NameNotDefined`` carries the name on the exception; plain
+    ``NameError`` only embeds it in the message.
+    """
+    name = getattr(exc, "name", None)
+    if isinstance(name, str):
+        return name
+    if isinstance(exc, NameError):
+        match = re.search(r"name '([^']+)' is not defined", str(exc))
+        return match.group(1) if match else None
+    return None

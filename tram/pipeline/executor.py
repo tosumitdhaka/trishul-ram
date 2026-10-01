@@ -791,9 +791,12 @@ class PipelineExecutor:
                             "Circuit breaker open — skipping sink",
                             extra={"pipeline": ctx.pipeline_name},
                         )
-                        ctx.record_error("Circuit breaker open")
+                        # Issue #84: the chunk-level skip accounting below counts
+                        # the records when no sink wrote them — record_error
+                        # would double-count. note_skip records the reason only.
+                        ctx.note_skip("Circuit breaker open")
                         if stats is not None:
-                            stats.increment(skipped=1, errors=["Circuit breaker open"])
+                            stats.increment(errors=["Circuit breaker open"])
                         return 0
 
                 # Per-sink retry loop
@@ -883,10 +886,14 @@ class PipelineExecutor:
                         DLQ_RECORDS.labels(pipeline=ctx.pipeline_name).inc()
                     if on_error == "abort":
                         raise TramError(f"Sink write error: {last_exc}") from last_exc
-                    ctx.record_error(str(last_exc))
+                    # Issue #84: the chunk-level skip accounting below
+                    # (inc_records_skipped when records_written == 0) already
+                    # counts these records — record_error would double-count.
+                    # note_skip keeps the error message without bumping the
+                    # counter, so true skipped = records_in - records_out.
+                    ctx.note_skip(str(last_exc))
                     if stats is not None:
                         stats.increment(
-                            skipped=1,
                             dlq=1 if dlq_sink is not None else 0,
                             errors=[str(last_exc)],
                         )
@@ -935,7 +942,11 @@ class PipelineExecutor:
                 RECORDS_OUT.labels(pipeline=ctx.pipeline_name).inc(records_written)
                 if stats is not None:
                     stats.increment(records_out=records_written)
-            else:
+            elif records:
+                # Issue #84: only count a chunk as skipped when it actually
+                # carried records that no sink wrote. Empty/no-op chunks
+                # (records == []) must not emit the "no sink wrote" error or
+                # bump the skip counter — true skipped = records_in - records_out.
                 ctx.inc_records_skipped(len(records))
                 RECORDS_SKIP.labels(pipeline=ctx.pipeline_name).inc(len(records))
                 if stats is not None:
