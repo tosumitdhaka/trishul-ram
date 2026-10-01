@@ -20,6 +20,12 @@ from pathlib import Path
 from typing import TYPE_CHECKING
 
 from tram.connectors.file_sink_common import extract_field_paths, validate_template_tokens
+from tram.core.config import (
+    stream_flush_interval_seconds as _default_stream_flush_interval,
+)
+from tram.core.config import (
+    stream_flush_records as _default_stream_flush_records,
+)
 from tram.core.context import PipelineRunContext, RunResult, RunStatus
 from tram.core.exceptions import TramError
 from tram.registry.registry import get_serializer, get_sink, get_source, get_transform
@@ -272,6 +278,107 @@ def _batch_inflight_cap(thread_workers: int) -> int:
     ``thread_workers=2`` and OOMKills the worker pod).
     """
     return max(1, thread_workers * 2)
+
+
+def _effective_stream_flush_records(config: PipelineConfig) -> int:
+    """Effective stream micro-batch record threshold (GH #78).
+
+    Per-pipeline ``stream_flush_records`` overrides the
+    ``TRAM_STREAM_FLUSH_RECORDS`` environment default (500, mirroring kafka
+    ``max_poll_records``). ``1`` restores the pre-v1.6.0 per-message flush.
+    """
+    if config.stream_flush_records is not None:
+        return config.stream_flush_records
+    return _default_stream_flush_records()
+
+
+def _effective_stream_flush_interval(config: PipelineConfig) -> float:
+    """Effective stream micro-batch flush interval in seconds (GH #78).
+
+    Per-pipeline ``stream_flush_interval_s`` overrides the
+    ``TRAM_STREAM_FLUSH_INTERVAL_SECONDS`` environment default (1.0). This is
+    the bounded end-to-end latency budget for buffered records: a flush fires
+    when the oldest buffered record has waited this long, even if the record
+    threshold has not been reached.
+    """
+    if config.stream_flush_interval_s is not None:
+        return config.stream_flush_interval_s
+    return _default_stream_flush_interval()
+
+
+class _StreamFlushBuffer:
+    """Thread-safe micro-batch buffer for the stream sink path (GH #78).
+
+    Stream records are appended as they arrive (post-parse, post-global-
+    transform); the buffer is drained and routed through the batch executor's
+    sink path on three triggers:
+
+      1. record threshold (``stream_flush_records``, default 500) — mirrors
+         kafka ``max_poll_records``;
+      2. flush interval (``stream_flush_interval_s``, default 1s) measured from
+         the *oldest* buffered record — the bounded end-to-end latency budget;
+      3. ``source_batch_end`` meta (set by the kafka source at each poll-batch
+         boundary): replayable sources commit their offsets only once the
+         executor resumes the generator past the batch's last message, so
+         flushing at the boundary guarantees commit-after-flush (at-least-once,
+         GH #78 design care 1).
+
+    ``append`` returns True when a flush is due; the caller (a stream worker or
+    the loop thread) then flushes. ``drain`` is atomic, so concurrent flushers
+    (the interval timer thread and whichever worker crossed a trigger) are safe
+    — the loser of a drain race finds the buffer empty.
+    """
+
+    def __init__(self, record_threshold: int, interval_s: float) -> None:
+        self._lock = threading.Lock()
+        self._records: list[dict] = []
+        self._meta: dict | None = None
+        self._oldest_at: float | None = None
+        self.record_threshold = record_threshold
+        self.interval_s = interval_s
+
+    def append(
+        self, records: list[dict], meta: dict, *, batch_end: bool = False
+    ) -> bool:
+        """Append post-transform records; True when the buffer should be flushed.
+
+        The first chunk's (augmented) meta is kept as the flush write's meta —
+        the batch sink path writes one batch per meta, so a flush is a
+        super-chunk carrying the meta of its first contributing chunk.
+        """
+        if not records and not batch_end:
+            return False
+        with self._lock:
+            if records:
+                if not self._records:
+                    self._meta = dict(meta)
+                    self._oldest_at = time.monotonic()
+                self._records.extend(records)
+            if not self._records:
+                return False
+            return (
+                batch_end
+                or len(self._records) >= self.record_threshold
+                or time.monotonic() - (self._oldest_at or 0.0) >= self.interval_s
+            )
+
+    def due(self) -> bool:
+        """True when the interval since the oldest buffered record has elapsed."""
+        with self._lock:
+            return bool(self._records) and (
+                time.monotonic() - (self._oldest_at or 0.0) >= self.interval_s
+            )
+
+    def drain(self) -> tuple[list[dict], dict] | None:
+        """Atomically take the buffered records + their representative meta."""
+        with self._lock:
+            if not self._records:
+                return None
+            records, meta = self._records, self._meta
+            self._records = []
+            self._meta = None
+            self._oldest_at = None
+            return records, meta or {}
 
 
 class PipelineExecutor:
@@ -649,6 +756,58 @@ class PipelineExecutor:
                 extra={"source_type": type(source).__name__, "error": str(exc)},
             )
 
+    def _apply_global_transforms(
+        self,
+        records: list[dict],
+        transforms: list,
+        meta: dict,
+        ctx: PipelineRunContext,
+        on_error: str,
+        *,
+        dlq_sink=None,
+        stats: PipelineStats | None = None,
+    ) -> list:
+        """Run the top-level transform chain over the records, per record.
+
+        Shared by the batch chunk path (``_process_records``) and the stream
+        arrival path (``_process_chunk`` with a flush buffer): on the stream
+        path the survivors are buffered for the next micro-batch flush instead
+        of being written immediately, so transform semantics are identical to
+        the per-chunk application. A failing record follows ``on_error``:
+        abort raises; continue/dlq DLQs it (when configured) and counts it via
+        ``record_error`` (one skip — true skipped = in − out, GH #84).
+        """
+        from tram.metrics.registry import DLQ_RECORDS
+
+        surviving_records = []
+        for record in records:
+            try:
+                processed = [record]
+                for t in transforms:
+                    self._set_transform_runtime_meta(t, meta)
+                    processed = t.apply(processed)
+                surviving_records.extend(processed)
+            except Exception as exc:
+                if on_error == "abort":
+                    # GH #48 §2.9: abort must fail the run like the parse and
+                    # sink-write abort paths, not silently DLQ+continue.
+                    raise TramError(f"Transform error: {exc}") from exc
+                if dlq_sink is not None:
+                    _write_dlq_envelope(
+                        dlq_sink, ctx,
+                        stage="transform", error=str(exc), record=record,
+                    )
+                    ctx.record_dlq()
+                    DLQ_RECORDS.labels(pipeline=ctx.pipeline_name).inc()
+                ctx.record_error(str(exc))
+                if stats is not None:
+                    stats.increment(
+                        skipped=1,
+                        dlq=1 if dlq_sink is not None else 0,
+                        errors=[str(exc)],
+                    )
+        return surviving_records
+
     def _process_records(
         self,
         records: list[dict],
@@ -663,8 +822,16 @@ class PipelineExecutor:
         parallel_sinks: bool = False,
         sink_cb_keys: list[str] | None = None,
         stats: PipelineStats | None = None,
+        *,
+        count_records_in: bool = True,
     ) -> bool:
-        """Process one decoded record batch."""
+        """Process one decoded record batch.
+
+        *count_records_in* is False on the stream micro-batch flush path (GH
+        #78): records_in is counted once at arrival (``_process_chunk`` buffer
+        mode), so the flush must not bump it again — the GH #84 identity
+        (skipped = in − out) holds across flush boundaries.
+        """
         from tram.metrics.registry import (
             DLQ_RECORDS,
             DURATION,
@@ -677,40 +844,17 @@ class PipelineExecutor:
         t_start = time.monotonic()
 
         try:
-            ctx.inc_records_in(len(records))
-            RECORDS_IN.labels(pipeline=ctx.pipeline_name).inc(len(records))
-            if stats is not None:
-                stats.increment(records_in=len(records))
+            if count_records_in:
+                ctx.inc_records_in(len(records))
+                RECORDS_IN.labels(pipeline=ctx.pipeline_name).inc(len(records))
+                if stats is not None:
+                    stats.increment(records_in=len(records))
 
             # ── Per-record global transforms ─────────────────────────────────
-            surviving_records = []
-            for record in records:
-                try:
-                    processed = [record]
-                    for t in transforms:
-                        self._set_transform_runtime_meta(t, meta)
-                        processed = t.apply(processed)
-                    surviving_records.extend(processed)
-                except Exception as exc:
-                    if on_error == "abort":
-                        # GH #48 §2.9: abort must fail the run like the parse
-                        # and sink-write abort paths, not silently DLQ+continue.
-                        raise TramError(f"Transform error: {exc}") from exc
-                    if dlq_sink is not None:
-                        _write_dlq_envelope(
-                            dlq_sink, ctx,
-                            stage="transform", error=str(exc), record=record,
-                        )
-                        ctx.record_dlq()
-                        DLQ_RECORDS.labels(pipeline=ctx.pipeline_name).inc()
-                    ctx.record_error(str(exc))
-                    if stats is not None:
-                        stats.increment(
-                            skipped=1,
-                            dlq=1 if dlq_sink is not None else 0,
-                            errors=[str(exc)],
-                        )
-            records = surviving_records
+            records = self._apply_global_transforms(
+                records, transforms, meta, ctx, on_error,
+                dlq_sink=dlq_sink, stats=stats,
+            )
 
             # ── Multi-sink routing with per-sink transforms ───────────────────
 
@@ -992,12 +1136,20 @@ class PipelineExecutor:
         parallel_sinks: bool = False,
         sink_cb_keys: list[str] | None = None,
         stats: PipelineStats | None = None,
+        flush_buffer: _StreamFlushBuffer | None = None,
     ) -> bool:
         """Process one (raw, meta) chunk. Returns True on success.
 
         Thread-safe: all ctx mutations go through locked helper methods.
+
+        When *flush_buffer* is given (stream micro-batching, GH #78) the sink
+        write is deferred: the chunk is parsed, counted, transformed, and
+        appended to the buffer, and the return value means "flush the buffer
+        now" (record threshold / flush interval / ``source_batch_end``
+        triggers). Without a buffer the chunk is written to the sinks
+        immediately and True means success.
         """
-        from tram.metrics.registry import DLQ_RECORDS, ERRORS
+        from tram.metrics.registry import DLQ_RECORDS, ERRORS, RECORDS_IN
 
         meta = _augment_chunk_meta(meta, ctx)
         try:
@@ -1023,6 +1175,23 @@ class PipelineExecutor:
                         errors=[f"Parse error: {exc}"],
                     )
                 raise TramError(f"Parse error: {exc}") from exc
+
+            if flush_buffer is not None:
+                # Stream micro-batching (GH #78): count records_in and apply the
+                # global transforms at arrival — exactly like the per-chunk
+                # path — but defer the sink write to the micro-batch flush. The
+                # return value is "flush the buffer now".
+                ctx.inc_records_in(len(records))
+                RECORDS_IN.labels(pipeline=ctx.pipeline_name).inc(len(records))
+                if stats is not None:
+                    stats.increment(records_in=len(records))
+                survivors = self._apply_global_transforms(
+                    records, transforms, meta, ctx, on_error,
+                    dlq_sink=dlq_sink, stats=stats,
+                )
+                return flush_buffer.append(
+                    survivors, meta, batch_end=bool(meta.get("source_batch_end"))
+                )
             return self._process_records(
                 records, meta, transforms, serializer_out, sinks, ctx, on_error,
                 rate_limit_rps, dlq_sink, parallel_sinks, sink_cb_keys, stats,
@@ -1111,6 +1280,57 @@ class PipelineExecutor:
             if stats is not None:
                 stats.increment(skipped=1, errors=[msg])
             return False
+
+    # ── Stream micro-batch flush (GH #78) ─────────────────────────────────
+
+    def _flush_stream_buffer(
+        self,
+        flush_buffer: _StreamFlushBuffer,
+        serializer_out,
+        sinks: list[tuple],
+        ctx: PipelineRunContext,
+        on_error: str,
+        rate_limit_rps: float | None,
+        dlq_sink,
+        parallel_sinks: bool,
+        sink_cb_keys: list[str] | None,
+        stats: PipelineStats | None,
+    ) -> bool:
+        """Drain the stream micro-batch buffer through the shared sink path (GH #78).
+
+        The batch executor's sink write path (``_process_records``) is reused,
+        not duplicated: one serialization + one sink write per flush. Records
+        are flushed with the buffer's representative meta (the first chunk's
+        augmented meta) — a flush is a super-chunk.
+
+        Counter semantics (GH #84) hold across flush boundaries: records_in was
+        already counted at arrival, so the flush only counts records_out /
+        records_skipped, and the "no sink wrote" error fires only for a flush
+        that actually carried records. The local-sink part cap (GH #77) is
+        consumed per flush: ``max_index`` advances one part per flush, and a
+        past-cap flush raises exactly like a past-cap batch chunk (run never
+        reports clean success).
+
+        Per-sink error handling is batch-scoped: one flush is one sink-write
+        unit, exactly like a batch chunk. Under ``on_error: continue`` a
+        failing sink's flush records are counted once (via the chunk-level
+        skip accounting when no sink delivered them), noted in the run errors,
+        DLQ'd when a DLQ sink is configured, and dropped — the sink's own
+        ``retry_count`` loop still applies per flush. ``on_error: abort``
+        raises out of the flush.
+
+        Returns True when a batch was flushed, False for an empty buffer.
+        """
+        entry = flush_buffer.drain()
+        if entry is None:
+            return False
+        records, meta = entry
+        self._process_records(
+            records, meta, [], serializer_out, sinks, ctx, on_error,
+            rate_limit_rps, dlq_sink, parallel_sinks, sink_cb_keys, stats,
+            count_records_in=False,
+        )
+        return True
 
     # ── Batch run ────────────────────────────────────────────────────────────
 
@@ -1548,6 +1768,43 @@ class PipelineExecutor:
                 self._save_state_to_store(config, transforms, config_sha256, ctx.run_id)
                 last_persist = time.monotonic()
 
+        # Stream micro-batching (GH #78): buffer records and flush to sinks per
+        # batch (record threshold OR flush interval, mirroring kafka
+        # max_poll_records) instead of one serialized sink write per message.
+        # The interval timer thread bounds the end-to-end latency of buffered
+        # records when the source is quieter than the record threshold; it is
+        # joined in the finally before the sinks close.
+        flush_buffer = _StreamFlushBuffer(
+            record_threshold=_effective_stream_flush_records(config),
+            interval_s=_effective_stream_flush_interval(config),
+        )
+        flusher_stop = threading.Event()
+
+        def _flush_now() -> None:
+            self._flush_stream_buffer(
+                flush_buffer, serializer_out, sinks, ctx, config.on_error,
+                config.rate_limit_rps, dlq_sink,
+                getattr(config, "parallel_sinks", False), sink_cb_keys, stats,
+            )
+
+        def _interval_flusher() -> None:
+            wake = max(flush_buffer.interval_s / 2, 0.05)
+            while not flusher_stop.wait(wake):
+                if not flush_buffer.due():
+                    continue
+                try:
+                    _flush_now()
+                except Exception as exc:
+                    logger.error(
+                        "Stream interval flush failed",
+                        extra={"pipeline": config.name, "error": str(exc)},
+                    )
+
+        flusher_thread = threading.Thread(
+            target=_interval_flusher, daemon=True, name="tram-stream-flusher"
+        )
+        flusher_thread.start()
+
         # Watcher: when the APScheduler stop_event fires, also call source.stop()
         # so that blocking sources (e.g. WebhookSource.read()) unblock immediately.
         # The local stream_exit event ends the watcher when the stream run exits
@@ -1578,6 +1835,7 @@ class PipelineExecutor:
                     transforms, dlq_sink, ctx, stop_event, stats,
                     sink_cb_keys=sink_cb_keys,
                     on_persist=_maybe_persist_state,
+                    flush_buffer=flush_buffer,
                 )
             else:
                 current_source_key: tuple[str, str] | None = None
@@ -1591,27 +1849,41 @@ class PipelineExecutor:
                     source_key = _source_unit_key(meta)
                     if source_key is not None:
                         if current_source_key is not None and source_key != current_source_key:
+                            # Drain the micro-batch buffer at source-unit
+                            # boundaries so one file's records never ride a
+                            # flush meta from (or into) another file
+                            # (source_filename templates must not mix files).
+                            _flush_now()
                             source.finalize(current_source_meta, success=True)
                             current_source_key = None
                             current_source_meta = None
                         if current_source_key is None:
                             current_source_key = source_key
                         current_source_meta = dict(meta)
-                    self._process_chunk(
+                    if self._process_chunk(
                         raw, meta, serializer_in, transforms,
                         serializer_out, sinks, ctx, config.on_error,
                         config.rate_limit_rps, dlq_sink,
                         getattr(config, "parallel_sinks", False),
                         sink_cb_keys,
                         stats,
-                    )
+                        flush_buffer=flush_buffer,
+                    ):
+                        # Record threshold / flush interval / source-batch-end.
+                        _flush_now()
                     _maybe_persist_state()
                 # On a stop the generator was abandoned mid-file; the current
-                # file stays unmarked (matches the pre-hook behavior).
+                # file stays unmarked (matches the pre-hook behavior). On a
+                # natural end, drain the micro-batch buffer BEFORE finalizing
+                # the current source unit so the file is never marked processed
+                # ahead of its records' flush (GH #78).
                 if current_source_meta is not None and not stopped:
+                    _flush_now()
                     source.finalize(current_source_meta, success=True)
             # The chunk loop drained (or was stopped) without an exception:
-            # this is a graceful stop.
+            # drain the micro-batch buffer so records counted in at arrival are
+            # never silently stranded at stop (GH #78 crash-window accounting).
+            _flush_now()
             graceful_stop = True
         except Exception as exc:
             logger.error(
@@ -1619,6 +1891,16 @@ class PipelineExecutor:
                 extra={"pipeline": config.name, "error": str(exc)},
                 exc_info=True,
             )
+            # Crash path: best-effort drain so buffered-but-unflushed records
+            # are surfaced (flushed to the sinks, or counted as skipped with the
+            # error recorded) instead of silently vanishing with the run.
+            try:
+                _flush_now()
+            except Exception as flush_exc:
+                logger.error(
+                    "Stream crash-path buffer drain failed",
+                    extra={"pipeline": config.name, "error": str(flush_exc)},
+                )
             raise
         finally:
             # End the stop-watcher as early as possible: on the crash path the
@@ -1627,6 +1909,11 @@ class PipelineExecutor:
             # already set stop_event and the source was unblocked, so the
             # watcher has nothing left to do.
             stream_exit.set()
+            # Stop the interval flusher before the final drains / sink close so
+            # no concurrent flush races the stateful-transform flush records or
+            # the sink teardown.
+            flusher_stop.set()
+            flusher_thread.join(timeout=2)
             # Graceful stop: close hooks honoring each stateful transform's
             # flush_on_close field (window_aggregate emits its open windows as
             # partials, then the final state blob reflects the cleared windows
@@ -1683,11 +1970,29 @@ class PipelineExecutor:
         stats: PipelineStats | None = None,
         sink_cb_keys: list[str] | None = None,
         on_persist=None,
+        flush_buffer: _StreamFlushBuffer | None = None,
     ) -> None:
-        """Stream mode with N worker threads. Producer reads; workers process."""
+        """Stream mode with N worker threads. Producer reads; workers process.
+
+        With a *flush_buffer* (stream micro-batching, GH #78) workers defer the
+        sink write to the micro-batch flush: parse/transform at arrival, one
+        serialized sink write per flush. The final drain of whatever is left in
+        the buffer happens in ``stream_run`` after the workers have joined.
+        Strict at-least-once for replayable sources (kafka poll-batch commits)
+        holds on the single-threaded path; with ``thread_workers > 1`` the
+        pre-existing poll-batch commit race applies (see the kafka source
+        docstring).
+        """
         # Bounded queue gives backpressure: producer blocks if workers are slow
         chunk_q: _queue.Queue = _queue.Queue(maxsize=config.thread_workers * 2)
         on_error = config.on_error
+
+        def _flush_now() -> None:
+            self._flush_stream_buffer(
+                flush_buffer, serializer_out, sinks, ctx, on_error,
+                config.rate_limit_rps, dlq_sink,
+                getattr(config, "parallel_sinks", False), sink_cb_keys, stats,
+            )
 
         def _worker() -> None:
             while True:
@@ -1696,14 +2001,17 @@ class PipelineExecutor:
                     return
                 raw, meta = item
                 try:
-                    self._process_chunk(
+                    needs_flush = self._process_chunk(
                         raw, meta, serializer_in, transforms,
                         serializer_out, sinks, ctx, on_error,
                         config.rate_limit_rps, dlq_sink,
                         getattr(config, "parallel_sinks", False),
                         sink_cb_keys,
                         stats,
+                        flush_buffer=flush_buffer,
                     )
+                    if flush_buffer is not None and needs_flush:
+                        _flush_now()
                 except Exception as exc:
                     logger.error(
                         "Stream worker error",

@@ -1516,6 +1516,18 @@ class PipelineConfig(BaseModel):
     # transforms; ignored otherwise.
     state_persist_interval_s: float = Field(0, ge=0)
 
+    # Stream micro-batching (GH #78): buffer stream records and flush to sinks
+    # per batch (record threshold OR flush interval, mirroring kafka
+    # max_poll_records) instead of one serialized sink write per message.
+    # Defaults come from the environment (TRAM_STREAM_FLUSH_RECORDS /
+    # TRAM_STREAM_FLUSH_INTERVAL_SECONDS); these fields override them per
+    # pipeline. stream_flush_records: 1 restores the pre-v1.6.0 per-message
+    # flush; stream_flush_interval_s: 0 disables the interval trigger.
+    # ge=1 / ge=0: a zero record threshold would mean "flush every chunk" and
+    # a negative interval would break the time math — reject at validate time.
+    stream_flush_records: int | None = Field(default=None, ge=1)
+    stream_flush_interval_s: float | None = Field(default=None, ge=0)
+
     # Error handling
     on_error: Literal["continue", "abort", "retry", "dlq"] = "continue"
     # ge=0: negative counts/delays would fail at runtime (range()/sleep());
