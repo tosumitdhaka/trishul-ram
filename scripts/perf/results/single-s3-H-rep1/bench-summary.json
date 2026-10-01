@@ -1,0 +1,42 @@
+{
+  "run_id": "single-s3-H-rep1",
+  "scenario": "s3",
+  "res_profile": "H",
+  "rep": 1,
+  "rep_started_at": "2026-10-01T05:44:12.598949+00:00",
+  "run_one_rc": 0,
+  "aborted": null,
+  "run_history": {
+    "rows": 1,
+    "records_in": 100000,
+    "records_out": 100000,
+    "records_skipped": 0,
+    "errors": 1,
+    "error_msgs": [
+      "Records skipped \u2014 no sink wrote successfully (condition filtered all records or every sink failed/circuit-open)"
+    ],
+    "statuses": [
+      "success"
+    ],
+    "wall_s": 9.591319,
+    "nodes": [
+      "trishul-ram-0"
+    ]
+  },
+  "loadgen": {},
+  "rest_sink_stats": {},
+  "sink_export": {},
+  "kafka_out": {},
+  "peaks": {
+    "cpu_peak_m": 2.0,
+    "mem_peak_mi": 743.0,
+    "peak_pod": "trishul-ram-0"
+  },
+  "metrics": {
+    "records_in": 100000,
+    "records_out": 100000,
+    "errors": 1,
+    "duration_s": 9.6,
+    "throughput_recs_s": 10416.7
+  }
+}

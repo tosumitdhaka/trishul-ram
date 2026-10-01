@@ -1,0 +1,22 @@
+{
+  "runs_total": 6,
+  "runs_completed": 6,
+  "records_in": 600000,
+  "records_out": 600000,
+  "records_skipped": 0,
+  "bytes_in": 163084356,
+  "bytes_out": 344873376,
+  "dlq_count": 0,
+  "run_duration_ms": {
+    "count": 6,
+    "total_ms": 2555613.824,
+    "avg_ms": 425935.637,
+    "max_ms": 2506580.315
+  },
+  "errors": [],
+  "error_count": 0,
+  "run_id": "single-s5-H-rep1",
+  "pipeline": "s5-sftp-local",
+  "api_url": "http://127.0.0.1:30001",
+  "collected_at": "2026-10-01T05:51:02.169412+00:00"
+}

@@ -1,0 +1,51 @@
+{
+  "run_id": "mw-s2pmxml-H-rep2",
+  "scenario": "s2pmxml",
+  "res_profile": "H",
+  "rep": 2,
+  "rep_started_at": "2026-09-29T15:25:15.952847+00:00",
+  "run_one_rc": 0,
+  "aborted": null,
+  "run_history": {
+    "rows": 1,
+    "records_in": 100000,
+    "records_out": 100000,
+    "errors": 0,
+    "error_msgs": [],
+    "statuses": [
+      "success"
+    ],
+    "wall_s": 4.755439,
+    "nodes": [
+      "trishul-ram-worker-0"
+    ]
+  },
+  "loadgen": {},
+  "rest_sink_stats": {},
+  "sink_export": {
+    "trishul-ram-worker-0": {
+      "files": 5,
+      "bytes": 21484214
+    },
+    "trishul-ram-worker-1": {
+      "files": 0,
+      "bytes": 0
+    },
+    "trishul-ram-worker-2": {
+      "files": 0,
+      "bytes": 0
+    }
+  },
+  "peaks": {
+    "cpu_peak_m": 23.0,
+    "mem_peak_mi": 107.0,
+    "peak_pod": "trishul-ram-worker-1"
+  },
+  "metrics": {
+    "records_in": 100000,
+    "records_out": 100000,
+    "errors": 0,
+    "duration_s": 4.755439,
+    "throughput_recs_s": 21028.6
+  }
+}

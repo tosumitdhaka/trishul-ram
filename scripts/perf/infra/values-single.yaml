@@ -1,0 +1,52 @@
+## Capacity study — single (all-in-one / standalone) topology values.
+##
+## Selects the chart's standalone path: one StatefulSet (`helm/templates/
+## statefulset.yaml`) running the `trishul-ram` image (Dockerfile — manager +
+## worker + UI in one container, `tram daemon` with no TRAM_MODE split).
+## No manager/worker StatefulSets are rendered when manager.enabled=false.
+##
+## Usage with the dev deploy script (builds the standalone image, injects
+## repository/tag via --set — this file only adds what the script does not set):
+##   ./scripts/deploy-kind-tram-dev.sh --mode standalone \
+##       [VALUES_FILE=scripts/perf/infra/values-single.yaml]
+##
+## Equivalent direct helm usage:
+##   helm upgrade --install trishul-ram helm/ -n trishul-ram --create-namespace \
+##     -f scripts/perf/infra/values-single.yaml \
+##     --set image.tag=<tag> --set image.registry="" \
+##     --set manager.image.registry="" --set worker.image.registry=""
+##
+## NOTE: `--mode standalone` of the deploy script already sets
+## manager.enabled=false + the standalone image repository + empty registries;
+## this file makes those choices explicit/repeatable for direct helm calls and
+## pins study-relevant extras. TRAM_MODE is NOT set in standalone pods (the
+## daemon runs everything in one process — see statefulset.yaml).
+
+manager:
+  enabled: false
+
+image:
+  ## Standalone image (Dockerfile), not the manager/worker split images.
+  registry: ""
+  repository: trishul-ram
+  pullPolicy: IfNotPresent
+
+replicaCount: 1
+
+## SQLite on a per-pod PVC (volumeClaimTemplates) — same as the dev release.
+## The perf study can disable this (`persistence.enabled: false`) for
+## ephemeral nodes; TRAM_DB_URL then falls back to the container filesystem.
+persistence:
+  enabled: true
+  size: 2Gi
+  storageClass: ""
+
+## Applies to the standalone StatefulSet only (statefulset.yaml:180).
+## Overlay with values-res-{L,M,H}.yaml to change.
+resources:
+  requests:
+    cpu: 500m
+    memory: 1Gi
+  limits:
+    cpu: "1"
+    memory: 1Gi

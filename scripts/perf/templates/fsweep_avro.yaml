@@ -1,0 +1,34 @@
+version: "1"
+
+pipeline:
+  name: fsweep-avro
+  description: >
+    Format sweep — Avro. Local Avro files in → Avro out. Input file format:
+    an Avro object-container file written with the CDR schema (the schema
+    file below is uploaded to the manager as /data/schemas/cdr.avsc; the
+    runbook documents generating the .avro corpus). Requires fastavro
+    (pip install tram[avro]).
+  enabled: true
+
+  schedule:
+    type: manual
+
+  source:
+    type: local
+    path: ${PERF_IN_DIR:-/data/perf/in}
+    file_pattern: "*.avro"
+
+  serializer_in:
+    type: avro
+    schema_file: ${PERF_AVRO_SCHEMA:-/data/schemas/cdr.avsc}
+
+  serializer_out:
+    type: avro
+    schema_file: ${PERF_AVRO_SCHEMA:-/data/schemas/cdr.avsc}
+
+  sinks:
+    - type: local
+      path: ${PERF_OUT_DIR:-/data/perf/out}
+      filename_template: "fsweep_avro_{pipeline}_{timestamp}.avro"
+
+  on_error: continue

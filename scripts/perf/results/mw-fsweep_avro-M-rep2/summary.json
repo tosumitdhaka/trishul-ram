@@ -1,0 +1,22 @@
+{
+  "runs_total": 2,
+  "runs_completed": 2,
+  "records_in": 200000,
+  "records_out": 200000,
+  "records_skipped": 0,
+  "bytes_in": 50780528,
+  "bytes_out": 50780528,
+  "dlq_count": 0,
+  "run_duration_ms": {
+    "count": 2,
+    "total_ms": 6720.081,
+    "avg_ms": 3360.041,
+    "max_ms": 3414.559
+  },
+  "errors": [],
+  "error_count": 0,
+  "run_id": "mw-fsweep_avro-M-rep2",
+  "pipeline": "fsweep-avro",
+  "api_url": "http://127.0.0.1:30001",
+  "collected_at": "2026-09-30T07:52:33.546441+00:00"
+}

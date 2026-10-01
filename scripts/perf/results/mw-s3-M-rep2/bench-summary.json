@@ -1,0 +1,55 @@
+{
+  "run_id": "mw-s3-M-rep2",
+  "scenario": "s3",
+  "res_profile": "M",
+  "rep": 2,
+  "rep_started_at": "2026-09-29T15:34:22.939728+00:00",
+  "run_one_rc": 0,
+  "aborted": null,
+  "run_history": {
+    "rows": 1,
+    "records_in": 100000,
+    "records_out": 100000,
+    "errors": 0,
+    "error_msgs": [],
+    "statuses": [
+      "success"
+    ],
+    "wall_s": 30.341137,
+    "nodes": [
+      "trishul-ram-worker-0"
+    ]
+  },
+  "loadgen": {},
+  "rest_sink_stats": {
+    "records": 100000,
+    "bytes": 56279616,
+    "posts": 1000
+  },
+  "sink_export": {
+    "trishul-ram-worker-0": {
+      "files": 0,
+      "bytes": 0
+    },
+    "trishul-ram-worker-1": {
+      "files": 0,
+      "bytes": 0
+    },
+    "trishul-ram-worker-2": {
+      "files": 0,
+      "bytes": 0
+    }
+  },
+  "peaks": {
+    "cpu_peak_m": 500.0,
+    "mem_peak_mi": 104.0,
+    "peak_pod": "trishul-ram-worker-0"
+  },
+  "metrics": {
+    "records_in": 100000,
+    "records_out": 100000,
+    "errors": 0,
+    "duration_s": 30.341137,
+    "throughput_recs_s": 3295.9
+  }
+}

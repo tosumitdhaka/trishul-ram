@@ -1,0 +1,22 @@
+{
+  "runs_total": 1,
+  "runs_completed": 1,
+  "records_in": 100000,
+  "records_out": 8,
+  "records_skipped": 0,
+  "bytes_in": 52378916,
+  "bytes_out": 1704,
+  "dlq_count": 0,
+  "run_duration_ms": {
+    "count": 1,
+    "total_ms": 7092.921,
+    "avg_ms": 7092.921,
+    "max_ms": 7092.921
+  },
+  "errors": [],
+  "error_count": 0,
+  "run_id": "mw-t4-M-rep1",
+  "pipeline": "t4-counter-delta-window",
+  "api_url": "http://127.0.0.1:30001",
+  "collected_at": "2026-09-30T08:37:59.183959+00:00"
+}

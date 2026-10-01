@@ -1,0 +1,22 @@
+{
+  "runs_total": 17,
+  "runs_completed": 17,
+  "records_in": 1721880,
+  "records_out": 972756,
+  "records_skipped": 1498248,
+  "bytes_in": 898455453,
+  "bytes_out": 547452076,
+  "dlq_count": 0,
+  "run_duration_ms": {
+    "count": 17,
+    "total_ms": 2525794.633,
+    "avg_ms": 148576.155,
+    "max_ms": 240216.486
+  },
+  "errors": [],
+  "error_count": 0,
+  "run_id": "sat-s6-M-step4-1200mps",
+  "pipeline": "s6-kafka-local",
+  "api_url": "http://127.0.0.1:30001",
+  "collected_at": "2026-09-30T10:35:27.446791+00:00"
+}

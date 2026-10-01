@@ -1,0 +1,49 @@
+version: "1"
+
+pipeline:
+  name: t1-project-filter
+  description: >
+    Transform bench T1 — project + filter_rows. Local JSONL in (flat CDR
+    corpus), projects the CDR down to a core field set, then drops records
+    whose event_type is EVENT. Measures projection + predicate cost over the
+    full corpus.
+  enabled: true
+
+  schedule:
+    type: manual
+
+  source:
+    type: local
+    path: ${PERF_IN_DIR:-/data/perf/in}
+    file_pattern: "*.jsonl"
+
+  serializer_in:
+    type: json
+
+  transforms:
+    - type: project
+      fields:
+        record_id: record_id
+        msisdn: msisdn
+        imsi: imsi
+        cell_id: cell_id
+        event_type: event_type
+        direction: direction
+        duration_s: duration_s
+        bytes_up: bytes_up
+        bytes_down: bytes_down
+        rat: rat
+        charge_amount: charge_amount
+
+    - type: filter
+      condition: "event_type != 'EVENT'"
+
+  serializer_out:
+    type: json
+
+  sinks:
+    - type: local
+      path: ${PERF_OUT_DIR:-/data/perf/out}
+      filename_template: "t1_{pipeline}_{timestamp}.json"
+
+  on_error: continue

@@ -1,0 +1,57 @@
+{
+  "run_id": "single-s4-H-rep2",
+  "started_at": "2026-10-01T06:31:50.751375+00:00",
+  "finished_at": "2026-10-01T06:32:06.078039+00:00",
+  "namespace": "trishul-ram",
+  "sampling": {
+    "duration_s": 15.0,
+    "interval_s": 5.0
+  },
+  "env": {
+    "tram_version": "1.5.1",
+    "helm_values": {
+      "source": "/home/dhaka/trishul/trishul-ram/scripts/perf/infra/values-res-H.yaml",
+      "image": {
+        "repository": null,
+        "tag": null
+      },
+      "manager": {
+        "enabled": null,
+        "image": {
+          "repository": null,
+          "tag": null
+        },
+        "replicas": 1,
+        "resources": {
+          "cpu": "2",
+          "memory": "2Gi"
+        }
+      },
+      "worker": {
+        "replicas": null,
+        "image": {
+          "repository": null,
+          "tag": null
+        },
+        "resources": {
+          "cpu": "2",
+          "memory": "2Gi"
+        }
+      },
+      "service": {
+        "type": null,
+        "nodePort": null
+      },
+      "env_snmp_stack": null
+    },
+    "node_allocatable": {
+      "cpu": "12",
+      "memory": "16120920Ki"
+    },
+    "running_images": {
+      "kafka-0": "docker.io/apache/kafka:3.9.0",
+      "sftp-0": "docker.io/atmoz/sftp:latest",
+      "trishul-ram-0": "docker.io/library/trishul-ram:local-20260930193823"
+    }
+  }
+}

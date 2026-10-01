@@ -1,0 +1,5 @@
+step,offered_rps,achieved_2xx_rps,p95_ms,worker_cpu_peak_m,notes
+1,100,96.8,3.6,235,k=1 sent=18000 2xx=17424 4xx=576 5xx=0 p50=2.5ms records_in=17423 records_out=17423 skipped=0 mem_peak=117Mi single
+2,200,193.9,3.1,405,k=1 sent=36000 2xx=34902 4xx=1098 5xx=0 p50=2.1ms records_in=34902 records_out=34902 skipped=0 mem_peak=125Mi single
+3,400,273.3,469.7,495,k=1 sent=50938 2xx=49192 4xx=1746 5xx=0 p50=105.8ms records_in=49185 records_out=49185 skipped=0 mem_peak=126Mi single
+4,800,279.5,468.4,479,k=1 sent=53943 2xx=50311 4xx=3632 5xx=0 p50=115.0ms records_in=50305 records_out=50305 skipped=0 mem_peak=126Mi single

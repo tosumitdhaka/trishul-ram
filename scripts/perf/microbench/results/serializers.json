@@ -1,0 +1,158 @@
+{
+  "meta": {
+    "phase": "1c-serializers",
+    "repo_version": "v1.5.1 @ 326d9dd",
+    "records": 10000,
+    "warmup_records": 1000,
+    "reps": 5,
+    "statistic": "median",
+    "cpu": "Intel(R) Core(TM) Ultra 7 155H",
+    "python": "3.12.3",
+    "host_note": "WSL2 host \u2014 numbers are comparative, not absolute",
+    "generated": "2026-09-29T14:03:56.499320+00:00"
+  },
+  "results": [
+    {
+      "name": "json",
+      "payload_bytes": 5276780,
+      "bytes_per_record": 527.7,
+      "parse": {
+        "records_s": 388017,
+        "us_per_record": 2.577,
+        "mb_s": 195.26
+      },
+      "serialize": {
+        "records_s": 465961,
+        "us_per_record": 2.146,
+        "mb_s": 234.49
+      },
+      "notes": "Payload = JSON array of canonical CDRs."
+    },
+    {
+      "name": "ndjson",
+      "payload_bytes": 4876779,
+      "bytes_per_record": 487.7,
+      "parse": {
+        "records_s": 235510,
+        "us_per_record": 4.246,
+        "mb_s": 109.53
+      },
+      "serialize": {
+        "records_s": 272420,
+        "us_per_record": 3.671,
+        "mb_s": 136.83
+      },
+      "notes": "Payload = one compact-JSON CDR per line."
+    },
+    {
+      "name": "csv",
+      "payload_bytes": 2366963,
+      "bytes_per_record": 236.7,
+      "parse": {
+        "records_s": 282126,
+        "us_per_record": 3.545,
+        "mb_s": 63.68
+      },
+      "serialize": {
+        "records_s": 355145,
+        "us_per_record": 2.816,
+        "mb_s": 80.17
+      },
+      "notes": "Header + 10k rows; parse output values are strings (CSV semantics)."
+    },
+    {
+      "name": "xml",
+      "payload_bytes": 7626840,
+      "bytes_per_record": 762.7,
+      "parse": {
+        "records_s": 37780,
+        "us_per_record": 26.469,
+        "mb_s": 27.48
+      },
+      "serialize": {
+        "records_s": 53162,
+        "us_per_record": 18.81,
+        "mb_s": 38.67
+      },
+      "notes": "defusedxml parse / lxml pretty-print serialize; parse output values are strings (XML text nodes)."
+    },
+    {
+      "name": "text",
+      "payload_bytes": 4876779,
+      "bytes_per_record": 487.7,
+      "parse": {
+        "records_s": 1933958,
+        "us_per_record": 0.517,
+        "mb_s": 899.46
+      },
+      "serialize": {
+        "records_s": 4899826,
+        "us_per_record": 0.204,
+        "mb_s": 2278.84
+      },
+      "notes": "Payload = one compact-JSON CDR per line (lines opaque to the serializer); parse yields {_line, _line_num} records, serialize round-trips the _line field."
+    },
+    {
+      "name": "pm_xml",
+      "payload_bytes": 1813088,
+      "bytes_per_record": 181.3,
+      "parse": {
+        "records_s": 97255,
+        "us_per_record": 10.282,
+        "mb_s": 16.82
+      },
+      "serialize": {
+        "records_s": 119351,
+        "us_per_record": 8.379,
+        "mb_s": 28.0
+      },
+      "notes": "Input constructed: 3GPP TS 32.432 measData, 10 measInfo x 1,000 measValue x 6 Nokia-style counters, numeric_values=true. Serialize output loses measType p-indices (one measInfo per record)."
+    },
+    {
+      "name": "bytes",
+      "payload_bytes": 4866780,
+      "bytes_per_record": 486.7,
+      "parse": {
+        "records_s": 1004395,
+        "us_per_record": 0.996,
+        "mb_s": 466.17
+      },
+      "serialize": {
+        "records_s": 1053258,
+        "us_per_record": 0.949,
+        "mb_s": 488.85
+      },
+      "notes": "Passthrough envelope: parse wraps a whole payload in ONE record (_raw/_size); serialize consumes only records[0]. Benched as 10000 x ~486 B payloads (one CDR file/message each); records/s = payloads/s."
+    },
+    {
+      "name": "asn1",
+      "payload_bytes": 2475266,
+      "bytes_per_record": 247.5,
+      "parse": {
+        "records_s": 50557,
+        "us_per_record": 19.78,
+        "mb_s": 11.93
+      },
+      "serialize": null,
+      "notes": "Decode-only by design (serialize raises SerializerError). Input = concatenated BER CdrRecord TLVs (3GPP CDR-file style), encoded with asn1tools from data/cdr.asn."
+    }
+  ],
+  "skipped": [
+    {
+      "name": "avro",
+      "reason": "fastavro not installed in venv (tram[avro])"
+    },
+    {
+      "name": "msgpack",
+      "reason": "msgpack not installed in venv (tram[msgpack_ser])"
+    },
+    {
+      "name": "parquet",
+      "reason": "pyarrow not installed in venv (tram[parquet])"
+    },
+    {
+      "name": "protobuf",
+      "reason": "protobuf + grpcio-tools not installed in venv (tram[protobuf_ser])"
+    }
+  ]
+}

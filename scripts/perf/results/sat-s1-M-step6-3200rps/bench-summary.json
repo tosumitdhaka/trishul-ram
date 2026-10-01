@@ -1,0 +1,106 @@
+{
+ "step": 6,
+ "offered": 3200,
+ "k": 4,
+ "sent": 181213,
+ "2xx": 172575,
+ "4xx": 8638,
+ "5xx": 0,
+ "p50": 133.559,
+ "p95": 579.28675,
+ "hist": {
+  "rows": 3,
+  "records_in": 172564,
+  "records_out": 172564,
+  "records_skipped": 0,
+  "bytes_in": 90043506,
+  "bytes_out": 97118630,
+  "errors": 0,
+  "error_msgs": [],
+  "statuses": [
+   "success"
+  ],
+  "wall_s": 180.180077,
+  "nodes": [
+   "trishul-ram-worker-0",
+   "trishul-ram-worker-1",
+   "trishul-ram-worker-2"
+  ]
+ },
+ "cpu": 501.0,
+ "mem": 710.0,
+ "loadgens": [
+  {
+   "tool": "loadgen_webhook",
+   "sent": 45821,
+   "http_2xx": 43675,
+   "http_4xx": 2146,
+   "http_5xx": 0,
+   "errors": 1,
+   "latency_ms": {
+    "p50": 130.707,
+    "p95": 571.93,
+    "max": 2029.562
+   },
+   "url": "http://127.0.0.1:30002/webhooks/ingest",
+   "rate": 800.0,
+   "concurrency": 50,
+   "duration_s": 180.0,
+   "payload_records": 100000
+  },
+  {
+   "tool": "loadgen_webhook",
+   "sent": 46127,
+   "http_2xx": 44045,
+   "http_4xx": 2082,
+   "http_5xx": 0,
+   "errors": 4,
+   "latency_ms": {
+    "p50": 127.953,
+    "p95": 570.547,
+    "max": 2181.662
+   },
+   "url": "http://127.0.0.1:30002/webhooks/ingest",
+   "rate": 800.0,
+   "concurrency": 50,
+   "duration_s": 180.0,
+   "payload_records": 100000
+  },
+  {
+   "tool": "loadgen_webhook",
+   "sent": 49730,
+   "http_2xx": 47401,
+   "http_4xx": 2329,
+   "http_5xx": 0,
+   "errors": 2,
+   "latency_ms": {
+    "p50": 121.582,
+    "p95": 515.399,
+    "max": 2135.367
+   },
+   "url": "http://127.0.0.1:30002/webhooks/ingest",
+   "rate": 800.0,
+   "concurrency": 50,
+   "duration_s": 180.0,
+   "payload_records": 100000
+  },
+  {
+   "tool": "loadgen_webhook",
+   "sent": 39535,
+   "http_2xx": 37454,
+   "http_4xx": 2081,
+   "http_5xx": 0,
+   "errors": 6,
+   "latency_ms": {
+    "p50": 153.994,
+    "p95": 659.271,
+    "max": 2380.027
+   },
+   "url": "http://127.0.0.1:30002/webhooks/ingest",
+   "rate": 800.0,
+   "concurrency": 50,
+   "duration_s": 180.0,
+   "payload_records": 100000
+  }
+ ]
+}

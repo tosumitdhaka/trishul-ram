@@ -1,0 +1,22 @@
+{
+  "runs_total": 2,
+  "runs_completed": 2,
+  "records_in": 200000,
+  "records_out": 200000,
+  "records_skipped": 0,
+  "bytes_in": 104557792,
+  "bytes_out": 112357772,
+  "dlq_count": 0,
+  "run_duration_ms": {
+    "count": 2,
+    "total_ms": 3576.05,
+    "avg_ms": 1788.025,
+    "max_ms": 1822.038
+  },
+  "errors": [],
+  "error_count": 0,
+  "run_id": "mw-fsweep_ndjson-M-rep2",
+  "pipeline": "fsweep-ndjson",
+  "api_url": "http://127.0.0.1:30001",
+  "collected_at": "2026-09-30T07:41:15.371525+00:00"
+}

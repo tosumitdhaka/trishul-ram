@@ -1,0 +1,38 @@
+version: "1"
+
+pipeline:
+  name: s3-rest-rest
+  description: >
+    Perf scenario S3 — REST source → REST sink. The REST source paginates the
+    mock_rest_server.py corpus (GET /records?offset=N&limit=M) and every
+    record is POSTed to the sink endpoint (POST /collect), whose counters are
+    read back via GET /collect/stats for the run summary.
+  enabled: true
+
+  schedule:
+    type: manual
+
+  source:
+    type: rest
+    url: ${PERF_REST_URL:-http://127.0.0.1:18080/records}
+    method: GET
+    timeout: 30
+    paginate: true
+    page_param: offset
+    page_size: ${PERF_REST_PAGE_SIZE:-100}
+
+  serializer_in:
+    type: json
+
+  serializer_out:
+    type: json
+
+  sinks:
+    - type: rest
+      url: ${PERF_REST_SINK_URL:-http://127.0.0.1:18080/collect}
+      method: POST
+      content_type: application/json
+      timeout: 30
+      expected_status: [200]
+
+  on_error: continue

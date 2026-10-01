@@ -1,0 +1,34 @@
+version: "1"
+
+pipeline:
+  name: fsweep-xml
+  description: >
+    Format sweep — XML. Local XML files in → XML out. Input file format:
+    file_gen.py --format xml (a <records> root with one <record> child per
+    CDR record; child element names = field names, text = values).
+  enabled: true
+
+  schedule:
+    type: manual
+
+  source:
+    type: local
+    path: ${PERF_IN_DIR:-/data/perf/in}
+    file_pattern: "*.xml"
+
+  serializer_in:
+    type: xml
+    root_element: records
+    record_element: record
+
+  serializer_out:
+    type: xml
+    root_element: records
+    record_element: record
+
+  sinks:
+    - type: local
+      path: ${PERF_OUT_DIR:-/data/perf/out}
+      filename_template: "fsweep_xml_{pipeline}_{timestamp}.xml"
+
+  on_error: continue

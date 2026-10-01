@@ -1,0 +1,123 @@
+## Capacity study — single-broker KRaft Kafka (no zookeeper).
+## Namespace: trishul-ram (same as TRAM — pipelines reach kafka:9092 in-ns).
+## Host access: NodePort 30094 on any kind node (advertised as 172.19.0.2:30094,
+## the control-plane IP — kube-proxy routes NodePort traffic to the pod
+## regardless of where the pod lands, so the advertised address stays valid).
+## Storage: ephemeral emptyDir (capacity study only — data is disposable).
+## Topic used by the study: perf-raw (3 partitions, created post-deploy, see
+## scripts/perf/infra/PORTMAP.md).
+apiVersion: v1
+kind: Service
+metadata:
+  name: kafka
+  namespace: trishul-ram
+  labels:
+    app.kubernetes.io/name: kafka
+spec:
+  type: NodePort
+  ## KRaft bootstrap: the broker must reach its own controller (kafka:9093)
+  ## through this Service BEFORE the pod turns Ready — without this flag
+  ## not-ready endpoints are excluded from ClusterIP routing and the broker
+  ## crash-loops on controller-registration timeout.
+  publishNotReadyAddresses: true
+  selector:
+    app.kubernetes.io/name: kafka
+  ports:
+    - name: plaintext
+      port: 9092
+      targetPort: 9092
+      protocol: TCP
+    # KRaft controller port — must be in the Service or the quorum voter
+    # bootstrap (1@kafka:9093) never reaches the pod through the ClusterIP.
+    - name: controller
+      port: 9093
+      targetPort: 9093
+      protocol: TCP
+    - name: external
+      port: 9094
+      targetPort: 9094
+      protocol: TCP
+      nodePort: 30094
+---
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: kafka
+  namespace: trishul-ram
+  labels:
+    app.kubernetes.io/name: kafka
+spec:
+  serviceName: kafka
+  replicas: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: kafka
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: kafka
+    spec:
+      containers:
+        - name: kafka
+          image: apache/kafka:3.9.0
+          ports:
+            - name: plaintext
+              containerPort: 9092
+            - name: controller
+              containerPort: 9093
+            - name: external
+              containerPort: 9094
+          env:
+            # KRaft: combined broker+controller, single node
+            - name: KAFKA_NODE_ID
+              value: "1"
+            - name: KAFKA_PROCESS_ROLES
+              value: broker,controller
+            - name: KAFKA_CONTROLLER_QUORUM_VOTERS
+              value: 1@kafka:9093
+            - name: KAFKA_LISTENERS
+              value: PLAINTEXT://:9092,CONTROLLER://:9093,EXTERNAL://:9094
+            - name: KAFKA_ADVERTISED_LISTENERS
+              value: PLAINTEXT://kafka:9092,EXTERNAL://172.19.0.2:30094
+            - name: KAFKA_LISTENER_SECURITY_PROTOCOL_MAP
+              value: CONTROLLER:PLAINTEXT,PLAINTEXT:PLAINTEXT,EXTERNAL:PLAINTEXT
+            - name: KAFKA_CONTROLLER_LISTENER_NAMES
+              value: CONTROLLER
+            - name: KAFKA_INTER_BROKER_LISTENER_NAME
+              value: PLAINTEXT
+            - name: KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR
+              value: "1"
+            - name: KAFKA_TRANSACTION_STATE_LOG_REPLICATION_FACTOR
+              value: "1"
+            - name: KAFKA_TRANSACTION_STATE_LOG_MIN_ISR
+              value: "1"
+            - name: KAFKA_GROUP_INITIAL_REBALANCE_DELAY_MS
+              value: "0"
+            - name: KAFKA_AUTO_CREATE_TOPICS_ENABLE
+              value: "true"
+            - name: KAFKA_HEAP_OPTS
+              value: "-Xmx1G -Xms1G"
+          resources:
+            requests:
+              cpu: 250m
+              memory: 1Gi
+            limits:
+              cpu: "1"
+              memory: 1536Mi
+          volumeMounts:
+            - name: data
+              mountPath: /var/lib/kafka/data
+          readinessProbe:
+            tcpSocket:
+              port: 9092
+            initialDelaySeconds: 10
+            periodSeconds: 10
+            failureThreshold: 12
+  volumeClaimTemplates:
+    - metadata:
+        name: data
+      spec:
+        accessModes: ["ReadWriteOnce"]
+        resources:
+          requests:
+            storage: 5Gi

@@ -1,0 +1,39 @@
+{
+  "run_id": "mw-fsweep_pmxml-M-rep1",
+  "scenario": "fsweep_pmxml",
+  "res_profile": "M",
+  "rep": 1,
+  "rep_started_at": "2026-09-30T07:46:33.120505+00:00",
+  "run_one_rc": 0,
+  "aborted": null,
+  "run_history": {
+    "rows": 1,
+    "records_in": 100000,
+    "records_out": 100000,
+    "records_skipped": 0,
+    "bytes_in": 30474180,
+    "bytes_out": 37769160,
+    "errors": 0,
+    "error_msgs": [],
+    "statuses": [
+      "success"
+    ],
+    "wall_s": 7.572017,
+    "nodes": [
+      "trishul-ram-worker-0"
+    ]
+  },
+  "bytes_per_record_in": 304.7,
+  "peaks": {
+    "cpu_peak_m": 95.0,
+    "mem_peak_mi": 1057.0,
+    "peak_pod": "trishul-ram-worker-0"
+  },
+  "metrics": {
+    "records_in": 100000,
+    "records_out": 100000,
+    "errors": 0,
+    "duration_s": 7.6,
+    "throughput_recs_s": 13157.9
+  }
+}

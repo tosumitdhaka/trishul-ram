@@ -1,0 +1,22 @@
+{
+  "runs_total": 1,
+  "runs_completed": 1,
+  "records_in": 100000,
+  "records_out": 100000,
+  "records_skipped": 0,
+  "bytes_in": 52378916,
+  "bytes_out": 56278896,
+  "dlq_count": 0,
+  "run_duration_ms": {
+    "count": 1,
+    "total_ms": 1303.282,
+    "avg_ms": 1303.282,
+    "max_ms": 1303.282
+  },
+  "errors": [],
+  "error_count": 0,
+  "run_id": "mw-t3-M-rep1",
+  "pipeline": "t3-deduplicate",
+  "api_url": "http://127.0.0.1:30001",
+  "collected_at": "2026-09-30T08:35:39.190965+00:00"
+}

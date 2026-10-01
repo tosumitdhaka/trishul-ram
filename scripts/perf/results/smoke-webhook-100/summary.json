@@ -1,0 +1,22 @@
+{
+  "runs_total": 6,
+  "runs_completed": 6,
+  "records_in": 1700,
+  "records_out": 1700,
+  "records_skipped": 0,
+  "bytes_in": 887660,
+  "bytes_out": 957360,
+  "dlq_count": 0,
+  "run_duration_ms": {
+    "count": 6,
+    "total_ms": 138492.704,
+    "avg_ms": 23082.117,
+    "max_ms": 26026.461
+  },
+  "errors": [],
+  "error_count": 0,
+  "run_id": "smoke-webhook-100",
+  "pipeline": "s1-webhook-local",
+  "api_url": "http://127.0.0.1:30001",
+  "collected_at": "2026-09-29T14:25:19.293963+00:00"
+}

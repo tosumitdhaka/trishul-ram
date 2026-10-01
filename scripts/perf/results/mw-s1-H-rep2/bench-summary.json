@@ -1,0 +1,70 @@
+{
+  "run_id": "mw-s1-H-rep2",
+  "scenario": "s1",
+  "res_profile": "H",
+  "rep": 2,
+  "rep_started_at": "2026-09-29T14:59:28.016185+00:00",
+  "run_one_rc": 0,
+  "aborted": null,
+  "run_history": {
+    "rows": 3,
+    "records_in": 124639,
+    "records_out": 124639,
+    "errors": 0,
+    "error_msgs": [],
+    "statuses": [
+      "success"
+    ],
+    "wall_s": 240.551356,
+    "nodes": [
+      "trishul-ram-worker-0",
+      "trishul-ram-worker-1",
+      "trishul-ram-worker-2"
+    ]
+  },
+  "loadgen": {
+    "tool": "loadgen_webhook",
+    "sent": 124639,
+    "http_2xx": 124639,
+    "http_4xx": 0,
+    "http_5xx": 0,
+    "errors": 0,
+    "latency_ms": {
+      "p50": 18.431,
+      "p95": 72.309,
+      "max": 348.981
+    },
+    "url": "http://127.0.0.1:30002/webhooks/ingest",
+    "rate": 800.0,
+    "concurrency": 20,
+    "duration_s": 180.0,
+    "payload_records": 100000
+  },
+  "rest_sink_stats": {},
+  "sink_export": {
+    "trishul-ram-worker-0": {
+      "files": 181,
+      "bytes": 101746
+    },
+    "trishul-ram-worker-1": {
+      "files": 179,
+      "bytes": 100723
+    },
+    "trishul-ram-worker-2": {
+      "files": 181,
+      "bytes": 101847
+    }
+  },
+  "peaks": {
+    "cpu_peak_m": 464.0,
+    "mem_peak_mi": 123.0,
+    "peak_pod": "trishul-ram-worker-2"
+  },
+  "metrics": {
+    "records_in": 124639,
+    "records_out": 124639,
+    "errors": 0,
+    "duration_s": 180.0,
+    "throughput_recs_s": 692.4
+  }
+}

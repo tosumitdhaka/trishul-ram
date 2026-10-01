@@ -1,0 +1,38 @@
+{
+ "step": 2,
+ "offered": 1000,
+ "k": 1,
+ "produced": 85173,
+ "consumed": 85173,
+ "dur": 90,
+ "hist": {
+  "rows": 1,
+  "records_in": 85173,
+  "records_out": 85173,
+  "records_skipped": 0,
+  "bytes_in": 44439663,
+  "bytes_out": 47931756,
+  "errors": 0,
+  "error_msgs": [],
+  "statuses": [
+   "success"
+  ],
+  "wall_s": 100.093002,
+  "nodes": [
+   "trishul-ram-worker-0"
+  ]
+ },
+ "cpu": 496.0,
+ "mem": 778.0,
+ "loadgens": [
+  {
+   "tool": "kafka_loadgen",
+   "mode": "produce",
+   "topic": "perf-cdr",
+   "sent": 85173,
+   "failed": 0,
+   "achieved_rps": 946.34
+  }
+ ],
+ "kafka_group_lag": null
+}

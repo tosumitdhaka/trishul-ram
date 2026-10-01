@@ -1,0 +1,53 @@
+{
+  "run_id": "mw-s4-L-rep1",
+  "scenario": "s4",
+  "res_profile": "L",
+  "rep": 1,
+  "rep_started_at": "2026-09-29T15:41:12.030737+00:00",
+  "run_one_rc": 0,
+  "aborted": null,
+  "run_history": {
+    "rows": 1,
+    "records_in": 0,
+    "records_out": 0,
+    "errors": 1,
+    "error_msgs": [
+      "Manager recovered no active worker batch run for pipeline marked running"
+    ],
+    "statuses": [
+      "failed"
+    ],
+    "wall_s": 7e-06,
+    "nodes": [
+      "trishul-ram-manager-0"
+    ]
+  },
+  "loadgen": {},
+  "rest_sink_stats": {},
+  "sink_export": {
+    "trishul-ram-worker-0": {
+      "files": 0,
+      "bytes": 0
+    },
+    "trishul-ram-worker-1": {
+      "files": 0,
+      "bytes": 0
+    },
+    "trishul-ram-worker-2": {
+      "files": 0,
+      "bytes": 0
+    }
+  },
+  "peaks": {
+    "cpu_peak_m": 94.0,
+    "mem_peak_mi": 117.0,
+    "peak_pod": "trishul-ram-worker-0"
+  },
+  "metrics": {
+    "records_in": 0,
+    "records_out": 0,
+    "errors": 1,
+    "duration_s": 7e-06,
+    "throughput_recs_s": 0.0
+  }
+}

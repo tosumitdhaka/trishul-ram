@@ -1,0 +1,29 @@
+{
+  "run_id": "mw-s4-M-rep1",
+  "started_at": "2026-09-29T16:14:59.047569+00:00",
+  "finished_at": "2026-09-29T16:15:14.361985+00:00",
+  "namespace": "trishul-ram",
+  "sampling": {
+    "duration_s": 15.0,
+    "interval_s": 5.0
+  },
+  "env": {
+    "tram_version": "1.5.1",
+    "helm_values": {
+      "source": null,
+      "note": "no --helm-values provided"
+    },
+    "node_allocatable": {
+      "cpu": "12",
+      "memory": "16120920Ki"
+    },
+    "running_images": {
+      "kafka-0": "docker.io/apache/kafka:3.9.0",
+      "sftp-0": "docker.io/atmoz/sftp:latest",
+      "trishul-ram-manager-0": "docker.io/library/trishul-ram-manager:local-20260929135930",
+      "trishul-ram-worker-0": "docker.io/library/trishul-ram-worker:local-20260929135930",
+      "trishul-ram-worker-1": "docker.io/library/trishul-ram-worker:local-20260929135930",
+      "trishul-ram-worker-2": "docker.io/library/trishul-ram-worker:local-20260929135930"
+    }
+  }
+}

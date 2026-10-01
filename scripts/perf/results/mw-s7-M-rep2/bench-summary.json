@@ -1,0 +1,46 @@
+{
+  "run_id": "mw-s7-M-rep2",
+  "scenario": "s7",
+  "res_profile": "M",
+  "rep": 2,
+  "rep_started_at": "2026-09-30T06:59:53.412938+00:00",
+  "run_one_rc": 0,
+  "aborted": null,
+  "run_history": {
+    "rows": 1,
+    "records_in": 100000,
+    "records_out": 0,
+    "records_skipped": 100010,
+    "errors": 3,
+    "error_msgs": [
+      "Kafka send failed to topic 'perf-cdr-out': [Error 10] MessageSizeTooLargeError: The message is 5627665 bytes when serialized which is larger than the maximum request size you have configured with the max_request_size configuration",
+      "Records skipped \u2014 no sink wrote successfully (condition filtered all records or every sink failed/circuit-open)",
+      "Kafka send failed to topic 'perf-cdr-out': [Error 10] MessageSizeTooLargeError: The message is 5628332 bytes when serialized which is larger than the maximum request size you have configured with the max_request_size configuration"
+    ],
+    "statuses": [
+      "success"
+    ],
+    "wall_s": 1.746093,
+    "nodes": [
+      "trishul-ram-worker-0"
+    ]
+  },
+  "loadgen": {},
+  "rest_sink_stats": {},
+  "sink_export": {},
+  "kafka_out": {
+    "raw": "{\"0\": 0, \"1\": 0, \"2\": 0}"
+  },
+  "peaks": {
+    "cpu_peak_m": 14.0,
+    "mem_peak_mi": 1050.0,
+    "peak_pod": "trishul-ram-worker-0"
+  },
+  "metrics": {
+    "records_in": 100000,
+    "records_out": 0,
+    "errors": 3,
+    "duration_s": 1.7,
+    "throughput_recs_s": 0.0
+  }
+}

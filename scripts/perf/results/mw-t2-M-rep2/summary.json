@@ -1,0 +1,22 @@
+{
+  "runs_total": 2,
+  "runs_completed": 2,
+  "records_in": 200000,
+  "records_out": 200000,
+  "records_skipped": 0,
+  "bytes_in": 108157832,
+  "bytes_out": 125557792,
+  "dlq_count": 0,
+  "run_duration_ms": {
+    "count": 2,
+    "total_ms": 7107.095,
+    "avg_ms": 3553.547,
+    "max_ms": 3573.747
+  },
+  "errors": [],
+  "error_count": 0,
+  "run_id": "mw-t2-M-rep2",
+  "pipeline": "t2-json-flatten-enrich",
+  "api_url": "http://127.0.0.1:30001",
+  "collected_at": "2026-09-30T08:34:31.810453+00:00"
+}

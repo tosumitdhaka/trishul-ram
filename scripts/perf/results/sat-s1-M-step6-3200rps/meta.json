@@ -1,0 +1,22 @@
+{
+  "run_id": "sat-s1-M-step6-3200rps",
+  "started_at": "2026-09-30T10:08:17.071239+00:00",
+  "finished_at": "2026-09-30T10:08:32.691800+00:00",
+  "namespace": "tram",
+  "sampling": {
+    "duration_s": 15.0,
+    "interval_s": 5.0
+  },
+  "env": {
+    "tram_version": "1.5.1",
+    "helm_values": {
+      "source": null,
+      "note": "no --helm-values provided"
+    },
+    "node_allocatable": {
+      "cpu": "12",
+      "memory": "16120920Ki"
+    },
+    "running_images": {}
+  }
+}

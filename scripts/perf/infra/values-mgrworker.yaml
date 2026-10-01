@@ -1,0 +1,63 @@
+## Capacity study — manager+worker topology values (3 workers).
+##
+## Selects the chart's split path: manager StatefulSet
+## (`helm/templates/manager-statefulset.yaml`, TRAM_MODE=manager, owns
+## scheduling + SQLite on the manager PVC) + worker StatefulSet
+## (`helm/templates/worker-statefulset.yaml`, TRAM_MODE=worker, stateless
+## executors; schemas/MIBs synced from the manager into a /data emptyDir).
+##
+## Usage with the dev deploy script (builds BOTH split images and injects
+## repositories/tag via --set):
+##   ./scripts/deploy-kind-tram-dev.sh --mode manager \
+##       [VALUES_FILE=scripts/perf/infra/values-mgrworker.yaml]
+##
+## Equivalent direct helm usage:
+##   helm upgrade --install trishul-ram helm/ -n trishul-ram --create-namespace \
+##     -f scripts/perf/infra/values-mgrworker.yaml \
+##     --set manager.image.tag=<tag> --set worker.image.tag=<tag> \
+##     --set image.registry="" --set manager.image.registry="" \
+##     --set worker.image.registry=""
+
+manager:
+  enabled: true
+  image:
+    registry: ""
+    repository: trishul-ram-manager
+  persistence:
+    enabled: true
+    accessMode: ReadWriteOnce
+    size: 10Gi
+    storageClass: ""
+  ## Applies to manager pods (manager-statefulset.yaml:230).
+  resources:
+    requests:
+      cpu: 500m
+      memory: 1Gi
+    limits:
+      cpu: "1"
+      memory: 1Gi
+
+worker:
+  replicas: 3
+  image:
+    registry: ""
+    repository: trishul-ram-worker
+  ## Worker ingress (webhook/UDP push → workers) as NodePort for host-side loadgen.
+  ingressService:
+    enabled: true
+    type: NodePort
+    port: 8767
+    nodePort: 30002
+  ## Applies to worker pods (worker-statefulset.yaml:134).
+  resources:
+    requests:
+      cpu: 500m
+      memory: 1Gi
+    limits:
+      cpu: "1"
+      memory: 1Gi
+
+service:
+  type: NodePort
+  port: 8765
+  nodePort: 30001

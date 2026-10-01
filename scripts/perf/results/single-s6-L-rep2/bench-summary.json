@@ -1,0 +1,52 @@
+{
+  "run_id": "single-s6-L-rep2",
+  "scenario": "s6",
+  "res_profile": "L",
+  "rep": 2,
+  "rep_started_at": "2026-09-30T12:07:04.272624+00:00",
+  "run_one_rc": 0,
+  "aborted": null,
+  "run_history": {
+    "rows": 1,
+    "records_in": 90000,
+    "records_out": 90000,
+    "records_skipped": 0,
+    "errors": 0,
+    "error_msgs": [],
+    "statuses": [
+      "success(log-derived)"
+    ],
+    "wall_s": 0.0,
+    "nodes": [
+      "trishul-ram-0(log-derived)"
+    ]
+  },
+  "loadgen": {
+    "tool": "kafka_loadgen",
+    "mode": "produce",
+    "topic": "perf-cdr",
+    "sent": 90000,
+    "failed": 0,
+    "achieved_rps": 500.0
+  },
+  "rest_sink_stats": {},
+  "sink_export": {
+    "trishul-ram-0": {
+      "files": 181,
+      "bytes": 101808
+    }
+  },
+  "kafka_out": {},
+  "peaks": {
+    "cpu_peak_m": 10.0,
+    "mem_peak_mi": 791.0,
+    "peak_pod": "trishul-ram-0"
+  },
+  "metrics": {
+    "records_in": 90000,
+    "records_out": 90000,
+    "errors": 0,
+    "duration_s": 180.0,
+    "throughput_recs_s": 500.0
+  }
+}

@@ -1,0 +1,52 @@
+{
+  "run_id": "mw-s5-M-rep1",
+  "scenario": "s5",
+  "res_profile": "M",
+  "rep": 1,
+  "rep_started_at": "2026-09-30T05:29:09.754867+00:00",
+  "run_one_rc": 0,
+  "aborted": null,
+  "run_history": {
+    "rows": 1,
+    "records_in": 100000,
+    "records_out": 100000,
+    "errors": 0,
+    "error_msgs": [],
+    "statuses": [
+      "success"
+    ],
+    "wall_s": 8.063119,
+    "nodes": [
+      "trishul-ram-worker-0"
+    ]
+  },
+  "loadgen": {},
+  "rest_sink_stats": {},
+  "sink_export": {
+    "trishul-ram-worker-0": {
+      "files": 8,
+      "bytes": 45982598
+    },
+    "trishul-ram-worker-1": {
+      "files": 0,
+      "bytes": 0
+    },
+    "trishul-ram-worker-2": {
+      "files": 0,
+      "bytes": 0
+    }
+  },
+  "kafka_out": {},
+  "peaks": {
+    "cpu_peak_m": 19.0,
+    "mem_peak_mi": 513.0,
+    "peak_pod": "sftp-0"
+  },
+  "metrics": {
+    "records_in": 100000,
+    "records_out": 100000,
+    "errors": 0,
+    "duration_s": 8.1,
+    "throughput_recs_s": 12345.7
+  }
+}

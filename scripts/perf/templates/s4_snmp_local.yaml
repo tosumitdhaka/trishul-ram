@@ -1,0 +1,41 @@
+version: "1"
+
+pipeline:
+  name: s4-snmp-local
+  description: >
+    Perf scenario S4 — SNMP walk → local JSON sink. Walks the synthetic
+    rows x 8 table served by snmp_responder_scaled.py (MIB area
+    1.3.6.1.4.1.99999.2.1, untyped instances, no MIB files needed) with
+    yield_rows so each table row becomes one record.
+    s4b (stack:trishul): the same YAML runs against the trishul-snmp stack —
+    set TRAM_SNMP_STACK=trishul in the deployment env (README documents it).
+  enabled: true
+
+  schedule:
+    type: manual
+
+  source:
+    type: snmp_poll
+    host: ${PERF_SNMP_HOST:-127.0.0.1}
+    port: ${PERF_SNMP_PORT:-11161}
+    community: public
+    version: "2c"
+    oids:
+      - "1.3.6.1.4.1.99999.2.1"
+    operation: walk
+    resolve_oids: false
+    yield_rows: true
+    index_depth: 1
+
+  serializer_in:
+    type: json
+
+  serializer_out:
+    type: json
+
+  sinks:
+    - type: local
+      path: ${PERF_OUT_DIR:-/data/perf/out}
+      filename_template: "s4_{pipeline}_{timestamp}.json"
+
+  on_error: continue

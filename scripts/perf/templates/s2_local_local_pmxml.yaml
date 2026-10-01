@@ -1,0 +1,34 @@
+version: "1"
+
+pipeline:
+  name: s2-local-local-pmxml
+  description: >
+    Perf scenario S2 (pm_xml variant) — local 3GPP PM XML files → local JSON
+    sink. Reads the measData batches materialized by file_gen.py --format
+    pm_xml (one bench record per <measValue>) and writes parsed records as
+    JSON to the sink dir.
+  enabled: true
+
+  schedule:
+    type: manual
+
+  source:
+    type: local
+    path: ${PERF_IN_DIR:-/data/perf/in}
+    file_pattern: "*.xml"
+
+  serializer_in:
+    type: pm_xml
+    add_managed_element: true
+    add_duration: false
+    numeric_values: true
+
+  serializer_out:
+    type: json
+
+  sinks:
+    - type: local
+      path: ${PERF_OUT_DIR:-/data/perf/out}
+      filename_template: "s2pmxml_{pipeline}_{timestamp}.json"
+
+  on_error: continue

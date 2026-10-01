@@ -1,0 +1,43 @@
+{
+  "run_id": "mw-t4-M-rep1",
+  "scenario": "t4",
+  "res_profile": "M",
+  "rep": 1,
+  "rep_started_at": "2026-09-30T08:37:33.458132+00:00",
+  "run_one_rc": 0,
+  "aborted": null,
+  "run_history": {
+    "rows": 1,
+    "records_in": 100000,
+    "records_out": 8,
+    "records_skipped": 0,
+    "bytes_in": 52378916,
+    "bytes_out": 1704,
+    "errors": 3,
+    "error_msgs": [
+      "Records skipped \u2014 no sink wrote successfully (condition filtered all records or every sink failed/circuit-open)",
+      "Records skipped \u2014 no sink wrote successfully (condition filtered all records or every sink failed/circuit-open)",
+      "Records skipped \u2014 no sink wrote successfully (condition filtered all records or every sink failed/circuit-open)"
+    ],
+    "statuses": [
+      "success"
+    ],
+    "wall_s": 7.092921,
+    "nodes": [
+      "trishul-ram-worker-0"
+    ]
+  },
+  "bytes_per_record_in": 523.8,
+  "peaks": {
+    "cpu_peak_m": 8.0,
+    "mem_peak_mi": 1050.0,
+    "peak_pod": "kafka-0"
+  },
+  "metrics": {
+    "records_in": 100000,
+    "records_out": 8,
+    "errors": 3,
+    "duration_s": 7.1,
+    "throughput_recs_s": 1.1
+  }
+}

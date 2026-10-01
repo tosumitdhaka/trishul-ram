@@ -1,0 +1,5 @@
+run_id,scenario,res_profile,rep,records_in,records_out,errors,duration_s,throughput_recs_s,pod_cpu_peak_m,pod_mem_peak_mi,notes
+single-t1-M-rep1,t1,M,1,100000,79781,0,4.1,19458.8,3,871,rows=1 statuses=success nodes=trishul-ram-0; peak_pod=trishul-ram-0; single
+single-t1-M-rep2,t1,M,2,100000,79781,0,4.1,19458.8,2,871,rows=1 statuses=success nodes=trishul-ram-0; peak_pod=trishul-ram-0; single
+single-t5-M-rep1,t5,M,1,100000,100000,0,12.9,7751.9,151,871,rows=1 statuses=success nodes=trishul-ram-0; peak_pod=trishul-ram-0; single
+single-t5-M-rep2,t5,M,2,100000,100000,0,13.0,7692.3,192,871,rows=1 statuses=success nodes=trishul-ram-0; peak_pod=trishul-ram-0; single

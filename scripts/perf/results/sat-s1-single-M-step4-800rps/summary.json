@@ -1,0 +1,22 @@
+{
+  "runs_total": 0,
+  "runs_completed": 0,
+  "records_in": 0,
+  "records_out": 0,
+  "records_skipped": 0,
+  "bytes_in": 0,
+  "bytes_out": 0,
+  "dlq_count": 0,
+  "run_duration_ms": {
+    "count": 0,
+    "total_ms": 0,
+    "avg_ms": 0.0,
+    "max_ms": 0.0
+  },
+  "errors": [],
+  "error_count": 0,
+  "run_id": "sat-s1-single-M-step4-800rps",
+  "pipeline": "s1-webhook-local",
+  "api_url": "http://127.0.0.1:30001",
+  "collected_at": "2026-10-01T07:13:49.383970+00:00"
+}

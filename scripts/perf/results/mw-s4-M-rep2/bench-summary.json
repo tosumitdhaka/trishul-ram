@@ -1,0 +1,51 @@
+{
+  "run_id": "mw-s4-M-rep2",
+  "scenario": "s4",
+  "res_profile": "M",
+  "rep": 2,
+  "rep_started_at": "2026-09-29T16:15:16.786869+00:00",
+  "run_one_rc": 0,
+  "aborted": null,
+  "run_history": {
+    "rows": 1,
+    "records_in": 1000,
+    "records_out": 1000,
+    "errors": 0,
+    "error_msgs": [],
+    "statuses": [
+      "success"
+    ],
+    "wall_s": 628.164747,
+    "nodes": [
+      "trishul-ram-worker-0"
+    ]
+  },
+  "loadgen": {},
+  "rest_sink_stats": {},
+  "sink_export": {
+    "trishul-ram-worker-0": {
+      "files": 1,
+      "bytes": 363044
+    },
+    "trishul-ram-worker-1": {
+      "files": 0,
+      "bytes": 0
+    },
+    "trishul-ram-worker-2": {
+      "files": 0,
+      "bytes": 0
+    }
+  },
+  "peaks": {
+    "cpu_peak_m": 78.0,
+    "mem_peak_mi": 132.0,
+    "peak_pod": "trishul-ram-worker-1"
+  },
+  "metrics": {
+    "records_in": 1000,
+    "records_out": 1000,
+    "errors": 0,
+    "duration_s": 628.164747,
+    "throughput_recs_s": 1.6
+  }
+}

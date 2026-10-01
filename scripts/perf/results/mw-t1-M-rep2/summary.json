@@ -1,0 +1,22 @@
+{
+  "runs_total": 4,
+  "runs_completed": 4,
+  "records_in": 400000,
+  "records_out": 159562,
+  "records_skipped": 200000,
+  "bytes_in": 209515664,
+  "bytes_out": 42651360,
+  "dlq_count": 0,
+  "run_duration_ms": {
+    "count": 4,
+    "total_ms": 18628.176,
+    "avg_ms": 4657.044,
+    "max_ms": 5113.97
+  },
+  "errors": [],
+  "error_count": 0,
+  "run_id": "mw-t1-M-rep2",
+  "pipeline": "t1-project-filter",
+  "api_url": "http://127.0.0.1:30001",
+  "collected_at": "2026-09-30T08:45:45.563722+00:00"
+}

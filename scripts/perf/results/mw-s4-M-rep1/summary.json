@@ -1,0 +1,24 @@
+{
+  "runs_total": 3,
+  "runs_completed": 3,
+  "records_in": 2000,
+  "records_out": 2000,
+  "records_skipped": 0,
+  "bytes_in": 726088,
+  "bytes_out": 726088,
+  "dlq_count": 0,
+  "run_duration_ms": {
+    "count": 3,
+    "total_ms": 1872703.965,
+    "avg_ms": 624234.655,
+    "max_ms": 1268494.336
+  },
+  "errors": [
+    "Manager recovered no active worker batch run for pipeline marked running"
+  ],
+  "error_count": 1,
+  "run_id": "mw-s4-M-rep1",
+  "pipeline": "s4-snmp-local",
+  "api_url": "http://127.0.0.1:30001",
+  "collected_at": "2026-09-29T16:15:14.361679+00:00"
+}

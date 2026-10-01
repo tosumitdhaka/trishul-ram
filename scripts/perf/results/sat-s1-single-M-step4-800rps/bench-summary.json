@@ -1,0 +1,39 @@
+{
+ "step": 4,
+ "offered": 800,
+ "k": 1,
+ "sent": 53943,
+ "2xx": 50311,
+ "4xx": 3632,
+ "5xx": 0,
+ "p50": 115.005,
+ "p95": 468.366,
+ "stream": {
+  "records_in": 50305,
+  "records_out": 50305,
+  "records_skipped": 0
+ },
+ "cpu": 479,
+ "mem": 126,
+ "loadgens": [
+  {
+   "tool": "loadgen_webhook",
+   "sent": 53943,
+   "http_2xx": 50311,
+   "http_4xx": 3632,
+   "http_5xx": 0,
+   "errors": 5,
+   "latency_ms": {
+    "p50": 115.005,
+    "p95": 468.366,
+    "max": 2595.488
+   },
+   "url": "http://127.0.0.1:30001/webhooks/ingest",
+   "rate": 800.0,
+   "concurrency": 50,
+   "duration_s": 180.0,
+   "payload_records": 100000
+  }
+ ],
+ "rc": 0
+}

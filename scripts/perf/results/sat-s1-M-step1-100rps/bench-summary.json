@@ -1,0 +1,52 @@
+{
+ "step": 1,
+ "offered": 100,
+ "k": 1,
+ "sent": 18000,
+ "2xx": 17450,
+ "4xx": 550,
+ "5xx": 0,
+ "p50": 2.296,
+ "p95": 3.195,
+ "hist": {
+  "rows": 3,
+  "records_in": 17449,
+  "records_out": 17449,
+  "records_skipped": 0,
+  "bytes_in": 9108173,
+  "bytes_out": 9823582,
+  "errors": 0,
+  "error_msgs": [],
+  "statuses": [
+   "success"
+  ],
+  "wall_s": 180.980608,
+  "nodes": [
+   "trishul-ram-worker-0",
+   "trishul-ram-worker-1",
+   "trishul-ram-worker-2"
+  ]
+ },
+ "cpu": 179.0,
+ "mem": 709.0,
+ "loadgens": [
+  {
+   "tool": "loadgen_webhook",
+   "sent": 18000,
+   "http_2xx": 17450,
+   "http_4xx": 550,
+   "http_5xx": 0,
+   "errors": 0,
+   "latency_ms": {
+    "p50": 2.296,
+    "p95": 3.195,
+    "max": 64.299
+   },
+   "url": "http://127.0.0.1:30002/webhooks/ingest",
+   "rate": 100.0,
+   "concurrency": 50,
+   "duration_s": 180.0,
+   "payload_records": 100000
+  }
+ ]
+}

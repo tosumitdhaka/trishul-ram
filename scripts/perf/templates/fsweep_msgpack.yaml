@@ -1,0 +1,31 @@
+version: "1"
+
+pipeline:
+  name: fsweep-msgpack
+  description: >
+    Format sweep — MessagePack. Local msgpack files in → msgpack out. Input
+    file format: one msgpack array of CDR records per file (runbook has the
+    corpus-generation recipe). Requires msgpack
+    (pip install tram[msgpack_ser]).
+  enabled: true
+
+  schedule:
+    type: manual
+
+  source:
+    type: local
+    path: ${PERF_IN_DIR:-/data/perf/in}
+    file_pattern: "*.msgpack"
+
+  serializer_in:
+    type: msgpack
+
+  serializer_out:
+    type: msgpack
+
+  sinks:
+    - type: local
+      path: ${PERF_OUT_DIR:-/data/perf/out}
+      filename_template: "fsweep_msgpack_{pipeline}_{timestamp}.msgpack"
+
+  on_error: continue

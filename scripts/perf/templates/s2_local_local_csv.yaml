@@ -1,0 +1,33 @@
+version: "1"
+
+pipeline:
+  name: s2-local-local-csv
+  description: >
+    Perf scenario S2 — local CSV files → local CSV sink. Reads the batch files
+    materialized by file_gen.py --format csv from the input dir and writes one
+    CSV per run to the sink dir.
+  enabled: true
+
+  schedule:
+    type: manual
+
+  source:
+    type: local
+    path: ${PERF_IN_DIR:-/data/perf/in}
+    file_pattern: "*.csv"
+
+  serializer_in:
+    type: csv
+    has_header: true
+    delimiter: ","
+
+  serializer_out:
+    type: csv
+    has_header: true
+
+  sinks:
+    - type: local
+      path: ${PERF_OUT_DIR:-/data/perf/out}
+      filename_template: "s2csv_{pipeline}_{timestamp}.csv"
+
+  on_error: continue

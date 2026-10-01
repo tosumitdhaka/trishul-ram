@@ -1,0 +1,22 @@
+{
+  "runs_total": 6,
+  "runs_completed": 6,
+  "records_in": 200000,
+  "records_out": 200000,
+  "records_skipped": 40,
+  "bytes_in": 268257906,
+  "bytes_out": 89419302,
+  "dlq_count": 0,
+  "run_duration_ms": {
+    "count": 6,
+    "total_ms": 1490.02,
+    "avg_ms": 248.337,
+    "max_ms": 752.324
+  },
+  "errors": [],
+  "error_count": 0,
+  "run_id": "mw-fsweep_msgpack-M-rep2",
+  "pipeline": "fsweep-msgpack",
+  "api_url": "http://127.0.0.1:30001",
+  "collected_at": "2026-09-30T08:25:16.283137+00:00"
+}

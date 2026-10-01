@@ -1,0 +1,33 @@
+version: "1"
+
+pipeline:
+  name: fsweep-parquet
+  description: >
+    Format sweep — Parquet. Local .parquet files in → parquet out. Input
+    file format: a Parquet file whose schema columns are the flat CDR
+    fields (runbook has the corpus-generation recipe). Requires pyarrow
+    (pip install tram[parquet]).
+  enabled: true
+
+  schedule:
+    type: manual
+
+  source:
+    type: local
+    path: ${PERF_IN_DIR:-/data/perf/in}
+    file_pattern: "*.parquet"
+
+  serializer_in:
+    type: parquet
+    compression: snappy
+
+  serializer_out:
+    type: parquet
+    compression: snappy
+
+  sinks:
+    - type: local
+      path: ${PERF_OUT_DIR:-/data/perf/out}
+      filename_template: "fsweep_parquet_{pipeline}_{timestamp}.parquet"
+
+  on_error: continue

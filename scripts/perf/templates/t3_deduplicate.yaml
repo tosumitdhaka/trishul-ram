@@ -1,0 +1,36 @@
+version: "1"
+
+pipeline:
+  name: t3-deduplicate
+  description: >
+    Transform bench T3 — deduplicate. Keeps the first occurrence of each
+    record_id within a run (the corpus contains synthetic duplicates when
+    generated with repeated seeds — the runbook defines the duplication
+    recipe). Measures the in-memory seen-set cost over the corpus.
+  enabled: true
+
+  schedule:
+    type: manual
+
+  source:
+    type: local
+    path: ${PERF_IN_DIR:-/data/perf/in}
+    file_pattern: "*.jsonl"
+
+  serializer_in:
+    type: json
+
+  transforms:
+    - type: deduplicate
+      fields: [record_id]
+      keep: first
+
+  serializer_out:
+    type: json
+
+  sinks:
+    - type: local
+      path: ${PERF_OUT_DIR:-/data/perf/out}
+      filename_template: "t3_{pipeline}_{timestamp}.json"
+
+  on_error: continue

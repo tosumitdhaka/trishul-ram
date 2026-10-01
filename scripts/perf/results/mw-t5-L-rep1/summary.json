@@ -1,0 +1,22 @@
+{
+  "runs_total": 5,
+  "runs_completed": 5,
+  "records_in": 500000,
+  "records_out": 300000,
+  "records_skipped": 200000,
+  "bytes_in": 261894580,
+  "bytes_out": 64952685,
+  "dlq_count": 0,
+  "run_duration_ms": {
+    "count": 5,
+    "total_ms": 79820.716,
+    "avg_ms": 15964.143,
+    "max_ms": 26189.883
+  },
+  "errors": [],
+  "error_count": 0,
+  "run_id": "mw-t5-L-rep1",
+  "pipeline": "t5-chain",
+  "api_url": "http://127.0.0.1:30001",
+  "collected_at": "2026-09-30T09:07:15.650125+00:00"
+}

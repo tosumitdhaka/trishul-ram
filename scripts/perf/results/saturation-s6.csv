@@ -1,0 +1,5 @@
+step,offered_msg_s,procs,produced,consumed,consumer_recs_s,lag_at_stop,worker_cpu_peak_m,notes
+1,500,1,90000,90000,500,0,499.0,produced_rps=500 records_out=90000 lag_left=0 kafka_group_lag=None topic_end=Requires group_id nodes=trishul-ram-worker-0 mem_peak=759Mi peak_pod=trishul-ram-worker-0 steady=180s
+2,1000,1,85173,85173,946,0,496.0,produced_rps=946 records_out=85173 lag_left=0 kafka_group_lag=None topic_end=Requires group_id nodes=trishul-ram-worker-0 mem_peak=778Mi peak_pod=trishul-ram-worker-0 steady=90s
+3,2000,2,78069,38945,865,39124,493.0,produced_rps=1735 records_out=38945 lag_left=39124 kafka_group_lag=None topic_end=Requires group_id nodes=trishul-ram-worker-0 mem_peak=783Mi peak_pod=trishul-ram-worker-0 steady=45s
+4,1200,2,90000,78643,1049,11357,500.0,produced_rps=1200 records_out=78643 lag_left=11357 kafka_group_lag=ns nodes=trishul-ram-worker-0 mem_peak=789Mi peak_pod=trishul-ram-worker-0 steady=75s bisect

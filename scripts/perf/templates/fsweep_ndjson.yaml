@@ -1,0 +1,30 @@
+version: "1"
+
+pipeline:
+  name: fsweep-ndjson
+  description: >
+    Format sweep — NDJSON. Local NDJSON files in → NDJSON out. Input file
+    format: file_gen.py --format ndjson / gen_corpus.py --format jsonl
+    (one compact JSON record per line).
+  enabled: true
+
+  schedule:
+    type: manual
+
+  source:
+    type: local
+    path: ${PERF_IN_DIR:-/data/perf/in}
+    file_pattern: "*.jsonl"
+
+  serializer_in:
+    type: ndjson
+
+  serializer_out:
+    type: ndjson
+
+  sinks:
+    - type: local
+      path: ${PERF_OUT_DIR:-/data/perf/out}
+      filename_template: "fsweep_ndjson_{pipeline}_{timestamp}.jsonl"
+
+  on_error: continue
