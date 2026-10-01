@@ -11,6 +11,9 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - Single-topology stream observability (GH #81): standalone stream runs now reach run history with in/out/error counts — one `SUCCESS` row per stats tick with segment DELTA counts (`<run_id>-seg<N>`, quiet segments skipped) plus a final lifecycle row on stop (`SUCCESS`) or crash (`FAILED` with the crash text). Rows are bounded (≤500 periodic rollups per lifecycle; the sum of all rows equals the lifecycle totals, so `/api/stats` stays correct)
 - `TRAM_MANAGER_URL` now defaults to `http://localhost:8765` in standalone mode when unset (GH #81) — the run-complete callback URL is never empty, so run-history rows are no longer silently dropped in single topology. An explicit value always wins; manager/worker modes are never defaulted (their manager is remote)
 
+### Fixed
+- Webhook placement race (GH #82): the worker ingress now holds unmatched webhook paths for up to `TRAM_WEBHOOK_PLACEMENT_WINDOW_SECONDS` (default `10`, sized to the ~5–11 s placement-propagation window) instead of 404ing immediately, then 404s as before. Requests are bounded by the window (small poll sleeps, no unbounded blocking); `0` restores the immediate-404 behavior
+
 ## [1.5.1] - 2026-09-29
 
 ### Added

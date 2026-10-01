@@ -2,10 +2,12 @@
 
 from __future__ import annotations
 
+import asyncio
 import hmac
 import logging
 import os
 import queue
+import time
 
 from fastapi import APIRouter, HTTPException, Request, Response, status
 
@@ -14,6 +16,18 @@ logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/webhooks")
 
 DEFAULT_MAX_BODY_BYTES = 10 * 1024 * 1024  # 10 MiB
+
+# v1.6.0 (GH #82): worker-ingress placement window. After a webhook stream is
+# registered/dispatched there is a ~5-11s propagation window where requests
+# routed to a worker whose placement has not arrived yet would 404. The ingress
+# instead holds unmatched paths for up to this many seconds (polling the
+# registry), sized to the propagation window, before 404ing as today.
+DEFAULT_PLACEMENT_WINDOW_SECONDS = 10.0
+# Poll granularity of the hold — small enough that a late registration is
+# picked up almost immediately, large enough that the per-request poll cost is
+# negligible. The hold is bounded by the window above, so concurrent unmatched
+# requests each resolve (accept or 404) within it — no unbounded blocking.
+_PLACEMENT_POLL_SECONDS = 0.1
 
 
 def _max_body_bytes() -> int:
@@ -31,11 +45,57 @@ def _max_body_bytes() -> int:
         return DEFAULT_MAX_BODY_BYTES
 
 
+def _placement_window_seconds() -> float:
+    """Bounded hold for unmatched webhook paths (TRAM_WEBHOOK_PLACEMENT_WINDOW_SECONDS).
+
+    0 restores the pre-v1.6.0 immediate-404 behavior. Invalid values are logged
+    at WARNING and fall back to the default (the webhook body-cap convention).
+    """
+    raw = os.environ.get("TRAM_WEBHOOK_PLACEMENT_WINDOW_SECONDS")
+    if raw is None:
+        return DEFAULT_PLACEMENT_WINDOW_SECONDS
+    try:
+        return max(float(raw), 0.0)
+    except ValueError:
+        logger.warning(
+            "Invalid TRAM_WEBHOOK_PLACEMENT_WINDOW_SECONDS=%r — using default",
+            raw,
+        )
+        return DEFAULT_PLACEMENT_WINDOW_SECONDS
+
+
+async def _wait_for_registration(path: str, window: float) -> queue.Queue | None:
+    """Poll the webhook registry for up to *window* seconds for *path*.
+
+    GH #82: the worker ingress can receive traffic for a stream whose placement
+    has not propagated to this worker yet (webhook sources register their path
+    only once the dispatched stream actually starts reading). Instead of 404ing
+    immediately, hold briefly and retry. DoS-safe: the registry lock is only
+    ever held for the instant dict lookup (never across the sleep), each
+    request is bounded by *window*, and the sleeps yield to the event loop so
+    concurrent requests are not blocked. Genuinely unknown paths still 404
+    promptly after the window expires.
+    """
+    from tram.connectors.webhook.source import _REGISTRY_LOCK, _WEBHOOK_REGISTRY
+
+    deadline = time.monotonic() + window
+    while True:
+        with _REGISTRY_LOCK:
+            q = _WEBHOOK_REGISTRY.get(path)
+        if q is not None:
+            return q
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            return None
+        await asyncio.sleep(min(_PLACEMENT_POLL_SECONDS, remaining))
+
+
 @router.post("/{path:path}", status_code=status.HTTP_202_ACCEPTED)
 async def receive_webhook(path: str, request: Request) -> Response:
     """Accept a POST and forward the body to the registered WebhookSource queue.
 
-    Returns 404 if no source is registered for the given path.
+    Returns 404 if no source is registered for the given path (after an
+    optional bounded hold for late registration — TRAM_WEBHOOK_PLACEMENT_WINDOW_SECONDS).
     Returns 401 if a secret is configured and the Authorization header doesn't match.
     Returns 413 if the request body exceeds TRAM_WEBHOOK_MAX_BODY_BYTES.
     """
@@ -43,11 +103,26 @@ async def receive_webhook(path: str, request: Request) -> Response:
 
     path = path.lstrip("/")
 
+    max_body = _max_body_bytes()
+
+    # Fast-path rejection from the Content-Length header runs BEFORE the
+    # placement hold so an oversized payload is never held (or buffered) for
+    # the window; the bounded stream read below is unchanged.
+    content_length = request.headers.get("content-length")
+    if content_length and content_length.isdigit() and int(content_length) > max_body:
+        raise HTTPException(status_code=413, detail="Webhook body too large")
+
     with _REGISTRY_LOCK:
         q = _WEBHOOK_REGISTRY.get(path)
 
     if q is None:
-        raise HTTPException(status_code=404, detail=f"No webhook source registered for path: {path}")
+        # GH #82: hold for the placement-propagation window instead of an
+        # immediate 404; window=0 keeps the pre-v1.6.0 behavior.
+        window = _placement_window_seconds()
+        if window > 0:
+            q = await _wait_for_registration(path, window)
+        if q is None:
+            raise HTTPException(status_code=404, detail=f"No webhook source registered for path: {path}")
 
     # Optional secret validation
     # The secret is stored per-source; we check the Authorization header here.
@@ -67,14 +142,8 @@ async def receive_webhook(path: str, request: Request) -> Response:
         ):
             raise HTTPException(status_code=401, detail="Invalid or missing Authorization header")
 
-    max_body = _max_body_bytes()
-
-    # Fast-path rejection from the Content-Length header, then a bounded stream
-    # read so an oversized payload is never fully buffered in memory.
-    content_length = request.headers.get("content-length")
-    if content_length and content_length.isdigit() and int(content_length) > max_body:
-        raise HTTPException(status_code=413, detail="Webhook body too large")
-
+    # Bounded stream read so an oversized payload is never fully buffered in
+    # memory (the Content-Length fast-path already ran above, before the hold).
     body = bytearray()
     async for chunk in request.stream():
         body.extend(chunk)
