@@ -52,11 +52,16 @@ class CastTransform(BaseTransform):
                 raise TransformError(
                     f"Unsupported cast type '{field_type}'. Supported: {list(_CASTERS)}"
                 )
+        # Issue #80 cost center 3: dotted fields mutate nested containers via
+        # set_path (the parent dict is shared by a shallow copy), so they need
+        # a full deepcopy. Top-level casts only replace top-level keys — a
+        # shallow copy is safe there (mutation tests: test_transform_mutation_safety).
+        self._needs_deepcopy = any("." in field for field in self.fields)
 
     def apply(self, records: list[dict]) -> list[dict]:
         result = []
         for record in records:
-            new_record = deepcopy(record)
+            new_record = deepcopy(record) if self._needs_deepcopy else dict(record)
             for field, target_type in self.fields.items():
                 found, value = get_path(new_record, field)
                 if not found:

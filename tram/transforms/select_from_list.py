@@ -2,8 +2,6 @@
 
 from __future__ import annotations
 
-from copy import deepcopy
-
 from tram.core.exceptions import TransformError
 from tram.interfaces.base_transform import BaseTransform
 from tram.registry.registry import register_transform
@@ -42,7 +40,11 @@ class SelectFromListTransform(BaseTransform):
     def apply(self, records: list[dict]) -> list[dict]:
         result = []
         for record in records:
-            new_record = deepcopy(record)
+            # Issue #80 cost center 3: the transform only reads via get_path
+            # and writes top-level output keys (``new_record[output_field]``) —
+            # it never mutates a nested container, so a shallow copy is
+            # provably safe (mutation tests in test_transform_mutation_safety).
+            new_record = dict(record)
             found, value = get_path(new_record, self.field)
             items = value if found and isinstance(value, list) else None
 

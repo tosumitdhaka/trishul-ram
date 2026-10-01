@@ -46,6 +46,7 @@ parser (``_SUPPORTED_OPS``: sum/avg/min/max/count/first/last).
 
 from __future__ import annotations
 
+import heapq
 import math
 from datetime import UTC, datetime
 
@@ -111,6 +112,12 @@ class WindowAggregateTransform(BaseTransform, StatefulTransform):
         self._max_ts: float | None = None
         # {group_key: {window_end_epoch: window_entry}}
         self._windows: dict[str, dict[int, dict]] = {}
+        # Global min-heap of open windows keyed by window-end: (end, group_key)
+        # pairs, one per created (group, window). This is the issue #80 O(log g)
+        # due-detection index — the per-record hot path never scans
+        # ``self._windows``. It is DERIVED state: rebuilt in ``set_state`` and
+        # cleared alongside ``self._windows`` on a flush close, never persisted.
+        self._due_heap: list[tuple[int, str]] = []
 
     # ── StatefulTransform protocol ─────────────────────────────────────────
 
@@ -133,6 +140,17 @@ class WindowAggregateTransform(BaseTransform, StatefulTransform):
             }
             for group_key, group_windows in windows.items()
         }
+        # Rebuild the due-detection heap from the restored open windows so a
+        # hydrated (already-due) window still finalizes on the next apply.
+        self._rebuild_due_heap()
+
+    def _rebuild_due_heap(self) -> None:
+        self._due_heap = [
+            (window_end, group_key)
+            for group_key, group_windows in self._windows.items()
+            for window_end in group_windows
+        ]
+        heapq.heapify(self._due_heap)
 
     def close(self, flush: bool) -> list[dict]:
         """Emit open windows as partials when *flush*; clear them from state.
@@ -155,6 +173,7 @@ class WindowAggregateTransform(BaseTransform, StatefulTransform):
                     pipeline=pipeline, complete="partial"
                 ).inc()
         self._windows = {}
+        self._due_heap = []  # no open windows left to track
         return emitted
 
     # ── Internal helpers ───────────────────────────────────────────────────
@@ -249,23 +268,39 @@ class WindowAggregateTransform(BaseTransform, StatefulTransform):
         return out
 
     def _finalize_due_windows(self, pipeline: str) -> list[dict]:
-        """Emit + remove every open window whose end the watermark has passed."""
+        """Emit + remove every open window whose end the watermark has passed.
+
+        O(log g) amortized: pops only the due (window_end, group_key) entries
+        off the global heap instead of scanning all groups x open windows
+        (the pre-issue-#80 O(n x groups) per-record cost). Emission order is
+        window-end ascending (then group key) — the old insertion-order scan
+        could emit simultaneously-due windows in a different relative order,
+        but the emitted SET and per-window content are identical.
+        """
         from tram.metrics.registry import TRANSFORM_WINDOWS_EMITTED_TOTAL
 
+        if self._max_ts is None:
+            return []
         watermark = self._max_ts - self.allowed_lateness_seconds
         emitted: list[dict] = []
-        for _group_key, windows in list(self._windows.items()):
-            for window_end in list(windows):
-                if window_end <= watermark:
-                    entry = windows.pop(window_end)
-                    emitted.append(
-                        self._emit_window(entry["group_values"], entry, complete=True)
-                    )
-                    TRANSFORM_WINDOWS_EMITTED_TOTAL.labels(
-                        pipeline=pipeline, complete="complete"
-                    ).inc()
+        while self._due_heap and self._due_heap[0][0] <= watermark:
+            window_end, group_key = heapq.heappop(self._due_heap)
+            windows = self._windows.get(group_key)
+            if windows is None:
+                continue  # defensive: group flushed/cleared between pushes
+            entry = windows.pop(window_end, None)
+            if entry is None:
+                continue  # defensive: stale due-index entry
+            emitted.append(
+                self._emit_window(entry["group_values"], entry, complete=True)
+            )
+            TRANSFORM_WINDOWS_EMITTED_TOTAL.labels(
+                pipeline=pipeline, complete="complete"
+            ).inc()
             if not windows:
-                self._windows.pop(_group_key, None)
+                # Evict the stale group so the state blob does not grow
+                # unboundedly at high group cardinality.
+                self._windows.pop(group_key, None)
         return emitted
 
     # ── Apply ──────────────────────────────────────────────────────────────
@@ -314,6 +349,10 @@ class WindowAggregateTransform(BaseTransform, StatefulTransform):
                     },
                 }
                 windows[window_end] = entry
+                # A new window is never due at creation (its end is always past
+                # the current watermark — see apply's late check + watermark
+                # ordering), so the heap push needs no immediate-finalize guard.
+                heapq.heappush(self._due_heap, (window_end, group_key))
             entry["sample_count"] += 1
             for out_field, (op, src_field) in self.operations.items():
                 found, value = get_path(record, src_field)

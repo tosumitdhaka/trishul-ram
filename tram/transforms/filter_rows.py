@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+import threading
 
 from tram.core.exceptions import TransformError
 from tram.interfaces.base_transform import BaseTransform
@@ -26,6 +27,21 @@ def _make_evaluator():
 
 _EvalCls, _EVAL_FUNCS = _make_evaluator()
 
+# One evaluator instance PER THREAD (issue #80 cost center 2): the executor
+# shares one transform across ``thread_workers`` threads and simpleeval reads
+# ``.names`` off the shared instance, so per-record name binding must never
+# race. Each thread owns its instance; the parsed condition tree is immutable
+# and shared read-only.
+_thread_local = threading.local()
+
+
+def _thread_evaluator():
+    evaluator = getattr(_thread_local, "evaluator", None)
+    if evaluator is None:
+        evaluator = _EvalCls(names={}, functions=_EVAL_FUNCS)
+        _thread_local.evaluator = evaluator
+    return evaluator
+
 
 @register_transform("filter")
 class FilterRowsTransform(BaseTransform):
@@ -34,13 +50,27 @@ class FilterRowsTransform(BaseTransform):
     def __init__(self, config: dict) -> None:
         super().__init__(config)
         self.condition: str = config["condition"]
+        # Compile the condition once at init. Parse errors are kept and raised
+        # from apply() so a bad condition still surfaces as a TransformError at
+        # record time, exactly as before.
+        self._parsed = None
+        self._parse_error: Exception | None = None
+        try:
+            self._parsed = _EvalCls.parse(self.condition)
+        except Exception as exc:  # noqa: BLE001 — surfaced at apply time
+            self._parse_error = exc
 
     def apply(self, records: list[dict]) -> list[dict]:
+        if self._parse_error is not None:
+            raise TransformError(
+                f"Filter condition error: {self.condition!r} — {self._parse_error}"
+            ) from self._parse_error
+        evaluator = _thread_evaluator()
         result = []
         for record in records:
+            evaluator.names = record
             try:
-                evaluator = _EvalCls(names=record, functions=_EVAL_FUNCS)
-                if evaluator.eval(self.condition):
+                if evaluator.eval(self.condition, previously_parsed=self._parsed):
                     result.append(record)
             except Exception as exc:
                 raise TransformError(
