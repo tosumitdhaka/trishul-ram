@@ -122,6 +122,25 @@ The three `__init__.py` files in `connectors/`, `transforms/`, and `serializers/
 - Runs in a dedicated thread per pipeline
 - Stopped only by `POST /api/pipelines/{name}/stop` or daemon shutdown
 
+### Stream Micro-Batching (v1.6.0, GH #78)
+- Stream records are buffered and flushed to sinks per batch instead of one
+  serialized sink write per message (the dominant stream cost: webhook ~360 rps /
+  kafka ~1,000 msg/s per 500m worker vs 5–12 µs/record on the batch path).
+- Flush triggers: record threshold (`stream_flush_records`, default 500, mirroring
+  kafka `max_poll_records`), flush interval (`stream_flush_interval_s`, default 1s —
+  the bounded end-to-end latency budget, enforced by a per-run timer thread so a
+  quiet stream still flushes a partial buffer), and the kafka source's
+  `source_batch_end` poll-batch marker.
+- The flush reuses the batch executor's sink path: one serialization + one sink
+  write per flush, exactly like a batch chunk (records_out/skipped accounting and
+  the local-sink part cap are per flush).
+- At-least-once is scoped by source class: kafka offsets are committed only after
+  the flush of the batch's records (commit-after-flush on the single-threaded
+  path); webhook ingress is not replayable, so its guarantee is bounded-buffer
+  acknowledgment — the crash window is one flush buffer. Buffered records are
+  drained at graceful stop and best-effort on crash (surfaced, never silently
+  stranded).
+
 ## Multi-Sink Routing + Per-Sink Transforms
 
 ```python

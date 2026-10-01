@@ -44,13 +44,18 @@ class KafkaSource(BaseSource):
     (``thread_workers: 1``) a message is consumed only after its sink write
     (or retry / skip / DLQ resolution under ``on_error``) has completed, so a
     crash at any point leaves the uncommitted batch to be re-polled on restart
-    instead of losing it. With ``thread_workers > 1`` the executor submits up
-    to ``2 * thread_workers`` messages ahead of the sink writes, so the batch
-    commit can fire while some of its messages are still queued — a crash in
-    that window loses those messages, so use ``thread_workers: 1`` for strict
-    at-least-once. Setting ``enable_auto_commit: true`` restores the legacy
-    at-most-once behavior: the consumer commits on its own ~5s timer regardless
-    of sink progress, and the explicit batch commit is disabled.
+    instead of losing it. Under stream micro-batching (GH #78) the last
+    message of each poll batch carries ``source_batch_end: true`` in its meta;
+    the executor flushes its micro-batch buffer when it sees that marker and
+    only then resumes the generator past it, so the per-batch commit can never
+    precede the flush of the batch's records (commit-after-flush). With
+    ``thread_workers > 1`` the executor submits up to ``2 * thread_workers``
+    messages ahead of the sink writes, so the batch commit can fire while some
+    of its messages are still queued — a crash in that window loses those
+    messages, so use ``thread_workers: 1`` for strict at-least-once. Setting
+    ``enable_auto_commit: true`` restores the legacy at-most-once behavior:
+    the consumer commits on its own ~5s timer regardless of sink progress, and
+    the explicit batch commit is disabled.
     """
 
     def __init__(self, config: dict) -> None:
@@ -203,18 +208,33 @@ class KafkaSource(BaseSource):
                     if not batch:
                         continue
                     self._update_lag(consumer)
-                    for _tp, msgs in batch.items():
-                        for msg in msgs:
-                            value = msg.value
-                            if value is None:
-                                continue
-
-                            yield value, {
-                                "kafka_topic": msg.topic,
-                                "kafka_partition": msg.partition,
-                                "kafka_offset": msg.offset,
-                                "kafka_key": msg.key.decode("utf-8") if msg.key else None,
-                            }
+                    # Materialize the poll batch in yield order so the
+                    # batch-end marker can be pinned to the final message the
+                    # executor will actually receive (GH #78): the executor
+                    # flushes its micro-batch buffer when it sees
+                    # ``source_batch_end``, and this source commits the batch
+                    # offsets only when the executor resumes the generator past
+                    # that message — so the commit can never precede the flush
+                    # (at-least-once, single-threaded path).
+                    ordered = [
+                        (msg.topic, msg.partition, msg)
+                        for _tp, msgs in batch.items()
+                        for msg in msgs
+                    ]
+                    live_count = sum(1 for _t, _p, m in ordered if m.value is not None)
+                    yielded = 0
+                    for topic, partition, msg in ordered:
+                        value = msg.value
+                        if value is None:
+                            continue
+                        yielded += 1
+                        yield value, {
+                            "kafka_topic": topic,
+                            "kafka_partition": partition,
+                            "kafka_offset": msg.offset,
+                            "kafka_key": msg.key.decode("utf-8") if msg.key else None,
+                            "source_batch_end": yielded == live_count,
+                        }
                     if not self.enable_auto_commit:
                         # Explicit per-batch commit. Reached only when the
                         # caller has resumed the generator past the last message

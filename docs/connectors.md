@@ -219,7 +219,7 @@ Consumes messages from a Kafka topic. Stream mode.
 | `topic` | required | Topic name or list of topics |
 | `group_id` | pipeline name | Consumer group ID |
 | `auto_offset_reset` | `latest` | `latest` \| `earliest` |
-| `enable_auto_commit` | `false` | Commit offsets once per poll batch after consumption (at-least-once); `true` opts into at-most-once |
+| `enable_auto_commit` | `false` | Commit offsets once per poll batch after consumption (at-least-once); `true` opts into at-most-once. Under stream micro-batching (GH #78) the last message of each poll batch carries `source_batch_end` in its meta so the executor flushes its micro-batch buffer before the batch's offsets are committed (commit-after-flush on the single-threaded path; with `thread_workers > 1` the commit can fire up to `2 × thread_workers` messages ahead — use `thread_workers: 1` for strict at-least-once) |
 | `max_poll_records` | `500` | Max records per poll |
 | `session_timeout_ms` | `30000` | Consumer session timeout |
 | `security_protocol` | `PLAINTEXT` | `PLAINTEXT` \| `SASL_PLAINTEXT` \| `SASL_SSL` \| `SSL` |

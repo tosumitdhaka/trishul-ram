@@ -113,6 +113,63 @@ def state_max_bytes() -> int:
         return _STATE_MAX_BYTES_DEFAULT
 
 
+# GH #78 defaults: the stream flush-record threshold mirrors kafka
+# ``max_poll_records`` (500); the flush interval is the bounded end-to-end
+# latency budget for buffered records (1s). The capacity study measured the
+# per-message sink write as the dominant stream cost (~0.5-1 ms/record vs
+# 5-12 µs/record on the batch path), so 500 records / 1s is the target
+# 2-5x capacity window with a bounded latency trade.
+_STREAM_FLUSH_RECORDS_DEFAULT = 500
+_STREAM_FLUSH_INTERVAL_DEFAULT = 1.0
+
+
+def stream_flush_records() -> int:
+    """``TRAM_STREAM_FLUSH_RECORDS`` default record threshold for the stream
+    micro-batch sink flush (GH #78).
+
+    Stream pipelines buffer records and flush to sinks per batch instead of
+    one serialized sink write per message; this is the record-count trigger
+    (mirrors kafka ``max_poll_records``). ``1`` restores the pre-v1.6.0
+    per-message flush. Per-pipeline ``stream_flush_records`` overrides it.
+    Invalid values are logged at WARNING and fall back to the default (the
+    webhook body-cap convention).
+    """
+    raw = os.environ.get("TRAM_STREAM_FLUSH_RECORDS")
+    if raw is None:
+        return _STREAM_FLUSH_RECORDS_DEFAULT
+    try:
+        return max(int(raw), 1)
+    except ValueError:
+        logger.warning(
+            "Invalid TRAM_STREAM_FLUSH_RECORDS=%r — using default",
+            raw,
+        )
+        return _STREAM_FLUSH_RECORDS_DEFAULT
+
+
+def stream_flush_interval_seconds() -> float:
+    """``TRAM_STREAM_FLUSH_INTERVAL_SECONDS`` flush interval for the stream
+    micro-batch sink flush (GH #78).
+
+    Bounded end-to-end latency budget: buffered records are flushed when the
+    oldest record in the buffer has waited this long, even if the record
+    threshold has not been reached. ``0`` disables the interval trigger
+    (records then flush on the record threshold or the source batch end).
+    Per-pipeline ``stream_flush_interval_s`` overrides it.
+    """
+    raw = os.environ.get("TRAM_STREAM_FLUSH_INTERVAL_SECONDS")
+    if raw is None:
+        return _STREAM_FLUSH_INTERVAL_DEFAULT
+    try:
+        return max(float(raw), 0.0)
+    except ValueError:
+        logger.warning(
+            "Invalid TRAM_STREAM_FLUSH_INTERVAL_SECONDS=%r — using default",
+            raw,
+        )
+        return _STREAM_FLUSH_INTERVAL_DEFAULT
+
+
 @dataclass(frozen=True)
 class AppConfig:
     """Application-wide configuration loaded from environment variables."""
