@@ -985,6 +985,23 @@ class KafkaSinkConfig(SinkCommonFieldsMixin):
     ssl_cafile: str | None = None
     acks: str | int = "all"
     compression_type: str | None = None
+    # Bounded-batch sends (issue #76): a source batch is delivered as multiple
+    # messages when it exceeds either cap. Both caps must stay <= the client
+    # max_request_size so no message is ever rejected as too large; a failed
+    # chunk surfaces as a run error (at-least-once across chunks, duplicates
+    # possible on retry).
+    chunk_records: int = Field(default=1000, ge=1)
+    chunk_bytes: int = Field(default=524288, ge=1)
+    max_request_size: int = Field(default=1048576, ge=1)
+
+    @model_validator(mode="after")
+    def validate_chunk_caps(self) -> KafkaSinkConfig:
+        if self.chunk_bytes > self.max_request_size:
+            raise ValueError(
+                f"chunk_bytes ({self.chunk_bytes}) must be <= max_request_size "
+                f"({self.max_request_size})"
+            )
+        return self
 
 
 
