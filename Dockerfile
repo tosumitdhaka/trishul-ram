@@ -49,19 +49,21 @@ RUN apt-get update && \
     rm -rf /var/lib/apt/lists/*
 
 # Standalone extras: union of manager + worker images plus AI features.
+# All serializer extras are baked in (GH #79): avro, protobuf_ser (grpcio-tools),
+# protobuf, asn1, msgpack_ser, parquet — the image matches the /api/plugins registry
+# (schema_mismatch stays empty) and every advertised serializer works in-cluster.
 # Excluded to keep the image lean (install individually as needed):
-#   parquet      — pyarrow (~150 MB):  pip install tram[parquet]
 #   s3           — boto3/botocore (~60 MB): pip install tram[s3]
 #   gcs          — google-cloud-storage (~50 MB): pip install tram[gcs]
 #   azure        — azure-storage-blob (~30 MB): pip install tram[azure]
 #   otel         — opentelemetry-sdk + OTLP exporter (~15 MB): pip install tram[otel]
-# Not yet tested (re-enable when validated):
+# Not yet tested (disabled; re-enable when validated):
 #   mqtt, amqp, nats, gnmi, influxdb, redis, elasticsearch, opensearch
 # corba (omniORBpy) excluded: not on PyPI; install python3-omniorb via apt in a custom layer.
 COPY --from=builder /build/dist/*.whl .
 RUN --mount=type=cache,target=/root/.cache/pip whl=$(ls *.whl) && \
     pip install \
-        "${whl}[manager,worker,k8s,metrics,watch,mib,protobuf_ser,protobuf,asn1,kafka,snmp,avro,jmespath,sql,websocket,prometheus_rw,ai-anthropic,ai-openai]" && \
+        "${whl}[manager,worker,k8s,metrics,watch,mib,protobuf_ser,protobuf,asn1,msgpack_ser,parquet,kafka,snmp,avro,jmespath,sql,websocket,prometheus_rw,ai-anthropic,ai-openai]" && \
     rm *.whl
 
 # Copy bundled SNMP MIB assets from the repo

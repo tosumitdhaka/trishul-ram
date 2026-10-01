@@ -177,7 +177,7 @@ TRAM_WORKER_PORT=8766                  # internal agent API
 TRAM_WORKER_INGRESS_PORT=8767          # public webhook ingress
 ```
 
-Workers only need `tram[worker,kafka,snmp,...]` — the `manager` extra (apscheduler, sqlalchemy) is not installed.
+Workers only need `tram[worker,kafka,snmp,...]` — the `manager` extra (apscheduler, sqlalchemy) is not installed. Since v1.6.0 (GH #79) the worker image bakes in the **full serializer set** (`avro`, `protobuf`, `protobuf_ser`/grpcio-tools, `asn1`, `msgpack_ser`, `parquet`), so every serializer the `/api/plugins` registry advertises works in-cluster with no `pip install` staging.
 
 ### Helm: manager.enabled=true
 
@@ -214,10 +214,12 @@ If you are upgrading from the older manager `Deployment`, set `manager.persisten
 
 ```dockerfile
 # Build with Dockerfile.worker (no UI assets, no manager deps)
-docker build -f Dockerfile.worker -t trishul-ram-worker:1.4.5 .
+docker build -f Dockerfile.worker -t trishul-ram-worker:latest .
 ```
 
 The worker image exposes port `8766` for the internal agent API and port `8767` for ingress-only webhook traffic. Kubernetes liveness/readiness probes stay on `/agent/health` over port `8766`.
+
+**Serializer coverage (GH #79):** the worker image installs every serializer extra — `avro` (fastavro), `protobuf` + `protobuf_ser` (grpcio-tools — the serializer compiles `.proto` files at runtime on the worker), `asn1`, `msgpack_ser`, and `parquet` (pyarrow). Pipelines using msgpack (fastest measured format), Parquet, Avro, ASN.1, or protobuf run with zero staging. The pyarrow addition costs roughly **+100 MB** on the worker and standalone images.
 
 ### Worker agent endpoints
 
@@ -637,28 +639,34 @@ host bind override (`--data-dir`) when you explicitly do not want a Docker-manag
 
 ### Installed extras in the default image
 
-The default `tram:1.4.5` image installs (`clickhouse` added in v1.0.4):
+The default standalone image (built from `Dockerfile`) installs the union of manager +
+worker extras plus AI features:
 
-`kafka`, `opensearch`, `snmp`, `avro`, `protobuf_ser`, `msgpack_ser`, `mqtt`, `amqp`, `nats`,
-`gnmi`, `jmespath`, `sql`, `influxdb`, `redis`, `websocket`, `elasticsearch`, `metrics`,
-`prometheus_rw`, `corba`, `mib`, `watch`, `postgresql`, `mysql`
+`manager`, `worker`, `k8s`, `metrics`, `watch`, `mib`, `protobuf_ser`, `protobuf`,
+`asn1`, `msgpack_ser`, `parquet`, `kafka`, `snmp`, `avro`, `jmespath`, `sql`,
+`websocket`, `prometheus_rw`, `ai-anthropic`, `ai-openai`
 
-`corba` (`omniORBpy`) is included — the image pre-installs the required omniORB runtime libraries
-(`libomniorb4-2`, `libomnithread4`) so the pre-built PyPI wheel installs without a source build.
+**Serializer coverage (GH #79, v1.6.0):** all serializers advertised by `/api/plugins`
+work in the worker and standalone images — msgpack, Parquet (pyarrow), Avro (fastavro),
+ASN.1, and protobuf (runtime decode **and** `.proto` compilation via grpcio-tools, which
+the serializer performs on the worker at run time). The worker image (`Dockerfile.worker`)
+carries the same serializer set; the manager image adds fastavro (`avro`) for parity with
+the schema-registry / UI paths. The protobuf + grpcio-tools pins share the protobuf 6.x
+floor so the extras resolve without pip backtracking. Accept the pyarrow image-size cost:
+**~+100 MB** on the worker and standalone images.
 
 The following extras are **excluded by default** to keep the image lean. Extend with a custom layer:
 
 | Extra | Reason excluded | ~Size |
 |-------|----------------|-------|
-| `parquet` | pyarrow is large | ~150 MB |
 | `s3` | boto3/botocore | ~60 MB |
 | `gcs` | google-cloud-storage + deps | ~50 MB |
 | `azure` | azure-storage-blob + SDK | ~30 MB |
 | `otel` | only needed when `TRAM_OTEL_ENDPOINT` is set; no-op fallback when absent | ~15 MB |
 
 ```dockerfile
-FROM ghcr.io/tosumitdhaka/trishul-ram:1.4.5
-RUN pip install "tram[parquet,s3,gcs,azure,otel]"
+FROM ghcr.io/tosumitdhaka/trishul-ram:latest
+RUN pip install "tram[s3,gcs,azure,otel]"
 ```
 
 ### docker-compose
