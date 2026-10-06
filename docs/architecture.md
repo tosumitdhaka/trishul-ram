@@ -124,8 +124,12 @@ The three `__init__.py` files in `connectors/`, `transforms/`, and `serializers/
 
 ### Stream Micro-Batching (v1.6.0, GH #78)
 - Stream records are buffered and flushed to sinks per batch instead of one
-  serialized sink write per message (the dominant stream cost: webhook ~360 rps /
-  kafka ~1,000 msg/s per 500m worker vs 5–12 µs/record on the batch path).
+  serialized sink write per message (the dominant v1.5.1 stream cost: webhook
+  ~360 rps / kafka ~1,000 msg/s per 500m worker vs 5–12 µs/record on the batch
+  path). Measured v1.6.0 (kind harness, 500m workers): kafka 2.0–3.9×
+  (≥2,000 msg/s no-lag, 3,943 producer-limited); webhook 1.19–1.47×
+  (~428 rps/worker at high client concurrency, ~535 at modest — CPU-bound
+  plateau) with ~20× better p95 latency at moderate rates.
 - Flush triggers: record threshold (`stream_flush_records`, default 500, mirroring
   kafka `max_poll_records`), flush interval (`stream_flush_interval_s`, default 1s —
   the bounded end-to-end latency budget, enforced by a per-run timer thread so a

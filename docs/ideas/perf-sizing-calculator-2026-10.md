@@ -3,7 +3,8 @@
 Derived sizing model from the capacity study (v1.5.1 @ 326d9dd). Inputs:
 `perf-capacity-analysis-2026-10.md` (measured medians + validated scaling
 factors), `perf-improvement-candidates.md` (known caps that bound these
-numbers). All rates are **per 500m-CPU worker pod** (mgr+worker topology)
+numbers), `perf-v160-vs-v151-comparison-2026-10.md` (measured v1.6.0 vs
+v1.5.1 deltas). All rates are **per 500m-CPU worker pod** (mgr+worker topology)
 unless noted. Model cells marked **[M]** are measured medians; **[D]** are
 model-derived (validated factors, combination not separately measured).
 
