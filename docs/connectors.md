@@ -909,7 +909,7 @@ Writes a file to an SFTP server.
 | `max_records` | — | Roll to a new file part when the next write would exceed this record count |
 | `max_time` | — | Roll to a new file part when the current file has been open this many seconds |
 | `max_bytes` | — | Roll to a new file part when the next write would exceed this byte count |
-| `max_index` | `99999` | Highest allowed file part index; writes past the cap fail loudly and past-cap records are counted as skipped — streams consume one part per record (increase it or adjust rollover thresholds) |
+| `max_index` | `99999` | Highest allowed file part index; writes past the cap fail loudly and past-cap records are counted as skipped — streams consume one part per flush (increase it or adjust rollover thresholds) |
 
 Notes:
 - `append` is the default for `sftp` file sinks.
@@ -953,7 +953,7 @@ Writes a file to the local filesystem.
 | `max_records` | — | Roll to a new file part when the next write would exceed this record count |
 | `max_time` | — | Roll to a new file part when the current file has been open this many seconds |
 | `max_bytes` | — | Roll to a new file part when the next write would exceed this byte count |
-| `max_index` | `99999` | Highest allowed file part index; writes past the cap fail loudly and past-cap records are counted as skipped — streams consume one part per record (increase it or adjust rollover thresholds) |
+| `max_index` | `99999` | Highest allowed file part index; writes past the cap fail loudly and past-cap records are counted as skipped — streams consume one part per flush (increase it or adjust rollover thresholds) |
 
 Notes:
 - `append` is the default for `local` file sinks.

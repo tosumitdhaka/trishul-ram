@@ -316,3 +316,120 @@ class TestCounterDeltaMutationSafety:
         assert out[0]["_metrics"]["ifInOctets_delta"] == 200
         assert rec2["_metrics"]["ifInOctets"] == 300
         snap2.assert_unchanged()
+
+
+# ── sibling-row aliasing (every-mutator-copies-first convention) ──────────
+
+
+class TestSiblingRowAliasing:
+    """Cross-row aliasing for the deepcopy-elimination set (issue #80).
+
+    The deepcopy-eliminated transforms emit output rows via shallow
+    ``dict(record)`` copies, so a row's nested containers can alias the source
+    record and — for the multi-row transforms (json_flatten explode paths,
+    explode) — sibling rows. That sharing is safe ONLY under the
+    every-mutator-copies-first convention: a downstream transform that needs to
+    mutate a nested container deep-copies the row before touching it. These
+    tests pin the contract: mutating one output row's nested container through
+    a convention-following copy must leave the sibling rows and the input
+    record unaffected.
+    """
+
+    def _assert_convention_following_mutation_safe(self, transform, record):
+        """Mutate one output row's nested container via a deep-copied row (as
+        the every-mutator-copies-first convention requires of any mutator) and
+        assert the original output rows (siblings) and the input record are
+        unaffected."""
+        out = transform.apply([record])
+        rows_before = copy.deepcopy(out)
+        input_before = copy.deepcopy(record)
+
+        row = copy.deepcopy(out[0])
+        probe = next(
+            (value for value in row.values() if isinstance(value, (dict, list)) and value),
+            None,
+        )
+        if isinstance(probe, dict):
+            probe["__probe"] = True
+        else:
+            probe.append("__probe")
+
+        assert out == rows_before, "sibling rows must be unaffected"
+        assert record == input_before, "input record must be unaffected"
+
+    def test_rename_sibling_rows_safe_under_convention(self):
+        self._assert_convention_following_mutation_safe(
+            RenameTransform({"fields": {"a": "renamed"}}), _nested_record()
+        )
+
+    def test_cast_sibling_rows_safe_under_convention(self):
+        self._assert_convention_following_mutation_safe(
+            CastTransform({"fields": {"a": "str"}}), _nested_record()
+        )
+
+    def test_value_map_sibling_rows_safe_under_convention(self):
+        self._assert_convention_following_mutation_safe(
+            ValueMapTransform({"field": "a", "mapping": {"1": "ONE"}}), _nested_record()
+        )
+
+    def test_coalesce_fields_sibling_rows_safe_under_convention(self):
+        self._assert_convention_following_mutation_safe(
+            CoalesceFieldsTransform({
+                "fields": {"out": {"sources": ["zz", "meta.deep"], "default": 0}},
+            }),
+            _nested_record(),
+        )
+
+    def test_drop_sibling_rows_safe_under_convention(self):
+        self._assert_convention_following_mutation_safe(
+            DropTransform({"fields": ["a"]}), _nested_record()
+        )
+
+    def test_unnest_sibling_rows_safe_under_convention(self):
+        self._assert_convention_following_mutation_safe(
+            UnnestTransform({"field": "meta"}), _nested_record()
+        )
+
+    def test_explode_sibling_rows_safe_under_convention(self):
+        """explode emits one row per element; the per-row records are shallow
+        copies that share the source record's containers, so the sibling-row
+        case is the exploded rows themselves."""
+        rec = _nested_record()
+        out = ExplodeTransform({"field": "list_field"}).apply([rec])
+        # sibling rows share the source record's nested containers (pinned
+        # aliasing contract — safe only because mutators deep-copy first)
+        assert out[0]["meta"] is rec["meta"]
+        assert out[1]["meta"] is rec["meta"]
+        self._assert_convention_following_mutation_safe(
+            ExplodeTransform({"field": "list_field"}), rec
+        )
+
+    def test_json_flatten_sibling_rows_safe_under_convention(self):
+        """json_flatten's explode path builds per-element rows from one private
+        base deepcopy: sibling rows share the base's containers with each other
+        (never with the source record), so the sibling-row case is explicit."""
+        rec = _nested_record()
+        out = JsonFlattenTransform({"explode_paths": ["list_field"]}).apply([rec])
+        # sibling rows share the private base's containers with each other...
+        assert out[0]["meta.tags"] is out[1]["meta.tags"]
+        # ...but never the source record's (base is a private deepcopy)
+        assert out[0]["meta.tags"] is not rec["meta"]["tags"]
+        self._assert_convention_following_mutation_safe(
+            JsonFlattenTransform({"explode_paths": ["list_field"]}), rec
+        )
+
+    def test_select_from_list_sibling_rows_safe_under_convention(self):
+        self._assert_convention_following_mutation_safe(
+            SelectFromListTransform({
+                "field": "list_field",
+                "select": [{"match": {"k": 2}, "output": {"k": "chosen"}}],
+            }),
+            _nested_record(),
+        )
+
+    def test_counter_delta_sibling_rows_safe_under_convention(self):
+        self._assert_convention_following_mutation_safe(
+            CounterDeltaTransform(_counter_delta_config(["v"])),
+            {"v": 100, "_index": "1", "_polled_at": "2026-09-16T09:00:00+00:00",
+             "meta": {"deep": [1]}},
+        )

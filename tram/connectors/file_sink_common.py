@@ -512,10 +512,13 @@ class RollingWriter:
         self._current_paths: dict[tuple[tuple[str, str], ...], str] = {}
         self._part_counters: dict[tuple[tuple[str, str], ...], int] = {}
         self._staged_targets: dict[tuple[str, str, str], dict[tuple[tuple[str, str], ...], StagedFileTarget]] = {}
-        # Fail-loud cap accounting (issue #77): per state key, how many records
-        # were dropped because part_index exceeded max_index. Every past-cap
-        # write still raises so the executor never counts a dropped record as
-        # written (records_out stays honest); this counter exposes the total.
+        # Fail-loud cap accounting (issue #77): per state key, how many past-cap
+        # WRITE ATTEMPTS were counted (one 500-record flush past the cap counts
+        # 1, not 500). Every past-cap write still raises so the executor never
+        # counts a dropped record as written (records_out stays honest); this
+        # counter exposes the total. Each per-key counter is reset when its
+        # source unit finalizes, so close()'s total covers only units that have
+        # not finalized yet.
         self._dropped_after_cap: dict[tuple[tuple[str, str], ...], int] = {}
         if self._file_mode == "append" and any(
             value is not None for value in (self._max_records, self._max_time, self._max_bytes)
@@ -541,11 +544,13 @@ class RollingWriter:
 
     @property
     def dropped_past_cap_total(self) -> int:
-        """Total records dropped past ``max_index`` across all state keys.
+        """Total past-cap write attempts across the not-yet-finalized state keys.
 
-        Every dropped record also raises (so the run records errors and never
-        counts the record as written); this counter exposes the total for the
-        run's final loud surface (issue #77).
+        Each past-cap WRITE ATTEMPT (a 500-record flush past the cap counts 1,
+        not 500) also raises, so the run records errors and never counts the
+        record as written; this counter exposes the total for the run's final
+        loud surface (issue #77). Counters are reset when their source unit
+        finalizes, so the total under-reports across finalized units.
         """
         return sum(self._dropped_after_cap.values())
 

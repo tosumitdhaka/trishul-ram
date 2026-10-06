@@ -30,7 +30,7 @@ class LocalSink(BaseSink):
                                              Default: "{pipeline}_{timestamp}.bin"
         overwrite          (bool, default True)  Overwrite existing files in single mode.
         max_index          (int, default 99999)  Highest allowed part index. Streams
-                                             consume one part per record; writes past
+                                             consume one part per flush; writes past
                                              the cap fail loudly (run error + skipped
                                              count) instead of silently dropping.
     """

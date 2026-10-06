@@ -181,7 +181,7 @@ all = [
     "tram[protobuf_ser]",  # protobuf/grpcio-tools pins share the 6.x floor — resolves without backtracking
     "tram[asn1]",
     "tram[msgpack_ser]",
-    # "tram[parquet]",  # ~150 MB pyarrow
+    # "tram[parquet]",  # ~+100 MB pyarrow
     # "tram[corba]",    # omniORBpy has no PyPI wheel (system package only)
     # ── Transforms ──────────────────────────────
     "tram[jmespath]",
