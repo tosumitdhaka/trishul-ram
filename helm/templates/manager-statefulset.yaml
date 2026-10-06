@@ -112,8 +112,18 @@ spec:
               value: /pipelines
             {{- end }}
             {{- range $key, $val := .Values.env }}
+            ## Topology wiring above (TRAM_NODE_ID/MODE/MANAGER_URL/WORKER_*) is
+            ## authoritative in manager pods: a values.env entry with one of those
+            ## names is dropped, never merged. This stops env written for another
+            ## topology (e.g. the standalone release's
+            ## TRAM_MANAGER_URL=http://localhost:8765) from leaking into the
+            ## manager pod spec on `helm upgrade --reuse-values` after switching to
+            ## manager+worker mode — a duplicate env name would let the stale value
+            ## win and the manager would advertise the wrong callback URL.
+            {{- if not (has $key (list "TRAM_NODE_ID" "TRAM_MODE" "TRAM_MANAGER_URL" "TRAM_WORKER_REPLICAS" "TRAM_WORKER_SERVICE" "TRAM_WORKER_NAMESPACE" "TRAM_WORKER_PORT")) }}
             - name: {{ $key }}
               value: {{ $val | quote }}
+            {{- end }}
             {{- end }}
             {{- if hasKey (default dict .Values.envSecret) "TRAM_DB_URL" }}
             ## TRAM_DB_URL provided via envSecret — rendered exactly once by the

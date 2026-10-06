@@ -210,6 +210,21 @@ This creates:
 
 If you are upgrading from the older manager `Deployment`, set `manager.persistence.existingClaim` to reuse the current manager PVC instead of provisioning a new one.
 
+**Upgrading from standalone (`--reuse-values`):** topology wiring is authoritative
+in manager/worker pods. `TRAM_NODE_ID`, `TRAM_MODE`, `TRAM_MANAGER_URL`,
+`TRAM_WORKER_*`, and the `/data` directory vars (`TRAM_SCHEMA_DIR`,
+`TRAM_MIB_DIR`, `TRAM_DATA_DIR`, `TRAM_DLQ_SPOOL_DIR`) are always computed by the
+chart, and a `values.env` entry with one of those names is **dropped** for
+manager/worker pods instead of being merged. In particular a
+`TRAM_MANAGER_URL=http://localhost:8765` set via `values.env` for the standalone
+topology no longer leaks into worker pods after
+`helm upgrade --reuse-values --set manager.enabled=true` (previously the duplicate
+env name let the stale value win and workers posted run-complete/pipeline-stats
+callbacks to themselves). Remove any such stale `env.TRAM_MANAGER_URL` override
+from your values — the chart now derives the callback URL from the manager
+Service. Standalone mode is unchanged: there `values.env` is the only source for
+`TRAM_MANAGER_URL` (the v1.6.0 GH #81 code default applies when unset).
+
 ### Worker image
 
 ```dockerfile
