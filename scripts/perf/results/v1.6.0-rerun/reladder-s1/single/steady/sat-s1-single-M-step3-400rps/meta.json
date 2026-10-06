@@ -1,0 +1,51 @@
+{
+  "run_id": "sat-s1-single-M-step3-400rps",
+  "started_at": "2026-10-06T06:54:11.717949+00:00",
+  "finished_at": "2026-10-06T06:56:41.997374+00:00",
+  "namespace": "trishul-ram",
+  "sampling": {
+    "duration_s": 150.0,
+    "interval_s": 5.0
+  },
+  "env": {
+    "tram_version": "1.5.1",
+    "helm_values": {
+      "source": "/home/dhaka/trishul/trishul-ram/scripts/perf/infra/values-single.yaml",
+      "image": {
+        "repository": "trishul-ram",
+        "tag": null
+      },
+      "manager": {
+        "enabled": false,
+        "image": {
+          "repository": null,
+          "tag": null
+        },
+        "replicas": 1,
+        "resources": null
+      },
+      "worker": {
+        "replicas": null,
+        "image": {
+          "repository": null,
+          "tag": null
+        },
+        "resources": null
+      },
+      "service": {
+        "type": null,
+        "nodePort": null
+      },
+      "env_snmp_stack": null
+    },
+    "node_allocatable": {
+      "cpu": "12",
+      "memory": "16120920Ki"
+    },
+    "running_images": {
+      "kafka-0": "docker.io/apache/kafka:3.9.0",
+      "sftp-0": "docker.io/atmoz/sftp:latest",
+      "trishul-ram-0": "docker.io/library/trishul-ram:local-20261001rr"
+    }
+  }
+}

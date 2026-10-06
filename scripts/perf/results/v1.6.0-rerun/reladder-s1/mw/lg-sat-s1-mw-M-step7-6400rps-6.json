@@ -1,0 +1,21 @@
+{
+  "tool": "loadgen_webhook",
+  "sent": 22888,
+  "http_2xx": 22488,
+  "http_4xx": 400,
+  "http_5xx": 0,
+  "errors": 0,
+  "latency_ms": {
+    "p50": 2153.299,
+    "p95": 10015.517,
+    "max": 33231.882
+  },
+  "inflight_peak": 400,
+  "url": "http://127.0.0.1:30002/webhooks/ingest",
+  "rate": 640.0,
+  "concurrency": 400,
+  "duration_s": 180.0,
+  "payload_records": 100000,
+  "achieved_rps": 127.2,
+  "connection_limited": true
+}

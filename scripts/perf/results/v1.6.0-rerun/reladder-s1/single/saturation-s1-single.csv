@@ -1,0 +1,7 @@
+step,offered_rps,achieved_2xx_rps,p95_ms,pod_cpu_peak_m,pod_mem_peak_mi,peak_pod,notes
+1,100,96.9,4.5,194.0,723.0,trishul-ram-0,k=1 sent=17849 2xx=17449 4xx=400 5xx=0 errors=0 records_in=17448 records_out=17448 skipped=0 nodes=trishul-ram-0 loadgen_achieved=99/s connection_limited=False
+2,200,193.9,5.6,407.0,721.0,trishul-ram-0,k=1 sent=35306 2xx=34906 4xx=400 5xx=0 errors=0 records_in=34902 records_out=34902 skipped=0 nodes=trishul-ram-0 loadgen_achieved=196/s connection_limited=False
+3,400,176.1,7536.9,412.0,721.0,trishul-ram-0,k=1 sent=32093 2xx=31693 4xx=400 5xx=0 errors=5 records_in=31690 records_out=31690 skipped=0 nodes=trishul-ram-0 loadgen_achieved=178/s connection_limited=True
+4,800,133.0,14700.1,316.0,721.0,trishul-ram-0,k=2 sent=24741 2xx=23941 4xx=800 5xx=0 errors=43 records_in=23940 records_out=23940 skipped=0 nodes=trishul-ram-0 loadgen_achieved=138/s connection_limited=True
+5,1600,156.5,15011.9,313.0,722.0,trishul-ram-0,k=3 sent=29363 2xx=28163 4xx=1200 5xx=0 errors=193 records_in=28155 records_out=28155 skipped=0 nodes=trishul-ram-0 loadgen_achieved=163/s connection_limited=True
+6,3200,159.8,23486.9,413.0,722.0,trishul-ram-0,k=6 sent=36010 2xx=28762 4xx=7248 5xx=0 errors=8650 records_in=28762 records_out=28762 skipped=0 nodes=trishul-ram-0 loadgen_achieved=200/s connection_limited=True

@@ -64,7 +64,7 @@ matrix-C mw-M medians; the rest is the multiplicative model on those anchors.
 | rest → rest | ~5k @ M, parity both topologies (the study's mw 3.3k was leftover-pipeline contamination — #86 A/B) | per-request source I/O |
 | → kafka sink | ~5k @ M / ~9k @ H (v1.6.0 s7 re-measure; functional at any batch size — #76 chunking) | produce |
 | snmp poll (walk) | 1.65 rows/s per pipeline | RTT pacing — size by walk-duration × frequency, never CPU |
-| webhook stream → * | pending clean re-ladder (v1.6.0 measured ~1.47× the study's ~360 but CPU telemetry was broken — do not cite) | per-ingress CPU |
+| webhook stream → * | ~430–535 rps/worker (concurrency-shaped: 535 @ low client concurrency, 428 @ conc 400; CPU-bound plateau) | per-ingress CPU + CFS queueing collapse below saturation |
 | kafka stream → * | ≥2,000 msg/s no-lag (3,943 measured, producer-limited) | single placement per pipeline |
 | → local sink (stream) | no practical cap — one part per ~500-record flush (#78); 220k-record run verified out==in | — |
 
@@ -72,15 +72,15 @@ matrix-C mw-M medians; the rest is the multiplicative model on those anchors.
 
 | stream class | rate per 500m worker | ceiling behavior | workers for 10k/50k/100k msg |
 |---|---:|---|---|
-| webhook → local json | pending clean re-ladder (study: ~360 rps; v1.6.0 plateau measured ~1.5× that but ladder CPU telemetry was broken) | latency much better in v1.6.0 (p95 12 ms at 800 offered vs 233 ms at study) | recompute after re-ladder |
+| webhook → local json | ~535 rps/worker @ modest client concurrency (~428 @ conc 400) — CPU-bound plateau, clean re-ladder 2026-10-06 | latency good until the cliff (p95 12 ms at ~775/worker offered @ conc 100); CFS-throttle-amplified queueing collapse starts below CPU saturation at high client concurrency | 23 workers @ conc-400 basis for 10k msg (~19 @ conc-50) |
 | kafka → local json | ≥2,000 msg/s no-lag | 3,943 consumed==produced, producer-limited (no lag signal); one placement per pipeline | 5 / 25 / 50 |
 
 Topology adjustments: batch = parity across the board including rest/pm_xml
 many-small-batch (the study's single 1.8–2× exception was leftover-pipeline
-contamination on the mw side — #86 A/B). Single-pod webhook: rerun showed
-~350 rps vs mw ~535/worker but the measurement is telemetry-limited —
-re-verify after the clean re-ladder. H (2cpu) stream ceilings were NOT
-verified — do not assume 2× without re-measurement.
+contamination on the mw side — #86 A/B). Single-pod webhook: ~357 rps
+(re-run conc-50 reference; the re-ladder's single steps 3–6 were
+host-contaminated and only bound it from below). H (2cpu) stream ceilings
+were NOT verified — do not assume 2× without re-measurement.
 
 ## 5. Worked examples
 
@@ -90,7 +90,7 @@ verified — do not assume 2× without re-measurement.
 | 100k rec/s csv plain | 100 / 51 | 2 sharded pipelines @ 500m (or 1 @ 2cpu) |
 | 25k rec/s pm_xml + project/filter | 25 / 5.8 | 5 sharded pipelines @ 500m |
 | 10k rec/s json + 5-transform chain | 10 / 29 | 1 pipeline @ 500m |
-| 5k rps webhook ingest | pending re-ladder (study basis: 5,000 / 360 → 14 workers) | recompute after clean re-ladder |
+| 5k rps webhook ingest | 5,000 / ~430 | 12 workers @ 500m (conc-400 basis; ~9 if client concurrency stays modest) |
 | 3k msg/s kafka consume | 3,000 / 2,000 | 2 pipelines (distinct groups) — single-placement cap |
 | sftp→local 20k rec/s | net cap ~10.5–11k | impossible per pipeline — shard files across 2+ pipelines |
 | 50k-row SNMP table / 15-min | 50k × 0.6s/row | 5.2h per walk — 1 pipeline is fine (idle CPU), schedule accordingly |
@@ -98,15 +98,17 @@ verified — do not assume 2× without re-measurement.
 ## 6. Rules of thumb
 
 1. Streams still cost far more than the batch path per record — kafka
-   ~36× after v1.6.0 micro-batching (down from ~87×), webhook pending
-   re-ladder — prefer file/batch sources wherever latency allows.
+   ~36× after v1.6.0 micro-batching (down from ~87×), webhook ~170× —
+   prefer file/batch sources wherever latency allows.
 2. A batch pipeline uses exactly ONE worker — scale by sharding input
    across pipelines, never by adding workers.
 3. Network/RTT-bound sources (sftp, snmp) ignore CPU — parallelize by
    pipeline, not resources.
-4. Stay under ~⅔ of a stream's measured ceiling to keep p95 in single-digit
-   ms (webhook latency improved ~10× in v1.6.0 at moderate rates; cliff
-   position to be re-verified with the clean re-ladder).
+4. Webhook capacity is client-concurrency-shaped (~535/worker at modest
+   concurrency vs ~428 at conc 400): the collapse is CFS-throttle-amplified
+   queueing that starts *below* CPU saturation once in-flight requests
+   pile up — keep per-worker client concurrency low (~100) and size at the
+   conc-400 figure for headroom.
 5. ~~Long streams (>100k records/placement) hit the local-sink part cap~~ —
    fixed in v1.6.0 (#77/#78): streams consume one part per ~500-record
    flush, not per record; a 220k-record run completed with out==in.

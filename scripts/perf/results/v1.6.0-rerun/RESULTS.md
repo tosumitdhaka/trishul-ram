@@ -29,20 +29,25 @@ baseline study's H-profile cells, proven by cross-check against the controlled #
 
 ## 2. Misses and confounders
 
-### 2.1 Webhook (#78) — 1.47× measured, confounded
+### 2.1 Webhook (#78) — MISS, resolved by clean re-ladder
 
-- mw ladder (3 workers): baseline steps 400→387.8, 800→559.5, 1600→761.8, 3200→958.8,
-  6400→1089.1. Rerun: 400→386.4, 800→775.4, 1600→1049.9, 3200→1605.0, 6400→1499.8.
-- **Latency is dramatically better**: rerun p95 12.2 ms at 800 rps (baseline 232.8 ms);
-  p50 1.7–4.7 ms at ≤400 (baseline 1.6–2.5 ms comparable).
-- Confounders: (a) the rerun's ladder collector lost pod CPU/mem telemetry
-  (`pod_cpu_peak_m=0.0` in every rerun ladder row — collector defect, §4), so CPU-bound
-  confirmation is impossible; (b) the loadgen (kafka-0 pod) peaked at ~1,607 sent/s — its
-  step-7 throughput (1,503/s at k=10) is *lower* than step-6 (1,607/s at k=6), the classic
-  loadgen-saturation signature; the server-side ceiling may be higher than measured.
-- The 2xx≈sent at every step (only 50×k 4xx, §4) — no server-side rejections.
-- **Verdict: plateau 1.47× misses the ≥2× gate on measured evidence; the clean-latency
-  regime doubled (800 rps at p95 12 ms vs baseline 400 @ 2.5 ms). Re-triage needed.**
+**Final verdict (reladder-s1/, 2026-10-06, telemetry + loadgen fixed):**
+mw-M plateaus at **~1,284 rps total (~428 rps/worker)** at client concurrency 400 —
+0.59× of the ≥2,184 target. At the re-run's conc-50 shape the same server does
+~1,605 (1.47× baseline), and 775 rps at p95 12 ms at conc 100. The plateau is
+**server-CPU-bound** (workers pinned at the 500m limit) with a
+CFS-throttle-amplified queueing collapse that begins well below CPU saturation
+(step 4: 335 m, p95 3.6 s). Controls: not path-bound (direct worker-IP collapse
+identical); the 1,605 figure is reproducible. The single-M ladder's steps 3–6 ran
+under host contention (foreign load) — clean reference stays the re-run's ~357.
+
+- The earlier confounders are closed: ladder CPU telemetry fixed (live values on
+  every row) and the loadgen genuinely offered 6,400 rps (connection-limited
+  flags now distinguish server latency from generator ceilings).
+- 2xx ≥98% at every mw step; 0 5xx.
+- **Capacity is concurrency-shaped** (~1,600 low-conc vs ~1,284 high-conc @ M) —
+  sizing should quote both and recommend sizing at the low-conc figure with a
+  concurrency note.
 
 ### 2.2 Protobuf (#83) — E2E flat; the issue's cost model was wrong
 

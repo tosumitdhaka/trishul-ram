@@ -1,0 +1,22 @@
+{
+  "runs_total": 152,
+  "runs_completed": 152,
+  "records_in": 4347213,
+  "records_out": 4347213,
+  "records_skipped": 0,
+  "bytes_in": 2270028987,
+  "bytes_out": 2448264720,
+  "dlq_count": 0,
+  "run_duration_ms": {
+    "count": 152,
+    "total_ms": 28298710.514,
+    "avg_ms": 186175.727,
+    "max_ms": 242318.328
+  },
+  "errors": [],
+  "error_count": 0,
+  "run_id": "probe-conc50-3200",
+  "pipeline": "s1-webhook-local",
+  "api_url": "http://127.0.0.1:30001",
+  "collected_at": "2026-10-06T06:35:54.504651+00:00"
+}
