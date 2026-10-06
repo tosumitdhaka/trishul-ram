@@ -358,19 +358,20 @@ def _l015_condition_dry_run(config: PipelineConfig) -> list[LintResult]:
     """L015 — dry-run filter/add_field expressions against a sample record.
 
     Filter/add_field conditions run under simpleeval with the record's
-    *fields* as the namespace. A condition that references an unbound
-    container name (``record.get('event_type')`` in a filter — simpleeval
-    exposes field names, not ``record``) passes registration and silently
-    loses 100% of records at run time. This rule replays each expression
-    against a synthetic sample record built from the names the expression
-    itself references, using the same evaluators the transforms use at
-    runtime, so:
+    *fields* as the namespace (filter_rows.py binds ``evaluator.names =
+    record``), so any name — including ``record`` or ``pipeline`` — may be a
+    legitimate record field the linter cannot see. This rule replays each
+    expression against a synthetic sample record built from the names the
+    expression itself references, using the same evaluators the transforms
+    use at runtime, so:
 
-    * deterministic failures — unparseable expressions, and filter conditions
-      referencing names the filter context never binds (``record``/``pipeline``)
+    * deterministic failures — unparseable expressions, and calls to names
+      that are neither provided functions nor plausible fields (a JSON record
+      field value is never callable, so ``lenn(x)`` fails for every record)
       — are errors (registration-rejecting);
-    * data-dependent failures (type/shape assumptions a real record might
-      satisfy) are warnings;
+    * data-dependent failures (type/shape assumptions, and references to
+      ``record``/``pipeline``/any name that could be a real field) are
+      warnings;
     * valid and intentionally dynamic expressions evaluate clean.
     """
     entries: list[tuple[str, str, str]] = []  # (transform_type, owner, expression)
@@ -425,12 +426,12 @@ def _l015_check_expression(
         node.id for node in ast.walk(tree) if isinstance(node, ast.Name)
     } - called - {"True", "False", "None"}
 
-    # filter evaluates with names = the record's fields ONLY — the record
-    # container and pipeline metadata are never exposed, so referencing them
-    # fails for every record (deterministic). add_field binds `record` and
-    # `pipeline` explicitly, so it has no never-bound names.
-    never_bound = {"record", "pipeline"} if transform_type == "filter" else set()
-
+    # filter evaluates with names = the record's fields ONLY (filter_rows.py
+    # sets ``evaluator.names = record``), so `record`/`pipeline`/any name may
+    # be a legitimate record field. add_field binds `record` and `pipeline`
+    # explicitly on top of the fields. No name is deterministically unbound
+    # in the *value* position; the deterministic class below is call
+    # position only.
     from tram.transforms.add_field import (
         _EVAL_FUNCS as _ADD_FIELD_FUNCS,
     )
@@ -443,16 +444,21 @@ def _l015_check_expression(
     from tram.transforms.filter_rows import (
         _EvalCls as _FilterEvalCls,
     )
+    funcs = _FILTER_FUNCS if transform_type == "filter" else _ADD_FIELD_FUNCS
 
     # Several seed types are tried because no single seed satisfies numeric
     # comparisons (`bytes_down >= 0`), string operations (`len(msisdn)`,
     # `field.startswith(...)`) and list operations (`sum(field)`).
-    # Never-bound names are deliberately left out of the sample record so an
-    # expression referencing them fails with the same unbound-name error the
-    # runtime would hit on every record.
+    # Every referenced name is seeded — the runtime binds arbitrary record
+    # fields, so a name like `record` may be a real field and the dry-run
+    # must exercise it like any other. Only names in *call* position are
+    # left out of the sample: a JSON record field value is never callable,
+    # so a called name that is not a provided function fails for every
+    # record (unbound, or a non-callable field value) — the deterministic
+    # class this rule rejects at registration.
     last_exc: Exception | None = None
     for seed in (0, "", []):
-        sample = {name: seed for name in referenced if name not in never_bound}
+        sample = {name: seed for name in referenced}
         try:
             if transform_type == "filter":
                 evaluator = _FilterEvalCls(names=sample, functions=_FILTER_FUNCS)
@@ -472,15 +478,15 @@ def _l015_check_expression(
 
     assert last_exc is not None
     name = _unbound_name(last_exc)
-    if name is not None and transform_type == "filter" and name in never_bound:
+    if name is not None and name in called and name not in funcs:
         return [LintResult(
             rule_id="L015",
             severity="error",
             message=(
                 f"Pipeline '{config.name}': {owner} condition {expression!r} "
-                f"references '{name}', which the filter evaluation context never "
-                "binds (simpleeval exposes record fields, not the record container) "
-                "— this condition fails for every record."
+                f"calls '{name}', which is not a function {transform_type} "
+                "evaluation provides (record field values are data, never "
+                "callable) — this condition fails for every record."
             ),
         )]
     return [LintResult(
@@ -498,12 +504,16 @@ def _l015_check_expression(
 def _unbound_name(exc: Exception) -> str | None:
     """Return the offending name for unbound-name exceptions, else None.
 
-    simpleeval's ``NameNotDefined`` carries the name on the exception; plain
-    ``NameError`` only embeds it in the message.
+    simpleeval's ``NameNotDefined`` carries the name on the exception,
+    ``FunctionNotDefined`` carries it as ``func_name``; plain ``NameError``
+    only embeds it in the message.
     """
     name = getattr(exc, "name", None)
     if isinstance(name, str):
         return name
+    func_name = getattr(exc, "func_name", None)
+    if isinstance(func_name, str):
+        return func_name
     if isinstance(exc, NameError):
         match = re.search(r"name '([^']+)' is not defined", str(exc))
         return match.group(1) if match else None
