@@ -131,20 +131,29 @@ def stream_flush_records() -> int:
     one serialized sink write per message; this is the record-count trigger
     (mirrors kafka ``max_poll_records``). ``1`` restores the pre-v1.6.0
     per-message flush. Per-pipeline ``stream_flush_records`` overrides it.
-    Invalid values are logged at WARNING and fall back to the default (the
-    webhook body-cap convention).
+    Invalid values — non-integers and values < 1 (the model field is ``ge=1``,
+    so ``0`` is invalid there too) — are logged at WARNING and fall back to
+    the default (the webhook body-cap convention), consistent with the model
+    rejecting ``0`` at validation.
     """
     raw = os.environ.get("TRAM_STREAM_FLUSH_RECORDS")
     if raw is None:
         return _STREAM_FLUSH_RECORDS_DEFAULT
     try:
-        return max(int(raw), 1)
+        value = int(raw)
     except ValueError:
         logger.warning(
             "Invalid TRAM_STREAM_FLUSH_RECORDS=%r — using default",
             raw,
         )
         return _STREAM_FLUSH_RECORDS_DEFAULT
+    if value < 1:
+        logger.warning(
+            "Invalid TRAM_STREAM_FLUSH_RECORDS=%r (must be >= 1) — using default",
+            raw,
+        )
+        return _STREAM_FLUSH_RECORDS_DEFAULT
+    return value
 
 
 def stream_flush_interval_seconds() -> float:

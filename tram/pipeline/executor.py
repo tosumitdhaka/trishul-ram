@@ -299,7 +299,8 @@ def _effective_stream_flush_interval(config: PipelineConfig) -> float:
     ``TRAM_STREAM_FLUSH_INTERVAL_SECONDS`` environment default (1.0). This is
     the bounded end-to-end latency budget for buffered records: a flush fires
     when the oldest buffered record has waited this long, even if the record
-    threshold has not been reached.
+    threshold has not been reached. ``0`` disables the interval trigger —
+    records then flush only on the record threshold or the source batch end.
     """
     if config.stream_flush_interval_s is not None:
         return config.stream_flush_interval_s
@@ -324,9 +325,13 @@ class _StreamFlushBuffer:
          GH #78 design care 1).
 
     ``append`` returns True when a flush is due; the caller (a stream worker or
-    the loop thread) then flushes. ``drain`` is atomic, so concurrent flushers
-    (the interval timer thread and whichever worker crossed a trigger) are safe
-    — the loser of a drain race finds the buffer empty.
+    the loop thread) then flushes. ``drain`` is atomic — concurrent drains hand
+    out disjoint records — but that alone does NOT serialize the sink writes:
+    two drains racing (the interval timer thread and a worker that crossed a
+    trigger) would both write to the same sink instances concurrently. The
+    executor therefore serializes every flush behind a per-run lock held across
+    the drain AND the sink write (see ``stream_run``), so a flush is one atomic
+    drain-and-write unit.
     """
 
     def __init__(self, record_threshold: int, interval_s: float) -> None:
@@ -359,14 +364,24 @@ class _StreamFlushBuffer:
             return (
                 batch_end
                 or len(self._records) >= self.record_threshold
-                or time.monotonic() - (self._oldest_at or 0.0) >= self.interval_s
+                or (
+                    self.interval_s > 0
+                    and time.monotonic() - (self._oldest_at or 0.0) >= self.interval_s
+                )
             )
 
     def due(self) -> bool:
-        """True when the interval since the oldest buffered record has elapsed."""
+        """True when the interval since the oldest buffered record has elapsed.
+
+        ``interval_s <= 0`` disables the interval trigger (documented semantic:
+        records then flush only on the record threshold or the source batch
+        end) — a zero interval must not mean "flush every chunk".
+        """
         with self._lock:
-            return bool(self._records) and (
-                time.monotonic() - (self._oldest_at or 0.0) >= self.interval_s
+            return (
+                bool(self._records)
+                and self.interval_s > 0
+                and time.monotonic() - (self._oldest_at or 0.0) >= self.interval_s
             )
 
     def drain(self) -> tuple[list[dict], dict] | None:
@@ -824,6 +839,7 @@ class PipelineExecutor:
         stats: PipelineStats | None = None,
         *,
         count_records_in: bool = True,
+        rate_limit_per_record: bool = False,
     ) -> bool:
         """Process one decoded record batch.
 
@@ -831,6 +847,14 @@ class PipelineExecutor:
         #78): records_in is counted once at arrival (``_process_chunk`` buffer
         mode), so the flush must not bump it again — the GH #84 identity
         (skipped = in − out) holds across flush boundaries.
+
+        *rate_limit_per_record* restores v1.5.1 stream semantics on the
+        micro-batch flush path: pre-#78 the stream consumed one rate-limit
+        token per message, but a flush of up to 500 records now took a single
+        token, silently raising throughput up to ~500× at the same
+        ``rate_limit_rps``. With the flag set the flush consumes one token per
+        record that reaches a sink write; the batch path keeps its per-chunk
+        behavior (changing it would alter existing deployments).
         """
         from tram.metrics.registry import (
             DLQ_RECORDS,
@@ -918,7 +942,16 @@ class PipelineExecutor:
                 active_ser = per_sink_ser if per_sink_ser is not None else serializer_out
 
                 if rate_limit_rps is not None:
-                    self._rate_limit(rate_limit_rps)
+                    if rate_limit_per_record:
+                        # Stream flush path (GH #78): one token per record that
+                        # reaches the sink write — v1.5.1 stream semantics.
+                        # Without this a 500-record flush consumed a single
+                        # token, throttling at up to 500× the configured rate
+                        # (v1.6.0 independent review finding 6).
+                        for _ in sink_records:
+                            self._rate_limit(rate_limit_rps)
+                    else:
+                        self._rate_limit(rate_limit_rps)
 
                 # Circuit breaker check — use stable string key, not id()
                 cb_threshold = getattr(sink_cfg, "circuit_breaker_threshold", 0)
@@ -1329,6 +1362,9 @@ class PipelineExecutor:
             records, meta, [], serializer_out, sinks, ctx, on_error,
             rate_limit_rps, dlq_sink, parallel_sinks, sink_cb_keys, stats,
             count_records_in=False,
+            # One rate-limit token per record on the flush path — a flush of
+            # up to 500 records must not bypass the configured rate (finding 6).
+            rate_limit_per_record=True,
         )
         return True
 
@@ -1779,13 +1815,23 @@ class PipelineExecutor:
             interval_s=_effective_stream_flush_interval(config),
         )
         flusher_stop = threading.Event()
+        # Serializes every flush of this run: the interval timer thread, the
+        # chunk-loop flush, the threaded workers, and the final/crash drains
+        # all funnel into _flush_now, and the lock is held across the drain AND
+        # the sink write. Without it two concurrent drains would hand out
+        # disjoint records and write both to the same sink instances at once —
+        # an unlocked RollingWriter would then allocate the same {part} path
+        # twice (silent overwrite) and KafkaSink's lazy producer init would
+        # race (v1.6.0 independent review finding 1).
+        flush_lock = threading.Lock()
 
         def _flush_now() -> None:
-            self._flush_stream_buffer(
-                flush_buffer, serializer_out, sinks, ctx, config.on_error,
-                config.rate_limit_rps, dlq_sink,
-                getattr(config, "parallel_sinks", False), sink_cb_keys, stats,
-            )
+            with flush_lock:
+                self._flush_stream_buffer(
+                    flush_buffer, serializer_out, sinks, ctx, config.on_error,
+                    config.rate_limit_rps, dlq_sink,
+                    getattr(config, "parallel_sinks", False), sink_cb_keys, stats,
+                )
 
         def _interval_flusher() -> None:
             wake = max(flush_buffer.interval_s / 2, 0.05)
@@ -1836,6 +1882,7 @@ class PipelineExecutor:
                     sink_cb_keys=sink_cb_keys,
                     on_persist=_maybe_persist_state,
                     flush_buffer=flush_buffer,
+                    flush_lock=flush_lock,
                 )
             else:
                 current_source_key: tuple[str, str] | None = None
@@ -1911,9 +1958,14 @@ class PipelineExecutor:
             stream_exit.set()
             # Stop the interval flusher before the final drains / sink close so
             # no concurrent flush races the stateful-transform flush records or
-            # the sink teardown.
+            # the sink teardown. The join is unbounded on purpose: the flusher
+            # is daemon and its flush is bounded by the sink write timeouts
+            # (e.g. kafka future.get(timeout=10)), so waiting it out guarantees
+            # no in-flight sink.write() is still running when _close_sinks runs
+            # (v1.6.0 independent review finding 4 — a 2s cap could be outlived
+            # by a slow flush and tear down the sink under it).
             flusher_stop.set()
-            flusher_thread.join(timeout=2)
+            flusher_thread.join()
             # Graceful stop: close hooks honoring each stateful transform's
             # flush_on_close field (window_aggregate emits its open windows as
             # partials, then the final state blob reflects the cleared windows
@@ -1971,13 +2023,17 @@ class PipelineExecutor:
         sink_cb_keys: list[str] | None = None,
         on_persist=None,
         flush_buffer: _StreamFlushBuffer | None = None,
+        flush_lock: threading.Lock | None = None,
     ) -> None:
         """Stream mode with N worker threads. Producer reads; workers process.
 
         With a *flush_buffer* (stream micro-batching, GH #78) workers defer the
         sink write to the micro-batch flush: parse/transform at arrival, one
-        serialized sink write per flush. The final drain of whatever is left in
-        the buffer happens in ``stream_run`` after the workers have joined.
+        serialized sink write per flush. *flush_lock* is the run's flush
+        serialization lock (see ``stream_run``): worker flushes and the reader
+        thread's drain-before-finalize must not interleave sink writes with the
+        interval timer thread. The final drain of whatever is left in the
+        buffer happens in ``stream_run`` after the workers have joined.
         Strict at-least-once for replayable sources (kafka poll-batch commits)
         holds on the single-threaded path; with ``thread_workers > 1`` the
         pre-existing poll-batch commit race applies (see the kafka source
@@ -1988,11 +2044,25 @@ class PipelineExecutor:
         on_error = config.on_error
 
         def _flush_now() -> None:
-            self._flush_stream_buffer(
-                flush_buffer, serializer_out, sinks, ctx, on_error,
-                config.rate_limit_rps, dlq_sink,
-                getattr(config, "parallel_sinks", False), sink_cb_keys, stats,
-            )
+            with flush_lock:
+                self._flush_stream_buffer(
+                    flush_buffer, serializer_out, sinks, ctx, on_error,
+                    config.rate_limit_rps, dlq_sink,
+                    getattr(config, "parallel_sinks", False), sink_cb_keys, stats,
+                )
+
+        def _drain_before_finalize() -> None:
+            """Mirror the single-threaded drain-before-finalize.
+
+            A file must never be marked processed while its records still sit
+            in the chunk queue or the micro-batch buffer (a crash would lose
+            them with the source marked done). ``chunk_q.join()`` waits for the
+            workers to parse/append every chunk read so far — the reader thread
+            puts nothing new until finalize returns — then the flush writes the
+            whole source unit in one serialized sink write.
+            """
+            chunk_q.join()
+            _flush_now()
 
         def _worker() -> None:
             while True:
@@ -2044,6 +2114,7 @@ class PipelineExecutor:
                 source_key = _source_unit_key(meta)
                 if source_key is not None:
                     if current_source_key is not None and source_key != current_source_key:
+                        _drain_before_finalize()
                         source.finalize(current_source_meta, success=True)
                         current_source_key = None
                         current_source_meta = None
@@ -2059,6 +2130,7 @@ class PipelineExecutor:
                     except Exception:
                         pass
             if current_source_meta is not None and not stopped:
+                _drain_before_finalize()
                 source.finalize(current_source_meta, success=True)
         finally:
             # Signal all workers to stop
