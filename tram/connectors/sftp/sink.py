@@ -33,8 +33,9 @@ class SFTPSink(BaseSink):
     Also accepts the rolling-file options from the ``sftp`` config schema
     (``file_mode``, ``max_records``, ``max_time``, ``max_bytes``,
     ``max_index``). ``max_index`` (default 99,999) is the highest allowed part
-    index: streams consume one part per record, and writes past the cap fail
-    loudly (run error + skipped count) instead of silently dropping.
+    index: streams consume one part per flush (one per ~500 records), and
+    writes past the cap fail loudly (run error + skipped count) instead of
+    silently dropping.
 
     The transport is opened once per run and reused across writes; it is
     closed by :meth:`close` (called by the executor after a run finishes). A
