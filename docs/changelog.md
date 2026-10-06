@@ -14,6 +14,9 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - Single-topology stream observability (GH #81): standalone stream runs now reach run history with in/out/error counts — one `SUCCESS` row per stats tick with segment DELTA counts (`<run_id>-seg<N>`, quiet segments skipped) plus a final lifecycle row on stop (`SUCCESS`) or crash (`FAILED` with the crash text). Rows are bounded (≤500 periodic rollups per lifecycle; the sum of all rows equals the lifecycle totals, so `/api/stats` stays correct)
 - `TRAM_MANAGER_URL` now defaults to `http://localhost:8765` in standalone mode when unset (GH #81) — the run-complete callback URL is never empty, so run-history rows are no longer silently dropped in single topology. An explicit value always wins; manager/worker modes are never defaulted (their manager is remote)
 
+### Changed
+- Kafka sink: `key_field` now applies to all serializers, not just JSON payloads — existing non-JSON pipelines with `key_field` set will change partitioning behavior (previously the key was silently ignored)
+
 ### Fixed
 - File-sink part cap fails loudly (GH #77): records past `max_index` (default 99,999) on the stream path are no longer silently skipped while the run reports success — every past-cap write raises with the running dropped count, and `close()` logs the run's final dropped total. The `max_index` schema/docs descriptions that documented never-implemented oldest-part deletion are corrected
 - `records_skipped` counter hygiene (GH #84): the stream skip path no longer double-counts (true skipped = in − out on stream and batch paths), a failing sink no longer counts records as skipped when a sibling sink delivered them, and the "no sink wrote successfully" error fires only for chunks that actually carried records — empty/no-op chunks no longer produce it

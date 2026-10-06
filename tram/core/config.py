@@ -117,8 +117,8 @@ def state_max_bytes() -> int:
 # ``max_poll_records`` (500); the flush interval is the bounded end-to-end
 # latency budget for buffered records (1s). The capacity study measured the
 # per-message sink write as the dominant stream cost (~0.5-1 ms/record vs
-# 5-12 µs/record on the batch path), so 500 records / 1s is the target
-# 2-5x capacity window with a bounded latency trade.
+# 5-12 µs/record on the batch path), so 500 records / 1s is the measured
+# capacity window (kafka ~2x+, webhook ~1.2-1.5x) with a bounded latency trade.
 _STREAM_FLUSH_RECORDS_DEFAULT = 500
 _STREAM_FLUSH_INTERVAL_DEFAULT = 1.0
 
