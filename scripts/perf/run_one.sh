@@ -15,6 +15,10 @@
 #   TRAM_NAMESPACE   pod namespace for the collector (default tram)
 #   PERF_PYTHON      python interpreter (default <repo>/.venv/bin/python)
 #   PERF_HELM_VALUES path to helm values.yaml for the collector meta (optional)
+#   PERF_RESULTS_DIR where the internal collector writes (default
+#                    <perf>/results; ladder drivers redirect this to scratch)
+#   PERF_RUN_WATCHDOG_S whole-run budget; default warmup+duration+900s
+#   TRAM_PERF_ALLOW_DIRTY=1 skips the enabled-pipeline hygiene pre-check
 #
 # Stream pipelines (webhook/kafka sources) auto-start on registration and are
 # stopped explicitly after the steady-state window. Batch pipelines (manual
@@ -29,6 +33,7 @@ PYTHON="${PERF_PYTHON:-$REPO_ROOT/.venv/bin/python}"
 API_URL="${TRAM_API_URL:-http://127.0.0.1:30001}"
 NAMESPACE="${TRAM_NAMESPACE:-tram}"
 HELM_VALUES="${PERF_HELM_VALUES:-}"
+RESULTS_DIR="${PERF_RESULTS_DIR:-$PERF_ROOT/results}"
 
 TEMPLATE="${1:-}"
 RUN_ID="${2:-}"
@@ -59,6 +64,13 @@ if [[ -n "${TRAM_API_KEY:-}" ]]; then
     API_KEY_HEADER=(-H "X-API-Key: $TRAM_API_KEY")
 fi
 
+# ── bench-hygiene pre-check (#86 lesson) ───────────────────────────────────
+# An enabled leftover pipeline (interval/cron-scheduled or manually startable)
+# fires mid-measurement and steals worker CPU. Abort listing the offenders
+# unless TRAM_PERF_ALLOW_DIRTY=1 is set. Runs once per invocation — cheap
+# (one GET /api/pipelines).
+"$PERF_ROOT/check_hygiene.sh"
+
 pipeline_name="$("$PYTHON" -c '
 import sys, yaml
 doc = yaml.safe_load(open(sys.argv[1], encoding="utf-8"))
@@ -78,13 +90,13 @@ echo "run_one[$RUN_ID]: pipeline=$pipeline_name schedule=$schedule_type template
 # ── register (delete a stale pipeline of the same name first) ─────────────
 register() {
     local rc
-    curl -sS -o /dev/null -w "%{http_code}" -X POST "$API_URL/api/pipelines" \
+    curl -sS --max-time 30 -o /dev/null -w "%{http_code}" -X POST "$API_URL/api/pipelines" \
         "${API_KEY_HEADER[@]}" -H "Content-Type: text/yaml" --data-binary "@$TEMPLATE"
 }
 code="$(register || true)"
 if [[ "$code" == "409" ]]; then
     echo "run_one[$RUN_ID]: existing pipeline $pipeline_name — deleting and re-registering"
-    curl -sS -o /dev/null -X DELETE "$API_URL/api/pipelines/$pipeline_name" "${API_KEY_HEADER[@]}" || true
+    curl -sS --max-time 30 -o /dev/null -X DELETE "$API_URL/api/pipelines/$pipeline_name" "${API_KEY_HEADER[@]}" || true
     code="$(register)"
 fi
 if [[ "$code" != "201" && "$code" != "200" ]]; then
@@ -93,11 +105,15 @@ if [[ "$code" != "201" && "$code" != "200" ]]; then
 fi
 
 stop_pipeline() {
-    curl -sS -o /dev/null -X POST "$API_URL/api/pipelines/$pipeline_name/stop" "${API_KEY_HEADER[@]}" || true
+    curl -sS --max-time 30 -o /dev/null -X POST "$API_URL/api/pipelines/$pipeline_name/stop" "${API_KEY_HEADER[@]}" || true
 }
 
 LOADGEN_PID=""
+WATCHDOG_PID=""
 cleanup() {
+    if [[ -n "$WATCHDOG_PID" ]] && kill -0 "$WATCHDOG_PID" 2>/dev/null; then
+        kill "$WATCHDOG_PID" 2>/dev/null || true
+    fi
     if [[ -n "$LOADGEN_PID" ]] && kill -0 "$LOADGEN_PID" 2>/dev/null; then
         kill -TERM "$LOADGEN_PID" 2>/dev/null || true
         wait "$LOADGEN_PID" 2>/dev/null || true
@@ -105,6 +121,23 @@ cleanup() {
     stop_pipeline
 }
 trap cleanup EXIT
+trap 'exit 130' TERM INT
+
+# Per-cell watchdog: a run must finish within warmup + duration + 900 s (or
+# PERF_RUN_WATCHDOG_S). A hung register curl, a stuck rollout wait, or a
+# stalled poll would otherwise stall the batch overnight. On fire, TERM the
+# script's children (foreground command + loadgen + collector) and the script
+# itself; the EXIT trap then stops the pipeline.
+WATCHDOG_S="${PERF_RUN_WATCHDOG_S:-$((DURATION + WARMUP + 900))}"
+(
+    sleep "$WATCHDOG_S"
+    echo "run_one[$RUN_ID]: WATCHDOG fired after ${WATCHDOG_S}s — aborting hung run" >&2
+    if command -v pkill >/dev/null 2>&1; then
+        pkill -TERM -P "$$" 2>/dev/null || true
+    fi
+    kill -TERM "$$" 2>/dev/null || true
+) &
+WATCHDOG_PID=$!
 
 run_collector() {
     local args=(--run-id "$RUN_ID" --duration "$COLLECT_DURATION" --interval 5
@@ -114,6 +147,9 @@ run_collector() {
     fi
     if [[ -n "$HELM_VALUES" ]]; then
         args+=(--helm-values "$HELM_VALUES")
+    fi
+    if [[ -n "$RESULTS_DIR" ]]; then
+        args+=(--results-dir "$RESULTS_DIR")
     fi
     "$PYTHON" "$PERF_ROOT/collector/collect.py" "${args[@]}"
 }
@@ -140,7 +176,7 @@ if [[ "$schedule_type" == "stream" ]]; then
     echo "run_one[$RUN_ID]: pipeline stopped"
 else
     # Batch pipeline: trigger one run and poll to completion.
-    run_resp="$(curl -sS -X POST "$API_URL/api/pipelines/$pipeline_name/run" "${API_KEY_HEADER[@]}" || true)"
+    run_resp="$(curl -sS --max-time 30 -X POST "$API_URL/api/pipelines/$pipeline_name/run" "${API_KEY_HEADER[@]}" || true)"
     echo "run_one[$RUN_ID]: triggered batch run: $run_resp"
     deadline=$((SECONDS + DURATION + WARMUP + 120))
     while (( SECONDS < deadline )); do
@@ -172,8 +208,8 @@ run_collector
 if [[ "$KEEP" == "1" ]]; then
     echo "run_one[$RUN_ID]: keeping pipeline $pipeline_name (stopped)"
 else
-    curl -sS -o /dev/null -X DELETE "$API_URL/api/pipelines/$pipeline_name" "${API_KEY_HEADER[@]}" || true
+    curl -sS --max-time 30 -o /dev/null -X DELETE "$API_URL/api/pipelines/$pipeline_name" "${API_KEY_HEADER[@]}" || true
     echo "run_one[$RUN_ID]: deleted pipeline $pipeline_name"
 fi
 trap - EXIT
-echo "run_one[$RUN_ID]: DONE — results under $PERF_ROOT/results/$RUN_ID/"
+echo "run_one[$RUN_ID]: DONE — results under $RESULTS_DIR/$RUN_ID/"
