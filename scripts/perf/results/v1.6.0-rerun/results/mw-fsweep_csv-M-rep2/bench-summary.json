@@ -1,0 +1,44 @@
+{
+  "run_id": "mw-fsweep_csv-M-rep2",
+  "scenario": "fsweep_csv",
+  "res_profile": "M",
+  "rep": 2,
+  "topology": "mw",
+  "rep_started_at": "2026-10-05T06:56:37.728391+00:00",
+  "run_one_rc": 0,
+  "aborted": null,
+  "run_history": {
+    "rows": 1,
+    "records_in": 100000,
+    "records_out": 100000,
+    "records_skipped": 0,
+    "bytes_in": 27180726,
+    "bytes_out": 27180726,
+    "errors": 0,
+    "error_msgs": [],
+    "statuses": [
+      "success"
+    ],
+    "wall_s": 2.159427,
+    "nodes": [
+      "trishul-ram-worker-0"
+    ]
+  },
+  "loadgens": [],
+  "rest_sink_stats": {},
+  "sink_export": {},
+  "kafka_out_cum": "",
+  "bytes_per_record_in": 271.8,
+  "peaks": {
+    "cpu_peak_m": 27.0,
+    "mem_peak_mi": 668.0,
+    "peak_pod": "trishul-ram-worker-0"
+  },
+  "metrics": {
+    "records_in": 100000,
+    "records_out": 100000,
+    "errors": 0,
+    "duration_s": 2.2,
+    "throughput_recs_s": 45454.5
+  }
+}

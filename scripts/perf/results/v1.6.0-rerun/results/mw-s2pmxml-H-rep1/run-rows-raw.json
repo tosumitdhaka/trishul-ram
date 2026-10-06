@@ -1,0 +1,18 @@
+[
+ {
+  "run_id": "c239bd5a-3d3e-4378-8844-98b7b2ef31a7",
+  "pipeline": "s2-local-local-pmxml",
+  "status": "success",
+  "started_at": "2026-10-05T08:24:53.553190+00:00",
+  "finished_at": "2026-10-05T08:24:57.985588+00:00",
+  "records_in": 100000,
+  "records_out": 100000,
+  "records_skipped": 0,
+  "bytes_in": 30474180,
+  "bytes_out": 42968540,
+  "dlq_count": 0,
+  "error": null,
+  "errors": [],
+  "node": "trishul-ram-worker-0"
+ }
+]

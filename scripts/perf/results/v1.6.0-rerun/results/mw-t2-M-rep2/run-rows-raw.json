@@ -1,0 +1,18 @@
+[
+ {
+  "run_id": "91914eb6-cb7d-47b5-aa93-c2e162710863",
+  "pipeline": "t2-json-flatten-enrich",
+  "status": "success",
+  "started_at": "2026-10-05T07:05:48.740583+00:00",
+  "finished_at": "2026-10-05T07:05:51.359391+00:00",
+  "records_in": 100000,
+  "records_out": 100000,
+  "records_skipped": 0,
+  "bytes_in": 54078916,
+  "bytes_out": 62778896,
+  "dlq_count": 0,
+  "error": null,
+  "errors": [],
+  "node": "trishul-ram-worker-0"
+ }
+]

@@ -1,0 +1,18 @@
+[
+ {
+  "run_id": "24c9d708-c33e-4ff8-96ac-92c729c1eeac",
+  "pipeline": "s2-local-local-csv",
+  "status": "success",
+  "started_at": "2026-10-05T10:39:36.355805+00:00",
+  "finished_at": "2026-10-05T10:39:38.754053+00:00",
+  "records_in": 100000,
+  "records_out": 100000,
+  "records_skipped": 0,
+  "bytes_in": 27180726,
+  "bytes_out": 27180726,
+  "dlq_count": 0,
+  "error": null,
+  "errors": [],
+  "node": "trishul-ram-0"
+ }
+]

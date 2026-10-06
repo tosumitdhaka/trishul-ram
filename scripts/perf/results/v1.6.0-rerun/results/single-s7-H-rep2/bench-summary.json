@@ -1,0 +1,44 @@
+{
+  "run_id": "single-s7-H-rep2",
+  "scenario": "s7",
+  "res_profile": "H",
+  "rep": 2,
+  "topology": "single",
+  "rep_started_at": "2026-10-05T12:51:10.916698+00:00",
+  "run_one_rc": 0,
+  "aborted": null,
+  "run_history": {
+    "rows": 1,
+    "records_in": 100000,
+    "records_out": 100000,
+    "records_skipped": 0,
+    "bytes_in": 52378916,
+    "bytes_out": 56278896,
+    "errors": 0,
+    "error_msgs": [],
+    "statuses": [
+      "success"
+    ],
+    "wall_s": 24.778075,
+    "nodes": [
+      "trishul-ram-0"
+    ]
+  },
+  "loadgens": [],
+  "rest_sink_stats": {},
+  "sink_export": {},
+  "kafka_out_cum": "1320",
+  "bytes_per_record_in": 523.8,
+  "peaks": {
+    "cpu_peak_m": 799.0,
+    "mem_peak_mi": 779.0,
+    "peak_pod": "trishul-ram-0"
+  },
+  "metrics": {
+    "records_in": 100000,
+    "records_out": 100000,
+    "errors": 0,
+    "duration_s": 24.8,
+    "throughput_recs_s": 4032.3
+  }
+}

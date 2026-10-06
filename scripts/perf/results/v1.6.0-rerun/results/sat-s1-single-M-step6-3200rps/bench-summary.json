@@ -1,0 +1,140 @@
+{
+ "step": 6,
+ "offered": 3200,
+ "k": 6,
+ "sent": 57429,
+ "2xx": 57129,
+ "4xx": 300,
+ "5xx": 0,
+ "p50": 817.3283333333334,
+ "p95": 1374.6271666666664,
+ "hist": {
+  "rows": 7,
+  "records_in": 56987,
+  "records_out": 56987,
+  "records_skipped": 0,
+  "bytes_in": 29755241,
+  "bytes_out": 32091708,
+  "errors": 0,
+  "error_msgs": [],
+  "statuses": [
+   "success"
+  ],
+  "wall_s": 180.984056,
+  "nodes": [
+   "trishul-ram-0"
+  ]
+ },
+ "cpu": 0.0,
+ "mem": 0.0,
+ "loadgens": [
+  {
+   "tool": "loadgen_webhook",
+   "sent": 9556,
+   "http_2xx": 9506,
+   "http_4xx": 50,
+   "http_5xx": 0,
+   "errors": 0,
+   "latency_ms": {
+    "p50": 817.408,
+    "p95": 1375.41,
+    "max": 10394.42
+   },
+   "url": "http://127.0.0.1:30001/webhooks/ingest",
+   "rate": 533.0,
+   "concurrency": 50,
+   "duration_s": 180.0,
+   "payload_records": 100000
+  },
+  {
+   "tool": "loadgen_webhook",
+   "sent": 9561,
+   "http_2xx": 9511,
+   "http_4xx": 50,
+   "http_5xx": 0,
+   "errors": 0,
+   "latency_ms": {
+    "p50": 817.562,
+    "p95": 1374.204,
+    "max": 10320.578
+   },
+   "url": "http://127.0.0.1:30001/webhooks/ingest",
+   "rate": 533.0,
+   "concurrency": 50,
+   "duration_s": 180.0,
+   "payload_records": 100000
+  },
+  {
+   "tool": "loadgen_webhook",
+   "sent": 9573,
+   "http_2xx": 9523,
+   "http_4xx": 50,
+   "http_5xx": 0,
+   "errors": 0,
+   "latency_ms": {
+    "p50": 818.592,
+    "p95": 1372.362,
+    "max": 10321.735
+   },
+   "url": "http://127.0.0.1:30001/webhooks/ingest",
+   "rate": 533.0,
+   "concurrency": 50,
+   "duration_s": 180.0,
+   "payload_records": 100000
+  },
+  {
+   "tool": "loadgen_webhook",
+   "sent": 9577,
+   "http_2xx": 9527,
+   "http_4xx": 50,
+   "http_5xx": 0,
+   "errors": 0,
+   "latency_ms": {
+    "p50": 816.743,
+    "p95": 1374.984,
+    "max": 10368.967
+   },
+   "url": "http://127.0.0.1:30001/webhooks/ingest",
+   "rate": 533.0,
+   "concurrency": 50,
+   "duration_s": 180.0,
+   "payload_records": 100000
+  },
+  {
+   "tool": "loadgen_webhook",
+   "sent": 9560,
+   "http_2xx": 9510,
+   "http_4xx": 50,
+   "http_5xx": 0,
+   "errors": 0,
+   "latency_ms": {
+    "p50": 816.836,
+    "p95": 1376.283,
+    "max": 10327.323
+   },
+   "url": "http://127.0.0.1:30001/webhooks/ingest",
+   "rate": 533.0,
+   "concurrency": 50,
+   "duration_s": 180.0,
+   "payload_records": 100000
+  },
+  {
+   "tool": "loadgen_webhook",
+   "sent": 9602,
+   "http_2xx": 9552,
+   "http_4xx": 50,
+   "http_5xx": 0,
+   "errors": 0,
+   "latency_ms": {
+    "p50": 816.829,
+    "p95": 1374.52,
+    "max": 10321.222
+   },
+   "url": "http://127.0.0.1:30001/webhooks/ingest",
+   "rate": 533.0,
+   "concurrency": 50,
+   "duration_s": 180.0,
+   "payload_records": 100000
+  }
+ ]
+}

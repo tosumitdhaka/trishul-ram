@@ -1,0 +1,50 @@
+[
+ {
+  "run_id": "s1-webhook-local-20261005090336-87aad3-w2",
+  "pipeline": "s1-webhook-local",
+  "status": "success",
+  "started_at": "2026-10-05T09:03:36.395996+00:00",
+  "finished_at": "2026-10-05T09:07:36.973459+00:00",
+  "records_in": 75955,
+  "records_out": 75955,
+  "records_skipped": 0,
+  "bytes_in": 39625356,
+  "bytes_out": 42739511,
+  "dlq_count": 0,
+  "error": null,
+  "errors": [],
+  "node": "trishul-ram-worker-2"
+ },
+ {
+  "run_id": "s1-webhook-local-20261005090336-87aad3-w1",
+  "pipeline": "s1-webhook-local",
+  "status": "success",
+  "started_at": "2026-10-05T09:03:36.380221+00:00",
+  "finished_at": "2026-10-05T09:07:36.972627+00:00",
+  "records_in": 39161,
+  "records_out": 39161,
+  "records_skipped": 0,
+  "bytes_in": 20429593,
+  "bytes_out": 22035194,
+  "dlq_count": 0,
+  "error": null,
+  "errors": [],
+  "node": "trishul-ram-worker-1"
+ },
+ {
+  "run_id": "s1-webhook-local-20261005090336-87aad3-w0",
+  "pipeline": "s1-webhook-local",
+  "status": "success",
+  "started_at": "2026-10-05T09:03:36.363768+00:00",
+  "finished_at": "2026-10-05T09:07:36.969992+00:00",
+  "records_in": 15477,
+  "records_out": 15477,
+  "records_skipped": 0,
+  "bytes_in": 8074269,
+  "bytes_out": 8708826,
+  "dlq_count": 0,
+  "error": null,
+  "errors": [],
+  "node": "trishul-ram-worker-0"
+ }
+]

@@ -1,0 +1,44 @@
+{
+  "run_id": "single-s2pmxml-H-rep1",
+  "scenario": "s2pmxml",
+  "res_profile": "H",
+  "rep": 1,
+  "topology": "single",
+  "rep_started_at": "2026-10-05T12:13:33.045208+00:00",
+  "run_one_rc": 0,
+  "aborted": null,
+  "run_history": {
+    "rows": 1,
+    "records_in": 100000,
+    "records_out": 100000,
+    "records_skipped": 0,
+    "bytes_in": 30474180,
+    "bytes_out": 42968540,
+    "errors": 0,
+    "error_msgs": [],
+    "statuses": [
+      "success"
+    ],
+    "wall_s": 4.507279,
+    "nodes": [
+      "trishul-ram-0"
+    ]
+  },
+  "loadgens": [],
+  "rest_sink_stats": {},
+  "sink_export": {},
+  "kafka_out_cum": "",
+  "bytes_per_record_in": 304.7,
+  "peaks": {
+    "cpu_peak_m": 111.0,
+    "mem_peak_mi": 693.0,
+    "peak_pod": "trishul-ram-0"
+  },
+  "metrics": {
+    "records_in": 100000,
+    "records_out": 100000,
+    "errors": 0,
+    "duration_s": 4.5,
+    "throughput_recs_s": 22222.2
+  }
+}

@@ -1,0 +1,22 @@
+{
+  "runs_total": 66,
+  "runs_completed": 66,
+  "records_in": 333025,
+  "records_out": 333025,
+  "records_skipped": 0,
+  "bytes_in": 173783169,
+  "bytes_out": 187437194,
+  "dlq_count": 0,
+  "run_duration_ms": {
+    "count": 66,
+    "total_ms": 1863228.516,
+    "avg_ms": 28230.735,
+    "max_ms": 54173.079
+  },
+  "errors": [],
+  "error_count": 0,
+  "run_id": "sat-s1-single-M-step5-1600rps",
+  "pipeline": "s1-webhook-local",
+  "api_url": "http://127.0.0.1:30001",
+  "collected_at": "2026-10-05T11:59:54.167926+00:00"
+}

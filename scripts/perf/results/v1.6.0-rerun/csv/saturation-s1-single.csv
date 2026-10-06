@@ -1,0 +1,7 @@
+step,offered_rps,achieved_2xx_rps,p95_ms,pod_cpu_peak_m,notes
+1,100,96.9,6.7,0.0,k=1 sent=17490 2xx=17440 4xx=50 5xx=0 p50=4.417ms records_in=17438 records_out=17438 skipped=0 nodes=trishul-ram-0 rows=7 mem_peak=0Mi peak_pod=
+2,200,189.1,238.9,0.0,k=1 sent=34080 2xx=34030 4xx=50 5xx=0 p50=4.318ms records_in=34018 records_out=34018 skipped=0 nodes=trishul-ram-0 rows=7 mem_peak=0Mi peak_pod=
+3,400,189.4,718.3,0.0,k=1 sent=34136 2xx=34086 4xx=50 5xx=0 p50=172.141ms records_in=34075 records_out=34075 skipped=0 nodes=trishul-ram-0 rows=7 mem_peak=0Mi peak_pod=
+4,800,333.8,696.3,0.0,k=2 sent=60181 2xx=60081 4xx=100 5xx=0 p50=211.3785ms records_in=60015 records_out=60015 skipped=0 nodes=trishul-ram-0 rows=6 mem_peak=0Mi peak_pod=
+5,1600,357.7,699.2,0.0,k=3 sent=64534 2xx=64384 4xx=150 5xx=0 p50=376.4823333333334ms records_in=64276 records_out=64276 skipped=0 nodes=trishul-ram-0 rows=7 mem_peak=0Mi peak_pod=
+6,3200,317.4,1374.6,0.0,k=6 sent=57429 2xx=57129 4xx=300 5xx=0 p50=817.3283333333334ms records_in=56987 records_out=56987 skipped=0 nodes=trishul-ram-0 rows=7 mem_peak=0Mi peak_pod=

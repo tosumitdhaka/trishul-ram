@@ -1,0 +1,9 @@
+run_id,scenario,res_profile,rep,records_in,records_out,errors,duration_s,throughput_recs_s,pod_cpu_peak_m,pod_mem_peak_mi,notes
+single-t1-M-rep1,t1,M,1,100000,79781,0,4.6,17343.7,18,692,"rows=1 statuses=success nodes=trishul-ram-0; transforms=project,filter; peak_pod=kafka-0"
+single-t5-M-rep1,t5,M,1,100000,100000,0,6.4,15625.0,144,692,"rows=1 statuses=success nodes=trishul-ram-0; transforms=rename,cast,add_field,filter,project; peak_pod=trishul-ram-0"
+single-t1-M-rep2,t1,M,2,100000,79781,0,2.1,37991.0,12,703,"rows=1 statuses=success nodes=trishul-ram-0; transforms=project,filter; peak_pod=kafka-0"
+single-t5-M-rep2,t5,M,2,100000,100000,0,3.1,32258.1,12,702,"rows=1 statuses=success nodes=trishul-ram-0; transforms=rename,cast,add_field,filter,project; peak_pod=kafka-0"
+single-t1-H-rep1,t1,H,1,100000,79781,0,0.9,88645.6,11,692,"rows=1 statuses=success nodes=trishul-ram-0; transforms=project,filter; peak_pod=kafka-0"
+single-t5-H-rep1,t5,H,1,100000,100000,0,1.4,71428.6,12,693,"rows=1 statuses=success nodes=trishul-ram-0; transforms=rename,cast,add_field,filter,project; peak_pod=kafka-0"
+single-t1-H-rep2,t1,H,2,100000,79781,0,2.6,30685.0,34,779,"rows=1 statuses=success nodes=trishul-ram-0; transforms=project,filter; peak_pod=kafka-0"
+single-t5-H-rep2,t5,H,2,100000,100000,0,3.9,25641.0,88,779,"rows=1 statuses=success nodes=trishul-ram-0; transforms=rename,cast,add_field,filter,project; peak_pod=trishul-ram-0"

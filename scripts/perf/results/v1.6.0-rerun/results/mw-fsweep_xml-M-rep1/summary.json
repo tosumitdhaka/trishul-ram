@@ -1,0 +1,22 @@
+{
+  "runs_total": 3,
+  "runs_completed": 3,
+  "records_in": 300000,
+  "records_out": 300000,
+  "records_skipped": 0,
+  "bytes_in": 207537258,
+  "bytes_out": 239338488,
+  "dlq_count": 0,
+  "run_duration_ms": {
+    "count": 3,
+    "total_ms": 27936.751,
+    "avg_ms": 9312.25,
+    "max_ms": 10611.208
+  },
+  "errors": [],
+  "error_count": 0,
+  "run_id": "mw-fsweep_xml-M-rep1",
+  "pipeline": "fsweep-xml",
+  "api_url": "http://127.0.0.1:30001",
+  "collected_at": "2026-10-05T06:21:29.764718+00:00"
+}

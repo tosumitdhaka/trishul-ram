@@ -1,0 +1,44 @@
+{
+  "run_id": "single-s4-M-rep2",
+  "scenario": "s4",
+  "res_profile": "M",
+  "rep": 2,
+  "topology": "single",
+  "rep_started_at": "2026-10-05T11:24:42.251293+00:00",
+  "run_one_rc": 0,
+  "aborted": null,
+  "run_history": {
+    "rows": 1,
+    "records_in": 1000,
+    "records_out": 1000,
+    "records_skipped": 0,
+    "bytes_in": 363044,
+    "bytes_out": 363044,
+    "errors": 0,
+    "error_msgs": [],
+    "statuses": [
+      "success"
+    ],
+    "wall_s": 684.591039,
+    "nodes": [
+      "trishul-ram-0"
+    ]
+  },
+  "loadgens": [],
+  "rest_sink_stats": {},
+  "sink_export": {},
+  "kafka_out_cum": "",
+  "bytes_per_record_in": 363.0,
+  "peaks": {
+    "cpu_peak_m": 105.0,
+    "mem_peak_mi": 767.0,
+    "peak_pod": "trishul-ram-0"
+  },
+  "metrics": {
+    "records_in": 1000,
+    "records_out": 1000,
+    "errors": 0,
+    "duration_s": 684.6,
+    "throughput_recs_s": 1.5
+  }
+}

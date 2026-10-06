@@ -1,0 +1,44 @@
+{
+  "run_id": "single-t1-H-rep1",
+  "scenario": "t1",
+  "res_profile": "H",
+  "rep": 1,
+  "topology": "single",
+  "rep_started_at": "2026-10-05T12:17:58.135125+00:00",
+  "run_one_rc": 0,
+  "aborted": null,
+  "run_history": {
+    "rows": 1,
+    "records_in": 100000,
+    "records_out": 79781,
+    "records_skipped": 0,
+    "bytes_in": 52378916,
+    "bytes_out": 21325680,
+    "errors": 0,
+    "error_msgs": [],
+    "statuses": [
+      "success"
+    ],
+    "wall_s": 0.859751,
+    "nodes": [
+      "trishul-ram-0"
+    ]
+  },
+  "loadgens": [],
+  "rest_sink_stats": {},
+  "sink_export": {},
+  "kafka_out_cum": "",
+  "bytes_per_record_in": 523.8,
+  "peaks": {
+    "cpu_peak_m": 11.0,
+    "mem_peak_mi": 692.0,
+    "peak_pod": "kafka-0"
+  },
+  "metrics": {
+    "records_in": 100000,
+    "records_out": 79781,
+    "errors": 0,
+    "duration_s": 0.9,
+    "throughput_recs_s": 88645.6
+  }
+}

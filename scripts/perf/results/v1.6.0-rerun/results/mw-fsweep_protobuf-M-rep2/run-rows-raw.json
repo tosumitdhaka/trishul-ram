@@ -1,0 +1,18 @@
+[
+ {
+  "run_id": "8d301013-1b62-44e9-8e29-17fa4e7460fb",
+  "pipeline": "fsweep-protobuf",
+  "status": "success",
+  "started_at": "2026-10-05T07:03:02.532127+00:00",
+  "finished_at": "2026-10-05T07:03:13.247763+00:00",
+  "records_in": 100000,
+  "records_out": 100000,
+  "records_skipped": 0,
+  "bytes_in": 27996680,
+  "bytes_out": 27996680,
+  "dlq_count": 0,
+  "error": null,
+  "errors": [],
+  "node": "trishul-ram-worker-0"
+ }
+]

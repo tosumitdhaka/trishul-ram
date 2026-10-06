@@ -1,0 +1,44 @@
+{
+ "step": 3,
+ "offered": 2000,
+ "k": 2,
+ "produced": 90000,
+ "consumed": 90000,
+ "lag": "err:Requires group_id",
+ "hist": {
+  "rows": 1,
+  "records_in": 90000,
+  "records_out": 90000,
+  "records_skipped": 0,
+  "bytes_in": 46958610,
+  "bytes_out": 50648610,
+  "errors": 0,
+  "error_msgs": [],
+  "statuses": [
+   "success"
+  ],
+  "wall_s": 60.172747,
+  "nodes": [
+   "trishul-ram-worker-0"
+  ]
+ },
+ "cpu": 0.0,
+ "loadgens": [
+  {
+   "tool": "kafka_loadgen",
+   "mode": "produce",
+   "topic": "perf-cdr",
+   "sent": 45000,
+   "failed": 0,
+   "achieved_rps": 1000.0
+  },
+  {
+   "tool": "kafka_loadgen",
+   "mode": "produce",
+   "topic": "perf-cdr",
+   "sent": 45000,
+   "failed": 0,
+   "achieved_rps": 999.99
+  }
+ ]
+}

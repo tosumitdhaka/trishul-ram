@@ -1,0 +1,562 @@
+{
+  "meta": {
+    "phase": "1c-transforms",
+    "repo_version": "v1.5.1 @ 326d9dd",
+    "records": 10000,
+    "warmup_records": 1000,
+    "reps": 5,
+    "scaling_reps": 3,
+    "statistic": "median",
+    "cpu": "Intel(R) Core(TM) Ultra 7 155H",
+    "python": "3.12.3",
+    "host_note": "WSL2 host \u2014 numbers are comparative, not absolute",
+    "generated": "2026-10-05T05:59:41.717264+00:00"
+  },
+  "results": [
+    {
+      "name": "project",
+      "n_input": 10000,
+      "n_output": 10000,
+      "us_per_input_record": 0.975,
+      "records_s": 1026137,
+      "config": {
+        "fields": {
+          "id": "record_id",
+          "msisdn": "msisdn",
+          "event": "event_type",
+          "charge": "charge_amount",
+          "cell": "cell_id",
+          "rat": "rat"
+        }
+      },
+      "note": null
+    },
+    {
+      "name": "filter",
+      "n_input": 10000,
+      "n_output": 2018,
+      "us_per_input_record": 1.777,
+      "records_s": 562772,
+      "config": {
+        "condition": "duration_s > 30 and event_type == \"VOICE\""
+      },
+      "note": null
+    },
+    {
+      "name": "json_flatten",
+      "n_input": 10000,
+      "n_output": 10000,
+      "us_per_input_record": 3.104,
+      "records_s": 322176,
+      "config": {
+        "separator": "."
+      },
+      "note": "nested CDR \u2192 flat (session_info.* hoisted with dotted keys)"
+    },
+    {
+      "name": "enrich",
+      "n_input": 10000,
+      "n_output": 10000,
+      "us_per_input_record": 0.732,
+      "records_s": 1366603,
+      "config": {
+        "lookup_file": "/tmp/tram_microbench_84g6zndu/cell_lookup.csv",
+        "lookup_format": "csv",
+        "join_key": "cell_id",
+        "add_fields": [
+          "region",
+          "vendor"
+        ]
+      },
+      "note": "left-join against 500-row cell_id \u2192 region/vendor CSV"
+    },
+    {
+      "name": "deduplicate",
+      "n_input": 10000,
+      "n_output": 9001,
+      "us_per_input_record": 0.509,
+      "records_s": 1962868,
+      "config": {
+        "fields": [
+          "record_id"
+        ],
+        "keep": "first"
+      },
+      "note": "corpus has 10% re-delivered duplicate records"
+    },
+    {
+      "name": "add_field",
+      "n_input": 10000,
+      "n_output": 10000,
+      "us_per_input_record": 3.798,
+      "records_s": 263289,
+      "config": {
+        "fields": {
+          "total_bytes": "bytes_up + bytes_down",
+          "charge_rounded": "round(charge_amount, 2)"
+        }
+      },
+      "note": null
+    },
+    {
+      "name": "rename",
+      "n_input": 10000,
+      "n_output": 10000,
+      "us_per_input_record": 1.142,
+      "records_s": 875775,
+      "config": {
+        "fields": {
+          "msisdn": "subscriber_number",
+          "charge_amount": "amount",
+          "sgsn_addr": "sgsn_ip"
+        }
+      },
+      "note": null
+    },
+    {
+      "name": "cast",
+      "n_input": 10000,
+      "n_output": 10000,
+      "us_per_input_record": 1.269,
+      "records_s": 787715,
+      "config": {
+        "fields": {
+          "charge_amount": "float",
+          "cell_id": "int",
+          "roaming": "bool"
+        }
+      },
+      "note": "cast-variant corpus (values pre-stringified)"
+    },
+    {
+      "name": "mask",
+      "n_input": 10000,
+      "n_output": 10000,
+      "us_per_input_record": 1.889,
+      "records_s": 529519,
+      "config": {
+        "fields": [
+          "msisdn",
+          "imsi",
+          "imei"
+        ],
+        "mode": "hash"
+      },
+      "note": "sha256 per PII field (PII redaction workload)"
+    },
+    {
+      "name": "regex_extract",
+      "n_input": 10000,
+      "n_output": 10000,
+      "us_per_input_record": 0.864,
+      "records_s": 1157354,
+      "config": {
+        "field": "msisdn",
+        "pattern": "^(?P<ncc>\\d{2})(?P<subscriber>\\d{8})$"
+      },
+      "note": null
+    },
+    {
+      "name": "jmespath",
+      "n_input": 10000,
+      "n_output": 10000,
+      "us_per_input_record": 7.753,
+      "records_s": 128983,
+      "config": {
+        "fields": {
+          "session_up": "session_info.bytes_up",
+          "session_down": "session_info.bytes_down",
+          "session_start": "session_info.session_start",
+          "access_point": "apn"
+        }
+      },
+      "note": "nested CDR (session_info) input"
+    },
+    {
+      "name": "value_map",
+      "n_input": 10000,
+      "n_output": 10000,
+      "us_per_input_record": 0.536,
+      "records_s": 1864701,
+      "config": {
+        "field": "event_type",
+        "mapping": {
+          "VOICE": 1,
+          "SMS": 2,
+          "DATA": 3,
+          "ROAMING": 4,
+          "EVENT": 5
+        }
+      },
+      "note": null
+    },
+    {
+      "name": "coalesce_fields",
+      "n_input": 10000,
+      "n_output": 10000,
+      "us_per_input_record": 0.928,
+      "records_s": 1077813,
+      "config": {
+        "fields": {
+          "apn_primary": {
+            "sources": [
+              "apn_backup",
+              "apn"
+            ],
+            "default": "unknown"
+          }
+        }
+      },
+      "note": "first source (apn_backup) missing on all records"
+    },
+    {
+      "name": "timestamp_normalize",
+      "n_input": 10000,
+      "n_output": 10000,
+      "us_per_input_record": 19.524,
+      "records_s": 51219,
+      "config": {
+        "fields": [
+          "timestamp",
+          "session_start"
+        ]
+      },
+      "note": null
+    },
+    {
+      "name": "template",
+      "n_input": 10000,
+      "n_output": 10000,
+      "us_per_input_record": 1.218,
+      "records_s": 821065,
+      "config": {
+        "fields": {
+          "cdr_ref": "{record_id}:{event_type}",
+          "summary": "{direction},{event_type},{duration_s}s"
+        }
+      },
+      "note": null
+    },
+    {
+      "name": "melt",
+      "n_input": 10000,
+      "n_output": 30000,
+      "us_per_input_record": 2.18,
+      "records_s": 458613,
+      "config": {
+        "value_field": "counters"
+      },
+      "note": "3 counters per record \u2192 3 output rows per input record"
+    },
+    {
+      "name": "explode",
+      "n_input": 10000,
+      "n_output": 20000,
+      "us_per_input_record": 4.751,
+      "records_s": 210486,
+      "config": {
+        "field": "charge_breakdown"
+      },
+      "note": "2 billing components per record \u2192 2 output rows"
+    },
+    {
+      "name": "unnest",
+      "n_input": 10000,
+      "n_output": 10000,
+      "us_per_input_record": 1.278,
+      "records_s": 782376,
+      "config": {
+        "field": "session_info"
+      },
+      "note": "nested CDR input; hoists session_info keys"
+    },
+    {
+      "name": "validate",
+      "n_input": 10000,
+      "n_output": 10000,
+      "us_per_input_record": 1.1,
+      "records_s": 909379,
+      "config": {
+        "rules": {
+          "msisdn": {
+            "required": true,
+            "regex": "^\\d{10}$"
+          },
+          "duration_s": {
+            "type": "int",
+            "min": 0,
+            "max": 3600
+          },
+          "event_type": {
+            "allowed": [
+              "VOICE",
+              "SMS",
+              "DATA",
+              "ROAMING",
+              "EVENT"
+            ]
+          },
+          "charge_amount": {
+            "type": "float",
+            "min": 0
+          }
+        }
+      },
+      "note": null
+    },
+    {
+      "name": "aggregate",
+      "n_input": 10000,
+      "n_output": 2450,
+      "us_per_input_record": 2.008,
+      "records_s": 498125,
+      "config": {
+        "group_by": [
+          "cell_id",
+          "rat"
+        ],
+        "operations": {
+          "total_up": "sum:bytes_up",
+          "total_down": "sum:bytes_down",
+          "avg_charge": "avg:charge_amount",
+          "samples": "count:record_id"
+        }
+      },
+      "note": "batch-local groupby; materializes all values per group (list appends, not running accumulators)"
+    },
+    {
+      "name": "window_aggregate",
+      "n_input": 10000,
+      "n_output": 4591,
+      "us_per_input_record": 15.078,
+      "records_s": 66323,
+      "config": {
+        "timestamp_field": "timestamp",
+        "group_by": [
+          "cell_id"
+        ],
+        "window_seconds": 900,
+        "operations": {
+          "total_down": "sum:bytes_down",
+          "avg_charge": "avg:charge_amount",
+          "samples": "count:record_id"
+        }
+      },
+      "note": "needs parseable timestamp (ISO); 500 cell groups, watermark-driven tumbling windows"
+    },
+    {
+      "name": "counter_delta",
+      "n_input": 10000,
+      "n_output": 10000,
+      "us_per_input_record": 12.032,
+      "records_s": 83109,
+      "config": {
+        "fields": [
+          "if_in_octets",
+          "if_out_octets"
+        ],
+        "key_fields": [
+          "cell_id"
+        ],
+        "timestamp_field": "_polled_at"
+      },
+      "note": "needs cumulative keyed counters + timestamps; 500 cell series x 2 counter fields, 300 s poll interval"
+    },
+    {
+      "name": "limit",
+      "n_input": 10000,
+      "n_output": 100,
+      "us_per_input_record": 0.0,
+      "records_s": 33557046980,
+      "config": {
+        "count": 100
+      },
+      "note": null
+    },
+    {
+      "name": "hex_decode",
+      "n_input": 10000,
+      "n_output": 10000,
+      "us_per_input_record": 10.449,
+      "records_s": 95706,
+      "config": {
+        "mode": "hex",
+        "overrides": [
+          {
+            "path": "sgsn_addr",
+            "decode_as": "ip",
+            "format": "packed"
+          },
+          {
+            "path": "ggsn_addr",
+            "decode_as": "ip",
+            "format": "packed"
+          }
+        ]
+      },
+      "note": "packed-IPv4 hex \u2192 dotted-quad; other fields untouched (mode=hex, no heuristic text decode)"
+    },
+    {
+      "name": "select_from_list",
+      "n_input": 10000,
+      "n_output": 10000,
+      "us_per_input_record": 1.802,
+      "records_s": 554793,
+      "config": {
+        "field": "locations",
+        "select": [
+          {
+            "name": "serving",
+            "match": {
+              "loc_type": "serving"
+            },
+            "output": {
+              "cell_id": "serving_cell"
+            }
+          }
+        ]
+      },
+      "note": "locations list: serving/previous cell dicts"
+    },
+    {
+      "name": "drop",
+      "n_input": 10000,
+      "n_output": 10000,
+      "us_per_input_record": 0.63,
+      "records_s": 1587326,
+      "config": {
+        "fields": [
+          "imsi",
+          "imei",
+          "sgsn_addr",
+          "ggsn_addr"
+        ]
+      },
+      "note": null
+    }
+  ],
+  "stateful_scaling": [
+    {
+      "name": "deduplicate",
+      "rows": [
+        {
+          "n": 10000,
+          "us_per_input_record": 0.449,
+          "records_s": 2229174,
+          "n_output": 9001
+        },
+        {
+          "n": 50000,
+          "us_per_input_record": 0.623,
+          "records_s": 1604923,
+          "n_output": 45001
+        },
+        {
+          "n": 100000,
+          "us_per_input_record": 0.624,
+          "records_s": 1601286,
+          "n_output": 90001
+        }
+      ],
+      "cost_growth_10k_to_100k": 1.39
+    },
+    {
+      "name": "aggregate",
+      "rows": [
+        {
+          "n": 10000,
+          "us_per_input_record": 1.995,
+          "records_s": 501288,
+          "n_output": 2450
+        },
+        {
+          "n": 50000,
+          "us_per_input_record": 1.633,
+          "records_s": 612504,
+          "n_output": 2500
+        },
+        {
+          "n": 100000,
+          "us_per_input_record": 1.637,
+          "records_s": 611031,
+          "n_output": 2500
+        }
+      ],
+      "cost_growth_10k_to_100k": 0.82
+    },
+    {
+      "name": "window_aggregate",
+      "rows": [
+        {
+          "n": 10000,
+          "us_per_input_record": 14.703,
+          "records_s": 68015,
+          "n_output": 4591
+        },
+        {
+          "n": 50000,
+          "us_per_input_record": 14.865,
+          "records_s": 67271,
+          "n_output": 22970
+        },
+        {
+          "n": 100000,
+          "us_per_input_record": 15.11,
+          "records_s": 66181,
+          "n_output": 46415
+        }
+      ],
+      "cost_growth_10k_to_100k": 1.03
+    },
+    {
+      "name": "counter_delta",
+      "rows": [
+        {
+          "n": 10000,
+          "us_per_input_record": 12.001,
+          "records_s": 83326,
+          "n_output": 10000
+        },
+        {
+          "n": 50000,
+          "us_per_input_record": 12.922,
+          "records_s": 77387,
+          "n_output": 50000
+        },
+        {
+          "n": 100000,
+          "us_per_input_record": 13.141,
+          "records_s": 76100,
+          "n_output": 100000
+        }
+      ],
+      "cost_growth_10k_to_100k": 1.09
+    }
+  ],
+  "window_aggregate_group_probe": {
+    "hypothesis": "apply() \u2192 _finalize_due_windows() scans every group's open windows on every record",
+    "rows": [
+      {
+        "n_groups": 10,
+        "us_per_input_record": 11.261
+      },
+      {
+        "n_groups": 100,
+        "us_per_input_record": 11.502
+      },
+      {
+        "n_groups": 500,
+        "us_per_input_record": 14.871
+      },
+      {
+        "n_groups": 1000,
+        "us_per_input_record": 18.6
+      },
+      {
+        "n_groups": 5000,
+        "us_per_input_record": 18.514
+      }
+    ],
+    "cost_growth_10_to_5000_groups": 1.64
+  }
+}

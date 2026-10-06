@@ -1,0 +1,6 @@
+step,offered_msg_s,procs,produced,consumed,consumer_recs_s,lag_at_stop,worker_cpu_peak_m,notes
+1,500,1,90000,90000,500.0,err:Requires group_id,0.0,produced=90000 statuses=success records_out=90000 skipped=0 nodes=trishul-ram-worker-0 peak_pod=
+2,1000,1,90000,90000,1000.0,err:Requires group_id,0.0,produced=90000 statuses=success records_out=90000 skipped=0 nodes=trishul-ram-worker-0 peak_pod=
+3,2000,2,90000,90000,2000.0,err:Requires group_id,0.0,produced=90000 statuses=success records_out=90000 skipped=0 nodes=trishul-ram-worker-0 peak_pod=
+4,4000,4,86754,86754,3943.4,err:Requires group_id,0.0,produced=86754 statuses=success records_out=86754 skipped=0 nodes=trishul-ram-worker-0 peak_pod=
+5,6000,6,52632,52632,3508.8,err:Requires group_id,0.0,produced=52632 statuses=success records_out=52632 skipped=0 nodes=trishul-ram-worker-0 peak_pod=

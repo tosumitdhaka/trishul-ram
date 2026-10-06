@@ -1,0 +1,44 @@
+{
+  "run_id": "mw-fsweep_msgpack-M-rep1",
+  "scenario": "fsweep_msgpack",
+  "res_profile": "M",
+  "rep": 1,
+  "topology": "mw",
+  "rep_started_at": "2026-10-05T06:22:46.023084+00:00",
+  "run_one_rc": 0,
+  "aborted": null,
+  "run_history": {
+    "rows": 1,
+    "records_in": 100000,
+    "records_out": 100000,
+    "records_skipped": 0,
+    "bytes_in": 44709651,
+    "bytes_out": 44709651,
+    "errors": 0,
+    "error_msgs": [],
+    "statuses": [
+      "success"
+    ],
+    "wall_s": 0.715989,
+    "nodes": [
+      "trishul-ram-worker-0"
+    ]
+  },
+  "loadgens": [],
+  "rest_sink_stats": {},
+  "sink_export": {},
+  "kafka_out_cum": "",
+  "bytes_per_record_in": 447.1,
+  "peaks": {
+    "cpu_peak_m": 13.0,
+    "mem_peak_mi": 656.0,
+    "peak_pod": "trishul-ram-manager-0"
+  },
+  "metrics": {
+    "records_in": 100000,
+    "records_out": 100000,
+    "errors": 0,
+    "duration_s": 0.7,
+    "throughput_recs_s": 142857.1
+  }
+}

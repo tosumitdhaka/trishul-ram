@@ -1,0 +1,18 @@
+[
+ {
+  "run_id": "afb1eab5-6a3c-4643-9593-b3058c1df999",
+  "pipeline": "s2-local-local-pmxml",
+  "status": "success",
+  "started_at": "2026-10-05T12:13:33.201024+00:00",
+  "finished_at": "2026-10-05T12:13:37.708303+00:00",
+  "records_in": 100000,
+  "records_out": 100000,
+  "records_skipped": 0,
+  "bytes_in": 30474180,
+  "bytes_out": 42968540,
+  "dlq_count": 0,
+  "error": null,
+  "errors": [],
+  "node": "trishul-ram-0"
+ }
+]

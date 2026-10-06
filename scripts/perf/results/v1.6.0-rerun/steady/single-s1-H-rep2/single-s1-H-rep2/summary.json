@@ -1,0 +1,22 @@
+{
+  "runs_total": 89,
+  "runs_completed": 89,
+  "records_in": 519411,
+  "records_out": 519411,
+  "records_skipped": 0,
+  "bytes_in": 271046992,
+  "bytes_out": 292342843,
+  "dlq_count": 0,
+  "run_duration_ms": {
+    "count": 89,
+    "total_ms": 2525725.749,
+    "avg_ms": 28378.941,
+    "max_ms": 54173.079
+  },
+  "errors": [],
+  "error_count": 0,
+  "run_id": "single-s1-H-rep2",
+  "pipeline": "s1-webhook-local",
+  "api_url": "http://127.0.0.1:30001",
+  "collected_at": "2026-10-05T13:00:00.620288+00:00"
+}

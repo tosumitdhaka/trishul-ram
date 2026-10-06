@@ -1,0 +1,44 @@
+{
+  "run_id": "single-fsweep_json-M-rep1",
+  "scenario": "fsweep_json",
+  "res_profile": "M",
+  "rep": 1,
+  "topology": "single",
+  "rep_started_at": "2026-10-05T10:44:06.267279+00:00",
+  "run_one_rc": 0,
+  "aborted": null,
+  "run_history": {
+    "rows": 1,
+    "records_in": 100000,
+    "records_out": 100000,
+    "records_skipped": 0,
+    "bytes_in": 52378916,
+    "bytes_out": 56278896,
+    "errors": 0,
+    "error_msgs": [],
+    "statuses": [
+      "success"
+    ],
+    "wall_s": 2.324133,
+    "nodes": [
+      "trishul-ram-0"
+    ]
+  },
+  "loadgens": [],
+  "rest_sink_stats": {},
+  "sink_export": {},
+  "kafka_out_cum": "",
+  "bytes_per_record_in": 523.8,
+  "peaks": {
+    "cpu_peak_m": 15.0,
+    "mem_peak_mi": 692.0,
+    "peak_pod": "trishul-ram-0"
+  },
+  "metrics": {
+    "records_in": 100000,
+    "records_out": 100000,
+    "errors": 0,
+    "duration_s": 2.3,
+    "throughput_recs_s": 43478.3
+  }
+}

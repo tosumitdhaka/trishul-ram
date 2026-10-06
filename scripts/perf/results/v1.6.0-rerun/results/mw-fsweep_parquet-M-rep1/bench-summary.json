@@ -1,0 +1,44 @@
+{
+  "run_id": "mw-fsweep_parquet-M-rep1",
+  "scenario": "fsweep_parquet",
+  "res_profile": "M",
+  "rep": 1,
+  "topology": "mw",
+  "rep_started_at": "2026-10-05T06:25:26.869229+00:00",
+  "run_one_rc": 0,
+  "aborted": null,
+  "run_history": {
+    "rows": 1,
+    "records_in": 100000,
+    "records_out": 100000,
+    "records_skipped": 0,
+    "bytes_in": 19183231,
+    "bytes_out": 19183231,
+    "errors": 0,
+    "error_msgs": [],
+    "statuses": [
+      "success"
+    ],
+    "wall_s": 3.222023,
+    "nodes": [
+      "trishul-ram-worker-0"
+    ]
+  },
+  "loadgens": [],
+  "rest_sink_stats": {},
+  "sink_export": {},
+  "kafka_out_cum": "",
+  "bytes_per_record_in": 191.8,
+  "peaks": {
+    "cpu_peak_m": 101.0,
+    "mem_peak_mi": 655.0,
+    "peak_pod": "trishul-ram-worker-0"
+  },
+  "metrics": {
+    "records_in": 100000,
+    "records_out": 100000,
+    "errors": 0,
+    "duration_s": 3.2,
+    "throughput_recs_s": 31250.0
+  }
+}
