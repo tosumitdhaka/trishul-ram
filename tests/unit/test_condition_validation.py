@@ -1,10 +1,15 @@
 """Issue #85 — registration-time filter/add_field condition validation (L015).
 
 Pins the L015 rule: dry-run each filter/add_field expression against a sample
-record so broken conditions (unbound names like ``record``) are caught at
-registration instead of silently losing 100% of records at run time. The rule
-is surfaced through ``tram validate`` (CLI), the registration endpoint, and
-the dry-run endpoint.
+record so broken conditions are caught at registration instead of silently
+losing 100% of records at run time. The rule is surfaced through
+``tram validate`` (CLI), the registration endpoint, and the dry-run endpoint.
+
+The filter evaluation namespace is the record's *fields* (filter_rows.py
+binds ``evaluator.names = record``), so names like ``record``/``pipeline``
+may be legitimate record fields and are downgraded to warnings; only
+deterministic failures — unparseable expressions, and calls to names that are
+neither provided functions nor plausible record fields — reject registration.
 """
 
 from __future__ import annotations
@@ -66,36 +71,61 @@ def _l015(config) -> list:
 
 
 class TestL015FilterConditions:
-    def test_broken_template_class_record_get_is_error(self):
-        """t1 as shipped (deploy-state.md): record.get('event_type') lost 100%."""
+    def test_record_get_is_warning_not_error(self):
+        """`record` may be a legitimate record field — the filter namespace IS
+        the record's fields — so record.get(...) is schema-dependent: warning,
+        not a registration-rejecting error (v1.6.0 regression, review finding 7)."""
         config = _config_with_transforms("""\
 - type: filter
   condition: "record.get('event_type') != 'EVENT'"
 """)
         findings = _l015(config)
         assert len(findings) == 1
-        assert findings[0].severity == "error"
+        assert findings[0].severity == "warning"
         assert "record" in findings[0].message
 
-    def test_broken_template_class_record_get_t5_style_is_error(self):
-        """t5 as shipped: record.get('bytes_down') >= 0 lost 100%."""
+    def test_record_get_bytes_down_is_warning(self):
+        """t5 as shipped: record.get('bytes_down') >= 0 — warning, not error."""
         config = _config_with_transforms("""\
 - type: filter
   condition: "record.get('bytes_down') >= 0"
 """)
         findings = _l015(config)
         assert len(findings) == 1
-        assert findings[0].severity == "error"
+        assert findings[0].severity == "warning"
 
-    def test_filter_pipeline_name_is_error(self):
-        """filter never binds `pipeline` either — deterministic failure."""
+    def test_filter_pipeline_name_is_warning(self):
+        """`pipeline` can be a record field too — a reference to it is
+        schema-dependent, so it warns instead of erroring."""
         config = _config_with_transforms("""\
 - type: filter
   condition: "pipeline.name == 'x'"
 """)
         findings = _l015(config)
         assert len(findings) == 1
+        assert findings[0].severity == "warning"
+
+    def test_filter_field_named_record_passes_clean(self):
+        """(a) A filter referencing a field literally named `record` — the
+        dry-run seeds it like any field, so no error and no warning."""
+        config = _config_with_transforms("""\
+- type: filter
+  condition: "record >= 0"
+""")
+        assert _l015(config) == []
+
+    def test_misspelled_function_is_error(self):
+        """(c) Deterministic failure still rejects: `lenn` is not a provided
+        filter function and a JSON record field value is never callable, so
+        this condition fails for every record."""
+        config = _config_with_transforms("""\
+- type: filter
+  condition: "lenn(msisdn) > 3"
+""")
+        findings = _l015(config)
+        assert len(findings) == 1
         assert findings[0].severity == "error"
+        assert "lenn" in findings[0].message
 
     def test_valid_condition_passes_clean(self):
         """t1 fixed (templates-fixed/): event_type != 'EVENT'."""
@@ -208,7 +238,7 @@ class TestL015AddFieldConditions:
 
 
 class TestL015SinkLevelTransforms:
-    def test_sink_level_filter_unbound_record_is_error(self):
+    def test_sink_level_filter_record_get_is_warning(self):
         config = _load("""
             pipeline:
               name: l015-sink
@@ -228,7 +258,7 @@ class TestL015SinkLevelTransforms:
         """)
         findings = _l015(config)
         assert len(findings) == 1
-        assert findings[0].severity == "error"
+        assert findings[0].severity == "warning"
 
     def test_no_expression_transforms_produce_no_l015(self):
         config = _load("""
@@ -249,7 +279,7 @@ class TestL015SinkLevelTransforms:
 
 
 class TestCLIValidateSurfacesL015:
-    def test_validate_rejects_unbound_filter_condition(self, tmp_path):
+    def test_validate_rejects_misspelled_function_condition(self, tmp_path):
         pipeline_file = tmp_path / "broken.yaml"
         pipeline_file.write_text(textwrap.dedent("""\
             pipeline:
@@ -263,13 +293,37 @@ class TestCLIValidateSurfacesL015:
                 type: json
               transforms:
                 - type: filter
-                  condition: "record.get('event_type') != 'EVENT'"
+                  condition: "lenn(msisdn) > 3"
               sink:
                 type: local
                 path: /out
         """))
         result = runner.invoke(app, ["validate", str(pipeline_file)])
         assert result.exit_code == 1
+
+    def test_validate_warns_but_passes_record_get_condition(self, tmp_path):
+        """The v1.6.0 regression: record.get(...) in a filter must validate
+        (L015 warning only), not exit 1."""
+        pipeline_file = tmp_path / "record-field.yaml"
+        pipeline_file.write_text(textwrap.dedent("""\
+            pipeline:
+              name: l015-cli-record
+              source:
+                type: local
+                path: /tmp
+              serializer_in:
+                type: json
+              serializer_out:
+                type: json
+              transforms:
+                - type: filter
+                  condition: "record.get('severity', 0) >= 3"
+              sink:
+                type: local
+                path: /out
+        """))
+        result = runner.invoke(app, ["validate", str(pipeline_file)])
+        assert result.exit_code == 0
 
     def test_validate_passes_valid_filter_condition(self, tmp_path):
         pipeline_file = tmp_path / "valid.yaml"
@@ -325,7 +379,7 @@ class TestRegistrationAndDryRunLint:
               type: json
             transforms:
               - type: filter
-                condition: "record.get('event_type') != 'EVENT'"
+                condition: "lenn(msisdn) > 3"
             sinks:
               - type: local
                 path: /tmp/out
@@ -349,12 +403,26 @@ class TestRegistrationAndDryRunLint:
                 path: /tmp/out
         """)
 
-    def test_register_rejects_unbound_filter_condition(self):
+    def test_register_rejects_deterministic_filter_condition(self):
         client, mock_controller = self._make_app()
         resp = client.post("/api/pipelines", json={"yaml_text": self._broken_yaml()})
         assert resp.status_code == 400
         assert "L015" in resp.json()["detail"]
         mock_controller.register.assert_not_called()
+
+    def test_register_accepts_record_field_filter_condition(self):
+        """Review finding 7: a filter referencing `record` as a record field
+        must register (L015 warning only), not 400."""
+        client, mock_controller = self._make_app()
+        state = MagicMock()
+        state.to_dict.return_value = {"name": "l015-api"}
+        mock_controller.register.return_value = state
+        yaml_body = self._broken_yaml().replace(
+            "lenn(msisdn) > 3", "record.get('severity', 0) >= 3"
+        )
+        resp = client.post("/api/pipelines", json={"yaml_text": yaml_body})
+        assert resp.status_code == 201
+        mock_controller.register.assert_called_once()
 
     def test_register_accepts_valid_condition(self):
         client, mock_controller = self._make_app()
@@ -371,7 +439,7 @@ class TestRegistrationAndDryRunLint:
         assert resp.status_code == 200
         body = resp.json()
         assert body["valid"] is False
-        assert any("record" in issue for issue in body["issues"])
+        assert any("lenn" in issue for issue in body["issues"])
 
     def test_dry_run_clean_for_valid_condition(self):
         client, _mock_controller = self._make_app()
