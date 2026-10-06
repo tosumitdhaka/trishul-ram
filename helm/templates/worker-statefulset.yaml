@@ -111,11 +111,18 @@ spec:
               value: {{ .Values.schemaRegistry.password | quote }}
             {{- end }}
             {{- range $key, $ref := .Values.envSecret }}
+            ## Same reserved-name drop as the env range above (keep the two lists
+            ## in sync): envSecret renders AFTER the topology wiring, so a stale
+            ## envSecret.TRAM_MANAGER_URL from a single-mode release would
+            ## duplicate the chart-computed name and the secret value would win —
+            ## same leak path the env guard closes, same threat model.
+            {{- if not (has $key (list "TRAM_NODE_ID" "TRAM_MODE" "TRAM_MANAGER_URL" "TRAM_WORKER_PORT" "TRAM_WORKER_INGRESS_PORT" "TRAM_SCHEMA_DIR" "TRAM_MIB_DIR" "TRAM_DATA_DIR" "TRAM_DLQ_SPOOL_DIR")) }}
             - name: {{ $key }}
               valueFrom:
                 secretKeyRef:
                   name: {{ $ref.secretName }}
                   key: {{ $ref.secretKey }}
+            {{- end }}
             {{- end }}
             {{- if .Values.apiKey }}
             - name: TRAM_API_KEY

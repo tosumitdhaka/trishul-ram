@@ -215,7 +215,9 @@ in manager/worker pods. `TRAM_NODE_ID`, `TRAM_MODE`, `TRAM_MANAGER_URL`,
 `TRAM_WORKER_*`, and the `/data` directory vars (`TRAM_SCHEMA_DIR`,
 `TRAM_MIB_DIR`, `TRAM_DATA_DIR`, `TRAM_DLQ_SPOOL_DIR`) are always computed by the
 chart, and a `values.env` entry with one of those names is **dropped** for
-manager/worker pods instead of being merged. In particular a
+manager/worker pods instead of being merged (the same drop applies to
+`envSecret` entries with those names, which render after the topology wiring).
+In particular a
 `TRAM_MANAGER_URL=http://localhost:8765` set via `values.env` for the standalone
 topology no longer leaks into worker pods after
 `helm upgrade --reuse-values --set manager.enabled=true` (previously the duplicate
