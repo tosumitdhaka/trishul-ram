@@ -503,3 +503,32 @@ In manager+worker mode the full `errors` list is sent in the worker callback pay
 ## Adding a New Protocol
 
 See `docs/connectors.md` for the 3-step process.
+
+## Protobuf Passthrough (v1.7.0)
+
+`PipelineConfig.protobuf_passthrough: bool = false` — opt-in execution path for pipelines that
+only transport Protobuf records. When enabled and eligible, length-delimited frames are validated
+individually (each message is parsed enough to detect malformed data and obtain accurate counts),
+and the **original message bytes** are re-framed and written through the sinks without the
+`MessageToDict`/`ParseDict` dictionary round trip.
+
+**Eligibility** (checked at registration; every unmet condition is listed in the rejection):
+`serializer_in` and `serializer_out` must both be `protobuf` with identical schema content
+(compared by content hash, not path), identical `message_class`, and `length_delimited` framing;
+no schema registry configured on the pipeline **or via the `TRAM_SCHEMA_REGISTRY_URL` env default**
+(Confluent magic-byte framing wraps the frame stream); no global or per-sink transforms; no sink
+conditions; no per-sink serializer overrides; no record-field-dependent filename templates;
+local file sinks only (Kafka chunking is not eligible); DLQ off.
+
+**Batch pipelines only.** Stream pipelines always use the dictionary path (the micro-batch flush
+buffer is unsupported by passthrough) and log one runtime WARNING. The batch path re-checks
+eligibility at run start and falls back to the dictionary path with a WARNING on any runtime
+mismatch.
+
+**Byte-preservation caveat:** unknown-field retention and encoding details may differ from the
+dictionary round trip even when known-field values match — outputs are the original input bytes,
+not re-serialized dictionaries.
+
+Measured (kind, 500m, `fsweep_protobuf` shape): 333,333 rec/s median vs the 11,111 fresh v1.6.1
+anchor (30×; pilot target was 2×), byte-identical output, peak RSS 151 vs 247 Mi — evidence in
+`scripts/perf/results/v170-passthrough-pilot/`.

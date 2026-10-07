@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "tram"
-version = "1.6.1"
+version = "1.7.0"
 description = "Trishul Real-time Aggregation & Mediation — telecom data pipeline daemon"
 readme = "README.md"
 requires-python = ">=3.13"
@@ -86,6 +86,14 @@ azure = ["azure-storage-blob>=12.0,<13.0"]     # ~30 MB; exclude from all
 
 # ── Streaming / API connectors ─────────────────────────────────────────────
 websocket = ["websockets>=12.0,<15.0"]
+
+# ── HTTP server runtime (v1.7.0 Pilot A) ──────────────────────────────────
+# Opt-in accelerated uvicorn runtime selected via TRAM_HTTP_ACCELERATED=1:
+# uvloop event loop + httptools HTTP parser. Both are optional — the daemon
+# falls back to the default asyncio/h11 runtime with a WARNING when either is
+# missing. Kept out of 'all': uvloop is Linux-only and the pilot treats the
+# accelerated runtime as an explicitly selectable, rollback-able option.
+http_accel = ["uvloop>=0.21", "httptools>=0.6"]
 
 # ── Kubernetes connector ───────────────────────────────────────────────────
 k8s = ["kubernetes>=29,<32"]

@@ -5,7 +5,7 @@
 image:
   registry: ""               # e.g. ghcr.io
   repository: OWNER/tram     # replace OWNER with your registry namespace
-  tag: "1.6.1"
+  tag: "1.7.0"
   pullPolicy: IfNotPresent
 
 ## Standalone mode: single-replica StatefulSet (replicaCount=1).
@@ -108,6 +108,7 @@ env:
   # TRAM_OTEL_SERVICE: tram
   # TRAM_WATCH_PIPELINES: "false"
   # TRAM_PIPELINE_SYNC_INTERVAL: "30"
+  # TRAM_HTTP_ACCELERATED: "0"  # accelerated HTTP runtime (uvloop + httptools; requires tram[http_accel] in the image)
 
 envSecret:
   TRAM_AUTH_SECRET:

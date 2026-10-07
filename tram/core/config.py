@@ -86,6 +86,27 @@ def ai_audit_enabled() -> bool:
     return raw != "0"
 
 
+def http_accelerated() -> bool:
+    """``TRAM_HTTP_ACCELERATED`` (v1.7.0 Pilot A) — default OFF, fails closed.
+
+    "1" selects the accelerated uvicorn runtime (uvloop event loop +
+    httptools HTTP parser) at every in-process HTTP server start site
+    (daemon API, worker agent, webhook ingress). The flag only takes effect
+    where both packages are importable — a missing package logs a WARNING
+    and the server starts on the default asyncio/h11 runtime, never crashing.
+    Any unrecognized value is logged at WARNING and treated as disabled, so
+    a typo'd value never silently flips a deployment onto an untested
+    runtime (the D.2/E.2 flag convention, inverted for a default-off flag).
+    """
+    raw = os.environ.get("TRAM_HTTP_ACCELERATED", "0")
+    if raw not in ("0", "1"):
+        logger.warning(
+            'Unrecognized TRAM_HTTP_ACCELERATED value — treating as disabled ("0")',
+            extra={"value": raw},
+        )
+    return raw == "1"
+
+
 # TRAM_STATE_MAX_BYTES default: 20 MiB. Justification — the design F.1 §3.2a
 # blob bound is ~2.5 MB at 50k counter keys; 20 MiB is ~8× that, so a
 # ``window_aggregate`` group/window blob has room to grow between polls

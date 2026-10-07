@@ -1498,6 +1498,27 @@ class PipelineConfig(BaseModel):
     # Parallelism
     thread_workers: int = Field(default=1, ge=1)   # intra-node worker threads per pipeline run
     parallel_sinks: bool = False   # fan-out sink writes concurrently
+    # Validated same-schema Protobuf passthrough (v1.7.0 pilot B). Opt-in and
+    # default-off: eligible pipelines transport validated Protobuf frames
+    # end-to-end without the dictionary round trip, preserving the original
+    # message bytes. Byte-preservation caveat: unknown-field retention and
+    # encoding details may differ from today's dictionary round trip even when
+    # known-field values match. Ineligible configurations are rejected at
+    # registration with every unmet condition listed.
+    protobuf_passthrough: bool = Field(
+        default=False,
+        description=(
+            "Opt-in validated same-schema Protobuf passthrough. Eligible "
+            "pipelines transport validated Protobuf frames end-to-end without "
+            "the dictionary round trip, preserving the original message bytes. "
+            "Caveat: unknown-field retention and encoding details may differ "
+            "from today's dictionary round trip even when known-field values "
+            "match. Registration rejects ineligible pipelines, listing every "
+            "unmet condition. Batch pipelines only — stream pipelines always "
+            "use the dictionary path (the micro-batch flush buffer is "
+            "unsupported by passthrough) with a runtime WARNING."
+        ),
+    )
     workers: WorkersConfig | None = None
     kubernetes: KubernetesServiceConfig | None = None
 
@@ -1703,6 +1724,29 @@ class PipelineConfig(BaseModel):
                         "max_records/max_time/max_bytes; use file_mode=single"
                     )
                 sink.file_mode = "single"
+        return self
+
+    @model_validator(mode="after")
+    def check_protobuf_passthrough_eligibility(self) -> PipelineConfig:
+        """Reject pipelines that opt into ``protobuf_passthrough`` but are not
+        eligible (v1.7.0 pilot B), listing EVERY unmet condition.
+
+        Runs at registration/load (the router wraps the ConfigError as a 400).
+        The predicate is re-checked at run start too; a runtime re-check
+        failure falls back to the existing dictionary path with one WARNING —
+        this gate makes the unsupported configuration a validation error
+        instead of a silent no-op.
+        """
+        if not self.protobuf_passthrough:
+            return self
+        from tram.pipeline.protobuf_passthrough import protobuf_passthrough_reasons
+
+        reasons = protobuf_passthrough_reasons(self)
+        if reasons:
+            raise ValueError(
+                "protobuf_passthrough is not supported for this pipeline: "
+                + "; ".join(reasons)
+            )
         return self
 
 

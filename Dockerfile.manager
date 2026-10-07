@@ -74,7 +74,7 @@ RUN apt-get update && \
 COPY --from=builder /build/dist/*.whl .
 RUN --mount=type=cache,target=/root/.cache/pip whl=$(ls *.whl) && \
     pip install \
-        "${whl}[manager,k8s,metrics,watch,mib,protobuf_ser,asn1,avro,ai-anthropic,ai-openai,snmp]" && \
+        "${whl}[manager,k8s,metrics,watch,mib,protobuf_ser,asn1,avro,ai-anthropic,ai-openai,snmp,http_accel]" && \
     rm *.whl
 
 COPY files/mibs_compiled/ /mibs/

@@ -1,0 +1,24 @@
+syntax = "proto3";
+
+message CdrRecord {
+  string record_id = 1;
+  string timestamp = 2;
+  string msisdn = 3;
+  string imsi = 4;
+  string imei = 5;
+  int64 cell_id = 6;
+  string event_type = 7;
+  string direction = 8;
+  int64 duration_s = 9;
+  int64 bytes_up = 10;
+  int64 bytes_down = 11;
+  string rat = 12;
+  bool roaming = 13;
+  double charge_amount = 14;
+  string currency = 15;
+  string session_start = 16;
+  string session_end = 17;
+  string apn = 18;
+  string sgsn_addr = 19;
+  string ggsn_addr = 20;
+}

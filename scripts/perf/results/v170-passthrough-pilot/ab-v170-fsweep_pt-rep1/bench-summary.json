@@ -1,0 +1,37 @@
+{
+  "run_id": "ab-v170-fsweep_pt-rep1",
+  "side": "v170",
+  "scenario": "fsweep_pt",
+  "rep": 1,
+  "scenario_note": "local .pb \u2192 validated same-schema passthrough (v1.7.0 Pilot B)",
+  "rep_started_at": "2026-10-07T11:26:22.941844+00:00",
+  "run_one_rc": 0,
+  "aborted": null,
+  "run_history": {
+    "rows": 1,
+    "records_in": 100000,
+    "records_out": 100000,
+    "records_skipped": 0,
+    "bytes_in": 27996680,
+    "bytes_out": 27996680,
+    "errors": 0,
+    "error_msgs": [],
+    "statuses": [
+      "success"
+    ],
+    "wall_s": 0.395907,
+    "nodes": [
+      "trishul-ram-worker-0"
+    ]
+  },
+  "kafka_offsets": null,
+  "metrics": {
+    "records_in": 100000,
+    "records_out": 100000,
+    "records_skipped": 0,
+    "errors": 0,
+    "duration_s": 0.4,
+    "throughput_in_recs_s": 250000.0,
+    "throughput_out_recs_s": 250000.0
+  }
+}
