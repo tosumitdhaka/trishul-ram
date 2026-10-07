@@ -127,8 +127,8 @@ class TestFlagOff:
             serve(config)
 
         _, kwargs = mock_run.call_args
-        assert "loop" not in kwargs
-        assert "http" not in kwargs
+        assert kwargs["loop"] == "asyncio"
+        assert kwargs["http"] == "h11"
 
     def test_worker_flag_off_passes_no_loop_or_http_kwargs(self, monkeypatch):
         """Worker agent + webhook ingress also keep today's args when flag is off."""
@@ -148,13 +148,13 @@ class TestFlagOff:
 
         assert mock_run.call_count == 2
         for call in mock_run.call_args_list:
-            assert "loop" not in call.kwargs
-            assert "http" not in call.kwargs
+            assert call.kwargs["loop"] == "asyncio"
+            assert call.kwargs["http"] == "h11"
 
     def test_flag_accessor_defaults_off(self, monkeypatch):
         """http_accelerated() reads the env each call and defaults to off."""
         monkeypatch.delenv("TRAM_HTTP_ACCELERATED", raising=False)
-        assert _http_accel_kwargs() == {}
+        assert _http_accel_kwargs() == {"loop": "asyncio", "http": "h11"}
         monkeypatch.setenv("TRAM_HTTP_ACCELERATED", "1")
         # Guard the import: the dev venv does not install http_accel extras.
         guard = _import_guard(mock_importable={"uvloop", "httptools"}, missing=set())
@@ -234,9 +234,9 @@ class TestFlagOnMissingPackage:
                 serve(config)
 
         _, kwargs = mock_run.call_args
-        assert "loop" not in kwargs
-        assert "http" not in kwargs
-        expected = " and ".join(missing if isinstance(missing, list) else [missing])
+        assert kwargs["loop"] == "asyncio"
+        assert kwargs["http"] == "h11"
+        expected = " and ".join(missing_list)
         assert f"TRAM_HTTP_ACCELERATED=1 but {expected} not installed" in caplog.text
 
 

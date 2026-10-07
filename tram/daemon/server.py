@@ -19,11 +19,16 @@ def _http_accel_kwargs() -> dict:
 
     Flag on + uvloop/httptools importable → ``loop="uvloop"``,
     ``http="httptools"``. Flag off (default), or either package missing →
-    ``{}`` (today's default asyncio/h11 runtime) with one WARNING naming the
-    missing package — never crashes on missing dependencies.
+    explicit default runtime ``loop="asyncio"``, ``http="h11"`` (never
+    ``{}``: with the http_accel extra installed, uvicorn's auto selection
+    would silently pick uvloop/httptools even with the flag off — installed
+    must not mean selected) with one WARNING naming the missing package —
+    never crashes on missing dependencies.
     """
+    default_runtime = {"loop": "asyncio", "http": "h11"}
     if not http_accelerated():
-        return {}
+        return dict(default_runtime)
+    missing: list[str] = []
     missing: list[str] = []
     try:
         import uvloop  # noqa: F401
@@ -39,7 +44,7 @@ def _http_accel_kwargs() -> dict:
             "using default asyncio/h11 runtime",
             " and ".join(missing),
         )
-        return {}
+        return dict(default_runtime)
     return {"loop": "uvloop", "http": "httptools"}
 
 
