@@ -169,7 +169,7 @@ unconfirmed work lives in the backlog at the bottom.
 - [x] **HTTP ingress pilot** — measured on kind (500m, both runtimes fresh-registered): p95 3.05→1.76 ms (−42%) and p50 −30% at moderate offered load, zero errors; throughput plateau unchanged (±6%, 573–678 rec/s both runtimes — bottleneck is downstream pipeline processing, ≥25% target not met). Ships opt-in, default off, with the explicit asyncio/h11 baseline pin and startup runtime reporting; uvloop/httptools in images via the `http_accel` extra
 - [x] **Protobuf pilot** — validated same-schema passthrough measured: 333,333 rec/s median (30× the 11,111 fresh v1.6.1 anchor; target 2×), byte-identical output (sha256), peak RSS 151 vs 247 Mi. Eligibility is strict (same-schema content, no transforms/conditions, local sinks, DLQ off) — no current real pipeline qualifies; see backlog note. Descriptor-aware conversion not pursued (pilot 1 removed the bottleneck; upb C-accelerated conversion remains the default path)
 - [x] Select shipping features from measured compatibility/performance results — both pilots ship default-off opt-in; process-separated ingress and native-message plugin APIs remain conditional follow-up designs
-- [ ] Independent full-diff review and release gate
+- [x] Independent full-diff review and release gate
 
 ## Post-v1.5.0 — AI Provider Layer (open design question)
 

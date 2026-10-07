@@ -5,6 +5,15 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ---
 
+## [1.7.0] - 2026-10-07
+
+### Added
+- `TRAM_HTTP_ACCELERATED` opt-in HTTP runtime: when set to `1` and `uvloop`+`httptools` are importable (new `http_accel` extra), all in-process HTTP servers start with `loop=uvloop`/`http=httptools`; missing dependencies log one WARNING and use the default runtime; flag off (default) explicitly pins `asyncio`/`h11` so the default runtime is deterministic regardless of installed extras. Startup logs the actually-active loop and HTTP parser per server. Measured on kind (500m workers): webhook ingress p95 3.05→1.76 ms (−42%) and p50 −30% at moderate offered load, zero errors; the sustainable-throughput plateau is unchanged (the ≥25% pilot target was not met — the bottleneck is downstream of HTTP parsing) — ships default-off. Documented in `.env.example`, `docs/deployment.md`, and Helm values
+- `protobuf_passthrough` opt-in pipeline flag: validated same-schema Protobuf passthrough for batch pipelines. Eligibility is checked at registration with every unmet condition listed (identical schema content by hash, same message_class, length-delimited framing, no schema registry — including the `TRAM_SCHEMA_REGISTRY_URL` env default —, no transforms/conditions/serializer overrides, no record-field-dependent filename templates, local sinks only, DLQ off); each frame is validated (malformed data fails with the dictionary path's exact error semantics) and the original message bytes are written through unchanged. A runtime re-check falls back to the dictionary path with one WARNING. Measured on kind (500m): 333,333 rec/s median vs the fresh v1.6.1 anchor of 11,111 (30×; pilot target was 2×), byte-identical output, peak RSS 151 vs 247 Mi
+
+### Performance
+- Pilot evidence committed under `scripts/perf/results/v170-passthrough-pilot/`, `v170-http-pilot/`, and `v170-protobuf-anchor/`; backlog rows added for the flag-independent stream re-adoption gap, real-pipeline passthrough eligibility, and the accelerated-runtime saturation check
+
 ## [1.6.1] - 2026-10-07
 
 ### Changed
