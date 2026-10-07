@@ -29,6 +29,7 @@ All configuration is via environment variables (12-factor).
 | `TRAM_LOG_LEVEL` | `INFO` | Log level: DEBUG, INFO, WARNING, ERROR |
 | `TRAM_LOG_FORMAT` | `json` | Log format: `json` or `text` |
 | `TRAM_WORKERS` | `1` | Uvicorn worker count |
+| `TRAM_HTTP_ACCELERATED` | `0` | Accelerated HTTP runtime (v1.7.0 Pilot A). `1` selects the uvloop event loop + httptools HTTP parser for every in-process server (daemon API, worker agent, webhook ingress); `0` (default) keeps the standard asyncio/h11 runtime, byte-for-byte today's behavior. Requires the optional extra `pip install tram[http_accel]`; if either package is missing the flag is ignored with a WARNING and the default runtime is used (never crashes). The startup line `HTTP runtime: loop=... http=...` reports the runtime that actually engaged — installed dependencies are not assumed active. uvloop is Linux-only; keep `0` on other platforms |
 | `TRAM_RELOAD_ON_START` | `true` | Auto-load pipelines from TRAM_PIPELINE_DIR at startup |
 | `TRAM_SMTP_HOST` | `localhost` | SMTP host for email alert actions |
 | `TRAM_SMTP_PORT` | `587` | SMTP port |

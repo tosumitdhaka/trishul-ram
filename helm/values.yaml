@@ -188,6 +188,12 @@ env:
   ## using them fail validation and the internal endpoints 404. Fails open on
   ## unrecognized values.
   TRAM_STATEFUL_TRANSFORMS: "1"
+  ## Accelerated HTTP runtime (v1.7.0 Pilot A): "1" selects the uvloop event
+  ## loop + httptools HTTP parser for every in-process server (daemon API,
+  ## worker agent, webhook ingress). Requires tram[http_accel] in the image —
+  ## a missing package is ignored with a WARNING (never crashes). "0" (default)
+  ## keeps today's asyncio/h11 runtime.
+  # TRAM_HTTP_ACCELERATED: "0"
   ## SNMP library stack (v1.5.0, GH #72): "legacy" (pysnmp, the pre-v1.5.0
   ## behavior) | "trishul" (trishul-smi / trishul-snmp). This generic env map
   ## is applied to BOTH the manager and worker planes — set the SAME value

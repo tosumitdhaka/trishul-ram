@@ -2,14 +2,126 @@
 
 from __future__ import annotations
 
+import asyncio
 import logging
 import os
 import signal
+from collections.abc import Mapping
 
-from tram.core.config import AppConfig
+from tram.core.config import AppConfig, http_accelerated
 from tram.core.log_config import setup_logging
 
 logger = logging.getLogger(__name__)
+
+
+def _http_accel_kwargs() -> dict:
+    """uvicorn ``loop``/``http`` kwargs for TRAM_HTTP_ACCELERATED.
+
+    Flag on + uvloop/httptools importable → ``loop="uvloop"``,
+    ``http="httptools"``. Flag off (default), or either package missing →
+    ``{}`` (today's default asyncio/h11 runtime) with one WARNING naming the
+    missing package — never crashes on missing dependencies.
+    """
+    if not http_accelerated():
+        return {}
+    missing: list[str] = []
+    try:
+        import uvloop  # noqa: F401
+    except ImportError:
+        missing.append("uvloop")
+    try:
+        import httptools  # noqa: F401
+    except ImportError:
+        missing.append("httptools")
+    if missing:
+        logger.warning(
+            "TRAM_HTTP_ACCELERATED=1 but %s not installed; "
+            "using default asyncio/h11 runtime",
+            " and ".join(missing),
+        )
+        return {}
+    return {"loop": "uvloop", "http": "httptools"}
+
+
+def _loop_runtime_name(loop) -> str:
+    """Short event-loop module name ('uvloop' | 'asyncio') from the ACTUAL class."""
+    cls = loop if isinstance(loop, type) else type(loop)
+    module = (getattr(cls, "__module__", "") or "").split(".")[0]
+    return "uvloop" if module == "uvloop" else "asyncio"
+
+
+def _http_runtime_name(protocol_class) -> str:
+    """Short HTTP-parser name from the ACTUAL uvicorn protocol class.
+
+    ``uvicorn.protocols.http.httptools_impl.HttpToolsProtocol`` → 'httptools'
+    ``uvicorn.protocols.http.h11_impl.H11Protocol``          → 'h11'
+    """
+    module = getattr(protocol_class, "__module__", "") or ""
+    if module.startswith("uvicorn.protocols.http.httptools_impl"):
+        return "httptools"
+    if module.startswith("uvicorn.protocols.http.h11_impl"):
+        return "h11"
+    try:
+        from uvicorn.protocols.http import h11_impl, httptools_impl
+    except ImportError:
+        return getattr(protocol_class, "__name__", str(protocol_class))
+    if issubclass(protocol_class, httptools_impl.HttpToolsProtocol):
+        return "httptools"
+    if issubclass(protocol_class, h11_impl.H11Protocol):
+        return "h11"
+    return getattr(protocol_class, "__name__", str(protocol_class))
+
+
+def _probe_event_loop(loop: str):
+    """Create a throwaway event loop of the class uvicorn will actually use."""
+    try:
+        from uvicorn.config import LOOP_FACTORIES as loop_map
+    except ImportError:  # uvicorn < 0.36 — LOOP_SETUPS installed the policy
+        from uvicorn.config import LOOP_SETUPS as loop_map
+
+    resolved = loop_map.get(loop, loop)
+    if resolved is None:
+        return asyncio.new_event_loop()
+    from uvicorn.config import import_from_string
+
+    setup = import_from_string(resolved)
+    factory = setup()
+    if factory is None:  # pre-0.36 loop_setup: the policy is already installed
+        return asyncio.new_event_loop()
+    return factory()
+
+
+def _resolve_active_runtime(loop: str, http: str) -> tuple[str, str]:
+    """Resolve the ACTUAL event-loop and HTTP-parser uvicorn will serve with.
+
+    Uses uvicorn's own factories/mappings (``uvicorn.config.LOOP_FACTORIES`` /
+    ``HTTP_PROTOCOLS``), then probes them for the concrete classes — an
+    installed dependency that never engaged is not reported as active.
+    """
+    from uvicorn.config import HTTP_PROTOCOLS, import_from_string
+
+    probe = _probe_event_loop(loop)
+    try:
+        loop_name = _loop_runtime_name(probe)
+    finally:
+        if not isinstance(probe, type):
+            probe.close()
+
+    protocol_class = import_from_string(HTTP_PROTOCOLS.get(http, http))
+    return loop_name, _http_runtime_name(protocol_class)
+
+
+def _report_runtime(uvicorn_kwargs: Mapping) -> None:
+    """Log ONE INFO line naming the ACTUAL event loop + HTTP parser serving."""
+    try:
+        loop_name, http_name = _resolve_active_runtime(
+            uvicorn_kwargs.get("loop", "auto"),
+            uvicorn_kwargs.get("http", "auto"),
+        )
+    except Exception:
+        logger.warning("Unable to resolve the active HTTP runtime for reporting")
+        return
+    logger.info("HTTP runtime: loop=%s http=%s", loop_name, http_name)
 
 
 def serve(config: AppConfig | None = None) -> None:
@@ -50,25 +162,33 @@ def serve(config: AppConfig | None = None) -> None:
                 "ssl_keyfile": config.tls_keyfile,
             }
 
+        # Resolved once (main thread) so the accelerated-runtime WARNING —
+        # if any — is logged once, not once per server thread.
+        http_accel_kwargs = _http_accel_kwargs()
+
         def _run_agent():
-            uvicorn.run(
-                worker_app,
-                host=config.host,
-                port=agent_port,
-                log_config=None,
-                access_log=False,
+            uvicorn_kwargs = {
+                "host": config.host,
+                "port": agent_port,
+                "log_config": None,
+                "access_log": False,
                 **tls_kwargs,
-            )
+                **http_accel_kwargs,
+            }
+            _report_runtime(uvicorn_kwargs)
+            uvicorn.run(worker_app, **uvicorn_kwargs)
 
         def _run_ingress():
-            uvicorn.run(
-                ingress_app,
-                host=config.host,
-                port=ingress_port,
-                log_config=None,
-                access_log=False,
+            uvicorn_kwargs = {
+                "host": config.host,
+                "port": ingress_port,
+                "log_config": None,
+                "access_log": False,
                 **tls_kwargs,
-            )
+                **http_accel_kwargs,
+            }
+            _report_runtime(uvicorn_kwargs)
+            uvicorn.run(ingress_app, **uvicorn_kwargs)
 
         agent_thread = threading.Thread(
             target=_run_agent,
@@ -156,6 +276,7 @@ def serve(config: AppConfig | None = None) -> None:
         log_config=None,  # We handle logging ourselves
         access_log=False,
     )
+    uvicorn_kwargs.update(_http_accel_kwargs())
     if config.tls_certfile and config.tls_keyfile:
         uvicorn_kwargs["ssl_certfile"] = config.tls_certfile
         uvicorn_kwargs["ssl_keyfile"] = config.tls_keyfile
@@ -164,4 +285,5 @@ def serve(config: AppConfig | None = None) -> None:
             extra={"certfile": config.tls_certfile},
         )
 
+    _report_runtime(uvicorn_kwargs)
     uvicorn.run(app, **uvicorn_kwargs)
