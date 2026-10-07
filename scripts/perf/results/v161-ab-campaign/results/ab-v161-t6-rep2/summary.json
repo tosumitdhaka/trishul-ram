@@ -1,0 +1,22 @@
+{
+  "runs_total": 7,
+  "runs_completed": 7,
+  "records_in": 700000,
+  "records_out": 693434,
+  "records_skipped": 0,
+  "bytes_in": 366652412,
+  "bytes_out": 468836382,
+  "dlq_count": 0,
+  "run_duration_ms": {
+    "count": 7,
+    "total_ms": 40370.735,
+    "avg_ms": 5767.248,
+    "max_ms": 7961.132
+  },
+  "errors": [],
+  "error_count": 0,
+  "run_id": "ab-v161-t6-rep2",
+  "pipeline": "t6-sink-conditions",
+  "api_url": "http://127.0.0.1:30001",
+  "collected_at": "2026-10-07T07:36:02.262564+00:00"
+}

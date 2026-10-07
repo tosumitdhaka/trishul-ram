@@ -1,0 +1,37 @@
+{
+  "run_id": "ab-v161-t6-rep4",
+  "side": "v161",
+  "scenario": "t6",
+  "rep": 4,
+  "scenario_note": "2 conditional sinks, thread_workers 4 (compile-once conditions)",
+  "rep_started_at": "2026-10-07T07:36:27.782562+00:00",
+  "run_one_rc": 0,
+  "aborted": null,
+  "run_history": {
+    "rows": 1,
+    "records_in": 100000,
+    "records_out": 99062,
+    "records_skipped": 0,
+    "bytes_in": 52378916,
+    "bytes_out": 66976626,
+    "errors": 0,
+    "error_msgs": [],
+    "statuses": [
+      "success"
+    ],
+    "wall_s": 1.769197,
+    "nodes": [
+      "trishul-ram-worker-0"
+    ]
+  },
+  "kafka_offsets": null,
+  "metrics": {
+    "records_in": 100000,
+    "records_out": 99062,
+    "records_skipped": 0,
+    "errors": 0,
+    "duration_s": 1.8,
+    "throughput_in_recs_s": 55555.6,
+    "throughput_out_recs_s": 55034.4
+  }
+}

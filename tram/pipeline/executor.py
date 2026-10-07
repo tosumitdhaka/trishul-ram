@@ -74,15 +74,63 @@ def _payload_size_bytes(payload) -> int:
         return len(str(payload).encode("utf-8"))
 
 
-def _filter_by_condition(records: list[dict], condition: str) -> list[dict]:
-    """Return subset of records where condition evaluates to truthy."""
+# One evaluator instance PER THREAD (issue #80 cost center 2, mirroring the
+# filter_rows transform): the executor shares one instance across
+# ``thread_workers`` chunk threads (and ``parallel_sinks`` fan-out threads),
+# and simpleeval reads ``.names`` off the shared instance, so per-record name
+# binding must never race. Each thread owns its instance; the parsed condition
+# trees are immutable and shared read-only.
+_thread_local = threading.local()
+
+
+def _thread_evaluator():
+    """Return the calling thread's condition evaluator, creating it lazily."""
+    evaluator = getattr(_thread_local, "evaluator", None)
+    if evaluator is None:
+        evaluator = _EvalCls(names={}, functions=_EVAL_FUNCS)
+        _thread_local.evaluator = evaluator
+    return evaluator
+
+
+def _filter_by_condition(
+    records: list[dict], condition: str, *, _cache: dict[str, object] | None = None
+) -> list[dict]:
+    """Return subset of records where condition evaluates to truthy.
+
+    Compile-once (the filter_rows pattern): the condition is parsed to an AST
+    node once and re-used for every record via ``previously_parsed``. The
+    executor passes its instance-level ``_condition_cache`` (keyed by the
+    condition string, naturally bounded by the configured sink conditions); a
+    caller without a cache gets a per-call one, so the string is parsed once
+    per call instead of once per record. Each record binds its own ``names``
+    mapping on the calling thread's evaluator — no shared mutable names state
+    between records or threads. Parse errors and eval errors both surface as
+    ``TramError("Condition eval error: ...")``, exactly as before; empty
+    input short-circuits without parsing, exactly as before.
+    """
     if _EvalCls is None:
         raise TramError("simpleeval is required for conditional routing")
+    if not records:
+        # Parity with the per-record-loop implementation: an empty batch never
+        # parsed the condition (and so never raised on a syntactically bad one).
+        return []
+    cache = _cache if _cache is not None else {}
+    parsed = cache.get(condition)
+    if parsed is None:
+        try:
+            parsed = _EvalCls.parse(condition)
+        except Exception as exc:
+            raise TramError(f"Condition eval error: {condition!r} — {exc}") from exc
+        # The parsed tree is immutable, so a concurrent thread compiling the
+        # same condition string can only store an equivalent tree (dict
+        # read/assign is GIL-atomic) — no lock is needed.
+        cache[condition] = parsed
+    evaluator = _thread_evaluator()
     result = []
     for record in records:
+        evaluator.names = record
         try:
-            evaluator = _EvalCls(names=record, functions=_EVAL_FUNCS)
-            if evaluator.eval(condition):
+            if evaluator.eval(condition, previously_parsed=parsed):
                 result.append(record)
         except Exception as exc:
             raise TramError(f"Condition eval error: {condition!r} — {exc}") from exc
@@ -415,6 +463,10 @@ class PipelineExecutor:
         # Circuit breaker state: {sink_key: (failure_count, open_until_monotonic)}
         self._cb_state: dict[str, tuple[int, float]] = {}
         self._cb_lock = threading.Lock()
+        # Compile-once sink-condition cache: {condition string: parsed AST}.
+        # Instance-scoped so growth is bounded by the configured sink
+        # conditions of the runs this executor performs.
+        self._condition_cache: dict[str, object] = {}
 
     # ── Rate limiting ────────────────────────────────────────────────────────────
 
@@ -897,7 +949,9 @@ class PipelineExecutor:
                     per_sink_ser = None
 
                 if condition:
-                    filtered = _filter_by_condition(records_in, condition)
+                    filtered = _filter_by_condition(
+                        records_in, condition, _cache=self._condition_cache
+                    )
                 else:
                     filtered = list(records_in)
 

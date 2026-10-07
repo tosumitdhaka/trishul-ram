@@ -1,0 +1,60 @@
+{
+  "run_id": "ab-v160-t4-rep2",
+  "started_at": "2026-10-07T07:11:08.950207+00:00",
+  "finished_at": "2026-10-07T07:11:25.178397+00:00",
+  "namespace": "trishul-ram",
+  "sampling": {
+    "duration_s": 15.0,
+    "interval_s": 5.0
+  },
+  "env": {
+    "tram_version": "1.6.0",
+    "helm_values": {
+      "source": "/home/dhaka/trishul/trishul-ram/scripts/perf/infra/values-mgrworker.yaml",
+      "image": {
+        "repository": null,
+        "tag": null
+      },
+      "manager": {
+        "enabled": true,
+        "image": {
+          "repository": "trishul-ram-manager",
+          "tag": null
+        },
+        "replicas": 1,
+        "resources": {
+          "cpu": "500m",
+          "memory": "1Gi"
+        }
+      },
+      "worker": {
+        "replicas": 3,
+        "image": {
+          "repository": "trishul-ram-worker",
+          "tag": null
+        },
+        "resources": {
+          "cpu": "500m",
+          "memory": "1Gi"
+        }
+      },
+      "service": {
+        "type": "NodePort",
+        "nodePort": 30001
+      },
+      "env_snmp_stack": null
+    },
+    "node_allocatable": {
+      "cpu": "12",
+      "memory": "16120920Ki"
+    },
+    "running_images": {
+      "kafka-0": "docker.io/apache/kafka:3.9.0",
+      "sftp-0": "docker.io/atmoz/sftp:latest",
+      "trishul-ram-manager-0": "docker.io/library/trishul-ram-manager:local-20261006092713",
+      "trishul-ram-worker-0": "docker.io/library/trishul-ram-worker:local-20261006092713",
+      "trishul-ram-worker-1": "docker.io/library/trishul-ram-worker:local-20261006092713",
+      "trishul-ram-worker-2": "docker.io/library/trishul-ram-worker:local-20261006092713"
+    }
+  }
+}

@@ -153,6 +153,23 @@ unconfirmed work lives in the backlog at the bottom.
 - [ ] **Wave 3 — packaging + re-measure (GH #79)** — serializer extras in worker/standalone images; harness re-run on v1.6.0 (same matrices); sizing-calculator doc refreshed with measured numbers
 - [ ] Independent full-diff review + release gate + tag
 
+## v1.6.1 — Targeted Performance Follow-up (locked scope)
+
+> Decided 2026-10-07 after the corrected v1.6.0 capacity review and local paired experiments. Scope is locked to the three changes below plus their compatibility checks and affected-pipeline re-measurement. Operation-level gains are not whole-pipeline forecasts. Evidence: [`perf-followup-assessment-2026-10-07.md`](ideas/perf-followup-assessment-2026-10-07.md); release scope and proposed subsequent work: [`perf-v161-v170-plan.md`](plans/perf-v161-v170-plan.md).
+
+- [x] **Timestamp handling** — ISO-first fast path with numeric-epoch and explicit-format precedence retained ahead of it and the interpretation of all currently accepted inputs preserved; faster default ISO formatting with byte-identical default output strings; shared benefits for timestamp normalization, counter delta, and window aggregation
+- [x] **Compile-once sink conditions** — reuse parsed expressions and thread-local evaluators for conditional routing, preserving names isolation and the existing routing error type and message
+- [x] **Bounded Kafka sink fast path** — use executor-supplied output count and actual payload length to avoid re-parsing/re-sizing eligible keyless payloads; retain existing fallback, acknowledgements, ordering, and retry semantics; pin the expected single-vs-multi message behavior for near-cap batches (actual payload length replaces the current sum-of-per-record sizing)
+- [x] Semantic regression checks, deployment-Python full-pipeline re-measurement (target: ≥20% improvement on affected pipelines, not every workload), independent full-diff review, and release gate
+
+## v1.7.0 — HTTP and Protobuf Performance (proposal)
+
+> Proposed 2026-10-07; implementation scope is not locked. Benchmark against the completed v1.6.1 baseline before selecting changes. See [`perf-v161-v170-plan.md`](plans/perf-v161-v170-plan.md) for staged scope and acceptance targets.
+
+- [ ] **HTTP ingress pilot** — compare existing stack with `uvloop`/`httptools`, measure CPU throttling/event-loop lag and completion latency, and tune bounded concurrency; retain the current FastAPI API and webhook queue ownership
+- [ ] **Protobuf pilot** — validated same-schema passthrough for eligible pipelines, then descriptor-aware conversion if transformed workloads justify it; retain existing dictionary/plugin contracts as the default
+- [ ] Select shipping features from measured compatibility/performance results; process-separated ingress and native-message plugin APIs remain conditional follow-up designs
+
 ## Post-v1.5.0 — AI Provider Layer (open design question)
 
 - [ ] treq `_providers/` vendoring (GH #71) + Wave C (A9 streaming; B3–B6 = MIB compile-error explanation, alert-rule authoring, throughput-anomaly explanation, connector test-failure explanation, per `docs/plans/ai-expansion-plan.md`) + A.2/A.3 plugin docstrings/examples (GH #41/#42) — **not scheduled to a version**; the maintainer runs a design round after the v1.6.0 re-measurement reevaluation. Calibration from the 2026-09-28 plan review: vendor 4–6 days, Wave C 2–3 weeks, A.2/A.3 ~1 week; treq's portable tests ~1,346 lines, no bedrock coverage.
@@ -203,6 +220,12 @@ unconfirmed work lives in the backlog at the bottom.
 - [ ] **Manager HA** — standby manager with DB-backed leader election (GH #68)
 - [ ] **Graceful worker drain** — `POST /api/workers/{id}/drain`; Helm pre-stop hook (GH #68)
 - [x] **Coverage target increase** — CI threshold raised to 75%; current coverage ~80%
+
+### Performance follow-ups (deferred from the v1.6.0 review, non-blocking, outside the locked v1.6.1 scope)
+- [ ] **Rate-limit sleeps hold the flush lock** — stream `_flush_now` holds `flush_lock` across per-record rate-limit sleeps; move sleeps outside the lock
+- [ ] **`_route_stateful_flush_records` lock discipline** — takes no `flush_lock` (currently benign: called post-join); document or align with the flush path
+- [ ] **`_stream_run_threaded(flush_lock=None)` NIT** — `None` default while `_flush_now` unconditionally acquires it; latent footgun
+- [ ] **Parquet controlled re-measure** — the v1.6.0-vs-v1.5.1 parquet cell is unproven; one controlled re-measure needed (`docs/ideas/perf-v160-vs-v151-comparison-2026-10.md`)
 
 ### Telecom Domain Hardening (from `docs/reviews/telecom-domain-review.md`)
 - [ ] **SNMP trap community-string verification** — trap source does not verify the community string (spoofing vector) (GH #65)

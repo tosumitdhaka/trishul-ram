@@ -1,0 +1,37 @@
+{
+  "run_id": "ab-v160-s7k-rep3",
+  "side": "v160",
+  "scenario": "s7k",
+  "rep": 3,
+  "scenario_note": "kafka sink, KEYLESS (v1.6.1 fast-path eligible)",
+  "rep_started_at": "2026-10-07T07:24:05.774785+00:00",
+  "run_one_rc": 0,
+  "aborted": null,
+  "run_history": {
+    "rows": 1,
+    "records_in": 100000,
+    "records_out": 100000,
+    "records_skipped": 0,
+    "bytes_in": 52378916,
+    "bytes_out": 56278896,
+    "errors": 0,
+    "error_msgs": [],
+    "statuses": [
+      "success"
+    ],
+    "wall_s": 16.106597,
+    "nodes": [
+      "trishul-ram-worker-0"
+    ]
+  },
+  "kafka_offsets": null,
+  "metrics": {
+    "records_in": 100000,
+    "records_out": 100000,
+    "records_skipped": 0,
+    "errors": 0,
+    "duration_s": 16.1,
+    "throughput_in_recs_s": 6211.2,
+    "throughput_out_recs_s": 6211.2
+  }
+}

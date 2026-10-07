@@ -1,0 +1,314 @@
+{
+  "date_utc": "2026-10-07T06:33:56.597344+00:00",
+  "python": "3.13.13",
+  "method": "7 alternating interleaved child-process reps (old/new), real implementations both sides, deployment image dependencies; medians reported; output equality asserted every rep",
+  "us_per_unit": {
+    "old": {
+      "sink_condition_compile_once": 16.5843,
+      "timestamp_normalize": 22.5355,
+      "counter_delta": 13.1487,
+      "window_aggregate": 17.2334,
+      "kafka_write_500": 3480.4657,
+      "kafka_write_1000_control": 9771.8459
+    },
+    "new": {
+      "sink_condition_compile_once": 2.0741,
+      "timestamp_normalize": 5.0587,
+      "counter_delta": 5.2838,
+      "window_aggregate": 8.5763,
+      "kafka_write_500": 162.0775,
+      "kafka_write_1000_control": 10036.1924
+    }
+  },
+  "speedup": {
+    "sink_condition_compile_once": 7.995901836941323,
+    "timestamp_normalize": 4.454800640480756,
+    "counter_delta": 2.488493129944358,
+    "window_aggregate": 2.009421312220888,
+    "kafka_write_500": 21.47408307754007,
+    "kafka_write_1000_control": 0.9736606783265733
+  },
+  "output_hashes_match": true,
+  "raw_reps": [
+    {
+      "us_per_unit": {
+        "sink_condition_compile_once": 15.7572,
+        "timestamp_normalize": 21.7203,
+        "counter_delta": 12.8576,
+        "window_aggregate": 16.0709,
+        "kafka_write_500": 3416.1904,
+        "kafka_write_1000_control": 9759.1307
+      },
+      "output_hashes": {
+        "sink_condition_compile_once": "7b3338f5a5e15c57c4cf3b8647f8a2a9f8309a9ee851f7ee4716a380c51ac5a7",
+        "timestamp_normalize": "9da7a456c82c082190224303dfc5f4ea1a004d61ab9365b95294129307f51077",
+        "counter_delta": "4db911ec14922db243ca62c6e2323a5ae832df98ab4d76aaf2ca73f5509cfb3a",
+        "window_aggregate": "06969b425c3fc664a0706ae37fb9e3e22afed199a8d1d166c70e78a94b77336d",
+        "kafka_write_500": "98527701e07a991a04558619ba55b61f09ae87fe69dd802e4f08aec2710ce85e",
+        "kafka_write_1000_control": "f9326e977b1aa7e1925761e223f4e4aa08ec5054df77bfe84622ffeb208c9fd0"
+      },
+      "rep": 0,
+      "side": "old"
+    },
+    {
+      "us_per_unit": {
+        "sink_condition_compile_once": 2.0741,
+        "timestamp_normalize": 4.618,
+        "counter_delta": 5.2107,
+        "window_aggregate": 8.7695,
+        "kafka_write_500": 151.207,
+        "kafka_write_1000_control": 9752.8322
+      },
+      "output_hashes": {
+        "sink_condition_compile_once": "7b3338f5a5e15c57c4cf3b8647f8a2a9f8309a9ee851f7ee4716a380c51ac5a7",
+        "timestamp_normalize": "9da7a456c82c082190224303dfc5f4ea1a004d61ab9365b95294129307f51077",
+        "counter_delta": "4db911ec14922db243ca62c6e2323a5ae832df98ab4d76aaf2ca73f5509cfb3a",
+        "window_aggregate": "06969b425c3fc664a0706ae37fb9e3e22afed199a8d1d166c70e78a94b77336d",
+        "kafka_write_500": "98527701e07a991a04558619ba55b61f09ae87fe69dd802e4f08aec2710ce85e",
+        "kafka_write_1000_control": "f9326e977b1aa7e1925761e223f4e4aa08ec5054df77bfe84622ffeb208c9fd0"
+      },
+      "rep": 0,
+      "side": "new"
+    },
+    {
+      "us_per_unit": {
+        "sink_condition_compile_once": 1.8991,
+        "timestamp_normalize": 4.7766,
+        "counter_delta": 5.175,
+        "window_aggregate": 8.3694,
+        "kafka_write_500": 161.2785,
+        "kafka_write_1000_control": 10414.6223
+      },
+      "output_hashes": {
+        "sink_condition_compile_once": "7b3338f5a5e15c57c4cf3b8647f8a2a9f8309a9ee851f7ee4716a380c51ac5a7",
+        "timestamp_normalize": "9da7a456c82c082190224303dfc5f4ea1a004d61ab9365b95294129307f51077",
+        "counter_delta": "4db911ec14922db243ca62c6e2323a5ae832df98ab4d76aaf2ca73f5509cfb3a",
+        "window_aggregate": "06969b425c3fc664a0706ae37fb9e3e22afed199a8d1d166c70e78a94b77336d",
+        "kafka_write_500": "98527701e07a991a04558619ba55b61f09ae87fe69dd802e4f08aec2710ce85e",
+        "kafka_write_1000_control": "f9326e977b1aa7e1925761e223f4e4aa08ec5054df77bfe84622ffeb208c9fd0"
+      },
+      "rep": 1,
+      "side": "new"
+    },
+    {
+      "us_per_unit": {
+        "sink_condition_compile_once": 16.9402,
+        "timestamp_normalize": 26.9756,
+        "counter_delta": 13.2277,
+        "window_aggregate": 16.2437,
+        "kafka_write_500": 3445.1598,
+        "kafka_write_1000_control": 9771.8459
+      },
+      "output_hashes": {
+        "sink_condition_compile_once": "7b3338f5a5e15c57c4cf3b8647f8a2a9f8309a9ee851f7ee4716a380c51ac5a7",
+        "timestamp_normalize": "9da7a456c82c082190224303dfc5f4ea1a004d61ab9365b95294129307f51077",
+        "counter_delta": "4db911ec14922db243ca62c6e2323a5ae832df98ab4d76aaf2ca73f5509cfb3a",
+        "window_aggregate": "06969b425c3fc664a0706ae37fb9e3e22afed199a8d1d166c70e78a94b77336d",
+        "kafka_write_500": "98527701e07a991a04558619ba55b61f09ae87fe69dd802e4f08aec2710ce85e",
+        "kafka_write_1000_control": "f9326e977b1aa7e1925761e223f4e4aa08ec5054df77bfe84622ffeb208c9fd0"
+      },
+      "rep": 1,
+      "side": "old"
+    },
+    {
+      "us_per_unit": {
+        "sink_condition_compile_once": 16.5155,
+        "timestamp_normalize": 22.5368,
+        "counter_delta": 13.102,
+        "window_aggregate": 17.4011,
+        "kafka_write_500": 3466.4199,
+        "kafka_write_1000_control": 9677.7024
+      },
+      "output_hashes": {
+        "sink_condition_compile_once": "7b3338f5a5e15c57c4cf3b8647f8a2a9f8309a9ee851f7ee4716a380c51ac5a7",
+        "timestamp_normalize": "9da7a456c82c082190224303dfc5f4ea1a004d61ab9365b95294129307f51077",
+        "counter_delta": "4db911ec14922db243ca62c6e2323a5ae832df98ab4d76aaf2ca73f5509cfb3a",
+        "window_aggregate": "06969b425c3fc664a0706ae37fb9e3e22afed199a8d1d166c70e78a94b77336d",
+        "kafka_write_500": "98527701e07a991a04558619ba55b61f09ae87fe69dd802e4f08aec2710ce85e",
+        "kafka_write_1000_control": "f9326e977b1aa7e1925761e223f4e4aa08ec5054df77bfe84622ffeb208c9fd0"
+      },
+      "rep": 2,
+      "side": "old"
+    },
+    {
+      "us_per_unit": {
+        "sink_condition_compile_once": 1.8479,
+        "timestamp_normalize": 4.6606,
+        "counter_delta": 5.2541,
+        "window_aggregate": 8.3202,
+        "kafka_write_500": 171.5773,
+        "kafka_write_1000_control": 9947.5068
+      },
+      "output_hashes": {
+        "sink_condition_compile_once": "7b3338f5a5e15c57c4cf3b8647f8a2a9f8309a9ee851f7ee4716a380c51ac5a7",
+        "timestamp_normalize": "9da7a456c82c082190224303dfc5f4ea1a004d61ab9365b95294129307f51077",
+        "counter_delta": "4db911ec14922db243ca62c6e2323a5ae832df98ab4d76aaf2ca73f5509cfb3a",
+        "window_aggregate": "06969b425c3fc664a0706ae37fb9e3e22afed199a8d1d166c70e78a94b77336d",
+        "kafka_write_500": "98527701e07a991a04558619ba55b61f09ae87fe69dd802e4f08aec2710ce85e",
+        "kafka_write_1000_control": "f9326e977b1aa7e1925761e223f4e4aa08ec5054df77bfe84622ffeb208c9fd0"
+      },
+      "rep": 2,
+      "side": "new"
+    },
+    {
+      "us_per_unit": {
+        "sink_condition_compile_once": 1.9002,
+        "timestamp_normalize": 5.0587,
+        "counter_delta": 5.2838,
+        "window_aggregate": 8.5763,
+        "kafka_write_500": 165.344,
+        "kafka_write_1000_control": 9674.6956
+      },
+      "output_hashes": {
+        "sink_condition_compile_once": "7b3338f5a5e15c57c4cf3b8647f8a2a9f8309a9ee851f7ee4716a380c51ac5a7",
+        "timestamp_normalize": "9da7a456c82c082190224303dfc5f4ea1a004d61ab9365b95294129307f51077",
+        "counter_delta": "4db911ec14922db243ca62c6e2323a5ae832df98ab4d76aaf2ca73f5509cfb3a",
+        "window_aggregate": "06969b425c3fc664a0706ae37fb9e3e22afed199a8d1d166c70e78a94b77336d",
+        "kafka_write_500": "98527701e07a991a04558619ba55b61f09ae87fe69dd802e4f08aec2710ce85e",
+        "kafka_write_1000_control": "f9326e977b1aa7e1925761e223f4e4aa08ec5054df77bfe84622ffeb208c9fd0"
+      },
+      "rep": 3,
+      "side": "new"
+    },
+    {
+      "us_per_unit": {
+        "sink_condition_compile_once": 16.0639,
+        "timestamp_normalize": 22.5355,
+        "counter_delta": 13.1487,
+        "window_aggregate": 16.7813,
+        "kafka_write_500": 3557.2728,
+        "kafka_write_1000_control": 9913.8539
+      },
+      "output_hashes": {
+        "sink_condition_compile_once": "7b3338f5a5e15c57c4cf3b8647f8a2a9f8309a9ee851f7ee4716a380c51ac5a7",
+        "timestamp_normalize": "9da7a456c82c082190224303dfc5f4ea1a004d61ab9365b95294129307f51077",
+        "counter_delta": "4db911ec14922db243ca62c6e2323a5ae832df98ab4d76aaf2ca73f5509cfb3a",
+        "window_aggregate": "06969b425c3fc664a0706ae37fb9e3e22afed199a8d1d166c70e78a94b77336d",
+        "kafka_write_500": "98527701e07a991a04558619ba55b61f09ae87fe69dd802e4f08aec2710ce85e",
+        "kafka_write_1000_control": "f9326e977b1aa7e1925761e223f4e4aa08ec5054df77bfe84622ffeb208c9fd0"
+      },
+      "rep": 3,
+      "side": "old"
+    },
+    {
+      "us_per_unit": {
+        "sink_condition_compile_once": 16.8082,
+        "timestamp_normalize": 24.4025,
+        "counter_delta": 13.8521,
+        "window_aggregate": 17.3124,
+        "kafka_write_500": 3480.4657,
+        "kafka_write_1000_control": 10173.1447
+      },
+      "output_hashes": {
+        "sink_condition_compile_once": "7b3338f5a5e15c57c4cf3b8647f8a2a9f8309a9ee851f7ee4716a380c51ac5a7",
+        "timestamp_normalize": "9da7a456c82c082190224303dfc5f4ea1a004d61ab9365b95294129307f51077",
+        "counter_delta": "4db911ec14922db243ca62c6e2323a5ae832df98ab4d76aaf2ca73f5509cfb3a",
+        "window_aggregate": "06969b425c3fc664a0706ae37fb9e3e22afed199a8d1d166c70e78a94b77336d",
+        "kafka_write_500": "98527701e07a991a04558619ba55b61f09ae87fe69dd802e4f08aec2710ce85e",
+        "kafka_write_1000_control": "f9326e977b1aa7e1925761e223f4e4aa08ec5054df77bfe84622ffeb208c9fd0"
+      },
+      "rep": 4,
+      "side": "old"
+    },
+    {
+      "us_per_unit": {
+        "sink_condition_compile_once": 2.2668,
+        "timestamp_normalize": 5.8092,
+        "counter_delta": 7.6974,
+        "window_aggregate": 9.852,
+        "kafka_write_500": 162.0775,
+        "kafka_write_1000_control": 10036.1924
+      },
+      "output_hashes": {
+        "sink_condition_compile_once": "7b3338f5a5e15c57c4cf3b8647f8a2a9f8309a9ee851f7ee4716a380c51ac5a7",
+        "timestamp_normalize": "9da7a456c82c082190224303dfc5f4ea1a004d61ab9365b95294129307f51077",
+        "counter_delta": "4db911ec14922db243ca62c6e2323a5ae832df98ab4d76aaf2ca73f5509cfb3a",
+        "window_aggregate": "06969b425c3fc664a0706ae37fb9e3e22afed199a8d1d166c70e78a94b77336d",
+        "kafka_write_500": "98527701e07a991a04558619ba55b61f09ae87fe69dd802e4f08aec2710ce85e",
+        "kafka_write_1000_control": "f9326e977b1aa7e1925761e223f4e4aa08ec5054df77bfe84622ffeb208c9fd0"
+      },
+      "rep": 4,
+      "side": "new"
+    },
+    {
+      "us_per_unit": {
+        "sink_condition_compile_once": 2.0784,
+        "timestamp_normalize": 5.3265,
+        "counter_delta": 5.3525,
+        "window_aggregate": 8.5155,
+        "kafka_write_500": 157.889,
+        "kafka_write_1000_control": 11358.3032
+      },
+      "output_hashes": {
+        "sink_condition_compile_once": "7b3338f5a5e15c57c4cf3b8647f8a2a9f8309a9ee851f7ee4716a380c51ac5a7",
+        "timestamp_normalize": "9da7a456c82c082190224303dfc5f4ea1a004d61ab9365b95294129307f51077",
+        "counter_delta": "4db911ec14922db243ca62c6e2323a5ae832df98ab4d76aaf2ca73f5509cfb3a",
+        "window_aggregate": "06969b425c3fc664a0706ae37fb9e3e22afed199a8d1d166c70e78a94b77336d",
+        "kafka_write_500": "98527701e07a991a04558619ba55b61f09ae87fe69dd802e4f08aec2710ce85e",
+        "kafka_write_1000_control": "f9326e977b1aa7e1925761e223f4e4aa08ec5054df77bfe84622ffeb208c9fd0"
+      },
+      "rep": 5,
+      "side": "new"
+    },
+    {
+      "us_per_unit": {
+        "sink_condition_compile_once": 16.9581,
+        "timestamp_normalize": 22.2499,
+        "counter_delta": 12.9214,
+        "window_aggregate": 17.2334,
+        "kafka_write_500": 3484.0957,
+        "kafka_write_1000_control": 9730.9882
+      },
+      "output_hashes": {
+        "sink_condition_compile_once": "7b3338f5a5e15c57c4cf3b8647f8a2a9f8309a9ee851f7ee4716a380c51ac5a7",
+        "timestamp_normalize": "9da7a456c82c082190224303dfc5f4ea1a004d61ab9365b95294129307f51077",
+        "counter_delta": "4db911ec14922db243ca62c6e2323a5ae832df98ab4d76aaf2ca73f5509cfb3a",
+        "window_aggregate": "06969b425c3fc664a0706ae37fb9e3e22afed199a8d1d166c70e78a94b77336d",
+        "kafka_write_500": "98527701e07a991a04558619ba55b61f09ae87fe69dd802e4f08aec2710ce85e",
+        "kafka_write_1000_control": "f9326e977b1aa7e1925761e223f4e4aa08ec5054df77bfe84622ffeb208c9fd0"
+      },
+      "rep": 5,
+      "side": "old"
+    },
+    {
+      "us_per_unit": {
+        "sink_condition_compile_once": 16.5843,
+        "timestamp_normalize": 21.8923,
+        "counter_delta": 13.2621,
+        "window_aggregate": 17.8318,
+        "kafka_write_500": 4187.488,
+        "kafka_write_1000_control": 11208.9148
+      },
+      "output_hashes": {
+        "sink_condition_compile_once": "7b3338f5a5e15c57c4cf3b8647f8a2a9f8309a9ee851f7ee4716a380c51ac5a7",
+        "timestamp_normalize": "9da7a456c82c082190224303dfc5f4ea1a004d61ab9365b95294129307f51077",
+        "counter_delta": "4db911ec14922db243ca62c6e2323a5ae832df98ab4d76aaf2ca73f5509cfb3a",
+        "window_aggregate": "06969b425c3fc664a0706ae37fb9e3e22afed199a8d1d166c70e78a94b77336d",
+        "kafka_write_500": "98527701e07a991a04558619ba55b61f09ae87fe69dd802e4f08aec2710ce85e",
+        "kafka_write_1000_control": "f9326e977b1aa7e1925761e223f4e4aa08ec5054df77bfe84622ffeb208c9fd0"
+      },
+      "rep": 6,
+      "side": "old"
+    },
+    {
+      "us_per_unit": {
+        "sink_condition_compile_once": 2.2741,
+        "timestamp_normalize": 5.2085,
+        "counter_delta": 5.7413,
+        "window_aggregate": 9.6907,
+        "kafka_write_500": 178.1646,
+        "kafka_write_1000_control": 11160.6976
+      },
+      "output_hashes": {
+        "sink_condition_compile_once": "7b3338f5a5e15c57c4cf3b8647f8a2a9f8309a9ee851f7ee4716a380c51ac5a7",
+        "timestamp_normalize": "9da7a456c82c082190224303dfc5f4ea1a004d61ab9365b95294129307f51077",
+        "counter_delta": "4db911ec14922db243ca62c6e2323a5ae832df98ab4d76aaf2ca73f5509cfb3a",
+        "window_aggregate": "06969b425c3fc664a0706ae37fb9e3e22afed199a8d1d166c70e78a94b77336d",
+        "kafka_write_500": "98527701e07a991a04558619ba55b61f09ae87fe69dd802e4f08aec2710ce85e",
+        "kafka_write_1000_control": "f9326e977b1aa7e1925761e223f4e4aa08ec5054df77bfe84622ffeb208c9fd0"
+      },
+      "rep": 6,
+      "side": "new"
+    }
+  ]
+}

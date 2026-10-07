@@ -1,0 +1,22 @@
+{
+  "runs_total": 6,
+  "runs_completed": 6,
+  "records_in": 600000,
+  "records_out": 600000,
+  "records_skipped": 0,
+  "bytes_in": 314273496,
+  "bytes_out": 337673376,
+  "dlq_count": 0,
+  "run_duration_ms": {
+    "count": 6,
+    "total_ms": 97753.923,
+    "avg_ms": 16292.321,
+    "max_ms": 17464.75
+  },
+  "errors": [],
+  "error_count": 0,
+  "run_id": "ab-v161-s7k-rep1",
+  "pipeline": "s7k-local-kafka-keyless",
+  "api_url": "http://127.0.0.1:30001",
+  "collected_at": "2026-10-07T07:44:24.090143+00:00"
+}

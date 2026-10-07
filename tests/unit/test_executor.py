@@ -10,7 +10,7 @@ from unittest.mock import MagicMock, patch
 import pytest
 
 from tram.core.context import RunStatus
-from tram.pipeline.executor import PipelineExecutor
+from tram.pipeline.executor import PipelineExecutor, _filter_by_condition
 from tram.pipeline.loader import load_pipeline_from_yaml
 
 
@@ -1141,3 +1141,184 @@ class TestTransformChain:
         assert t.metas[0]["source_filename"] == "test.json"
         assert t.metas[0]["pipeline_name"] == "test-exec"
         assert "run_id" in t.metas[0]
+
+
+class TestSinkConditionCompileOnce:
+    """Compile-once sink conditions (perf follow-up 2026-10-07 §2).
+
+    Sink routing must keep the filter_rows pattern: one parse per condition
+    string (cached on the executor instance), thread-local evaluators,
+    per-record names binding, and unchanged TramError routing errors.
+    """
+
+    def test_condition_eval_error_raises_tram_error(self):
+        """Error parity: a condition that fails at evaluation raises TramError
+        with the 'Condition eval error:' wording, as before the change."""
+        from tram.core.exceptions import TramError
+
+        executor = PipelineExecutor()
+        with pytest.raises(TramError, match="Condition eval error: 'missing_field > 5'"):
+            _filter_by_condition(
+                [{"id": "1"}], "missing_field > 5", _cache=executor._condition_cache
+            )
+
+    def test_syntactically_invalid_condition_raises_tram_error(self):
+        """A condition that fails to PARSE surfaces with the same observable
+        behavior as an eval-time failure: TramError with the 'Condition eval
+        error:' wording. (Before the change the parse happened per record
+        inside eval; now it happens once and is wrapped identically.)"""
+        from tram.core.exceptions import TramError
+
+        executor = PipelineExecutor()
+        with pytest.raises(TramError, match="Condition eval error: 'x =='"):
+            _filter_by_condition([{"x": 1}], "x ==", _cache=executor._condition_cache)
+        # A parse failure must never be cached.
+        assert executor._condition_cache == {}
+
+    def test_empty_records_short_circuit_without_parsing(self):
+        """Empty-input parity: the per-record-loop implementation never parsed
+        the condition for an empty batch, so a syntactically bad condition
+        returned [] silently — the compile-once path must do the same."""
+        executor = PipelineExecutor()
+        result = _filter_by_condition([], "x ==", _cache=executor._condition_cache)
+        assert result == []
+        # Nothing parsed, nothing cached.
+        assert executor._condition_cache == {}
+
+    def test_batch_run_abort_invalid_condition_fails_with_condition_eval_error(self):
+        """A syntactically invalid sink condition under on_error=abort fails
+        the run with the same 'Condition eval error:' message — the call-site
+        change (instance cache) does not alter the abort path."""
+        config = _make_pipeline("on_error: abort")
+        executor = PipelineExecutor()
+
+        records = [{"id": "1", "val": "a"}]
+        mock_source = MagicMock()
+        mock_source.read.return_value = iter([
+            (json.dumps(records).encode(), {"source_filename": "test.json"}),
+        ])
+        mock_sink = MagicMock()
+        mock_ser_in = MagicMock()
+        mock_ser_in.parse.return_value = records
+        mock_ser_out = MagicMock()
+        mock_ser_out.serialize.return_value = b"[]"
+
+        with (
+            patch.object(executor, "_build_source", return_value=mock_source),
+            patch.object(executor, "_build_sinks", return_value=[(mock_sink, "val ==", [])]),
+            patch.object(executor, "_build_serializer_in", return_value=mock_ser_in),
+            patch.object(executor, "_build_serializer_out", return_value=mock_ser_out),
+            patch.object(executor, "_build_transforms", return_value=[]),
+        ):
+            result = executor.batch_run(config)
+
+        assert result.status == RunStatus.FAILED
+        assert "Condition eval error:" in (result.error or "")
+        mock_sink.write.assert_not_called()
+
+    def test_condition_parsed_once_per_executor_instance(self):
+        """Compile-once: the condition string is parsed a single time and
+        cached on the executor instance, not per record or per call."""
+        executor = PipelineExecutor()
+        records = [{"x": i} for i in range(10)]
+        for _ in range(3):
+            result = _filter_by_condition(records, "x >= 5", _cache=executor._condition_cache)
+            assert [r["x"] for r in result] == [5, 6, 7, 8, 9]
+        assert list(executor._condition_cache) == ["x >= 5"]
+        # Different conditions are cached independently, and a second executor
+        # instance does not share the first's cache.
+        result = _filter_by_condition(records, "x < 3", _cache=executor._condition_cache)
+        assert [r["x"] for r in result] == [0, 1, 2]
+        assert set(executor._condition_cache) == {"x >= 5", "x < 3"}
+        assert PipelineExecutor()._condition_cache == {}
+
+    def test_condition_names_isolated_across_threads(self):
+        """Names isolation: two threads routing different records through the
+        SAME executor and condition concurrently produce per-record results
+        with no cross-bleed (thread-local evaluators, per-record names)."""
+        executor = PipelineExecutor()
+        condition = "keep == 1"
+        a_records = [{"id": f"a{i}", "keep": 1} for i in range(25)]
+        b_records = [{"id": f"b{i}", "keep": 0} for i in range(25)]
+        a_ids = [r["id"] for r in a_records]
+        barrier = threading.Barrier(2)
+        failures = []
+        results = {}
+
+        def route(tag, records, expected_ids):
+            try:
+                for _ in range(40):
+                    barrier.wait(timeout=10)
+                    filtered = _filter_by_condition(
+                        records, condition, _cache=executor._condition_cache
+                    )
+                    got = [r["id"] for r in filtered]
+                    if got != expected_ids:
+                        failures.append(f"{tag}: expected {expected_ids}, got {got}")
+                        return
+                results[tag] = "ok"
+            except Exception as exc:  # barrier timeout or unexpected error
+                failures.append(f"{tag}: {exc!r}")
+
+        t1 = threading.Thread(target=route, args=("a", a_records, a_ids))
+        t2 = threading.Thread(target=route, args=("b", b_records, []))
+        t1.start()
+        t2.start()
+        t1.join(timeout=30)
+        t2.join(timeout=30)
+
+        assert failures == []
+        assert results == {"a": "ok", "b": "ok"}
+        assert list(executor._condition_cache) == [condition]
+
+    def test_multi_sink_different_conditions_route_mixed_records(self):
+        """Routing behavior is unchanged for mixed records across multiple
+        sinks with different conditions: each sink receives exactly the
+        records its condition selects (batch-run path with the instance
+        cache)."""
+        config = _make_pipeline()
+        executor = PipelineExecutor()
+
+        records = [
+            {"id": "1", "val": "a"},
+            {"id": "2", "val": "b"},
+            {"id": "3", "val": "a"},
+        ]
+        mock_source = MagicMock()
+        mock_source.read.return_value = iter([
+            (json.dumps(records).encode(), {"source_filename": "test.json"}),
+        ])
+        sink_a = MagicMock()
+        sink_b = MagicMock()
+        mock_ser_in = MagicMock()
+        mock_ser_in.parse.return_value = records
+        serialized_calls = []
+
+        def fake_serialize(records_in):
+            serialized_calls.append(records_in)
+            return json.dumps(records_in).encode()
+
+        mock_ser_out = MagicMock()
+        mock_ser_out.serialize.side_effect = fake_serialize
+
+        with (
+            patch.object(executor, "_build_source", return_value=mock_source),
+            patch.object(executor, "_build_sinks", return_value=[
+                (sink_a, "val == 'a'", []),
+                (sink_b, "val == 'b'", []),
+            ]),
+            patch.object(executor, "_build_serializer_in", return_value=mock_ser_in),
+            patch.object(executor, "_build_serializer_out", return_value=mock_ser_out),
+            patch.object(executor, "_build_transforms", return_value=[]),
+        ):
+            result = executor.batch_run(config)
+
+        assert result.status == RunStatus.SUCCESS
+        assert result.records_in == 3
+        # records_out is the largest single-sink write (D4 conservative lower
+        # bound when sink conditions are disjoint).
+        assert result.records_out == 2
+        # Sinks are processed in declaration order: a then b.
+        assert [r["id"] for r in serialized_calls[0]] == ["1", "3"]
+        assert [r["id"] for r in serialized_calls[1]] == ["2"]
+        assert list(executor._condition_cache) == ["val == 'a'", "val == 'b'"]

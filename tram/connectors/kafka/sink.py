@@ -79,6 +79,14 @@ class KafkaSink(BaseSink):
     are pinned to one stable partition via ``producer.partitions_for`` so the
     broker still delivers them in order.
 
+    Fast path (perf follow-up 2026-10-07): when the executor already supplied
+    ``output_record_count`` in *meta* and the payload is already-serialized
+    bytes within both caps (and the sink is keyless), ``write`` sends the
+    payload as ONE message without re-parsing records or re-serializing via
+    ``chunk_records_by_caps``. Every other case (missing/zero/over-cap count,
+    key-configured, payload over the byte cap, opaque payload) keeps the legacy
+    parse-and-chunk behavior byte-for-byte.
+
     Delivery semantics: at-least-once across chunk boundaries. A failed chunk
     surfaces as a ``SinkError`` (never a silent skip) whose message reports how
     many chunks were already delivered; on retry the whole batch is re-sent
@@ -152,6 +160,18 @@ class KafkaSink(BaseSink):
     def write(self, data: bytes, meta: dict) -> None:
         producer = self._get_producer()
 
+        if self._fast_path_eligible(data, meta):
+            # Fast path: the executor already supplied output_record_count and
+            # the payload is already-serialized bytes within both caps — send it
+            # as ONE message without re-parsing records or re-serializing via
+            # chunk_records_by_caps. Keyless by eligibility; a single message
+            # needs no sticky-partition pinning (ordering is trivial). Delivery
+            # bookkeeping is shared with the legacy path: _send_chunk waits on
+            # the ack future and surfaces failures as SinkError, so the
+            # executor's retry/backoff/circuit-breaker loop treats it the same.
+            self._send_chunk(producer, data, key=None)
+            return
+
         records, serializer = self._parse_payload(data, meta)
         if records is None:
             # Opaque/unparseable payload (or no record framing): legacy single
@@ -188,6 +208,36 @@ class KafkaSink(BaseSink):
                     "re-sends from chunk 1 (duplicates possible, at-least-once): "
                     f"{exc}"
                 ) from exc
+
+    def _fast_path_eligible(self, data: bytes, meta: dict) -> bool:
+        """Single-message fast-path eligibility gate (perf follow-up 2026-10-07).
+
+        All of the following must hold, checked in this order:
+          1. ``meta["output_record_count"]`` is a positive int — the executor
+             already counted this partition's records after sink transforms and
+             filename partitioning.
+          2. That count is within the per-message record cap
+             (``count <= self.chunk_records``, the same boundary
+             ``chunk_records_by_caps`` applies).
+          3. The sink is keyless (no ``key_field``), so ``_batch_key`` would
+             not apply — no key extraction is required.
+          4. The payload is already-serialized bytes whose actual length is
+             within the byte cap (``len(data) <= self.chunk_bytes``).
+
+        When any check fails the caller falls back to the legacy parse-and-chunk
+        path. No serialization work is added here: the check uses the actual
+        payload length, not the per-record serialized-length sum.
+        """
+        count = meta.get("output_record_count")
+        if not isinstance(count, int) or isinstance(count, bool) or count <= 0:
+            return False
+        if count > self.chunk_records:
+            return False
+        if self.key_field:
+            return False
+        if not isinstance(data, bytes) or len(data) > self.chunk_bytes:
+            return False
+        return True
 
     def _batch_partition(self, producer, records: list[dict]) -> int | None:
         """Stable partition for a key-less chunked batch (issue #76 ordering).
