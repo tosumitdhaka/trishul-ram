@@ -1390,6 +1390,16 @@ sinks:
             for i in range(2):
                 resp = self._dispatch(client, yaml_text, f"r-sp-fn-{i}")
                 assert resp.status_code == 202
+                if i == 0:
+                    # Serialize the runs. The output filename is templated on
+                    # {epoch_ms} resolved at sink-open time; two async runs
+                    # dispatched back-to-back can open their sinks within the
+                    # same millisecond on a fast runner, the second output
+                    # overwrites the first, and the file-count pin fails — a
+                    # timing artifact, not the behavior under pin. Wait for
+                    # run 1 to complete and let the clock advance ≥2 ms.
+                    self._wait_for(completed, n=1, timeout=5.0)
+                    time.sleep(0.002)
             self._wait_for(completed, n=2, timeout=5.0)
 
         assert len(completed) == 2
