@@ -1,0 +1,1680 @@
+{
+ "format_cases": [
+  {
+   "dt": "2026-10-07T12:30:45.000000",
+   "expected_output": "2026-10-07T12:30:45.000Z"
+  },
+  {
+   "dt": "2026-10-07T12:30:45.000000",
+   "expected_output": "2026-10-07T12:30:45.000Z"
+  },
+  {
+   "dt": "2026-10-07T12:30:45.000001",
+   "expected_output": "2026-10-07T12:30:45.000Z"
+  },
+  {
+   "dt": "2026-10-07T12:30:45.000500",
+   "expected_output": "2026-10-07T12:30:45.000Z"
+  },
+  {
+   "dt": "2026-10-07T12:30:45.123456",
+   "expected_output": "2026-10-07T12:30:45.123Z"
+  },
+  {
+   "dt": "2026-10-07T12:30:45.999999",
+   "expected_output": "2026-10-07T12:30:45.999Z"
+  },
+  {
+   "dt": "2026-10-07T12:30:45.001234",
+   "expected_output": "2026-10-07T12:30:45.001Z"
+  },
+  {
+   "dt": "2026-10-07T12:30:45.012300",
+   "expected_output": "2026-10-07T12:30:45.012Z"
+  },
+  {
+   "dt": "0001-01-01T00:00:00.000000",
+   "expected_output": "1-01-01T00:00:00.000Z"
+  },
+  {
+   "dt": "0999-12-31T23:59:59.999999",
+   "expected_output": "999-12-31T23:59:59.999Z"
+  },
+  {
+   "dt": "1000-01-02T03:04:05.000000",
+   "expected_output": "1000-01-02T03:04:05.000Z"
+  },
+  {
+   "dt": "9999-12-31T23:59:59.999999",
+   "expected_output": "9999-12-31T23:59:59.999Z"
+  },
+  {
+   "dt": "2026-10-07T18:00:00.000000+05:30",
+   "expected_output": "2026-10-07T18:00:00.000Z"
+  },
+  {
+   "dt": "2026-10-07T06:00:00.000000+00:00",
+   "expected_output": "2026-10-07T06:00:00.000Z"
+  }
+ ],
+ "parse_cases": [
+  {
+   "expected": {
+    "dt": "2026-10-07T12:30:45.000000+00:00"
+   },
+   "input_format": null,
+   "source_tz": null,
+   "val": "2026-10-07T12:30:45",
+   "val_kind": "str"
+  },
+  {
+   "expected": {
+    "dt": "2026-10-07T03:30:45.000000+00:00"
+   },
+   "input_format": null,
+   "source_tz": "Asia/Tokyo",
+   "val": "2026-10-07T12:30:45",
+   "val_kind": "str"
+  },
+  {
+   "expected": {
+    "dt": "2026-10-07T10:30:45.000000+00:00"
+   },
+   "input_format": null,
+   "source_tz": "Europe/Berlin",
+   "val": "2026-10-07T12:30:45",
+   "val_kind": "str"
+  },
+  {
+   "expected": {
+    "dt": "2026-10-07T12:30:45.500000+00:00"
+   },
+   "input_format": null,
+   "source_tz": null,
+   "val": "2026-10-07T12:30:45.5",
+   "val_kind": "str"
+  },
+  {
+   "expected": {
+    "dt": "2026-10-07T03:30:45.500000+00:00"
+   },
+   "input_format": null,
+   "source_tz": "Asia/Tokyo",
+   "val": "2026-10-07T12:30:45.5",
+   "val_kind": "str"
+  },
+  {
+   "expected": {
+    "dt": "2026-10-07T10:30:45.500000+00:00"
+   },
+   "input_format": null,
+   "source_tz": "Europe/Berlin",
+   "val": "2026-10-07T12:30:45.5",
+   "val_kind": "str"
+  },
+  {
+   "expected": {
+    "dt": "2026-10-07T12:30:45.123456+00:00"
+   },
+   "input_format": null,
+   "source_tz": null,
+   "val": "2026-10-07T12:30:45.123456",
+   "val_kind": "str"
+  },
+  {
+   "expected": {
+    "dt": "2026-10-07T03:30:45.123456+00:00"
+   },
+   "input_format": null,
+   "source_tz": "Asia/Tokyo",
+   "val": "2026-10-07T12:30:45.123456",
+   "val_kind": "str"
+  },
+  {
+   "expected": {
+    "dt": "2026-10-07T10:30:45.123456+00:00"
+   },
+   "input_format": null,
+   "source_tz": "Europe/Berlin",
+   "val": "2026-10-07T12:30:45.123456",
+   "val_kind": "str"
+  },
+  {
+   "expected": {
+    "dt": "2026-10-07T12:30:45.123456+00:00"
+   },
+   "input_format": null,
+   "source_tz": null,
+   "val": "2026-10-07T12:30:45.1234567",
+   "val_kind": "str"
+  },
+  {
+   "expected": {
+    "dt": "2026-10-07T03:30:45.123456+00:00"
+   },
+   "input_format": null,
+   "source_tz": "Asia/Tokyo",
+   "val": "2026-10-07T12:30:45.1234567",
+   "val_kind": "str"
+  },
+  {
+   "expected": {
+    "dt": "2026-10-07T10:30:45.123456+00:00"
+   },
+   "input_format": null,
+   "source_tz": "Europe/Berlin",
+   "val": "2026-10-07T12:30:45.1234567",
+   "val_kind": "str"
+  },
+  {
+   "expected": {
+    "dt": "2026-10-07T12:30:45.000000+00:00"
+   },
+   "input_format": null,
+   "source_tz": null,
+   "val": "2026-10-07T12:30:45Z",
+   "val_kind": "str"
+  },
+  {
+   "expected": {
+    "dt": "2026-10-07T12:30:45.000000+00:00"
+   },
+   "input_format": null,
+   "source_tz": "Asia/Tokyo",
+   "val": "2026-10-07T12:30:45Z",
+   "val_kind": "str"
+  },
+  {
+   "expected": {
+    "dt": "2026-10-07T12:30:45.000000+00:00"
+   },
+   "input_format": null,
+   "source_tz": "Europe/Berlin",
+   "val": "2026-10-07T12:30:45Z",
+   "val_kind": "str"
+  },
+  {
+   "expected": {
+    "dt": "2026-10-07T12:30:45.123000+00:00"
+   },
+   "input_format": null,
+   "source_tz": null,
+   "val": "2026-10-07T12:30:45.123Z",
+   "val_kind": "str"
+  },
+  {
+   "expected": {
+    "dt": "2026-10-07T12:30:45.123000+00:00"
+   },
+   "input_format": null,
+   "source_tz": "Asia/Tokyo",
+   "val": "2026-10-07T12:30:45.123Z",
+   "val_kind": "str"
+  },
+  {
+   "expected": {
+    "dt": "2026-10-07T12:30:45.123000+00:00"
+   },
+   "input_format": null,
+   "source_tz": "Europe/Berlin",
+   "val": "2026-10-07T12:30:45.123Z",
+   "val_kind": "str"
+  },
+  {
+   "expected": {
+    "dt": "2026-10-07T12:30:45.123456+00:00"
+   },
+   "input_format": null,
+   "source_tz": null,
+   "val": "2026-10-07T12:30:45.123456789Z",
+   "val_kind": "str"
+  },
+  {
+   "expected": {
+    "dt": "2026-10-07T12:30:45.123456+00:00"
+   },
+   "input_format": null,
+   "source_tz": "Asia/Tokyo",
+   "val": "2026-10-07T12:30:45.123456789Z",
+   "val_kind": "str"
+  },
+  {
+   "expected": {
+    "dt": "2026-10-07T12:30:45.123456+00:00"
+   },
+   "input_format": null,
+   "source_tz": "Europe/Berlin",
+   "val": "2026-10-07T12:30:45.123456789Z",
+   "val_kind": "str"
+  },
+  {
+   "expected": {
+    "dt": "2026-10-07T07:00:45.000000+00:00"
+   },
+   "input_format": null,
+   "source_tz": null,
+   "val": "2026-10-07T12:30:45+05:30",
+   "val_kind": "str"
+  },
+  {
+   "expected": {
+    "dt": "2026-10-07T07:00:45.000000+00:00"
+   },
+   "input_format": null,
+   "source_tz": "Asia/Tokyo",
+   "val": "2026-10-07T12:30:45+05:30",
+   "val_kind": "str"
+  },
+  {
+   "expected": {
+    "dt": "2026-10-07T07:00:45.000000+00:00"
+   },
+   "input_format": null,
+   "source_tz": "Europe/Berlin",
+   "val": "2026-10-07T12:30:45+05:30",
+   "val_kind": "str"
+  },
+  {
+   "expected": {
+    "dt": "2026-10-07T07:00:45.123000+00:00"
+   },
+   "input_format": null,
+   "source_tz": null,
+   "val": "2026-10-07T12:30:45.123+05:30",
+   "val_kind": "str"
+  },
+  {
+   "expected": {
+    "dt": "2026-10-07T07:00:45.123000+00:00"
+   },
+   "input_format": null,
+   "source_tz": "Asia/Tokyo",
+   "val": "2026-10-07T12:30:45.123+05:30",
+   "val_kind": "str"
+  },
+  {
+   "expected": {
+    "dt": "2026-10-07T07:00:45.123000+00:00"
+   },
+   "input_format": null,
+   "source_tz": "Europe/Berlin",
+   "val": "2026-10-07T12:30:45.123+05:30",
+   "val_kind": "str"
+  },
+  {
+   "expected": {
+    "dt": "2026-10-07T07:30:45.000000+00:00"
+   },
+   "input_format": null,
+   "source_tz": null,
+   "val": "2026-10-07T12:30:45+05",
+   "val_kind": "str"
+  },
+  {
+   "expected": {
+    "dt": "2026-10-07T07:30:45.000000+00:00"
+   },
+   "input_format": null,
+   "source_tz": "Asia/Tokyo",
+   "val": "2026-10-07T12:30:45+05",
+   "val_kind": "str"
+  },
+  {
+   "expected": {
+    "dt": "2026-10-07T07:30:45.000000+00:00"
+   },
+   "input_format": null,
+   "source_tz": "Europe/Berlin",
+   "val": "2026-10-07T12:30:45+05",
+   "val_kind": "str"
+  },
+  {
+   "expected": {
+    "dt": "2026-10-07T07:30:45.000000+00:00"
+   },
+   "input_format": null,
+   "source_tz": null,
+   "val": "2026-10-07T12:30:45+0500",
+   "val_kind": "str"
+  },
+  {
+   "expected": {
+    "dt": "2026-10-07T07:30:45.000000+00:00"
+   },
+   "input_format": null,
+   "source_tz": "Asia/Tokyo",
+   "val": "2026-10-07T12:30:45+0500",
+   "val_kind": "str"
+  },
+  {
+   "expected": {
+    "dt": "2026-10-07T07:30:45.000000+00:00"
+   },
+   "input_format": null,
+   "source_tz": "Europe/Berlin",
+   "val": "2026-10-07T12:30:45+0500",
+   "val_kind": "str"
+  },
+  {
+   "expected": {
+    "dt": "2026-10-07T07:30:15.000000+00:00"
+   },
+   "input_format": null,
+   "source_tz": null,
+   "val": "2026-10-07T12:30:45+05:00:30",
+   "val_kind": "str"
+  },
+  {
+   "expected": {
+    "dt": "2026-10-07T07:30:15.000000+00:00"
+   },
+   "input_format": null,
+   "source_tz": "Asia/Tokyo",
+   "val": "2026-10-07T12:30:45+05:00:30",
+   "val_kind": "str"
+  },
+  {
+   "expected": {
+    "dt": "2026-10-07T07:30:15.000000+00:00"
+   },
+   "input_format": null,
+   "source_tz": "Europe/Berlin",
+   "val": "2026-10-07T12:30:45+05:00:30",
+   "val_kind": "str"
+  },
+  {
+   "expected": {
+    "dt": "2026-10-07T12:30:00.000000+00:00"
+   },
+   "input_format": null,
+   "source_tz": null,
+   "val": "2026-10-07T12:30",
+   "val_kind": "str"
+  },
+  {
+   "expected": {
+    "dt": "2026-10-07T03:30:00.000000+00:00"
+   },
+   "input_format": null,
+   "source_tz": "Asia/Tokyo",
+   "val": "2026-10-07T12:30",
+   "val_kind": "str"
+  },
+  {
+   "expected": {
+    "dt": "2026-10-07T10:30:00.000000+00:00"
+   },
+   "input_format": null,
+   "source_tz": "Europe/Berlin",
+   "val": "2026-10-07T12:30",
+   "val_kind": "str"
+  },
+  {
+   "expected": {
+    "dt": "2026-10-07T12:00:00.000000+00:00"
+   },
+   "input_format": null,
+   "source_tz": null,
+   "val": "2026-10-07T12",
+   "val_kind": "str"
+  },
+  {
+   "expected": {
+    "dt": "2026-10-07T03:00:00.000000+00:00"
+   },
+   "input_format": null,
+   "source_tz": "Asia/Tokyo",
+   "val": "2026-10-07T12",
+   "val_kind": "str"
+  },
+  {
+   "expected": {
+    "dt": "2026-10-07T10:00:00.000000+00:00"
+   },
+   "input_format": null,
+   "source_tz": "Europe/Berlin",
+   "val": "2026-10-07T12",
+   "val_kind": "str"
+  },
+  {
+   "expected": {
+    "dt": "2026-10-07T12:30:45.000000+00:00"
+   },
+   "input_format": null,
+   "source_tz": null,
+   "val": "2026-10-07 12:30:45",
+   "val_kind": "str"
+  },
+  {
+   "expected": {
+    "dt": "2026-10-07T03:30:45.000000+00:00"
+   },
+   "input_format": null,
+   "source_tz": "Asia/Tokyo",
+   "val": "2026-10-07 12:30:45",
+   "val_kind": "str"
+  },
+  {
+   "expected": {
+    "dt": "2026-10-07T10:30:45.000000+00:00"
+   },
+   "input_format": null,
+   "source_tz": "Europe/Berlin",
+   "val": "2026-10-07 12:30:45",
+   "val_kind": "str"
+  },
+  {
+   "expected": {
+    "dt": "2026-10-07T12:30:45.123456+00:00"
+   },
+   "input_format": null,
+   "source_tz": null,
+   "val": "2026-10-07 12:30:45.123456",
+   "val_kind": "str"
+  },
+  {
+   "expected": {
+    "dt": "2026-10-07T03:30:45.123456+00:00"
+   },
+   "input_format": null,
+   "source_tz": "Asia/Tokyo",
+   "val": "2026-10-07 12:30:45.123456",
+   "val_kind": "str"
+  },
+  {
+   "expected": {
+    "dt": "2026-10-07T10:30:45.123456+00:00"
+   },
+   "input_format": null,
+   "source_tz": "Europe/Berlin",
+   "val": "2026-10-07 12:30:45.123456",
+   "val_kind": "str"
+  },
+  {
+   "expected": {
+    "dt": "2026-10-07T12:30:45.000000+00:00"
+   },
+   "input_format": null,
+   "source_tz": null,
+   "val": "2026-10-07 12:30:45Z",
+   "val_kind": "str"
+  },
+  {
+   "expected": {
+    "dt": "2026-10-07T12:30:45.000000+00:00"
+   },
+   "input_format": null,
+   "source_tz": "Asia/Tokyo",
+   "val": "2026-10-07 12:30:45Z",
+   "val_kind": "str"
+  },
+  {
+   "expected": {
+    "dt": "2026-10-07T12:30:45.000000+00:00"
+   },
+   "input_format": null,
+   "source_tz": "Europe/Berlin",
+   "val": "2026-10-07 12:30:45Z",
+   "val_kind": "str"
+  },
+  {
+   "expected": {
+    "dt": "2026-10-07T09:30:45.500000+00:00"
+   },
+   "input_format": null,
+   "source_tz": null,
+   "val": "2026-10-07 12:30:45.5+03:00",
+   "val_kind": "str"
+  },
+  {
+   "expected": {
+    "dt": "2026-10-07T09:30:45.500000+00:00"
+   },
+   "input_format": null,
+   "source_tz": "Asia/Tokyo",
+   "val": "2026-10-07 12:30:45.5+03:00",
+   "val_kind": "str"
+  },
+  {
+   "expected": {
+    "dt": "2026-10-07T09:30:45.500000+00:00"
+   },
+   "input_format": null,
+   "source_tz": "Europe/Berlin",
+   "val": "2026-10-07 12:30:45.5+03:00",
+   "val_kind": "str"
+  },
+  {
+   "expected": {
+    "dt": "2026-10-07T00:00:00.000000+00:00"
+   },
+   "input_format": null,
+   "source_tz": null,
+   "val": "2026-10-07",
+   "val_kind": "str"
+  },
+  {
+   "expected": {
+    "dt": "2026-10-06T15:00:00.000000+00:00"
+   },
+   "input_format": null,
+   "source_tz": "Asia/Tokyo",
+   "val": "2026-10-07",
+   "val_kind": "str"
+  },
+  {
+   "expected": {
+    "dt": "2026-10-06T22:00:00.000000+00:00"
+   },
+   "input_format": null,
+   "source_tz": "Europe/Berlin",
+   "val": "2026-10-07",
+   "val_kind": "str"
+  },
+  {
+   "expected": {
+    "dt": "2026-01-07T00:00:00.000000+00:00"
+   },
+   "input_format": null,
+   "source_tz": null,
+   "val": "2026-1-7",
+   "val_kind": "str"
+  },
+  {
+   "expected": {
+    "dt": "2026-01-06T15:00:00.000000+00:00"
+   },
+   "input_format": null,
+   "source_tz": "Asia/Tokyo",
+   "val": "2026-1-7",
+   "val_kind": "str"
+  },
+  {
+   "expected": {
+    "dt": "2026-01-06T23:00:00.000000+00:00"
+   },
+   "input_format": null,
+   "source_tz": "Europe/Berlin",
+   "val": "2026-1-7",
+   "val_kind": "str"
+  },
+  {
+   "expected": {
+    "dt": "2026-10-07T00:00:00.000000+00:00"
+   },
+   "input_format": null,
+   "source_tz": null,
+   "val": "2026-10-7",
+   "val_kind": "str"
+  },
+  {
+   "expected": {
+    "dt": "2026-10-06T15:00:00.000000+00:00"
+   },
+   "input_format": null,
+   "source_tz": "Asia/Tokyo",
+   "val": "2026-10-7",
+   "val_kind": "str"
+  },
+  {
+   "expected": {
+    "dt": "2026-10-06T22:00:00.000000+00:00"
+   },
+   "input_format": null,
+   "source_tz": "Europe/Berlin",
+   "val": "2026-10-7",
+   "val_kind": "str"
+  },
+  {
+   "expected": {
+    "dt": "1970-08-23T12:03:27.000000+00:00"
+   },
+   "input_format": null,
+   "source_tz": null,
+   "val": "20261007",
+   "val_kind": "str"
+  },
+  {
+   "expected": {
+    "dt": "1970-08-23T12:03:27.000000+00:00"
+   },
+   "input_format": null,
+   "source_tz": "Asia/Tokyo",
+   "val": "20261007",
+   "val_kind": "str"
+  },
+  {
+   "expected": {
+    "dt": "1970-08-23T12:03:27.000000+00:00"
+   },
+   "input_format": null,
+   "source_tz": "Europe/Berlin",
+   "val": "20261007",
+   "val_kind": "str"
+  },
+  {
+   "expected": {
+    "dt": "2026-10-07T12:30:45.000000+00:00"
+   },
+   "input_format": null,
+   "source_tz": null,
+   "val": "20261007T123045",
+   "val_kind": "str"
+  },
+  {
+   "expected": {
+    "dt": "2026-10-07T03:30:45.000000+00:00"
+   },
+   "input_format": null,
+   "source_tz": "Asia/Tokyo",
+   "val": "20261007T123045",
+   "val_kind": "str"
+  },
+  {
+   "expected": {
+    "dt": "2026-10-07T10:30:45.000000+00:00"
+   },
+   "input_format": null,
+   "source_tz": "Europe/Berlin",
+   "val": "20261007T123045",
+   "val_kind": "str"
+  },
+  {
+   "expected": {
+    "dt": "2026-10-07T07:00:45.500000+00:00"
+   },
+   "input_format": null,
+   "source_tz": null,
+   "val": "20261007T123045.5+0530",
+   "val_kind": "str"
+  },
+  {
+   "expected": {
+    "dt": "2026-10-07T07:00:45.500000+00:00"
+   },
+   "input_format": null,
+   "source_tz": "Asia/Tokyo",
+   "val": "20261007T123045.5+0530",
+   "val_kind": "str"
+  },
+  {
+   "expected": {
+    "dt": "2026-10-07T07:00:45.500000+00:00"
+   },
+   "input_format": null,
+   "source_tz": "Europe/Berlin",
+   "val": "20261007T123045.5+0530",
+   "val_kind": "str"
+  },
+  {
+   "expected": {
+    "dt": "2026-10-07T12:30:45.250000+00:00"
+   },
+   "input_format": null,
+   "source_tz": null,
+   "val": "2026-10-07T12:30:45,25",
+   "val_kind": "str"
+  },
+  {
+   "expected": {
+    "dt": "2026-10-07T03:30:45.250000+00:00"
+   },
+   "input_format": null,
+   "source_tz": "Asia/Tokyo",
+   "val": "2026-10-07T12:30:45,25",
+   "val_kind": "str"
+  },
+  {
+   "expected": {
+    "dt": "2026-10-07T10:30:45.250000+00:00"
+   },
+   "input_format": null,
+   "source_tz": "Europe/Berlin",
+   "val": "2026-10-07T12:30:45,25",
+   "val_kind": "str"
+  },
+  {
+   "expected": {
+    "dt": "2026-10-07T12:30:45.000000+00:00"
+   },
+   "input_format": null,
+   "source_tz": null,
+   "val": "2026-10-07X12:30:45",
+   "val_kind": "str"
+  },
+  {
+   "expected": {
+    "dt": "2026-10-07T03:30:45.000000+00:00"
+   },
+   "input_format": null,
+   "source_tz": "Asia/Tokyo",
+   "val": "2026-10-07X12:30:45",
+   "val_kind": "str"
+  },
+  {
+   "expected": {
+    "dt": "2026-10-07T10:30:45.000000+00:00"
+   },
+   "input_format": null,
+   "source_tz": "Europe/Berlin",
+   "val": "2026-10-07X12:30:45",
+   "val_kind": "str"
+  },
+  {
+   "expected": {
+    "dt": "2026-09-30T00:00:00.000000+00:00"
+   },
+   "input_format": null,
+   "source_tz": null,
+   "val": "2026-W40-3",
+   "val_kind": "str"
+  },
+  {
+   "expected": {
+    "dt": "2026-09-29T15:00:00.000000+00:00"
+   },
+   "input_format": null,
+   "source_tz": "Asia/Tokyo",
+   "val": "2026-W40-3",
+   "val_kind": "str"
+  },
+  {
+   "expected": {
+    "dt": "2026-09-29T22:00:00.000000+00:00"
+   },
+   "input_format": null,
+   "source_tz": "Europe/Berlin",
+   "val": "2026-W40-3",
+   "val_kind": "str"
+  },
+  {
+   "expected": {
+    "dt": "1970-01-01T00:00:00.000000+00:00"
+   },
+   "input_format": null,
+   "source_tz": null,
+   "val": "0",
+   "val_kind": "str"
+  },
+  {
+   "expected": {
+    "dt": "1970-01-01T00:00:00.000000+00:00"
+   },
+   "input_format": null,
+   "source_tz": "Asia/Tokyo",
+   "val": "0",
+   "val_kind": "str"
+  },
+  {
+   "expected": {
+    "dt": "1970-01-01T00:00:00.000000+00:00"
+   },
+   "input_format": null,
+   "source_tz": "Europe/Berlin",
+   "val": "0",
+   "val_kind": "str"
+  },
+  {
+   "expected": {
+    "dt": "2009-02-13T23:31:30.000000+00:00"
+   },
+   "input_format": null,
+   "source_tz": null,
+   "val": "1234567890",
+   "val_kind": "str"
+  },
+  {
+   "expected": {
+    "dt": "2009-02-13T23:31:30.000000+00:00"
+   },
+   "input_format": null,
+   "source_tz": "Asia/Tokyo",
+   "val": "1234567890",
+   "val_kind": "str"
+  },
+  {
+   "expected": {
+    "dt": "2009-02-13T23:31:30.000000+00:00"
+   },
+   "input_format": null,
+   "source_tz": "Europe/Berlin",
+   "val": "1234567890",
+   "val_kind": "str"
+  },
+  {
+   "expected": {
+    "dt": "1969-12-31T23:57:56.500000+00:00"
+   },
+   "input_format": null,
+   "source_tz": null,
+   "val": "-123.5",
+   "val_kind": "str"
+  },
+  {
+   "expected": {
+    "dt": "1969-12-31T23:57:56.500000+00:00"
+   },
+   "input_format": null,
+   "source_tz": "Asia/Tokyo",
+   "val": "-123.5",
+   "val_kind": "str"
+  },
+  {
+   "expected": {
+    "dt": "1969-12-31T23:57:56.500000+00:00"
+   },
+   "input_format": null,
+   "source_tz": "Europe/Berlin",
+   "val": "-123.5",
+   "val_kind": "str"
+  },
+  {
+   "expected": {
+    "dt": "2023-11-14T22:13:20.000000+00:00"
+   },
+   "input_format": null,
+   "source_tz": null,
+   "val": "  1700000000  ",
+   "val_kind": "str"
+  },
+  {
+   "expected": {
+    "dt": "2023-11-14T22:13:20.000000+00:00"
+   },
+   "input_format": null,
+   "source_tz": "Asia/Tokyo",
+   "val": "  1700000000  ",
+   "val_kind": "str"
+  },
+  {
+   "expected": {
+    "dt": "2023-11-14T22:13:20.000000+00:00"
+   },
+   "input_format": null,
+   "source_tz": "Europe/Berlin",
+   "val": "  1700000000  ",
+   "val_kind": "str"
+  },
+  {
+   "expected": {
+    "dt": "2286-11-20T17:46:39.000000+00:00"
+   },
+   "input_format": null,
+   "source_tz": null,
+   "val": "9999999999",
+   "val_kind": "str"
+  },
+  {
+   "expected": {
+    "dt": "2286-11-20T17:46:39.000000+00:00"
+   },
+   "input_format": null,
+   "source_tz": "Asia/Tokyo",
+   "val": "9999999999",
+   "val_kind": "str"
+  },
+  {
+   "expected": {
+    "dt": "2286-11-20T17:46:39.000000+00:00"
+   },
+   "input_format": null,
+   "source_tz": "Europe/Berlin",
+   "val": "9999999999",
+   "val_kind": "str"
+  },
+  {
+   "expected": {
+    "dt": "2001-09-09T01:46:39.999999+00:00"
+   },
+   "input_format": null,
+   "source_tz": null,
+   "val": "999999999999999",
+   "val_kind": "str"
+  },
+  {
+   "expected": {
+    "dt": "2001-09-09T01:46:39.999999+00:00"
+   },
+   "input_format": null,
+   "source_tz": "Asia/Tokyo",
+   "val": "999999999999999",
+   "val_kind": "str"
+  },
+  {
+   "expected": {
+    "dt": "2001-09-09T01:46:39.999999+00:00"
+   },
+   "input_format": null,
+   "source_tz": "Europe/Berlin",
+   "val": "999999999999999",
+   "val_kind": "str"
+  },
+  {
+   "expected": {
+    "dt": "2001-09-09T01:46:40.000000+00:00"
+   },
+   "input_format": null,
+   "source_tz": null,
+   "val": "999999999999999999",
+   "val_kind": "str"
+  },
+  {
+   "expected": {
+    "dt": "2001-09-09T01:46:40.000000+00:00"
+   },
+   "input_format": null,
+   "source_tz": "Asia/Tokyo",
+   "val": "999999999999999999",
+   "val_kind": "str"
+  },
+  {
+   "expected": {
+    "dt": "2001-09-09T01:46:40.000000+00:00"
+   },
+   "input_format": null,
+   "source_tz": "Europe/Berlin",
+   "val": "999999999999999999",
+   "val_kind": "str"
+  },
+  {
+   "expected": {
+    "error": "OverflowError",
+    "msg": "timestamp out of range for platform time_t"
+   },
+   "input_format": null,
+   "source_tz": null,
+   "val": "123456789012345678901234567890",
+   "val_kind": "str"
+  },
+  {
+   "expected": {
+    "error": "OverflowError",
+    "msg": "timestamp out of range for platform time_t"
+   },
+   "input_format": null,
+   "source_tz": "Asia/Tokyo",
+   "val": "123456789012345678901234567890",
+   "val_kind": "str"
+  },
+  {
+   "expected": {
+    "error": "OverflowError",
+    "msg": "timestamp out of range for platform time_t"
+   },
+   "input_format": null,
+   "source_tz": "Europe/Berlin",
+   "val": "123456789012345678901234567890",
+   "val_kind": "str"
+  },
+  {
+   "expected": {
+    "error": "TransformError",
+    "msg": "Cannot parse timestamp: '1e9'"
+   },
+   "input_format": null,
+   "source_tz": null,
+   "val": "1e9",
+   "val_kind": "str"
+  },
+  {
+   "expected": {
+    "error": "TransformError",
+    "msg": "Cannot parse timestamp: '1e9'"
+   },
+   "input_format": null,
+   "source_tz": "Asia/Tokyo",
+   "val": "1e9",
+   "val_kind": "str"
+  },
+  {
+   "expected": {
+    "error": "TransformError",
+    "msg": "Cannot parse timestamp: '1e9'"
+   },
+   "input_format": null,
+   "source_tz": "Europe/Berlin",
+   "val": "1e9",
+   "val_kind": "str"
+  },
+  {
+   "expected": {
+    "error": "TransformError",
+    "msg": "Cannot parse timestamp: ''"
+   },
+   "input_format": null,
+   "source_tz": null,
+   "val": "",
+   "val_kind": "str"
+  },
+  {
+   "expected": {
+    "error": "TransformError",
+    "msg": "Cannot parse timestamp: ''"
+   },
+   "input_format": null,
+   "source_tz": "Asia/Tokyo",
+   "val": "",
+   "val_kind": "str"
+  },
+  {
+   "expected": {
+    "error": "TransformError",
+    "msg": "Cannot parse timestamp: ''"
+   },
+   "input_format": null,
+   "source_tz": "Europe/Berlin",
+   "val": "",
+   "val_kind": "str"
+  },
+  {
+   "expected": {
+    "error": "TransformError",
+    "msg": "Cannot parse timestamp: 'not-a-date'"
+   },
+   "input_format": null,
+   "source_tz": null,
+   "val": "not-a-date",
+   "val_kind": "str"
+  },
+  {
+   "expected": {
+    "error": "TransformError",
+    "msg": "Cannot parse timestamp: 'not-a-date'"
+   },
+   "input_format": null,
+   "source_tz": "Asia/Tokyo",
+   "val": "not-a-date",
+   "val_kind": "str"
+  },
+  {
+   "expected": {
+    "error": "TransformError",
+    "msg": "Cannot parse timestamp: 'not-a-date'"
+   },
+   "input_format": null,
+   "source_tz": "Europe/Berlin",
+   "val": "not-a-date",
+   "val_kind": "str"
+  },
+  {
+   "expected": {
+    "error": "TransformError",
+    "msg": "Cannot parse timestamp: '2026-13-45'"
+   },
+   "input_format": null,
+   "source_tz": null,
+   "val": "2026-13-45",
+   "val_kind": "str"
+  },
+  {
+   "expected": {
+    "error": "TransformError",
+    "msg": "Cannot parse timestamp: '2026-13-45'"
+   },
+   "input_format": null,
+   "source_tz": "Asia/Tokyo",
+   "val": "2026-13-45",
+   "val_kind": "str"
+  },
+  {
+   "expected": {
+    "error": "TransformError",
+    "msg": "Cannot parse timestamp: '2026-13-45'"
+   },
+   "input_format": null,
+   "source_tz": "Europe/Berlin",
+   "val": "2026-13-45",
+   "val_kind": "str"
+  },
+  {
+   "expected": {
+    "error": "TransformError",
+    "msg": "Cannot parse timestamp: '45:30'"
+   },
+   "input_format": null,
+   "source_tz": null,
+   "val": "45:30",
+   "val_kind": "str"
+  },
+  {
+   "expected": {
+    "error": "TransformError",
+    "msg": "Cannot parse timestamp: '45:30'"
+   },
+   "input_format": null,
+   "source_tz": "Asia/Tokyo",
+   "val": "45:30",
+   "val_kind": "str"
+  },
+  {
+   "expected": {
+    "error": "TransformError",
+    "msg": "Cannot parse timestamp: '45:30'"
+   },
+   "input_format": null,
+   "source_tz": "Europe/Berlin",
+   "val": "45:30",
+   "val_kind": "str"
+  },
+  {
+   "expected": {
+    "error": "TransformError",
+    "msg": "Cannot parse timestamp: 'true'"
+   },
+   "input_format": null,
+   "source_tz": null,
+   "val": "true",
+   "val_kind": "str"
+  },
+  {
+   "expected": {
+    "error": "TransformError",
+    "msg": "Cannot parse timestamp: 'true'"
+   },
+   "input_format": null,
+   "source_tz": "Asia/Tokyo",
+   "val": "true",
+   "val_kind": "str"
+  },
+  {
+   "expected": {
+    "error": "TransformError",
+    "msg": "Cannot parse timestamp: 'true'"
+   },
+   "input_format": null,
+   "source_tz": "Europe/Berlin",
+   "val": "true",
+   "val_kind": "str"
+  },
+  {
+   "expected": {
+    "error": "TransformError",
+    "msg": "Cannot parse timestamp: 'null'"
+   },
+   "input_format": null,
+   "source_tz": null,
+   "val": "null",
+   "val_kind": "str"
+  },
+  {
+   "expected": {
+    "error": "TransformError",
+    "msg": "Cannot parse timestamp: 'null'"
+   },
+   "input_format": null,
+   "source_tz": "Asia/Tokyo",
+   "val": "null",
+   "val_kind": "str"
+  },
+  {
+   "expected": {
+    "error": "TransformError",
+    "msg": "Cannot parse timestamp: 'null'"
+   },
+   "input_format": null,
+   "source_tz": "Europe/Berlin",
+   "val": "null",
+   "val_kind": "str"
+  },
+  {
+   "expected": {
+    "error": "TransformError",
+    "msg": "Cannot parse timestamp: '0000-00-00'"
+   },
+   "input_format": null,
+   "source_tz": null,
+   "val": "0000-00-00",
+   "val_kind": "str"
+  },
+  {
+   "expected": {
+    "error": "TransformError",
+    "msg": "Cannot parse timestamp: '0000-00-00'"
+   },
+   "input_format": null,
+   "source_tz": "Asia/Tokyo",
+   "val": "0000-00-00",
+   "val_kind": "str"
+  },
+  {
+   "expected": {
+    "error": "TransformError",
+    "msg": "Cannot parse timestamp: '0000-00-00'"
+   },
+   "input_format": null,
+   "source_tz": "Europe/Berlin",
+   "val": "0000-00-00",
+   "val_kind": "str"
+  },
+  {
+   "expected": {
+    "error": "TransformError",
+    "msg": "Cannot parse timestamp: '2026-02-30'"
+   },
+   "input_format": null,
+   "source_tz": null,
+   "val": "2026-02-30",
+   "val_kind": "str"
+  },
+  {
+   "expected": {
+    "error": "TransformError",
+    "msg": "Cannot parse timestamp: '2026-02-30'"
+   },
+   "input_format": null,
+   "source_tz": "Asia/Tokyo",
+   "val": "2026-02-30",
+   "val_kind": "str"
+  },
+  {
+   "expected": {
+    "error": "TransformError",
+    "msg": "Cannot parse timestamp: '2026-02-30'"
+   },
+   "input_format": null,
+   "source_tz": "Europe/Berlin",
+   "val": "2026-02-30",
+   "val_kind": "str"
+  },
+  {
+   "expected": {
+    "dt": "2026-10-25T00:30:00.000000+00:00"
+   },
+   "input_format": null,
+   "source_tz": "Europe/Berlin",
+   "val": "2026-10-25T02:30:00",
+   "val_kind": "str"
+  },
+  {
+   "expected": {
+    "dt": "2026-10-25T02:30:00.000000+00:00"
+   },
+   "input_format": null,
+   "source_tz": null,
+   "val": "2026-10-25T02:30:00",
+   "val_kind": "str"
+  },
+  {
+   "expected": {
+    "dt": "2026-03-29T01:30:00.000000+00:00"
+   },
+   "input_format": null,
+   "source_tz": "Europe/Berlin",
+   "val": "2026-03-29T02:30:00",
+   "val_kind": "str"
+  },
+  {
+   "expected": {
+    "dt": "1970-01-01T00:00:00.000000+00:00"
+   },
+   "input_format": null,
+   "source_tz": null,
+   "val": 0,
+   "val_kind": "int"
+  },
+  {
+   "expected": {
+    "dt": "1970-01-01T00:00:00.000000+00:00"
+   },
+   "input_format": null,
+   "source_tz": "Asia/Tokyo",
+   "val": 0,
+   "val_kind": "int"
+  },
+  {
+   "expected": {
+    "dt": "1970-01-01T00:00:01.000000+00:00"
+   },
+   "input_format": null,
+   "source_tz": null,
+   "val": 1,
+   "val_kind": "int"
+  },
+  {
+   "expected": {
+    "dt": "1969-12-31T23:59:59.000000+00:00"
+   },
+   "input_format": null,
+   "source_tz": null,
+   "val": -1,
+   "val_kind": "int"
+  },
+  {
+   "expected": {
+    "dt": "1970-01-01T00:00:01.750000+00:00"
+   },
+   "input_format": null,
+   "source_tz": null,
+   "val": 1.75,
+   "val_kind": "float"
+  },
+  {
+   "expected": {
+    "dt": "1970-01-01T00:00:01.750000+00:00"
+   },
+   "input_format": null,
+   "source_tz": "Asia/Tokyo",
+   "val": 1.75,
+   "val_kind": "float"
+  },
+  {
+   "expected": {
+    "dt": "2009-02-13T23:31:30.000000+00:00"
+   },
+   "input_format": null,
+   "source_tz": null,
+   "val": 1234567890,
+   "val_kind": "int"
+  },
+  {
+   "expected": {
+    "dt": "2023-11-14T22:13:20.500000+00:00"
+   },
+   "input_format": null,
+   "source_tz": null,
+   "val": 1700000000.5,
+   "val_kind": "float"
+  },
+  {
+   "expected": {
+    "dt": "1930-11-18T00:28:30.000000+00:00"
+   },
+   "input_format": null,
+   "source_tz": null,
+   "val": -1234567890,
+   "val_kind": "int"
+  },
+  {
+   "expected": {
+    "dt": "2009-02-13T23:31:30.123000+00:00"
+   },
+   "input_format": null,
+   "source_tz": null,
+   "val": 1234567890123,
+   "val_kind": "int"
+  },
+  {
+   "expected": {
+    "dt": "2009-02-13T23:31:30.123456+00:00"
+   },
+   "input_format": null,
+   "source_tz": null,
+   "val": 1234567890123456,
+   "val_kind": "int"
+  },
+  {
+   "expected": {
+    "dt": "2009-02-13T23:31:30.123457+00:00"
+   },
+   "input_format": null,
+   "source_tz": null,
+   "val": 1234567890123456789,
+   "val_kind": "int"
+  },
+  {
+   "expected": {
+    "dt": "2009-02-13T23:31:30.123457+00:00"
+   },
+   "input_format": null,
+   "source_tz": "Asia/Tokyo",
+   "val": 1234567890123456789,
+   "val_kind": "int"
+  },
+  {
+   "expected": {
+    "dt": "2286-11-20T17:46:39.000000+00:00"
+   },
+   "input_format": null,
+   "source_tz": null,
+   "val": 9999999999,
+   "val_kind": "int"
+  },
+  {
+   "expected": {
+    "dt": "2286-11-20T17:46:39.999998+00:00"
+   },
+   "input_format": null,
+   "source_tz": null,
+   "val": 9999999999999999,
+   "val_kind": "int"
+  },
+  {
+   "expected": {
+    "dt": "2286-11-20T17:46:40.000000+00:00"
+   },
+   "input_format": null,
+   "source_tz": null,
+   "val": 9999999999999999999,
+   "val_kind": "int"
+  },
+  {
+   "expected": {
+    "dt": "2286-11-20T17:46:40.000000+00:00"
+   },
+   "input_format": null,
+   "source_tz": null,
+   "val": 10000000000000000000,
+   "val_kind": "int"
+  },
+  {
+   "expected": {
+    "dt": "2026-10-07T12:30:45.000000+00:00"
+   },
+   "input_format": null,
+   "source_tz": null,
+   "val": "2026-10-07T12:30:45",
+   "val_kind": "dt"
+  },
+  {
+   "expected": {
+    "dt": "2026-10-07T03:30:45.000000+00:00"
+   },
+   "input_format": null,
+   "source_tz": "Asia/Tokyo",
+   "val": "2026-10-07T12:30:45",
+   "val_kind": "dt"
+  },
+  {
+   "expected": {
+    "dt": "2026-10-07T10:30:45.000000+00:00"
+   },
+   "input_format": null,
+   "source_tz": "Europe/Berlin",
+   "val": "2026-10-07T12:30:45",
+   "val_kind": "dt"
+  },
+  {
+   "expected": {
+    "dt": "2026-10-07T12:30:45.123456+00:00"
+   },
+   "input_format": null,
+   "source_tz": null,
+   "val": "2026-10-07T12:30:45.123456",
+   "val_kind": "dt"
+  },
+  {
+   "expected": {
+    "dt": "2026-10-07T03:30:45.123456+00:00"
+   },
+   "input_format": null,
+   "source_tz": "Asia/Tokyo",
+   "val": "2026-10-07T12:30:45.123456",
+   "val_kind": "dt"
+  },
+  {
+   "expected": {
+    "dt": "2026-10-07T10:30:45.123456+00:00"
+   },
+   "input_format": null,
+   "source_tz": "Europe/Berlin",
+   "val": "2026-10-07T12:30:45.123456",
+   "val_kind": "dt"
+  },
+  {
+   "expected": {
+    "dt": "2026-10-07T12:30:00.000000+00:00"
+   },
+   "input_format": null,
+   "source_tz": null,
+   "val": "2026-10-07T18:00:00+05:30",
+   "val_kind": "dt"
+  },
+  {
+   "expected": {
+    "dt": "2026-10-07T12:30:00.000000+00:00"
+   },
+   "input_format": null,
+   "source_tz": "Asia/Tokyo",
+   "val": "2026-10-07T18:00:00+05:30",
+   "val_kind": "dt"
+  },
+  {
+   "expected": {
+    "dt": "2026-10-07T12:30:00.000000+00:00"
+   },
+   "input_format": null,
+   "source_tz": "Europe/Berlin",
+   "val": "2026-10-07T18:00:00+05:30",
+   "val_kind": "dt"
+  },
+  {
+   "expected": {
+    "dt": "2026-10-07T06:00:00.000000+00:00"
+   },
+   "input_format": null,
+   "source_tz": null,
+   "val": "2026-10-07T06:00:00+00:00",
+   "val_kind": "dt"
+  },
+  {
+   "expected": {
+    "dt": "2026-10-07T06:00:00.000000+00:00"
+   },
+   "input_format": null,
+   "source_tz": "Asia/Tokyo",
+   "val": "2026-10-07T06:00:00+00:00",
+   "val_kind": "dt"
+  },
+  {
+   "expected": {
+    "dt": "2026-10-07T06:00:00.000000+00:00"
+   },
+   "input_format": null,
+   "source_tz": "Europe/Berlin",
+   "val": "2026-10-07T06:00:00+00:00",
+   "val_kind": "dt"
+  },
+  {
+   "expected": {
+    "dt": "0001-01-01T00:00:00.000000+00:00"
+   },
+   "input_format": null,
+   "source_tz": null,
+   "val": "0001-01-01T00:00:00",
+   "val_kind": "dt"
+  },
+  {
+   "expected": {
+    "error": "OverflowError",
+    "msg": "date value out of range"
+   },
+   "input_format": null,
+   "source_tz": "Asia/Tokyo",
+   "val": "0001-01-01T00:00:00",
+   "val_kind": "dt"
+  },
+  {
+   "expected": {
+    "error": "OverflowError",
+    "msg": "date value out of range"
+   },
+   "input_format": null,
+   "source_tz": "Europe/Berlin",
+   "val": "0001-01-01T00:00:00",
+   "val_kind": "dt"
+  },
+  {
+   "expected": {
+    "dt": "9999-12-31T23:59:59.999999+00:00"
+   },
+   "input_format": null,
+   "source_tz": null,
+   "val": "9999-12-31T23:59:59.999999",
+   "val_kind": "dt"
+  },
+  {
+   "expected": {
+    "dt": "9999-12-31T14:59:59.999999+00:00"
+   },
+   "input_format": null,
+   "source_tz": "Asia/Tokyo",
+   "val": "9999-12-31T23:59:59.999999",
+   "val_kind": "dt"
+  },
+  {
+   "expected": {
+    "dt": "9999-12-31T22:59:59.999999+00:00"
+   },
+   "input_format": null,
+   "source_tz": "Europe/Berlin",
+   "val": "9999-12-31T23:59:59.999999",
+   "val_kind": "dt"
+  },
+  {
+   "expected": {
+    "dt": "2026-10-07T12:30:00.000000+00:00"
+   },
+   "input_format": "%d/%m/%Y %H:%M",
+   "source_tz": null,
+   "val": "07/10/2026 12:30",
+   "val_kind": "str"
+  },
+  {
+   "expected": {
+    "dt": "2026-10-07T03:30:00.000000+00:00"
+   },
+   "input_format": "%d/%m/%Y %H:%M",
+   "source_tz": "Asia/Tokyo",
+   "val": "07/10/2026 12:30",
+   "val_kind": "str"
+  },
+  {
+   "expected": {
+    "dt": "2026-10-07T00:00:00.000000+00:00"
+   },
+   "input_format": "%Y-%m-%d",
+   "source_tz": null,
+   "val": "2026-10-07",
+   "val_kind": "str"
+  },
+  {
+   "expected": {
+    "error": "TransformError",
+    "msg": "Cannot parse '07/10/2026' with format '%Y-%m-%d': time data '07/10/2026' does not match format '%Y-%m-%d'"
+   },
+   "input_format": "%Y-%m-%d",
+   "source_tz": null,
+   "val": "07/10/2026",
+   "val_kind": "str"
+  },
+  {
+   "expected": {
+    "dt": "2026-10-07T00:00:00.000000+00:00"
+   },
+   "input_format": "%Y-%m-%d %H:%M",
+   "source_tz": "Asia/Tokyo",
+   "val": "2026-10-07 09:00",
+   "val_kind": "str"
+  },
+  {
+   "expected": {
+    "error": "TransformError",
+    "msg": "Cannot parse '99/99/9999' with format '%d/%m/%Y': time data '99/99/9999' does not match format '%d/%m/%Y'"
+   },
+   "input_format": "%d/%m/%Y",
+   "source_tz": null,
+   "val": "99/99/9999",
+   "val_kind": "str"
+  }
+ ]
+}

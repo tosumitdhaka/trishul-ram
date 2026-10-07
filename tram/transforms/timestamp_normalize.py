@@ -55,7 +55,20 @@ def _parse_timestamp(
         except ValueError as exc:
             raise TransformError(f"Cannot parse {s!r} with format {input_format!r}: {exc}") from exc
 
-    # Try ISO-8601 variants
+    # Fast path: Python 3.11+ fromisoformat (C-accelerated) handles most ISO
+    # variants, including compact basic format, comma fractions, "Z", and
+    # bare/compact offsets. Typical ISO inputs no longer pay up to seven
+    # failed strptime attempts.
+    try:
+        dt = datetime.fromisoformat(s)
+        if dt.tzinfo is None:
+            dt = dt.replace(tzinfo=source_tz or UTC)
+        return dt.astimezone(UTC)
+    except ValueError:
+        pass
+
+    # strptime fallback for inputs fromisoformat rejects, e.g. offsets with
+    # seconds ("+05:00:30") and non-padded dates ("2026-1-7").
     for fmt in (
         "%Y-%m-%dT%H:%M:%S.%f%z",
         "%Y-%m-%dT%H:%M:%S%z",
@@ -72,15 +85,6 @@ def _parse_timestamp(
             return dt.astimezone(UTC)
         except ValueError:
             continue
-
-    # Python 3.11+ fromisoformat handles most ISO variants
-    try:
-        dt = datetime.fromisoformat(s)
-        if dt.tzinfo is None:
-            dt = dt.replace(tzinfo=source_tz or UTC)
-        return dt.astimezone(UTC)
-    except ValueError:
-        pass
 
     raise TransformError(f"Cannot parse timestamp: {val!r}")
 
@@ -152,7 +156,14 @@ class TimestampNormalizeTransform(BaseTransform):
         if self.output_format == "epoch_ns":
             return int(dt.timestamp() * 1_000_000_000)
         if self.output_format == "iso":
-            return dt.strftime("%Y-%m-%dT%H:%M:%S.%f")[:-3] + "Z"  # millisecond precision + Z
+            # Millisecond precision + "Z". Byte-identical to the strftime
+            # construction: str(dt.year) mirrors this platform's non-zero-padded
+            # %Y (year 1 -> "1-01-01..."), and // 1000 truncates microseconds.
+            return (
+                f"{dt.year}-{dt.month:02d}-{dt.day:02d}T"
+                f"{dt.hour:02d}:{dt.minute:02d}:{dt.second:02d}"
+                f".{dt.microsecond // 1000:03d}Z"
+            )
         if self.output_format == "datetime":
             return dt
         return dt.strftime(self.output_format)
