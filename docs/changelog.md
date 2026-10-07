@@ -5,6 +5,16 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ---
 
+## [1.6.1] - 2026-10-07
+
+### Changed
+- Timestamp parsing fast path: ISO-8601 strings (the dominant telecom timestamp form) are parsed by `datetime.fromisoformat` first instead of paying up to seven failed `strptime` attempts; numeric-epoch, numeric-string, and explicit `input_format` precedence is unchanged, and the interpretation of every previously accepted input is preserved (pinned by a 176-case golden corpus captured from the pre-change parser, including exact error messages). The default `iso` output formatting is byte-identical to the old `strftime` construction (millisecond truncation, unpadded years < 1000). Shared kernel: `timestamp_normalize`, `counter_delta`, and `window_aggregate` all inherit the gain
+- Compile-once sink routing conditions: per-sink conditions are parsed once per executor instance and evaluated through thread-local evaluators with per-record names binding (the `filter` transform's proven pattern) instead of constructing a fresh evaluator and re-parsing per record. Routing semantics, names isolation, and `TramError` "Condition eval error:" wording are unchanged; an empty batch short-circuits without parsing exactly as before
+- Kafka sink fast path for eligible keyless batches: when the executor supplies `output_record_count` within `chunk_records` and the already-serialized payload is keyless and its actual length is within `chunk_bytes`, the batch is sent as one message without re-parsing records or re-serializing for the chunk-size decision. Acknowledgement wait, retry/backoff accounting, at-least-once semantics, and the legacy path for all other cases are unchanged. Behavior note: near-cap batches are sized by actual payload length instead of the sum of per-record serialized lengths — a batch the old sum model split into two messages is now one byte-faithful message
+
+### Performance
+- Kind-cluster A/B (same cluster, 500m workers, 10×10k CDR corpus, 5 reps/scenario/side, version images): stateful transform chain (counter_delta+window_aggregate) 2.39×; conditional multi-sink routing 3.94×; keyed Kafka control unchanged (0.97×). The keyless Kafka fast path engages (default `batch_size` 500 → ~281 KB in-cap payloads) but end-to-end throughput on a sync `acks=all` shape is unchanged (0.95×): the scenario is broker-round-trip-bound and the removed write CPU (~2–3%) is inside noise — the gain is per-write CPU (21.5× on the write call, deployment-Python paired re-measure) and shows end-to-end only when the sink write path is CPU-bound. Output byte-identical on both sides; zero errors across 40 reps
+
 ## [1.6.0] - 2026-10-06
 
 ### Added

@@ -157,10 +157,10 @@ unconfirmed work lives in the backlog at the bottom.
 
 > Decided 2026-10-07 after the corrected v1.6.0 capacity review and local paired experiments. Scope is locked to the three changes below plus their compatibility checks and affected-pipeline re-measurement. Operation-level gains are not whole-pipeline forecasts. Evidence: [`perf-followup-assessment-2026-10-07.md`](ideas/perf-followup-assessment-2026-10-07.md); release scope and proposed subsequent work: [`perf-v161-v170-plan.md`](plans/perf-v161-v170-plan.md).
 
-- [ ] **Timestamp handling** — ISO-first fast path with numeric-epoch and explicit-format precedence retained ahead of it and the interpretation of all currently accepted inputs preserved; faster default ISO formatting with byte-identical default output strings; shared benefits for timestamp normalization, counter delta, and window aggregation
-- [ ] **Compile-once sink conditions** — reuse parsed expressions and thread-local evaluators for conditional routing, preserving names isolation and the existing routing error type and message
-- [ ] **Bounded Kafka sink fast path** — use executor-supplied output count and actual payload length to avoid re-parsing/re-sizing eligible keyless payloads; retain existing fallback, acknowledgements, ordering, and retry semantics; pin the expected single-vs-multi message behavior for near-cap batches (actual payload length replaces the current sum-of-per-record sizing)
-- [ ] Semantic regression checks, deployment-Python full-pipeline re-measurement (target: ≥20% improvement on affected pipelines, not every workload), independent full-diff review, and release gate
+- [x] **Timestamp handling** — ISO-first fast path with numeric-epoch and explicit-format precedence retained ahead of it and the interpretation of all currently accepted inputs preserved; faster default ISO formatting with byte-identical default output strings; shared benefits for timestamp normalization, counter delta, and window aggregation
+- [x] **Compile-once sink conditions** — reuse parsed expressions and thread-local evaluators for conditional routing, preserving names isolation and the existing routing error type and message
+- [x] **Bounded Kafka sink fast path** — use executor-supplied output count and actual payload length to avoid re-parsing/re-sizing eligible keyless payloads; retain existing fallback, acknowledgements, ordering, and retry semantics; pin the expected single-vs-multi message behavior for near-cap batches (actual payload length replaces the current sum-of-per-record sizing)
+- [x] Semantic regression checks, deployment-Python full-pipeline re-measurement (target: ≥20% improvement on affected pipelines, not every workload), independent full-diff review, and release gate
 
 ## v1.7.0 — HTTP and Protobuf Performance (proposal)
 
