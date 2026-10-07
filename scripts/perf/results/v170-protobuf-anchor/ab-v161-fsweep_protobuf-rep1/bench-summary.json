@@ -1,0 +1,37 @@
+{
+  "run_id": "ab-v161-fsweep_protobuf-rep1",
+  "side": "v161",
+  "scenario": "fsweep_protobuf",
+  "rep": 1,
+  "scenario_note": "local .pb \u2192 protobuf passthrough (v1.7.0 anchor)",
+  "rep_started_at": "2026-10-07T10:45:00.465619+00:00",
+  "run_one_rc": 0,
+  "aborted": null,
+  "run_history": {
+    "rows": 1,
+    "records_in": 100000,
+    "records_out": 100000,
+    "records_skipped": 0,
+    "bytes_in": 27996680,
+    "bytes_out": 27996680,
+    "errors": 0,
+    "error_msgs": [],
+    "statuses": [
+      "success"
+    ],
+    "wall_s": 9.77256,
+    "nodes": [
+      "trishul-ram-worker-0"
+    ]
+  },
+  "kafka_offsets": null,
+  "metrics": {
+    "records_in": 100000,
+    "records_out": 100000,
+    "records_skipped": 0,
+    "errors": 0,
+    "duration_s": 9.8,
+    "throughput_in_recs_s": 10204.1,
+    "throughput_out_recs_s": 10204.1
+  }
+}

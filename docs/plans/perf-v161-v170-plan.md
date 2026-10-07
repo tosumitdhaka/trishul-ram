@@ -116,6 +116,14 @@ that v1.6.0 number, not a predicted outcome; recompute it as 2× whatever the
 fresh v1.6.1 baseline yields. Measure RSS and
 transformed-pipeline fallback overhead too.
 
+**Measured fresh v1.6.1 anchor (2026-10-07, `scripts/perf/results/v170-protobuf-anchor/`):**
+median **11,111 records/s** over 5 reps (100k in / 100k out each, 0 errors;
+kind, mw topology, 500m workers, image `local-20261007072806` = v1.6.1 @
+`84117f0`, `fsweep_protobuf` template, 10×10k corpus). The v1.6.0 dip did
+not reproduce — the anchor is 1.07× v1.5.1's 10,363 and 1.17× v1.6.0's 9,527 —
+confirming the plan's requirement to re-measure rather than assume. The
+recomputed pilot test goal is **≈22.2k records/s** (2× the anchor).
+
 ### Second pilot: descriptor-aware conversion for transformed workloads
 
 If Protobuf pipelines commonly transform records, benchmark a conversion plan
