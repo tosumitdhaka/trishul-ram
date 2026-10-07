@@ -1224,6 +1224,7 @@ class PipelineExecutor:
         sink_cb_keys: list[str] | None = None,
         stats: PipelineStats | None = None,
         flush_buffer: _StreamFlushBuffer | None = None,
+        passthrough: bool = False,
     ) -> bool:
         """Process one (raw, meta) chunk. Returns True on success.
 
@@ -1235,10 +1236,28 @@ class PipelineExecutor:
         now" (record threshold / flush interval / ``source_batch_end``
         triggers). Without a buffer the chunk is written to the sinks
         immediately and True means success.
+
+        When *passthrough* is True (validated same-schema Protobuf
+        passthrough, v1.7.0 pilot B) the chunk is dispatched to the
+        protobuf_passthrough module: every frame is validated, the original
+        message bytes are preserved and re-framed, and the payload is written
+        through the sinks without the dictionary round trip. The flag is only
+        set after the run-start eligibility re-check passed.
         """
         from tram.metrics.registry import DLQ_RECORDS, ERRORS, RECORDS_IN
 
         meta = _augment_chunk_meta(meta, ctx)
+        if passthrough:
+            from tram.pipeline.protobuf_passthrough import (
+                process_chunk as _protobuf_passthrough_chunk,
+            )
+
+            return _protobuf_passthrough_chunk(
+                self, raw, meta, serializer_in, serializer_out, sinks, ctx,
+                on_error, rate_limit_rps=rate_limit_rps,
+                parallel_sinks=parallel_sinks, sink_cb_keys=sink_cb_keys,
+                stats=stats,
+            )
         try:
             raw_size = _payload_size_bytes(raw)
             ctx.inc_bytes_in(raw_size)
@@ -1604,15 +1623,40 @@ class PipelineExecutor:
         stats: PipelineStats | None = None,
     ) -> None:
         """Inner loop: read source chunks and process with optional thread pool."""
+        passthrough = False
+        if getattr(config, "protobuf_passthrough", False) is True:
+            # Runtime re-check of the registration-time eligibility gate
+            # (v1.7.0 pilot B): belt and braces against schema files changing
+            # on disk, plus runtime-mode conditions the config gate cannot see
+            # (record_chunk_size). Any unmet condition falls back to the
+            # existing dictionary path with one WARNING.
+            from tram.pipeline.protobuf_passthrough import protobuf_passthrough_runtime_reasons
+
+            reasons = protobuf_passthrough_runtime_reasons(
+                config, record_chunk_size=getattr(config, "record_chunk_size", None)
+            )
+            if reasons:
+                logger.warning(
+                    "protobuf_passthrough enabled but not eligible at runtime — "
+                    "falling back to the dictionary path",
+                    extra={
+                        "pipeline": config.name,
+                        "reasons": "; ".join(reasons),
+                    },
+                )
+            else:
+                passthrough = True
         if config.thread_workers > 1:
             self._run_batch_chunks_threaded(
                 config, source, sinks, serializer_in, serializer_out,
                 transforms, dlq_sink, ctx, sink_cb_keys=sink_cb_keys, stats=stats,
+                passthrough=passthrough,
             )
             return
         self._run_batch_chunks_sequential(
             config, source, sinks, serializer_in, serializer_out,
             transforms, dlq_sink, ctx, sink_cb_keys=sink_cb_keys, stats=stats,
+            passthrough=passthrough,
         )
 
     def _run_batch_chunks_sequential(
@@ -1627,6 +1671,7 @@ class PipelineExecutor:
         ctx: PipelineRunContext,
         sink_cb_keys: list[str] | None = None,
         stats: PipelineStats | None = None,
+        passthrough: bool = False,
     ) -> None:
         """Single-threaded batch loop. Each chunk is fully processed before the
         next one is pulled, so source finalize runs strictly after the chunk
@@ -1669,6 +1714,7 @@ class PipelineExecutor:
                         raw, meta, serializer_in, transforms,
                         serializer_out, sinks, ctx, on_error,
                         rate_limit_rps, dlq_sink, parallel_sinks, sink_cb_keys, stats,
+                        passthrough=passthrough,
                     )
                 if batch_size and ctx.records_in >= batch_size:
                     logger.info(
@@ -1707,6 +1753,7 @@ class PipelineExecutor:
         ctx: PipelineRunContext,
         sink_cb_keys: list[str] | None = None,
         stats: PipelineStats | None = None,
+        passthrough: bool = False,
     ) -> None:
         """Multi-threaded batch loop: bounded in-flight chunks + deferred finalize.
 
@@ -1754,6 +1801,7 @@ class PipelineExecutor:
                     raw, meta, serializer_in, transforms,
                     serializer_out, sinks, ctx, on_error,
                     config.rate_limit_rps, dlq_sink, parallel_sinks, sink_cb_keys, stats,
+                    passthrough=passthrough,
                 )
             key = _source_unit_key(meta)
             if key is not None:
@@ -1840,6 +1888,25 @@ class PipelineExecutor:
         transforms = self._build_transforms(config)
         dlq_sink = self._build_dlq_sink(config)
         sink_cb_keys = [self._make_sink_cb_key(config, i) for i in range(len(sinks))]
+
+        if getattr(config, "protobuf_passthrough", False) is True:
+            # v1.7.0 pilot B: stream mode always uses the micro-batch flush
+            # buffer (GH #78), which passthrough does not support — the run
+            # falls back to the dictionary path with one WARNING. The batch
+            # path re-checks eligibility per run in _run_batch_chunks.
+            from tram.pipeline.protobuf_passthrough import protobuf_passthrough_runtime_reasons
+
+            reasons = protobuf_passthrough_runtime_reasons(config)
+            reasons.append(
+                "stream mode uses the micro-batch flush buffer — passthrough "
+                "writes chunks immediately and is not supported on the buffered "
+                "stream path"
+            )
+            logger.warning(
+                "protobuf_passthrough enabled but not eligible at runtime — "
+                "falling back to the dictionary path",
+                extra={"pipeline": config.name, "reasons": "; ".join(reasons)},
+            )
 
         ctx = PipelineRunContext(pipeline_name=config.name)
 
