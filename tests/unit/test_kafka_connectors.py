@@ -1,4 +1,4 @@
-"""Tests for Kafka source connector."""
+"""Tests for Kafka source connector and Kafka sink fast-path eligibility."""
 from __future__ import annotations
 
 import sys
@@ -8,8 +8,10 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
+from tram.connectors.kafka.sink import KafkaSink
 from tram.connectors.kafka.source import KafkaSource
 from tram.core.exceptions import SourceError
+from tram.serializers.json_serializer import JsonSerializer
 
 
 class _TopicPartition:
@@ -463,3 +465,75 @@ class TestKafkaSourceStop:
         # re-polled on restart, preserving at-least-once). The mock here only
         # pins the loop structure, not the closed-consumer failure mode.
         assert mock_consumer.poll.call_count == 1
+
+
+class TestKafkaSinkFastPath:
+    """Kafka sink single-message fast path (perf follow-up 2026-10-07).
+
+    When the executor already supplied ``output_record_count`` and the payload
+    is already-serialized bytes within both caps (and the sink is keyless),
+    ``KafkaSink.write`` sends it as ONE message without re-parsing records or
+    re-serializing via ``chunk_records_by_caps``. Every ineligibility reason
+    falls back to the legacy parse-and-chunk path (parse is invoked).
+    """
+
+    _JSON_META = {"serializer_type": "json", "serializer_config": {"type": "json"}}
+
+    @staticmethod
+    def _make_sink(config_extra: dict | None = None) -> KafkaSink:
+        cfg = {"brokers": ["kafka:9092"], "topic": "events"}
+        if config_extra:
+            cfg.update(config_extra)
+        return KafkaSink(cfg)
+
+    @staticmethod
+    def _serialized_records(count: int = 2) -> bytes:
+        return JsonSerializer({}).serialize([{"seq": i} for i in range(count)])
+
+    def test_fast_path_sends_single_message_without_reparse(self):
+        """Eligible batch: no re-parse, no chunk re-serialization, exactly one
+        send carrying the exact payload bytes (keyless → no key)."""
+        data = self._serialized_records(2)
+        sink = self._make_sink()
+        producer = MagicMock()
+        sink._producer = producer
+
+        with (
+            patch.object(sink, "_parse_payload") as mock_parse,
+            patch("tram.connectors.kafka.sink.chunk_records_by_caps") as mock_chunk,
+        ):
+            sink.write(data, dict(self._JSON_META, output_record_count=2))
+
+        mock_parse.assert_not_called()  # no re-parse of the payload
+        mock_chunk.assert_not_called()  # no per-record re-serialization
+        assert producer.send.call_count == 1
+        call = producer.send.call_args
+        assert call.kwargs["value"] is data  # exact payload bytes, byte-faithful
+        assert call.kwargs["key"] is None  # keyless batch → no key
+
+    @pytest.mark.parametrize(
+        ("config_extra", "meta_extra"),
+        [
+            (None, None),  # count missing
+            (None, {"output_record_count": 0}),  # count 0
+            ({"chunk_records": 2}, {"output_record_count": 3}),  # count > record cap
+            ({"chunk_bytes": 10}, {"output_record_count": 2}),  # payload > byte cap
+            ({"key_field": "seq"}, {"output_record_count": 2}),  # key configured
+        ],
+    )
+    def test_fast_path_falls_back_to_legacy_when_ineligible(
+        self, config_extra, meta_extra
+    ):
+        """Each ineligibility reason takes the legacy path: parse is invoked."""
+        data = self._serialized_records(2)
+        sink = self._make_sink(config_extra)
+        producer = MagicMock()
+        sink._producer = producer
+        meta = dict(self._JSON_META)
+        if meta_extra:
+            meta.update(meta_extra)
+
+        with patch.object(sink, "_parse_payload", wraps=sink._parse_payload) as mock_parse:
+            sink.write(data, meta)
+
+        mock_parse.assert_called_once_with(data, meta)

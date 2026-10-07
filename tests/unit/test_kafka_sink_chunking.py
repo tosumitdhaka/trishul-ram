@@ -195,3 +195,107 @@ def test_model_default_caps_and_validation() -> None:
             chunk_bytes=2_000_000,
             max_request_size=1_048_576,
         )
+
+
+def test_near_cap_eligible_batch_sent_as_single_byte_faithful_message() -> None:
+    """Near-cap pinning (perf follow-up 2026-10-07): the legacy cap decision
+    sums per-record serialized lengths — an overestimate with indented JSON
+    framing — which would split this batch into 2 chunks. The fast path uses
+    the ACTUAL payload length (within chunk_bytes) and sends it as ONE
+    byte-faithful message."""
+    records = [{"seq": i, "pad": "x" * 40} for i in range(2)]
+    serializer = JsonSerializer({"indent": 2})
+    data = serializer.serialize(records)
+    per_record_sum = sum(len(serializer.serialize([record])) for record in records)
+    assert per_record_sum > len(data)  # the overestimate that splits the legacy path
+
+    sink = _make_sink({"chunk_bytes": len(data)})
+    producer = MagicMock()
+    sink._producer = producer
+    meta = {
+        "serializer_type": "json",
+        "serializer_config": {"type": "json", "indent": 2},
+        "output_record_count": len(records),
+    }
+
+    with (
+        patch.object(sink, "_parse_payload") as mock_parse,
+        patch("tram.connectors.kafka.sink.chunk_records_by_caps") as mock_chunk,
+    ):
+        sink.write(data, meta)
+
+    mock_parse.assert_not_called()  # fast path: no re-parse
+    mock_chunk.assert_not_called()  # fast path: no re-serialization
+    assert producer.send.call_count == 1
+    assert producer.send.call_args.kwargs["value"] is data  # byte-faithful
+
+
+def test_near_cap_batch_without_count_still_split_by_legacy_path() -> None:
+    """Counterpart: the same near-cap batch WITHOUT the executor-supplied count
+    is ineligible, so the legacy path re-parses and chunks by the per-record
+    serialized-length sum — the overestimate splits it into 2 messages."""
+    records = [{"seq": i, "pad": "x" * 40} for i in range(2)]
+    serializer = JsonSerializer({"indent": 2})
+    data = serializer.serialize(records)
+    per_record_sum = sum(len(serializer.serialize([record])) for record in records)
+    assert per_record_sum > len(data)
+
+    sink = _make_sink({"chunk_bytes": len(data)})
+    producer = MagicMock()
+    sink._producer = producer
+    meta = {"serializer_type": "json", "serializer_config": {"type": "json", "indent": 2}}
+
+    sink.write(data, meta)
+
+    assert producer.send.call_count == 2  # legacy split on the per-record sum
+    sent = [call.kwargs["value"] for call in producer.send.call_args_list]
+    assert sent == [
+        serializer.serialize([records[0]]),
+        serializer.serialize([records[1]]),
+    ]
+
+
+def test_fast_path_failure_uses_same_sink_error_as_legacy() -> None:
+    """Retry-accounting parity: a fast-path send failure raises the same
+    SinkError as the legacy path, so the executor's per-sink retry/backoff/
+    circuit-breaker loop (which wraps write()) treats both paths identically —
+    one send attempt, then SinkError."""
+    records = [{"seq": i} for i in range(2)]
+    data = JsonSerializer({}).serialize(records)
+    metas = [dict(_JSON_META, output_record_count=2), dict(_JSON_META)]
+
+    errors = []
+    send_counts = []
+    for meta in metas:
+        sink = _make_sink()
+        producer = MagicMock()
+        future = MagicMock()
+        future.get.side_effect = RuntimeError("broker reject")
+        producer.send.return_value = future
+        sink._producer = producer
+
+        with pytest.raises(SinkError) as excinfo:
+            sink.write(data, meta)
+        errors.append(str(excinfo.value))
+        send_counts.append(producer.send.call_count)
+        future.get.assert_called_once_with(timeout=10)  # ack wait on both paths
+
+    assert send_counts == [1, 1]  # one send attempt each, then SinkError
+    assert errors[0] == errors[1]  # identical error → identical retry trigger
+
+
+def test_fast_path_waits_on_ack_future_with_ten_second_timeout() -> None:
+    """Ack-wait parity: the fast path blocks on the producer's ack future with
+    the same 10s timeout as the legacy path — a message is only 'sent' once the
+    broker acknowledges it."""
+    sink = _make_sink()
+    producer = MagicMock()
+    future = MagicMock()
+    producer.send.return_value = future
+    sink._producer = producer
+    data = JsonSerializer({}).serialize([{"seq": 1}, {"seq": 2}])
+
+    sink.write(data, dict(_JSON_META, output_record_count=2))
+
+    producer.send.assert_called_once()
+    future.get.assert_called_once_with(timeout=10)
