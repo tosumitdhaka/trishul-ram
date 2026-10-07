@@ -164,11 +164,12 @@ unconfirmed work lives in the backlog at the bottom.
 
 ## v1.7.0 — HTTP and Protobuf Performance (proposal)
 
-> Proposed 2026-10-07; implementation scope is not locked. Benchmark against the completed v1.6.1 baseline before selecting changes. See [`perf-v161-v170-plan.md`](plans/perf-v161-v170-plan.md) for staged scope and acceptance targets.
+> Proposed 2026-10-07; implemented and measured same day on the fresh v1.6.1 baseline. See [`perf-v161-v170-plan.md`](plans/perf-v161-v170-plan.md) for staged scope and acceptance targets; pilot evidence in `scripts/perf/results/v170-http-pilot/` and `scripts/perf/results/v170-passthrough-pilot/`.
 
-- [ ] **HTTP ingress pilot** — compare existing stack with `uvloop`/`httptools`, measure CPU throttling/event-loop lag and completion latency, and tune bounded concurrency; retain the current FastAPI API and webhook queue ownership
-- [ ] **Protobuf pilot** — validated same-schema passthrough for eligible pipelines, then descriptor-aware conversion if transformed workloads justify it; retain existing dictionary/plugin contracts as the default
-- [ ] Select shipping features from measured compatibility/performance results; process-separated ingress and native-message plugin APIs remain conditional follow-up designs
+- [x] **HTTP ingress pilot** — measured on kind (500m, both runtimes fresh-registered): p95 3.05→1.76 ms (−42%) and p50 −30% at moderate offered load, zero errors; throughput plateau unchanged (±6%, 573–678 rec/s both runtimes — bottleneck is downstream pipeline processing, ≥25% target not met). Ships opt-in, default off, with the explicit asyncio/h11 baseline pin and startup runtime reporting; uvloop/httptools in images via the `http_accel` extra
+- [x] **Protobuf pilot** — validated same-schema passthrough measured: 333,333 rec/s median (30× the 11,111 fresh v1.6.1 anchor; target 2×), byte-identical output (sha256), peak RSS 151 vs 247 Mi. Eligibility is strict (same-schema content, no transforms/conditions, local sinks, DLQ off) — no current real pipeline qualifies; see backlog note. Descriptor-aware conversion not pursued (pilot 1 removed the bottleneck; upb C-accelerated conversion remains the default path)
+- [x] Select shipping features from measured compatibility/performance results — both pilots ship default-off opt-in; process-separated ingress and native-message plugin APIs remain conditional follow-up designs
+- [ ] Independent full-diff review and release gate
 
 ## Post-v1.5.0 — AI Provider Layer (open design question)
 
@@ -295,3 +296,8 @@ unconfirmed work lives in the backlog at the bottom.
 | v1.0.1 | SNMP poll yield_rows; dynamic version |
 | v1.0.0 | API key auth; rate limiting; TLS; per-sink retry; circuit breaker; OTel |
 | v0.9.0 | Thread workers; batch_size; DLQ; CORBA source; processed-file tracking |
+
+### Performance follow-ups (2026-10-07, from v1.7.0 pilots)
+- [ ] **Stream re-adoption after worker restart** — measured on kind: no re-dispatch of a running stream pipeline within 900 s (asyncio/h11) / 600 s (uvloop) after a worker rollout; suspected cause is the cold-start stats deadlock (workers only send per-run stats, so a cluster running nothing reports nothing and the reconciler's liveness hysteresis never resolves). Flag-independent, pre-existing. Evidence: `scripts/perf/results/v170-http-pilot/`
+- [ ] **Pilot B real-pipeline eligibility** — passthrough eligibility (same-schema in/out, no transforms/conditions, local sinks, DLQ off) currently matches no real pipeline (all transform records; cisco_pm_proto_to_json and proto-device-event do not qualify); the 30× result is on the canonical eligible shape. Re-evaluate when pure-transport pipelines appear
+- [ ] **Accel-on cluster saturation check** — the 202-accepted/503-queue-full contract under overload with `TRAM_HTTP_ACCELERATED=1` is unit-covered but not kind-exercised; run before any fleet-wide enablement

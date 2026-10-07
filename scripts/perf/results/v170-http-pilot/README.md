@@ -39,3 +39,22 @@ Campaign re-run pending with the corrected runbook: after each rollout,
 verify webhook registration (canary POST → fast 202) BEFORE loadgen; baseline
 side now runs the explicit asyncio/h11 pin (a4ac731) so it is a true default
 runtime even with the extra installed.
+
+## Final A/B re-run (run2/, images local-20261007121103 with the a4ac731 pin)
+
+Both sides fresh-registered (symmetric); s1_webhook_local, 500m workers, 40s steps.
+
+| shape | base asyncio/h11 | accel uvloop/httptools | delta |
+|---|---|---|---|
+| 500 rps c50 p50/p95 (ms) | 1.75 / 3.05 | 1.23 / 1.76 | −30% / −42% |
+| plateau 1000–2500 c50 (rps) | 573–658 | 627–678 | ±6% |
+| 2000 rps c200 (rps) | 452 | 447 | ~0 |
+| errors | 0 | 0 | — |
+
+Verdict: latency target met (p95 1.76 ms ≪ 50 ms, −42%); ≥25% sustainable-throughput
+target NOT met — the plateau is bound downstream of HTTP parsing. Ships default-off.
+
+Adoption measurement: no stream re-adoption after worker rollout under EITHER
+runtime (900 s flag=0 / 600 s flag=1) — flag-independent pre-existing gap
+(roadmap backlog). The accelerated runtime serves registered webhook POSTs in
+1–2 ms and completes fresh dispatch/adoption-cycle operations normally.
