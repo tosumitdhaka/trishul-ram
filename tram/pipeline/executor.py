@@ -105,10 +105,15 @@ def _filter_by_condition(
     per call instead of once per record. Each record binds its own ``names``
     mapping on the calling thread's evaluator — no shared mutable names state
     between records or threads. Parse errors and eval errors both surface as
-    ``TramError("Condition eval error: ...")``, exactly as before.
+    ``TramError("Condition eval error: ...")``, exactly as before; empty
+    input short-circuits without parsing, exactly as before.
     """
     if _EvalCls is None:
         raise TramError("simpleeval is required for conditional routing")
+    if not records:
+        # Parity with the per-record-loop implementation: an empty batch never
+        # parsed the condition (and so never raised on a syntactically bad one).
+        return []
     cache = _cache if _cache is not None else {}
     parsed = cache.get(condition)
     if parsed is None:

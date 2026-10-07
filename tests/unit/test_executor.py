@@ -1175,6 +1175,16 @@ class TestSinkConditionCompileOnce:
         # A parse failure must never be cached.
         assert executor._condition_cache == {}
 
+    def test_empty_records_short_circuit_without_parsing(self):
+        """Empty-input parity: the per-record-loop implementation never parsed
+        the condition for an empty batch, so a syntactically bad condition
+        returned [] silently — the compile-once path must do the same."""
+        executor = PipelineExecutor()
+        result = _filter_by_condition([], "x ==", _cache=executor._condition_cache)
+        assert result == []
+        # Nothing parsed, nothing cached.
+        assert executor._condition_cache == {}
+
     def test_batch_run_abort_invalid_condition_fails_with_condition_eval_error(self):
         """A syntactically invalid sink condition under on_error=abort fails
         the run with the same 'Condition eval error:' message — the call-site
