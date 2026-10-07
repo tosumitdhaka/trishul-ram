@@ -1,0 +1,37 @@
+{
+  "run_id": "ab-v161-t4-rep1",
+  "side": "v161",
+  "scenario": "t4",
+  "rep": 1,
+  "scenario_note": "counter_delta+window_aggregate (timestamp kernel)",
+  "rep_started_at": "2026-10-07T07:33:07.373279+00:00",
+  "run_one_rc": 0,
+  "aborted": null,
+  "run_history": {
+    "rows": 1,
+    "records_in": 100000,
+    "records_out": 8,
+    "records_skipped": 0,
+    "bytes_in": 52378916,
+    "bytes_out": 1704,
+    "errors": 0,
+    "error_msgs": [],
+    "statuses": [
+      "success"
+    ],
+    "wall_s": 2.582354,
+    "nodes": [
+      "trishul-ram-worker-0"
+    ]
+  },
+  "kafka_offsets": null,
+  "metrics": {
+    "records_in": 100000,
+    "records_out": 8,
+    "records_skipped": 0,
+    "errors": 0,
+    "duration_s": 2.6,
+    "throughput_in_recs_s": 38461.5,
+    "throughput_out_recs_s": 3.1
+  }
+}

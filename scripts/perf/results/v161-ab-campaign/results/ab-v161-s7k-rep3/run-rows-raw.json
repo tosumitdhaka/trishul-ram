@@ -1,0 +1,18 @@
+[
+ {
+  "run_id": "f206f692-4916-4a24-a5c4-8f2e313758d5",
+  "pipeline": "s7k-local-kafka-keyless",
+  "status": "success",
+  "started_at": "2026-10-07T07:46:07.811435+00:00",
+  "finished_at": "2026-10-07T07:46:24.598454+00:00",
+  "records_in": 100000,
+  "records_out": 100000,
+  "records_skipped": 0,
+  "bytes_in": 52378916,
+  "bytes_out": 56278896,
+  "dlq_count": 0,
+  "error": null,
+  "errors": [],
+  "node": "trishul-ram-worker-0"
+ }
+]

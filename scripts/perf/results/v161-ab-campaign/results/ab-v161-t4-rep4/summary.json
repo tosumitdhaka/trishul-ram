@@ -1,0 +1,22 @@
+{
+  "runs_total": 14,
+  "runs_completed": 14,
+  "records_in": 1400000,
+  "records_out": 112,
+  "records_skipped": 0,
+  "bytes_in": 733304824,
+  "bytes_out": 23856,
+  "dlq_count": 0,
+  "run_duration_ms": {
+    "count": 14,
+    "total_ms": 70775.034,
+    "avg_ms": 5055.36,
+    "max_ms": 7467.097
+  },
+  "errors": [],
+  "error_count": 0,
+  "run_id": "ab-v161-t4-rep4",
+  "pipeline": "t4-counter-delta-window",
+  "api_url": "http://127.0.0.1:30001",
+  "collected_at": "2026-10-07T07:34:39.537278+00:00"
+}

@@ -1,0 +1,18 @@
+[
+ {
+  "run_id": "cfe1025b-9347-4094-853c-b4135c077d73",
+  "pipeline": "t4-counter-delta-window",
+  "status": "success",
+  "started_at": "2026-10-07T07:11:28.251135+00:00",
+  "finished_at": "2026-10-07T07:11:33.736050+00:00",
+  "records_in": 100000,
+  "records_out": 8,
+  "records_skipped": 0,
+  "bytes_in": 52378916,
+  "bytes_out": 1704,
+  "dlq_count": 0,
+  "error": null,
+  "errors": [],
+  "node": "trishul-ram-worker-0"
+ }
+]

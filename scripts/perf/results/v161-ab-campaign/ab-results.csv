@@ -1,0 +1,41 @@
+run_id,side,scenario,rep,records_in,records_out,records_skipped,errors,duration_s,throughput_in_recs_s,throughput_out_recs_s,note
+ab-v160-t4-rep1,v160,t4,1,100000,8,0,0,5.2,19230.8,1.5,counter_delta+window_aggregate (timestamp kernel)
+ab-v160-t4-rep2,v160,t4,2,100000,8,0,0,5.7,17543.9,1.4,counter_delta+window_aggregate (timestamp kernel)
+ab-v160-t4-rep3,v160,t4,3,100000,8,0,0,5.5,18181.8,1.5,counter_delta+window_aggregate (timestamp kernel)
+ab-v160-t4-rep4,v160,t4,4,100000,8,0,0,5.6,17857.1,1.4,counter_delta+window_aggregate (timestamp kernel)
+ab-v160-t4-rep5,v160,t4,5,100000,8,0,0,5.2,19230.8,1.5,counter_delta+window_aggregate (timestamp kernel)
+ab-v160-t6-rep1,v160,t6,1,100000,99062,0,0,7.0,14285.7,14151.7,"2 conditional sinks, thread_workers 4 (compile-once conditions)"
+ab-v160-t6-rep2,v160,t6,2,100000,99062,0,0,7.1,14084.5,13952.4,"2 conditional sinks, thread_workers 4 (compile-once conditions)"
+ab-v160-t6-rep3,v160,t6,3,100000,99062,0,0,7.0,14285.7,14151.7,"2 conditional sinks, thread_workers 4 (compile-once conditions)"
+ab-v160-t6-rep4,v160,t6,4,100000,99062,0,0,7.7,12987.0,12865.2,"2 conditional sinks, thread_workers 4 (compile-once conditions)"
+ab-v160-t6-rep5,v160,t6,5,100000,99062,0,0,8.0,12500.0,12382.8,"2 conditional sinks, thread_workers 4 (compile-once conditions)"
+ab-v160-s7-rep1,v160,s7,1,100000,100000,0,0,16.1,6211.2,6211.2,"kafka sink, KEYED (control — v1.6.1 does not change this path)"
+ab-v160-s7-rep2,v160,s7,2,100000,100000,0,0,15.8,6329.1,6329.1,"kafka sink, KEYED (control — v1.6.1 does not change this path)"
+ab-v160-s7-rep3,v160,s7,3,100000,100000,0,0,15.8,6329.1,6329.1,"kafka sink, KEYED (control — v1.6.1 does not change this path)"
+ab-v160-s7-rep4,v160,s7,4,100000,100000,0,0,16.8,5952.4,5952.4,"kafka sink, KEYED (control — v1.6.1 does not change this path)"
+ab-v160-s7-rep5,v160,s7,5,100000,100000,0,0,16.9,5917.2,5917.2,"kafka sink, KEYED (control — v1.6.1 does not change this path)"
+ab-v160-s7k-rep1,v160,s7k,1,100000,100000,0,0,17.5,5714.3,5714.3,"kafka sink, KEYLESS (v1.6.1 fast-path eligible)"
+ab-v160-s7k-rep2,v160,s7k,2,100000,100000,0,0,15.9,6289.3,6289.3,"kafka sink, KEYLESS (v1.6.1 fast-path eligible)"
+ab-v160-s7k-rep3,v160,s7k,3,100000,100000,0,0,16.1,6211.2,6211.2,"kafka sink, KEYLESS (v1.6.1 fast-path eligible)"
+ab-v160-s7k-rep4,v160,s7k,4,100000,100000,0,0,15.7,6369.4,6369.4,"kafka sink, KEYLESS (v1.6.1 fast-path eligible)"
+ab-v160-s7k-rep5,v160,s7k,5,100000,100000,0,0,15.9,6289.3,6289.3,"kafka sink, KEYLESS (v1.6.1 fast-path eligible)"
+ab-v161-t4-rep1,v161,t4,1,100000,8,0,0,2.6,38461.5,3.1,counter_delta+window_aggregate (timestamp kernel)
+ab-v161-t4-rep2,v161,t4,2,100000,8,0,0,2.3,43478.3,3.5,counter_delta+window_aggregate (timestamp kernel)
+ab-v161-t4-rep3,v161,t4,3,100000,8,0,0,2.4,41666.7,3.3,counter_delta+window_aggregate (timestamp kernel)
+ab-v161-t4-rep4,v161,t4,4,100000,8,0,0,2.3,43478.3,3.5,counter_delta+window_aggregate (timestamp kernel)
+ab-v161-t4-rep5,v161,t4,5,100000,8,0,0,2.3,43478.3,3.5,counter_delta+window_aggregate (timestamp kernel)
+ab-v161-t6-rep1,v161,t6,1,100000,99062,0,0,1.8,55555.6,55034.4,"2 conditional sinks, thread_workers 4 (compile-once conditions)"
+ab-v161-t6-rep2,v161,t6,2,100000,99062,0,0,1.8,55555.6,55034.4,"2 conditional sinks, thread_workers 4 (compile-once conditions)"
+ab-v161-t6-rep3,v161,t6,3,100000,99062,0,0,1.7,58823.5,58271.8,"2 conditional sinks, thread_workers 4 (compile-once conditions)"
+ab-v161-t6-rep4,v161,t6,4,100000,99062,0,0,1.8,55555.6,55034.4,"2 conditional sinks, thread_workers 4 (compile-once conditions)"
+ab-v161-t6-rep5,v161,t6,5,100000,99062,0,0,1.8,55555.6,55034.4,"2 conditional sinks, thread_workers 4 (compile-once conditions)"
+ab-v161-s7-rep1,v161,s7,1,100000,100000,0,0,16.6,6024.1,6024.1,"kafka sink, KEYED (control — v1.6.1 does not change this path)"
+ab-v161-s7-rep2,v161,s7,2,100000,100000,0,0,16.6,6024.1,6024.1,"kafka sink, KEYED (control — v1.6.1 does not change this path)"
+ab-v161-s7-rep3,v161,s7,3,100000,100000,0,0,16.5,6060.6,6060.6,"kafka sink, KEYED (control — v1.6.1 does not change this path)"
+ab-v161-s7-rep4,v161,s7,4,100000,100000,0,0,16.7,5988.0,5988.0,"kafka sink, KEYED (control — v1.6.1 does not change this path)"
+ab-v161-s7-rep5,v161,s7,5,100000,100000,0,0,16.6,6024.1,6024.1,"kafka sink, KEYED (control — v1.6.1 does not change this path)"
+ab-v161-s7k-rep1,v161,s7k,1,100000,100000,0,0,16.6,6024.1,6024.1,"kafka sink, KEYLESS (v1.6.1 fast-path eligible)"
+ab-v161-s7k-rep2,v161,s7k,2,100000,100000,0,0,16.6,6024.1,6024.1,"kafka sink, KEYLESS (v1.6.1 fast-path eligible)"
+ab-v161-s7k-rep3,v161,s7k,3,100000,100000,0,0,16.8,5952.4,5952.4,"kafka sink, KEYLESS (v1.6.1 fast-path eligible)"
+ab-v161-s7k-rep4,v161,s7k,4,100000,100000,0,0,16.9,5917.2,5917.2,"kafka sink, KEYLESS (v1.6.1 fast-path eligible)"
+ab-v161-s7k-rep5,v161,s7k,5,100000,100000,0,0,16.9,5917.2,5917.2,"kafka sink, KEYLESS (v1.6.1 fast-path eligible)"

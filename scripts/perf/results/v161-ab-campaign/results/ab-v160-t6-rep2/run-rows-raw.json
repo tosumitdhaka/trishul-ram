@@ -1,0 +1,18 @@
+[
+ {
+  "run_id": "d354b5a1-b7a4-4e45-a2fd-98b1d3a51840",
+  "pipeline": "t6-sink-conditions",
+  "status": "success",
+  "started_at": "2026-10-07T07:13:33.656951+00:00",
+  "finished_at": "2026-10-07T07:13:40.747504+00:00",
+  "records_in": 100000,
+  "records_out": 99062,
+  "records_skipped": 0,
+  "bytes_in": 52378916,
+  "bytes_out": 66976626,
+  "dlq_count": 0,
+  "error": null,
+  "errors": [],
+  "node": "trishul-ram-worker-0"
+ }
+]

@@ -1,0 +1,34 @@
+version: "1"
+
+pipeline:
+  name: s7k-local-kafka-keyless
+  description: >
+    Perf scenario S7K — local JSONL source → Kafka sink, KEYLESS (v1.6.1
+    perf follow-up). Identical to s7_local_kafka.yaml except no key_field:
+    with the executor-supplied output_record_count within caps, the v1.6.1
+    Kafka sink fast path sends each batch as one message without
+    re-parsing/re-sizing. acks=all, same topic and corpus as s7.
+  enabled: true
+
+  schedule:
+    type: manual
+
+  source:
+    type: local
+    path: ${PERF_IN_DIR:-/data/perf/in}
+    file_pattern: "*.jsonl"
+
+  serializer_in:
+    type: json
+
+  serializer_out:
+    type: json
+
+  sinks:
+    - type: kafka
+      brokers:
+        - ${PERF_KAFKA_BROKERS:-kafka:9092}
+      topic: ${PERF_KAFKA_OUT_TOPIC:-perf-cdr-out}
+      acks: all
+
+  on_error: continue

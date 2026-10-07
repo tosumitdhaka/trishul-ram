@@ -1,0 +1,41 @@
+version: "1"
+
+pipeline:
+  name: t6-sink-conditions
+  description: >
+    Transform bench T6 — conditional multi-sink routing (v1.6.1 perf
+    follow-up). No transforms: the only per-record work is sink condition
+    evaluation, isolating the compile-once sink-condition path in the
+    executor. Every record is evaluated against two conditions (matching
+    the corpus's VOICE fraction and long-session fraction); thread_workers 4
+    exercises the thread-local evaluator sharing across chunk threads.
+  enabled: true
+
+  schedule:
+    type: manual
+
+  source:
+    type: local
+    path: ${PERF_IN_DIR:-/data/perf/in}
+    file_pattern: "*.jsonl"
+
+  serializer_in:
+    type: json
+
+  thread_workers: 4
+
+  serializer_out:
+    type: json
+
+  sinks:
+    - type: local
+      path: ${PERF_OUT_DIR:-/data/perf/out}
+      filename_template: "t6_voice_{pipeline}_{timestamp}.json"
+      condition: 'event_type == "VOICE"'
+
+    - type: local
+      path: ${PERF_OUT_DIR:-/data/perf/out}
+      filename_template: "t6_long_{pipeline}_{timestamp}.json"
+      condition: "duration_s > 30"
+
+  on_error: continue
