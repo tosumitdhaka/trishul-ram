@@ -14,7 +14,17 @@ Summary is written as a single JSON line to stderr and, when ``--summary``
 is given, to a file:
 
     sent, http_2xx, http_4xx, http_5xx, errors,
-    latency_ms {p50, p95, max}
+    latency_ms {p50, p95, max},
+    achieved_rps, inflight_peak, connection_limited
+
+``connection_limited`` is True when the generator could not complete the
+offered rate AND its in-flight connection pool ran at the ceiling — i.e. the
+achieved plateau is loadgen-structural (either the server's latency consumed
+the concurrency budget — server-bound — or the bench host could not cycle
+connections fast enough — host-bound). Combine it with ``latency_ms`` to tell
+the two apart: high latency ⇒ server-bound, low latency ⇒ host-bound. Raise
+``--concurrency`` until ``connection_limited`` is False at the offered rate
+for the headroom the ladder needs.
 
 Uses httpx (already in the harness venv — TRAM's REST client).
 """
@@ -61,6 +71,8 @@ class SendStats:
         self.http_5xx = 0
         self.errors = 0
         self.latencies_ms: list[float] = []
+        self.inflight = 0
+        self.inflight_peak = 0
 
     def record(self, status_code: int, latency_ms: float) -> None:
         self.sent += 1
@@ -111,6 +123,8 @@ async def _worker(
         body = payloads[idx % n].encode("utf-8")
         idx += 1
         t0 = time.perf_counter()
+        stats.inflight += 1
+        stats.inflight_peak = max(stats.inflight_peak, stats.inflight)
         try:
             resp = await client.post(
                 url,
@@ -120,6 +134,8 @@ async def _worker(
         except httpx.HTTPError:
             stats.errors += 1
             continue
+        finally:
+            stats.inflight -= 1
         latency_ms = (time.perf_counter() - t0) * 1000.0
         stats.record(resp.status_code, latency_ms)
 
@@ -156,6 +172,7 @@ def summary(stats: SendStats, **extra) -> dict:
             "p95": round(_percentile(lat, 95), 3),
             "max": round(max(lat), 3) if lat else 0.0,
         },
+        "inflight_peak": stats.inflight_peak,
         **extra,
     }
 
@@ -179,6 +196,7 @@ def main() -> None:
 
     payloads = load_payloads(args.payload_file)
     stats = asyncio.run(run_flood(args.url, args.rate, args.concurrency, args.duration, payloads))
+    offered_total = args.rate * args.duration
     result = summary(
         stats,
         url=args.url,
@@ -186,6 +204,12 @@ def main() -> None:
         concurrency=args.concurrency,
         duration_s=args.duration,
         payload_records=len(payloads),
+        achieved_rps=round(stats.sent / args.duration, 1) if args.duration > 0 else 0.0,
+        # Loadgen-side saturation signal: could not complete the offered rate
+        # while every in-flight connection slot was busy.
+        connection_limited=(
+            stats.sent < offered_total * 0.95 and stats.inflight_peak >= args.concurrency
+        ),
     )
     print(json.dumps(result), file=sys.stderr)
     if args.summary:

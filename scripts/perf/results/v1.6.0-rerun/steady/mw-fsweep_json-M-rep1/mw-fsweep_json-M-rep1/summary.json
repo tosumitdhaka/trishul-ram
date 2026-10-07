@@ -1,0 +1,22 @@
+{
+  "runs_total": 9,
+  "runs_completed": 9,
+  "records_in": 900000,
+  "records_out": 900000,
+  "records_skipped": 0,
+  "bytes_in": 471410244,
+  "bytes_out": 506510064,
+  "dlq_count": 0,
+  "run_duration_ms": {
+    "count": 9,
+    "total_ms": 14689.459,
+    "avg_ms": 1632.162,
+    "max_ms": 2791.512
+  },
+  "errors": [],
+  "error_count": 0,
+  "run_id": "mw-fsweep_json-M-rep1",
+  "pipeline": "fsweep-json",
+  "api_url": "http://127.0.0.1:30001",
+  "collected_at": "2026-10-05T06:20:56.469101+00:00"
+}

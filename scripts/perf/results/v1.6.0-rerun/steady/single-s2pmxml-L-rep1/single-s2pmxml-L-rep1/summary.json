@@ -1,0 +1,22 @@
+{
+  "runs_total": 11,
+  "runs_completed": 11,
+  "records_in": 1100000,
+  "records_out": 1100000,
+  "records_skipped": 0,
+  "bytes_in": 335215980,
+  "bytes_out": 472653940,
+  "dlq_count": 0,
+  "run_duration_ms": {
+    "count": 11,
+    "total_ms": 72017.551,
+    "avg_ms": 6547.05,
+    "max_ms": 12680.337
+  },
+  "errors": [],
+  "error_count": 0,
+  "run_id": "single-s2pmxml-L-rep1",
+  "pipeline": "s2-local-local-pmxml",
+  "api_url": "http://127.0.0.1:30001",
+  "collected_at": "2026-10-05T09:34:58.968646+00:00"
+}

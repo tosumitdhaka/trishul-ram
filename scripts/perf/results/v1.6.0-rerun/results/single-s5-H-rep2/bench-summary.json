@@ -1,0 +1,49 @@
+{
+  "run_id": "single-s5-H-rep2",
+  "scenario": "s5",
+  "res_profile": "H",
+  "rep": 2,
+  "topology": "single",
+  "rep_started_at": "2026-10-05T12:52:07.930282+00:00",
+  "run_one_rc": 0,
+  "aborted": null,
+  "run_history": {
+    "rows": 1,
+    "records_in": 100000,
+    "records_out": 100000,
+    "records_skipped": 0,
+    "bytes_in": 27180726,
+    "bytes_out": 57478896,
+    "errors": 0,
+    "error_msgs": [],
+    "statuses": [
+      "success"
+    ],
+    "wall_s": 11.023573,
+    "nodes": [
+      "trishul-ram-0"
+    ]
+  },
+  "loadgens": [],
+  "rest_sink_stats": {},
+  "sink_export": {
+    "trishul-ram-0": {
+      "files": 10,
+      "bytes": 57478896
+    }
+  },
+  "kafka_out_cum": "",
+  "bytes_per_record_in": 271.8,
+  "peaks": {
+    "cpu_peak_m": 169.0,
+    "mem_peak_mi": 779.0,
+    "peak_pod": "trishul-ram-0"
+  },
+  "metrics": {
+    "records_in": 100000,
+    "records_out": 100000,
+    "errors": 0,
+    "duration_s": 11.0,
+    "throughput_recs_s": 9090.9
+  }
+}

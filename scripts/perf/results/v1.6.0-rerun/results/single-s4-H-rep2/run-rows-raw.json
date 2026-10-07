@@ -1,0 +1,18 @@
+[
+ {
+  "run_id": "b51f27c0-00d8-42f2-a909-d86499b83221",
+  "pipeline": "s4-snmp-local",
+  "status": "success",
+  "started_at": "2026-10-06T03:50:39.696907+00:00",
+  "finished_at": "2026-10-06T04:10:24.283782+00:00",
+  "records_in": 1000,
+  "records_out": 1000,
+  "records_skipped": 0,
+  "bytes_in": 363044,
+  "bytes_out": 363044,
+  "dlq_count": 0,
+  "error": null,
+  "errors": [],
+  "node": "trishul-ram-0"
+ }
+]

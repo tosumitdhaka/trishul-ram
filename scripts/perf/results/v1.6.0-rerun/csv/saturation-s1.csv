@@ -1,0 +1,8 @@
+step,offered_rps,achieved_2xx_rps,p95_ms,worker_cpu_peak_m,notes
+1,100,96.9,4.6,0.0,"k=1 sent=17496 2xx=17446 4xx=50 5xx=0 records_in=17443 records_out=17443 skipped=0 nodes=trishul-ram-worker-0,trishul-ram-worker-1,trishul-ram-worker-2 mem_peak=0Mi peak_pod="
+2,200,193.9,4.7,0.0,"k=1 sent=34950 2xx=34900 4xx=50 5xx=0 records_in=34897 records_out=34897 skipped=0 nodes=trishul-ram-worker-0,trishul-ram-worker-1,trishul-ram-worker-2 mem_peak=0Mi peak_pod="
+3,400,386.4,6.4,0.0,"k=1 sent=69602 2xx=69552 4xx=50 5xx=0 records_in=69548 records_out=69548 skipped=0 nodes=trishul-ram-worker-0,trishul-ram-worker-1,trishul-ram-worker-2 mem_peak=0Mi peak_pod="
+4,800,775.4,12.2,0.0,"k=2 sent=139666 2xx=139566 4xx=100 5xx=0 records_in=139561 records_out=139561 skipped=0 nodes=trishul-ram-worker-0,trishul-ram-worker-1,trishul-ram-worker-2 mem_peak=0Mi peak_pod="
+5,1600,1049.9,376.6,0.0,"k=3 sent=189125 2xx=188975 4xx=150 5xx=0 records_in=188969 records_out=188969 skipped=0 nodes=trishul-ram-worker-0,trishul-ram-worker-1,trishul-ram-worker-2 mem_peak=0Mi peak_pod="
+6,3200,1605.0,514.9,0.0,"k=6 sent=289200 2xx=288900 4xx=300 5xx=0 records_in=288888 records_out=288888 skipped=0 nodes=trishul-ram-worker-0,trishul-ram-worker-1,trishul-ram-worker-2 mem_peak=0Mi peak_pod="
+7,6400,1499.8,968.9,0.0,"k=10 sent=270465 2xx=269965 4xx=500 5xx=0 records_in=269950 records_out=269950 skipped=0 nodes=trishul-ram-worker-0,trishul-ram-worker-1,trishul-ram-worker-2 mem_peak=0Mi peak_pod="

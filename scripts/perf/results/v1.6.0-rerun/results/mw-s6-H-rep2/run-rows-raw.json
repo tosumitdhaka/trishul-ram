@@ -1,0 +1,18 @@
+[
+ {
+  "run_id": "s6-kafka-local-20261005090752-a324ac",
+  "pipeline": "s6-kafka-local",
+  "status": "success",
+  "started_at": "2026-10-05T09:07:52.967770+00:00",
+  "finished_at": "2026-10-05T09:11:53.127265+00:00",
+  "records_in": 220554,
+  "records_out": 220554,
+  "records_skipped": 0,
+  "bytes_in": 115083971,
+  "bytes_out": 124126685,
+  "dlq_count": 0,
+  "error": null,
+  "errors": [],
+  "node": "trishul-ram-worker-0"
+ }
+]

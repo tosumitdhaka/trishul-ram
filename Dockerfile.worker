@@ -5,9 +5,11 @@
 #   ✓  worker       — semantic marker
 #   ✓  kafka        — Kafka source/sink
 #   ✓  snmp         — pysnmp: SNMP get/walk/trap source+sink (uses MIBs from shared volume)
-#   ✓  avro         — Avro serializer/deserializer
-#   ✓  protobuf     — protobuf runtime decode (compiled .proto artifacts from manager)
+#   ✓  avro         — Avro serializer/deserializer (fastavro)
+#   ✓  protobuf     — protobuf runtime decode + runtime .proto compile (grpcio-tools)
 #   ✓  asn1         — ASN.1 BER/DER/PER decode
+#   ✓  msgpack_ser  — msgpack serializer (fastest measured format)
+#   ✓  parquet      — pyarrow Parquet serializer (~+100 MB image cost)
 #   ✓  jmespath     — jmespath transform
 #   ✓  sql          — SQL connector (sqlalchemy runtime, no migration/scheduling)
 #   ✓  websocket    — WebSocket source/sink
@@ -17,7 +19,6 @@
 #
 #   ✗  manager (apscheduler, persistence) — manager owns scheduling and DB writes
 #   ✗  mib (pysmi)  — MIB compilation is manager-side only
-#   ✗  protobuf_ser (grpcio-tools) — .proto compilation is manager-side only
 #   ✗  k8s          — worker orchestration is manager-side only
 #   ✗  Web UI assets, ai-* — UI/API-driven features
 #
@@ -55,12 +56,15 @@ RUN apt-get update && \
 
 # Install worker extras only — no manager (no apscheduler, no sqlalchemy persistence).
 # sql extra is included so workers can execute SQL connector pipelines (needs sqlalchemy).
-# Excluded to keep the image lean: s3, gcs, azure, otel, parquet, ai-* (UI-driven features).
+# All serializer extras are baked in (GH #79): msgpack_ser, parquet, protobuf_ser —
+# the protobuf serializer compiles .proto at runtime via grpcio-tools on the worker,
+# and the image must match the /api/plugins registry (schema_mismatch stays empty).
+# Excluded to keep the image lean: s3, gcs, azure, otel, ai-* (UI-driven features).
 # corba (omniORBpy) is excluded: not on PyPI; install python3-omniorb via apt in a custom layer.
 COPY --from=builder /build/dist/*.whl .
 RUN --mount=type=cache,target=/root/.cache/pip whl=$(ls *.whl) && \
     pip install \
-        "${whl}[worker,kafka,snmp,avro,protobuf,asn1,jmespath,sql,websocket,metrics,prometheus_rw,watch]" && \
+        "${whl}[worker,kafka,snmp,avro,protobuf_ser,protobuf,asn1,msgpack_ser,parquet,jmespath,sql,websocket,metrics,prometheus_rw,watch]" && \
     rm *.whl
 
 # Copy bundled SNMP MIB assets from the repo

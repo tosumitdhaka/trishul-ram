@@ -1,0 +1,18 @@
+[
+ {
+  "run_id": "b31fd2ae-eeee-402d-a6aa-db8695002bec",
+  "pipeline": "t5-chain",
+  "status": "success",
+  "started_at": "2026-10-05T07:08:32.784401+00:00",
+  "finished_at": "2026-10-05T07:08:36.038746+00:00",
+  "records_in": 100000,
+  "records_out": 100000,
+  "records_skipped": 0,
+  "bytes_in": 52378916,
+  "bytes_out": 21650895,
+  "dlq_count": 0,
+  "error": null,
+  "errors": [],
+  "node": "trishul-ram-worker-0"
+ }
+]

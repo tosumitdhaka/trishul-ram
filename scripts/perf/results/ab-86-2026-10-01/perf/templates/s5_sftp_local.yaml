@@ -1,0 +1,37 @@
+version: "1"
+
+pipeline:
+  name: s5-sftp-local
+  description: >
+    Perf scenario S5 — SFTP source → local JSON sink. Reads the batch files
+    (file_gen.py output) from the SFTP server's remote path and writes parsed
+    records as JSON to the local sink dir. Phase 1b/2 deploys the SFTP server;
+    credentials are placeholders documented in the runbook.
+  enabled: true
+
+  schedule:
+    type: manual
+
+  source:
+    type: sftp
+    host: ${PERF_SFTP_HOST:-127.0.0.1}
+    port: ${PERF_SFTP_PORT:-2222}
+    username: ${PERF_SFTP_USER:-perfuser}
+    password: ${PERF_SFTP_PASS:-perfpass}
+    remote_path: ${PERF_SFTP_REMOTE:-/data/perf/in}
+    file_pattern: "*.csv"
+
+  serializer_in:
+    type: csv
+    has_header: true
+    delimiter: ","
+
+  serializer_out:
+    type: json
+
+  sinks:
+    - type: local
+      path: ${PERF_OUT_DIR:-/data/perf/out}
+      filename_template: "s5_{pipeline}_{timestamp}.json"
+
+  on_error: continue

@@ -1,0 +1,69 @@
+manager:
+  enabled: false
+  image:
+    registry: ''
+    repository: trishul-ram-manager
+    tag: local-20260929135930
+  resources:
+    requests:
+      cpu: 250m
+      memory: 512Mi
+    limits:
+      cpu: 250m
+      memory: 512Mi
+worker:
+  replicas: 3
+  image:
+    registry: ''
+    repository: trishul-ram-worker
+    tag: local-20260929135930
+  ingressService:
+    enabled: true
+    type: NodePort
+    port: 8767
+    nodePort: 30002
+  resources:
+    requests:
+      cpu: 250m
+      memory: 512Mi
+    limits:
+      cpu: 250m
+      memory: 512Mi
+service:
+  type: NodePort
+  port: 8765
+  nodePort: 30001
+env:
+  TRAM_LOG_FORMAT: json
+  TRAM_LOG_LEVEL: INFO
+  TRAM_QUEUE_MANUAL_RUNS: '1'
+  TRAM_SNMP_STACK: legacy
+  TRAM_STATEFUL_TRANSFORMS: '1'
+  TRAM_STREAM_SINGLE_PLACEMENT: '1'
+  TRAM_RATE_LIMIT: '0'
+  PERF_REST_URL: http://172.19.0.1:18080/records
+  PERF_REST_SINK_URL: http://172.19.0.1:18080/collect
+  PERF_SNMP_HOST: 172.19.0.1
+  PERF_SFTP_HOST: sftp
+  PERF_SFTP_PORT: '22'
+  PERF_SFTP_USER: perf
+  PERF_SFTP_PASS: perfpw
+  PERF_SFTP_REMOTE: /upload/in
+  TRAM_MANAGER_URL: http://localhost:8765
+image:
+  registry: ''
+  repository: trishul-ram
+  pullPolicy: IfNotPresent
+  tag: local-20261001rr
+replicaCount: 1
+persistence:
+  enabled: true
+  size: 2Gi
+  storageClass: ''
+resources:
+  requests:
+    cpu: 250m
+    memory: 512Mi
+  limits:
+    cpu: 250m
+    memory: 512Mi

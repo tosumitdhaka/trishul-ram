@@ -1,0 +1,50 @@
+run_id,scenario,res_profile,rep,records_in,records_out,errors,duration_s,throughput_recs_s,pod_cpu_peak_m,pod_mem_peak_mi,notes
+mw-s2csv-L-rep1,s2csv,L,1,100000,100000,0,5.7,17543.9,122,552,rows=1 statuses=success nodes=trishul-ram-worker-0; peak_pod=trishul-ram-worker-0
+mw-s2csv-L-rep1,s2csv,L,1,100000,100000,0,5.4,18518.5,35,550,rows=1 statuses=success nodes=trishul-ram-worker-0; peak_pod=kafka-0
+mw-s2pmxml-L-rep1,s2pmxml,L,1,100000,100000,0,13.7,7299.3,107,564,rows=1 statuses=success nodes=trishul-ram-worker-0; peak_pod=trishul-ram-worker-0
+mw-s3-L-rep1,s3,L,1,100000,100000,0,41.7,2398.1,250,566,rows=1 statuses=success nodes=trishul-ram-worker-0; rest sink stats: records=100000 posts=1000; peak_pod=trishul-ram-worker-0
+mw-s7-L-rep1,s7,L,1,100000,100000,0,35.4,2824.9,251,577,rows=1 statuses=success nodes=trishul-ram-worker-0; kafka sink end_offsets cumulative=110; peak_pod=trishul-ram-worker-0
+mw-s5-L-rep1,s5,L,1,100000,100000,0,10.8,9259.3,36,574,rows=1 statuses=success nodes=trishul-ram-worker-0; sinkfiles=10 sinkbytes=57478896; peak_pod=sftp-0
+mw-s1-L-rep1,s1,L,1,18000,18000,0,180.0,100.0,10,575,"rows=3 statuses=success nodes=trishul-ram-worker-0,trishul-ram-worker-1,trishul-ram-worker-2; lg: sent=18000 2xx=18000 4xx=0 5xx=0 p50=2.226ms p95=2.99ms max=53.927ms; offered=100.0/s for 180s; peak_pod=kafka-0"
+mw-s6-L-rep1,s6,L,1,90000,90000,0,180.0,500.0,13,636,rows=1 statuses=success nodes=trishul-ram-worker-0; lg: sent=90000 failed=0 achieved_rps=500.0; offered=None/s for 0s; sinkfiles=178 sinkbytes=712351; peak_pod=kafka-0
+mw-s4-L-rep1,s4,L,1,1000,1000,0,643.2,1.6,120,635,rows=1 statuses=success nodes=trishul-ram-worker-0; peak_pod=trishul-ram-worker-0
+mw-s2csv-L-rep2,s2csv,L,2,100000,100000,0,3.8,26315.8,11,634,rows=1 statuses=success nodes=trishul-ram-worker-0; peak_pod=kafka-0
+mw-s2pmxml-L-rep2,s2pmxml,L,2,100000,100000,0,13.5,7407.4,78,634,rows=1 statuses=success nodes=trishul-ram-worker-0; peak_pod=trishul-ram-worker-0
+mw-s3-L-rep2,s3,L,2,100000,100000,0,38.3,2611.0,251,634,rows=1 statuses=success nodes=trishul-ram-worker-0; rest sink stats: records=100000 posts=1000; peak_pod=trishul-ram-worker-0
+mw-s7-L-rep2,s7,L,2,100000,100000,0,35.2,2840.9,249,636,rows=1 statuses=success nodes=trishul-ram-worker-0; kafka sink end_offsets cumulative=220; peak_pod=trishul-ram-worker-0
+mw-s5-L-rep2,s5,L,2,100000,100000,0,10.3,9708.7,114,636,rows=1 statuses=success nodes=trishul-ram-worker-0; sinkfiles=10 sinkbytes=57478896; peak_pod=trishul-ram-worker-0
+mw-s1-L-rep2,s1,L,2,18000,18000,0,180.0,100.0,12,635,"rows=3 statuses=success nodes=trishul-ram-worker-0,trishul-ram-worker-1,trishul-ram-worker-2; lg: sent=18000 2xx=18000 4xx=0 5xx=0 p50=2.557ms p95=3.934ms max=30.274ms; offered=100.0/s for 180s; peak_pod=kafka-0"
+mw-s6-L-rep2,s6,L,2,90000,90000,0,180.0,500.0,14,682,rows=1 statuses=success nodes=trishul-ram-worker-0; lg: sent=90000 failed=0 achieved_rps=500.0; offered=None/s for 0s; sinkfiles=181 sinkbytes=765758; peak_pod=kafka-0
+mw-s4-L-rep2,s4,L,2,1000,1000,0,649.0,1.5,81,680,rows=1 statuses=success nodes=trishul-ram-worker-0; peak_pod=trishul-ram-worker-0
+mw-s2csv-M-rep1,s2csv,M,1,100000,100000,1,3433.1,29.1,52,661,"rows=2 statuses=failed,success nodes=trishul-ram-manager-0,trishul-ram-worker-0; errors=Manager recovered no active worker batch run for pipeline marked running; peak_pod=trishul-ram-worker-0"
+mw-s2pmxml-M-rep1,s2pmxml,M,1,100000,100000,0,5.8,17241.4,79,659,rows=1 statuses=success nodes=trishul-ram-worker-0; peak_pod=trishul-ram-worker-0
+mw-s3-M-rep1,s3,M,1,100000,100000,0,17.2,5814.0,334,658,rows=1 statuses=success nodes=trishul-ram-worker-0; rest sink stats: records=100000 posts=1000; peak_pod=trishul-ram-worker-0
+mw-s7-M-rep1,s7,M,1,100000,100000,0,16.7,5988.0,477,658,rows=1 statuses=success nodes=trishul-ram-worker-0; kafka sink end_offsets cumulative=330; peak_pod=trishul-ram-worker-0
+mw-s5-M-rep1,s5,M,1,100000,100000,0,9.1,10989.0,64,657,rows=1 statuses=success nodes=trishul-ram-worker-0; sinkfiles=8 sinkbytes=45983038; peak_pod=sftp-0
+mw-s1-M-rep1,s1,M,1,53999,53999,0,180.0,300.0,13,646,"rows=3 statuses=success nodes=trishul-ram-worker-0,trishul-ram-worker-1,trishul-ram-worker-2; lg: sent=53999 2xx=53999 4xx=0 5xx=0 p50=2.349ms p95=4.383ms max=38.897ms; offered=300.0/s for 180s; peak_pod=kafka-0"
+mw-s6-M-rep1,s6,M,1,144357,144357,0,180.0,802.0,14,699,rows=1 statuses=success nodes=trishul-ram-worker-0; lg: sent=144357 failed=0 achieved_rps=801.98; offered=None/s for 0s; sinkfiles=181 sinkbytes=435366; peak_pod=kafka-0
+mw-s4-M-rep1,s4,M,1,1000,1000,0,726.7,1.4,103,665,rows=1 statuses=success nodes=trishul-ram-worker-0; peak_pod=trishul-ram-worker-0
+mw-s2csv-M-rep2,s2csv,M,2,100000,100000,0,2.1,47619.0,22,665,rows=1 statuses=success nodes=trishul-ram-worker-0; peak_pod=trishul-ram-worker-0
+mw-s2pmxml-M-rep2,s2pmxml,M,2,100000,100000,0,6.1,16393.4,11,666,rows=1 statuses=success nodes=trishul-ram-worker-0; peak_pod=kafka-0
+mw-s3-M-rep2,s3,M,2,100000,100000,0,20.8,4807.7,452,666,rows=1 statuses=success nodes=trishul-ram-worker-0; rest sink stats: records=100000 posts=1000; peak_pod=trishul-ram-worker-0
+mw-s7-M-rep2,s7,M,2,100000,100000,0,21.1,4739.3,500,669,rows=1 statuses=success nodes=trishul-ram-worker-0; kafka sink end_offsets cumulative=440; peak_pod=trishul-ram-worker-0
+mw-s5-M-rep2,s5,M,2,100000,100000,0,9.3,10752.7,136,669,rows=1 statuses=success nodes=trishul-ram-worker-0; sinkfiles=9 sinkbytes=51730688; peak_pod=trishul-ram-worker-0
+mw-s1-M-rep2,s1,M,2,53971,53971,0,180.0,299.8,12,650,"rows=3 statuses=success nodes=trishul-ram-worker-0,trishul-ram-worker-1,trishul-ram-worker-2; lg: sent=53971 2xx=53971 4xx=0 5xx=0 p50=2.449ms p95=5.252ms max=302.413ms; offered=300.0/s for 180s; peak_pod=kafka-0"
+mw-s6-M-rep2,s6,M,2,182237,182237,0,180.0,1012.4,18,718,rows=1 statuses=success nodes=trishul-ram-worker-0; lg: sent=182237 failed=0 achieved_rps=1012.42; offered=None/s for 0s; sinkfiles=181 sinkbytes=444450; peak_pod=trishul-ram-worker-0
+mw-s4-M-rep2,s4,M,2,1000,1000,0,697.6,1.4,137,696,rows=1 statuses=success nodes=trishul-ram-worker-0; peak_pod=trishul-ram-worker-0
+mw-s2csv-H-rep1,s2csv,H,1,100000,100000,0,1.6,62500.0,140,660,rows=1 statuses=success nodes=trishul-ram-worker-0; peak_pod=trishul-ram-worker-0
+mw-s2pmxml-H-rep1,s2pmxml,H,1,100000,100000,0,4.4,22727.3,359,660,rows=1 statuses=success nodes=trishul-ram-worker-0; peak_pod=trishul-ram-worker-0
+mw-s3-H-rep1,s3,H,1,100000,100000,0,18.6,5376.3,722,660,rows=1 statuses=success nodes=trishul-ram-worker-0; rest sink stats: records=100000 posts=1000; peak_pod=trishul-ram-worker-0
+mw-s7-H-rep1,s7,H,1,100000,100000,0,13.1,7633.6,401,659,rows=1 statuses=success nodes=trishul-ram-worker-0; kafka sink end_offsets cumulative=550; peak_pod=trishul-ram-worker-0
+mw-s5-H-rep1,s5,H,1,100000,100000,0,10.1,9901.0,164,655,rows=1 statuses=success nodes=trishul-ram-worker-0; sinkfiles=9 sinkbytes=51731273; peak_pod=trishul-ram-worker-0
+mw-s1-H-rep1,s1,H,1,67536,67536,0,180.0,375.2,13,640,"rows=3 statuses=success nodes=trishul-ram-worker-0,trishul-ram-worker-1,trishul-ram-worker-2; lg: sent=67536 2xx=67536 4xx=0 5xx=0 p50=32.874ms p95=151.705ms max=886.436ms; offered=800.0/s for 180s; peak_pod=kafka-0"
+mw-s6-H-rep1,s6,H,1,123124,123124,0,180.0,684.0,13,681,rows=1 statuses=success nodes=trishul-ram-worker-0; lg: sent=123124 failed=0 achieved_rps=684.02; offered=None/s for 0s; sinkfiles=182 sinkbytes=507205; peak_pod=kafka-0
+mw-s4-H-rep1,s4,H,1,1000,1000,0,739.5,1.4,94,681,rows=1 statuses=success nodes=trishul-ram-worker-0; peak_pod=trishul-ram-worker-0
+mw-s2csv-H-rep2,s2csv,H,2,100000,100000,0,1.1,90909.1,43,681,rows=1 statuses=success nodes=trishul-ram-worker-0; peak_pod=trishul-ram-worker-0
+mw-s2pmxml-H-rep2,s2pmxml,H,2,100000,100000,0,3.2,31250.0,184,681,rows=1 statuses=success nodes=trishul-ram-worker-0; peak_pod=trishul-ram-worker-0
+mw-s3-H-rep2,s3,H,2,100000,100000,0,11.8,8474.6,82,669,rows=1 statuses=success nodes=trishul-ram-worker-0; rest sink stats: records=100000 posts=1000; peak_pod=trishul-ram-worker-0
+mw-s7-H-rep2,s7,H,2,100000,100000,0,9.6,10416.7,69,669,rows=1 statuses=success nodes=trishul-ram-worker-0; kafka sink end_offsets cumulative=660; peak_pod=trishul-ram-worker-0
+mw-s5-H-rep2,s5,H,2,100000,100000,0,9.0,11111.1,63,671,rows=1 statuses=success nodes=trishul-ram-worker-0; sinkfiles=9 sinkbytes=51730999; peak_pod=trishul-ram-worker-0
+mw-s1-H-rep2,s1,H,2,130593,130593,0,180.0,725.5,10,660,"rows=3 statuses=success nodes=trishul-ram-worker-0,trishul-ram-worker-1,trishul-ram-worker-2; lg: sent=130593 2xx=130593 4xx=0 5xx=0 p50=13.148ms p95=62.997ms max=357.417ms; offered=800.0/s for 180s; peak_pod=kafka-0"
+mw-s6-H-rep2,s6,H,2,220554,220554,0,180.0,1225.3,20,774,rows=1 statuses=success nodes=trishul-ram-worker-0; lg: sent=220554 failed=0 achieved_rps=1225.3; offered=None/s for 0s; sinkfiles=181 sinkbytes=297547; peak_pod=trishul-ram-worker-0
+mw-s4-H-rep2,s4,H,2,1000,1000,0,625.0,1.6,112,775,rows=1 statuses=success nodes=trishul-ram-worker-0; peak_pod=trishul-ram-worker-0

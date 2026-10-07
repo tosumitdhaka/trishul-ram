@@ -1,0 +1,22 @@
+{
+  "runs_total": 10,
+  "runs_completed": 10,
+  "records_in": 1000000,
+  "records_out": 1000000,
+  "records_skipped": 0,
+  "bytes_in": 522806180,
+  "bytes_out": 562796160,
+  "dlq_count": 0,
+  "run_duration_ms": {
+    "count": 10,
+    "total_ms": 192212.064,
+    "avg_ms": 19221.206,
+    "max_ms": 36964.252
+  },
+  "errors": [],
+  "error_count": 0,
+  "run_id": "ab-single-s3-H-rep1",
+  "pipeline": "s3-rest-rest",
+  "api_url": "http://127.0.0.1:30001",
+  "collected_at": "2026-10-01T11:42:17.923767+00:00"
+}

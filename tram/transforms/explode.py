@@ -22,6 +22,15 @@ class ExplodeTransform(BaseTransform):
         self.include_index: bool = config.get("include_index", False)
         self.index_field: str = config.get("index_field", "index")
         self.drop_source: bool = config.get("drop_source", True)
+        # Issue #80 cost center 3: a top-level field only deletes the record's
+        # own key and writes top-level keys per element, so a shallow
+        # ``dict(record)`` per element is provably safe (and turns the old
+        # O(n x record) per-element deepcopy into O(n)). The ELEMENT is still
+        # deep-copied into each row — GH #18 pinned that exploded rows must not
+        # alias the source record's containers. A dotted field writes through
+        # set_path into a nested container shared by a shallow copy, so it
+        # keeps the per-element record deepcopy (gated by mutation tests).
+        self._needs_deepcopy = "." in self.field
 
     def apply(self, records: list[dict]) -> list[dict]:
         result = []
@@ -32,7 +41,10 @@ class ExplodeTransform(BaseTransform):
                 continue
             elements = value
             for i, element in enumerate(elements):
-                new_record = deepcopy(record)
+                if self._needs_deepcopy:
+                    new_record = deepcopy(record)
+                else:
+                    new_record = dict(record)
                 if self.drop_source:
                     delete_path(new_record, self.field)
                 if isinstance(element, dict):

@@ -1,0 +1,24 @@
+{
+  "runs_total": 11,
+  "runs_completed": 11,
+  "records_in": 1000000,
+  "records_out": 1000000,
+  "records_skipped": 0,
+  "bytes_in": 271807260,
+  "bytes_out": 574788960,
+  "dlq_count": 0,
+  "run_duration_ms": {
+    "count": 11,
+    "total_ms": 89215.945,
+    "avg_ms": 8110.54,
+    "max_ms": 10774.759
+  },
+  "errors": [
+    "SFTP listdir failed: [Errno 2] No such file"
+  ],
+  "error_count": 1,
+  "run_id": "mw-s5-M-rep2",
+  "pipeline": "s5-sftp-local",
+  "api_url": "http://127.0.0.1:30001",
+  "collected_at": "2026-10-05T06:56:08.327958+00:00"
+}

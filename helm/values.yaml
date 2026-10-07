@@ -162,6 +162,13 @@ sharedStorage:
   storageClass: "nfs-rwx"
 
 ## Environment variables (plain key/value)
+## Topology-computed names are reserved in manager/worker mode: the chart always
+## sets TRAM_NODE_ID, TRAM_MODE, TRAM_MANAGER_URL, TRAM_WORKER_* and the /data
+## dir vars itself, so a values.env entry with one of those names is dropped for
+## manager/worker pods (the envSecret range below applies the same drop). This
+## keeps env/envSecret written for the standalone topology (e.g.
+## TRAM_MANAGER_URL=http://localhost:8765) from leaking into worker pods after a
+## `helm upgrade --reuse-values` topology switch.
 env:
   TRAM_LOG_LEVEL: INFO
   TRAM_LOG_FORMAT: json

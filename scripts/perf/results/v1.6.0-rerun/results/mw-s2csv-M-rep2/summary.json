@@ -1,0 +1,24 @@
+{
+  "runs_total": 17,
+  "runs_completed": 17,
+  "records_in": 1600000,
+  "records_out": 1600000,
+  "records_skipped": 0,
+  "bytes_in": 434891616,
+  "bytes_out": 434891616,
+  "dlq_count": 0,
+  "run_duration_ms": {
+    "count": 17,
+    "total_ms": 3470848.743,
+    "avg_ms": 204167.573,
+    "max_ms": 3430585.552
+  },
+  "errors": [
+    "Manager recovered no active worker batch run for pipeline marked running"
+  ],
+  "error_count": 1,
+  "run_id": "mw-s2csv-M-rep2",
+  "pipeline": "s2-local-local-csv",
+  "api_url": "http://127.0.0.1:30001",
+  "collected_at": "2026-10-05T06:52:28.347414+00:00"
+}

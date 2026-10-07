@@ -68,10 +68,14 @@ class PipelineRunContext:
     def record_error(self, msg: str) -> None:
         """Append an error message and increment records_skipped by 1.
 
-        Use this for per-record transform or sink failures where a single
-        record is being abandoned. Do **not** call this and then also call
-        ``inc_records_skipped`` for the same record — that would double-count.
-        For batch skips (e.g. all sinks filtered out an entire chunk), call
+        Use this for per-record failures where a single record is being
+        abandoned (per-record transform errors, chunk-level processing
+        errors). Do **not** call this and then also call
+        ``inc_records_skipped`` for the same record — that would double-count
+        (issue #84). Sink-write and circuit-breaker failures must use
+        ``note_skip`` instead: the chunk loop already counts the whole chunk
+        via ``inc_records_skipped`` when ``records_written == 0``. For
+        chunk-level skips (e.g. all sinks filtered out an entire chunk), call
         ``inc_records_skipped(len(records))`` and then ``note_skip(msg)``.
         """
         with self._lock:  # type: ignore[attr-defined]

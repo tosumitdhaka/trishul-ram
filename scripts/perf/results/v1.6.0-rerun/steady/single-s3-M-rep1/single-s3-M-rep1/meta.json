@@ -1,0 +1,57 @@
+{
+  "run_id": "single-s3-M-rep1",
+  "started_at": "2026-10-05T10:41:29.093786+00:00",
+  "finished_at": "2026-10-05T10:42:16.143918+00:00",
+  "namespace": "trishul-ram",
+  "sampling": {
+    "duration_s": 45.0,
+    "interval_s": 5.0
+  },
+  "env": {
+    "tram_version": "unknown",
+    "helm_values": {
+      "source": "/tmp/opencode/v160-rerun/values/single-M.yaml",
+      "image": {
+        "repository": "trishul-ram",
+        "tag": "local-20261001rr"
+      },
+      "manager": {
+        "enabled": false,
+        "image": {
+          "repository": "trishul-ram-manager",
+          "tag": "local-20260929135930"
+        },
+        "replicas": 1,
+        "resources": {
+          "cpu": "500m",
+          "memory": "1Gi"
+        }
+      },
+      "worker": {
+        "replicas": 3,
+        "image": {
+          "repository": "trishul-ram-worker",
+          "tag": "local-20260929135930"
+        },
+        "resources": {
+          "cpu": "500m",
+          "memory": "1Gi"
+        }
+      },
+      "service": {
+        "type": "NodePort",
+        "nodePort": 30001
+      },
+      "env_snmp_stack": "legacy"
+    },
+    "node_allocatable": {
+      "cpu": "12",
+      "memory": "16120920Ki"
+    },
+    "running_images": {
+      "kafka-0": "docker.io/apache/kafka:3.9.0",
+      "sftp-0": "docker.io/atmoz/sftp:latest",
+      "trishul-ram-0": "docker.io/library/trishul-ram:local-20261001rr"
+    }
+  }
+}

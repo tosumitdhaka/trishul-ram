@@ -1,0 +1,76 @@
+{
+ "step": 5,
+ "offered": 6000,
+ "k": 6,
+ "produced": 52632,
+ "consumed": 52632,
+ "lag": "err:Requires group_id",
+ "hist": {
+  "rows": 1,
+  "records_in": 52632,
+  "records_out": 52632,
+  "records_skipped": 0,
+  "bytes_in": 27461490,
+  "bytes_out": 29619402,
+  "errors": 0,
+  "error_msgs": [],
+  "statuses": [
+   "success"
+  ],
+  "wall_s": 30.068713,
+  "nodes": [
+   "trishul-ram-worker-0"
+  ]
+ },
+ "cpu": 0.0,
+ "loadgens": [
+  {
+   "tool": "kafka_loadgen",
+   "mode": "produce",
+   "topic": "perf-cdr",
+   "sent": 8593,
+   "failed": 0,
+   "achieved_rps": 572.84
+  },
+  {
+   "tool": "kafka_loadgen",
+   "mode": "produce",
+   "topic": "perf-cdr",
+   "sent": 8808,
+   "failed": 0,
+   "achieved_rps": 587.15
+  },
+  {
+   "tool": "kafka_loadgen",
+   "mode": "produce",
+   "topic": "perf-cdr",
+   "sent": 8664,
+   "failed": 0,
+   "achieved_rps": 577.54
+  },
+  {
+   "tool": "kafka_loadgen",
+   "mode": "produce",
+   "topic": "perf-cdr",
+   "sent": 8933,
+   "failed": 0,
+   "achieved_rps": 595.48
+  },
+  {
+   "tool": "kafka_loadgen",
+   "mode": "produce",
+   "topic": "perf-cdr",
+   "sent": 8741,
+   "failed": 0,
+   "achieved_rps": 582.65
+  },
+  {
+   "tool": "kafka_loadgen",
+   "mode": "produce",
+   "topic": "perf-cdr",
+   "sent": 8893,
+   "failed": 0,
+   "achieved_rps": 592.68
+  }
+ ]
+}

@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "tram"
-version = "1.5.1"
+version = "1.6.0"
 description = "Trishul Real-time Aggregation & Mediation — telecom data pipeline daemon"
 readme = "README.md"
 requires-python = ">=3.13"
@@ -92,11 +92,17 @@ k8s = ["kubernetes>=29,<32"]
 
 # ── Serializers ───────────────────────────────────────────────────────────
 avro = ["fastavro>=1.9,<2.0"]
-protobuf_ser = ["protobuf>=4.25,<7.0", "grpcio-tools>=1.64,<2.0"]  # compile .proto (manager); grpcio-tools 1.72+ requires protobuf>=6
-protobuf = ["protobuf>=4.25,<7.0"]             # runtime decode only (worker)
+# GH #79 (v1.6.0): the protobuf serializer compiles .proto at runtime on the worker too,
+# so protobuf_ser is baked into worker + standalone images, not just manager.
+# Pin decision (2026-10): grpcio-tools 1.72+ requires protobuf>=6.30 while 1.64-1.71
+# require protobuf<6 — a mixed floor makes pip backtrack between majors. Both pins now
+# share the 6.x floor (protobuf 6.30 is the 6.x line's floor) so pip resolves in one pass;
+# `protobuf`, `protobuf_ser`, and `prometheus_rw` all use the identical protobuf range.
+protobuf_ser = ["protobuf>=6.30,<7.0", "grpcio-tools>=1.72,<2.0"]  # compile .proto (manager + worker runtime)
+protobuf = ["protobuf>=6.30,<7.0"]             # runtime decode only (worker) — same 6.x floor as protobuf_ser
 asn1 = ["asn1tools>=0.167,<1.0"]
 msgpack_ser = ["msgpack>=1.0,<2.0"]
-parquet = ["pyarrow>=16,<20"]                  # ~150 MB; exclude from all
+parquet = ["pyarrow>=16,<20"]                  # ~+100 MB image cost; baked into worker/standalone images (GH #79), kept out of 'all'
 corba = ["omniORBpy>=4.3"]                     # system package only — no PyPI wheel
 
 # ── Transforms ────────────────────────────────────────────────────────────
@@ -104,7 +110,7 @@ jmespath = ["jmespath>=1.0,<2.0"]
 
 # ── Observability ─────────────────────────────────────────────────────────
 metrics = ["prometheus-client>=0.20,<1.0"]
-prometheus_rw = ["protobuf>=4.25,<7.0", "python-snappy>=0.7,<1.0"]
+prometheus_rw = ["protobuf>=6.30,<7.0", "python-snappy>=0.7,<1.0"]
 otel = [                                       # SDK↔exporter tight coupling; pin together
     "opentelemetry-sdk>=1.20,<2.0",
     "opentelemetry-exporter-otlp-proto-grpc>=1.20,<2.0",
@@ -134,14 +140,13 @@ dev = [
 ]
 
 # ── Meta ──────────────────────────────────────────────────────────────────
-# Excluded from 'all' (size, system deps, or pip backtrack risk):
+# Excluded from 'all' (size or system deps):
 #   corba        — omniORBpy has no PyPI wheel (system package only)
 #   s3           — boto3↔botocore per-patch coupling causes backtrack (~60 MB)
 #   gcs          — google-cloud-storage (~50 MB)
 #   azure        — azure-storage-blob (~30 MB)
-#   parquet      — pyarrow (~150 MB)
-#   protobuf_ser — grpcio-tools 1.72+ requires protobuf>=6; triggers backtrack with older pins
-# Install individually when needed: pip install tram[s3] / tram[protobuf_ser]
+#   parquet      — pyarrow (~+100 MB); baked into worker/standalone images (GH #79), kept out of 'all'
+# Install individually when needed: pip install tram[s3] / tram[parquet]
 all = [
     # ── Deployment ──────────────────────────────
     "tram[manager]",
@@ -173,10 +178,10 @@ all = [
     # ── Serializers ─────────────────────────────
     "tram[avro]",
     "tram[protobuf]",
-    # "tram[protobuf_ser]",  # grpcio-tools 1.72+ requires protobuf>=6; triggers backtrack with older pins
+    "tram[protobuf_ser]",  # protobuf/grpcio-tools pins share the 6.x floor — resolves without backtracking
     "tram[asn1]",
     "tram[msgpack_ser]",
-    # "tram[parquet]",  # ~150 MB pyarrow
+    # "tram[parquet]",  # ~+100 MB pyarrow
     # "tram[corba]",    # omniORBpy has no PyPI wheel (system package only)
     # ── Transforms ──────────────────────────────
     "tram[jmespath]",
@@ -211,7 +216,12 @@ line-length = 100
 target-version = "py313"
 # "scripts/snmp-wire-harness": wire-validation evidence, kept byte-identical to the
 # 2026-09-28 GO run (scripts/snmp-wire-harness/README.md) — never lint-modified
-extend-exclude = ["files", "scripts/snmp-wire-harness"]
+# "scripts/perf/results": perf-campaign evidence (capacity study, #86 A/B, v1.6.0
+# rerun) — frozen copies of the harness at measurement time, same byte-identical
+# provenance discipline — never lint-modified. The canonical harness itself
+# (scripts/perf/*.py, generators/) IS linted.
+# ".slim": local agent worktrees (machine-local, git-ignored)
+extend-exclude = ["files", "scripts/snmp-wire-harness", "scripts/perf/results", ".slim"]
 
 [tool.ruff.lint]
 select = ["E", "F", "I", "UP"]

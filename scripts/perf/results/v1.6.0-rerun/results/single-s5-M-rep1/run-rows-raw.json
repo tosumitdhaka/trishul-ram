@@ -1,0 +1,18 @@
+[
+ {
+  "run_id": "bc77fc26-f616-4b07-abb0-ffab97f163c5",
+  "pipeline": "s5-sftp-local",
+  "status": "success",
+  "started_at": "2026-10-05T10:43:11.452666+00:00",
+  "finished_at": "2026-10-05T10:43:21.177854+00:00",
+  "records_in": 100000,
+  "records_out": 100000,
+  "records_skipped": 0,
+  "bytes_in": 27180726,
+  "bytes_out": 57478896,
+  "dlq_count": 0,
+  "error": null,
+  "errors": [],
+  "node": "trishul-ram-0"
+ }
+]

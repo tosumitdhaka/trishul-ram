@@ -1,0 +1,18 @@
+[
+ {
+  "run_id": "f3deaf07-e42a-423c-ac19-68712050f240",
+  "pipeline": "fsweep-csv",
+  "status": "success",
+  "started_at": "2026-10-05T06:56:38.019948+00:00",
+  "finished_at": "2026-10-05T06:56:40.179375+00:00",
+  "records_in": 100000,
+  "records_out": 100000,
+  "records_skipped": 0,
+  "bytes_in": 27180726,
+  "bytes_out": 27180726,
+  "dlq_count": 0,
+  "error": null,
+  "errors": [],
+  "node": "trishul-ram-worker-0"
+ }
+]

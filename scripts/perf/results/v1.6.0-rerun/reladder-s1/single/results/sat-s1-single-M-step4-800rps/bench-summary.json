@@ -1,0 +1,73 @@
+{
+ "step": 4,
+ "offered": 800,
+ "k": 2,
+ "sent": 24741,
+ "2xx": 23941,
+ "4xx": 800,
+ "5xx": 0,
+ "errors": 43,
+ "p95": 14700.1005,
+ "hist": {
+  "rows": 6,
+  "records_in": 23940,
+  "records_out": 23940,
+  "records_skipped": 0,
+  "errors": 0,
+  "statuses": [
+   "success"
+  ],
+  "nodes": [
+   "trishul-ram-0"
+  ]
+ },
+ "cpu": 316.0,
+ "mem": 721.0,
+ "peak_pod": "trishul-ram-0",
+ "loadgen_achieved": 137.5,
+ "loadgen_connection_limited": true,
+ "loadgens": [
+  {
+   "tool": "loadgen_webhook",
+   "sent": 12231,
+   "http_2xx": 11831,
+   "http_4xx": 400,
+   "http_5xx": 0,
+   "errors": 22,
+   "latency_ms": {
+    "p50": 5605.875,
+    "p95": 15211.273,
+    "max": 41735.042
+   },
+   "inflight_peak": 400,
+   "url": "http://127.0.0.1:30001/webhooks/ingest",
+   "rate": 400.0,
+   "concurrency": 400,
+   "duration_s": 180.0,
+   "payload_records": 100000,
+   "achieved_rps": 68.0,
+   "connection_limited": true
+  },
+  {
+   "tool": "loadgen_webhook",
+   "sent": 12510,
+   "http_2xx": 12110,
+   "http_4xx": 400,
+   "http_5xx": 0,
+   "errors": 21,
+   "latency_ms": {
+    "p50": 5670.427,
+    "p95": 14188.928,
+    "max": 44219.055
+   },
+   "inflight_peak": 400,
+   "url": "http://127.0.0.1:30001/webhooks/ingest",
+   "rate": 400.0,
+   "concurrency": 400,
+   "duration_s": 180.0,
+   "payload_records": 100000,
+   "achieved_rps": 69.5,
+   "connection_limited": true
+  }
+ ]
+}

@@ -1,0 +1,22 @@
+{
+  "runs_total": 9,
+  "runs_completed": 9,
+  "records_in": 900000,
+  "records_out": 900000,
+  "records_skipped": 0,
+  "bytes_in": 244626534,
+  "bytes_out": 244626534,
+  "dlq_count": 0,
+  "run_duration_ms": {
+    "count": 9,
+    "total_ms": 22170.005,
+    "avg_ms": 2463.334,
+    "max_ms": 4194.754
+  },
+  "errors": [],
+  "error_count": 0,
+  "run_id": "mw-fsweep_csv-L-rep2",
+  "pipeline": "fsweep-csv",
+  "api_url": "http://127.0.0.1:30001",
+  "collected_at": "2026-10-05T05:22:06.937794+00:00"
+}

@@ -1,0 +1,9 @@
+== trishul-ram-0 ==
+usage_usec 2950800
+user_usec 2498398
+system_usec 452401
+nr_periods 773
+nr_throttled 0
+throttled_usec 0
+nr_bursts 0
+burst_usec 0

@@ -1,0 +1,36 @@
+== trishul-ram-manager-0 ==
+usage_usec 2289751
+user_usec 1989854
+system_usec 299896
+nr_periods 596
+nr_throttled 0
+throttled_usec 0
+nr_bursts 0
+burst_usec 0
+== trishul-ram-worker-0 ==
+usage_usec 5329598
+user_usec 4834293
+system_usec 495304
+nr_periods 942
+nr_throttled 0
+throttled_usec 0
+nr_bursts 0
+burst_usec 0
+== trishul-ram-worker-1 ==
+usage_usec 1286740
+user_usec 1046307
+system_usec 240433
+nr_periods 836
+nr_throttled 0
+throttled_usec 0
+nr_bursts 0
+burst_usec 0
+== trishul-ram-worker-2 ==
+usage_usec 1218159
+user_usec 998632
+system_usec 219526
+nr_periods 783
+nr_throttled 0
+throttled_usec 0
+nr_bursts 0
+burst_usec 0

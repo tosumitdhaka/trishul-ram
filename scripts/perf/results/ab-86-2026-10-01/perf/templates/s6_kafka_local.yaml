@@ -1,0 +1,36 @@
+version: "1"
+
+pipeline:
+  name: s6-kafka-local
+  description: >
+    Perf scenario S6 — Kafka source → local JSON sink. Stream pipeline
+    consuming canonical CDR records (kafka_loadgen.py producer mode) from the
+    bench topic, at-least-once offset handling (explicit per-batch commit).
+    Requires kafka-python (Phase 1b).
+  enabled: true
+
+  schedule:
+    type: stream
+
+  source:
+    type: kafka
+    brokers:
+      - ${PERF_KAFKA_BROKERS:-kafka:9092}
+    topic: ${PERF_KAFKA_TOPIC:-perf-cdr}
+    group_id: perf-s6-consumer
+    auto_offset_reset: earliest
+    enable_auto_commit: false
+    max_poll_records: 500
+
+  serializer_in:
+    type: json
+
+  serializer_out:
+    type: json
+
+  sinks:
+    - type: local
+      path: ${PERF_OUT_DIR:-/data/perf/out}
+      filename_template: "s6_{pipeline}_{timestamp}.json"
+
+  on_error: continue

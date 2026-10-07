@@ -1,0 +1,18 @@
+[
+ {
+  "run_id": "c2a5f18b-ff6a-4bef-aa9a-2358f0ebc8e7",
+  "pipeline": "t1-project-filter",
+  "status": "success",
+  "started_at": "2026-10-05T09:01:48.606487+00:00",
+  "finished_at": "2026-10-05T09:01:49.533925+00:00",
+  "records_in": 100000,
+  "records_out": 79781,
+  "records_skipped": 0,
+  "bytes_in": 52378916,
+  "bytes_out": 21325680,
+  "dlq_count": 0,
+  "error": null,
+  "errors": [],
+  "node": "trishul-ram-worker-0"
+ }
+]

@@ -29,6 +29,10 @@ class LocalSink(BaseSink):
                                              {source_filename}.
                                              Default: "{pipeline}_{timestamp}.bin"
         overwrite          (bool, default True)  Overwrite existing files in single mode.
+        max_index          (int, default 99999)  Highest allowed part index. Streams
+                                             consume one part per flush; writes past
+                                             the cap fail loudly (run error + skipped
+                                             count) instead of silently dropping.
     """
 
     def __init__(self, config: dict) -> None:
@@ -77,3 +81,20 @@ class LocalSink(BaseSink):
             raise
         except Exception as exc:
             raise SinkError(f"Error finalizing local sink output: {exc}") from exc
+
+    def close(self) -> None:
+        """Log the run's past-cap dropped total loudly (issue #77 fail-loud).
+
+        The executor swallows close() failures, so this is a log surface, not a
+        raise: the per-record SinkError raises already put the loss on the run
+        result; this makes the run's final total explicit in the logs.
+        Idempotent.
+        """
+        dropped = self._writer.dropped_past_cap_total
+        if dropped > 0:
+            logger.error(
+                "Local sink dropped %d record(s) past max_index=%d this run — "
+                "increase max_index or adjust rollover thresholds",
+                dropped,
+                self._writer.max_index,
+            )

@@ -1,0 +1,18 @@
+[
+ {
+  "run_id": "e09fe8a9-dd40-4f99-8152-82d5f228529e",
+  "pipeline": "s3-rest-rest",
+  "status": "success",
+  "started_at": "2026-10-05T12:50:08.087314+00:00",
+  "finished_at": "2026-10-05T12:50:41.830667+00:00",
+  "records_in": 100000,
+  "records_out": 100000,
+  "records_skipped": 0,
+  "bytes_in": 52280618,
+  "bytes_out": 56279616,
+  "dlq_count": 0,
+  "error": null,
+  "errors": [],
+  "node": "trishul-ram-0"
+ }
+]

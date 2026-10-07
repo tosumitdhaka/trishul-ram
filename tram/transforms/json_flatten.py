@@ -71,8 +71,30 @@ class JsonFlattenTransform(BaseTransform):
             if mode not in {"keep", "value", "both"}:
                 raise TransformError("json_flatten: choice_unwrap.mode must be keep, value, or both")
 
+        # Issue #80 cost center 3: rows are only deep-copied when a stage can
+        # mutate nested containers in place (explode/zip delete paths,
+        # choice_unwrap rewrites paths). The pure flatten path is read-only
+        # (``_flatten_record``/``_drop_flattened_paths`` build new dicts), so
+        # the input records can flow through untouched. The per-stage shallow
+        # copies (see ``_apply_explodes``/``_apply_zip_groups``) are safe
+        # because the base rows they derive from are private deepcopies.
+        self._needs_private_rows = bool(
+            self.explode_paths or self.zip_groups or self.choice_unwrap
+        )
+        # Dotted paths written via set_path during explode/zip need per-row
+        # deepcopies (a shallow copy would alias the parent dict across rows).
+        self._explode_needs_deepcopy = ["." in p for p in self.explode_paths]
+        self._zip_output_dotted = {
+            group_index
+            for group_index, group in enumerate(self.zip_groups)
+            if any("." in out for out in group.get("fields", {}).values())
+        }
+
     def apply(self, records: list[dict]) -> list[dict]:
-        rows = [deepcopy(record) for record in records]
+        if self._needs_private_rows:
+            rows = [deepcopy(record) for record in records]
+        else:
+            rows = list(records)
         rows = self._apply_explodes(rows)
         rows = self._apply_zip_groups(rows)
         rows = self._apply_choice_unwrap(rows)
@@ -81,7 +103,7 @@ class JsonFlattenTransform(BaseTransform):
         return rows
 
     def _apply_explodes(self, rows: list[dict]) -> list[dict]:
-        for path in self.explode_paths:
+        for path_index, path in enumerate(self.explode_paths):
             next_rows: list[dict] = []
             for row in rows:
                 found, value = get_path(row, path)
@@ -92,21 +114,26 @@ class JsonFlattenTransform(BaseTransform):
                 if not isinstance(value, list):
                     raise TransformError(f"json_flatten: explode path '{path}' is not a list")
 
+                # The base copy may carry the (large) exploded list; it is made
+                # exactly once per row (the O(n²) per-element deepcopy pattern
+                # was removed in GH #18). Per-element rows are shallow copies
+                # of this private base unless the explode path is dotted.
                 base_row = deepcopy(row)
                 _delete_path_pruned(base_row, path)
 
+                per_element_deepcopy = self._explode_needs_deepcopy[path_index]
                 for element in value:
-                    new_row = deepcopy(base_row)
+                    new_row = deepcopy(base_row) if per_element_deepcopy else dict(base_row)
                     if isinstance(element, dict):
-                        new_row.update(deepcopy(element))
+                        new_row.update(element)
                     else:
-                        set_path(new_row, path, deepcopy(element), create_missing=True)
+                        set_path(new_row, path, element, create_missing=True)
                     next_rows.append(new_row)
             rows = next_rows
         return rows
 
     def _apply_zip_groups(self, rows: list[dict]) -> list[dict]:
-        for group in self.zip_groups:
+        for group_index, group in enumerate(self.zip_groups):
             next_rows: list[dict] = []
             fields = group.get("fields", {})
             strict = group.get("strict", True)
@@ -141,18 +168,23 @@ class JsonFlattenTransform(BaseTransform):
                     next_rows.append(row)
                     continue
 
+                # Base copy per row per group (source paths are deleted from
+                # it; keeping it a private deepcopy preserves the old
+                # per-group-row isolation exactly, including for later zip
+                # groups that re-read the same row).
                 base_row = deepcopy(row)
                 for source_field in fields:
                     _delete_path_pruned(base_row, source_field)
 
+                per_idx_deepcopy = group_index in self._zip_output_dotted
                 length = lengths.pop()
                 for idx in range(length):
-                    new_row = deepcopy(base_row)
+                    new_row = deepcopy(base_row) if per_idx_deepcopy else dict(base_row)
                     for source_field, output_field in fields.items():
                         set_path(
                             new_row,
                             output_field,
-                            deepcopy(found_values[source_field][idx]),
+                            found_values[source_field][idx],
                             create_missing=True,
                         )
                     next_rows.append(new_row)

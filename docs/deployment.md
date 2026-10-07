@@ -39,6 +39,7 @@ All configuration is via environment variables (12-factor).
 | `TRAM_API_KEY` | _(empty)_ | API key for request authentication via the `X-API-Key` header (empty = auth disabled; the legacy `?api_key=` query param was removed) |
 | `TRAM_INTERNAL_AUTH_MODE` | `warn` | How internal machine-to-machine surfaces (`/api/internal/*` on the manager, `/agent/*` on workers) treat requests with a missing/invalid key: `off` (pass through, no log), `warn` (log at WARNING, still serve), `enforce` (reject with 401). Default `warn` — flipping to `enforce` in a later phase requires no code changes |
 | `TRAM_WEBHOOK_MAX_BODY_BYTES` | `10485760` | Maximum accepted webhook request body size in bytes; oversized payloads are rejected with 413 (v1.4.0) |
+| `TRAM_WEBHOOK_PLACEMENT_WINDOW_SECONDS` | `10` | Bounded hold for unmatched webhook paths (v1.6.0, GH #82). After a webhook stream is registered there is a ~5–11 s window where traffic routed to a worker whose placement has not propagated yet would 404; the ingress instead polls for up to this many seconds before 404ing as before. `0` restores the pre-v1.6.0 immediate-404 behavior. Every request is bounded by this window (small poll sleeps, no unbounded blocking), but the ingress is unauthenticated: a path-spray can pin ~10 s of connection residency per request (FD/memory amplification). Front the ingress with a rate limiter — or set the window to `0` — when exposed to untrusted clients |
 | `TRAM_AUTH_USERS` | _(empty)_ | Comma-separated `user:password` pairs for browser UI login (v1.0.8); issues 8-hour HMAC session tokens; coexists with `TRAM_API_KEY` |
 | `TRAM_AUTH_SECRET` | _(random)_ | Shared HMAC signing secret for session tokens (v1.0.8); **required in cluster mode** — without a shared secret each pod signs tokens independently and cross-pod requests return 401 |
 | `TRAM_RATE_LIMIT` | `50` | Max requests per sliding window per IP for `/api/*` (excluding `/api/internal/*`) and `/webhooks/*`; `0` = disabled. Default `50` since v1.4.6 (previously `0` = disabled) — lower it for sensitive surfaces or raise it for high-traffic webhook ingress / multi-tab NOC usage |
@@ -74,10 +75,12 @@ All configuration is via environment variables (12-factor).
 | `TRAM_WORKER_NAMESPACE` | `default` | Kubernetes namespace where worker pods run (v1.2.0) |
 | `TRAM_WORKER_PORT` | `8766` | Port that worker pods listen on (v1.2.0) |
 | `TRAM_WORKER_INGRESS_PORT` | `8767` | Public ingress port on worker pods for `/webhooks/*` push traffic (v1.3.0) |
-| `TRAM_MANAGER_URL` | _(empty)_ | Manager base URL used by worker pods for run-complete callbacks (v1.2.0) |
+| `TRAM_MANAGER_URL` | `http://localhost:8765` (standalone) / _(empty)_ (manager, worker) | Manager base URL used for run-complete callbacks (v1.2.0). Since v1.6.0 (GH #81) standalone mode defaults to `http://localhost:8765` when unset, so run-history rows are never silently dropped (an explicit value — including a remote manager in a hybrid setup — always wins). Manager and worker modes are never defaulted: their manager is remote, and a worker defaulting to localhost would post its own callbacks to itself |
 | `TRAM_DATA_DIR` | `/data` | Base directory for worker-synced schemas and custom MIBs in worker mode; if overridden, keep `TRAM_SCHEMA_DIR` and `TRAM_MIB_DIR` under the same root |
 | `TRAM_STATS_INTERVAL` | `30` | Seconds between worker periodic stats reports; also controls `PlacementReconciler` tick interval (`min(TRAM_STATS_INTERVAL, 10)s`) and stale-slot threshold (`3 × interval`) (v1.3.0) |
 | `TRAM_STREAM_SINGLE_PLACEMENT` | `1` | Durable placement for count=1 streams (v1.4.0, GH #17). `1` (default) routes count=1 stream dispatch through the broadcast-placement machinery: every dispatch produces a persisted 1-slot placement row, so manager-restart adoption, worker-death recovery, and stale-config detection are reconciler-driven. `0` keeps the legacy count=1 single-dispatch path (stream tracked in manager memory only). Rollback is `0` + manager restart; placement rows already created keep working under either value because the placement machinery is flag-independent |
+| `TRAM_STREAM_FLUSH_RECORDS` | `500` | Record threshold for the stream micro-batch sink flush (v1.6.0, GH #78). Stream pipelines buffer records and flush to sinks per batch (mirroring kafka `max_poll_records`) instead of one serialized sink write per message — the per-message write was the dominant stream cost (~0.5–1 ms/record vs 5–12 µs/record on the batch path). `1` restores the pre-v1.6.0 per-message flush. Per-pipeline `stream_flush_records` overrides this |
+| `TRAM_STREAM_FLUSH_INTERVAL_SECONDS` | `1.0` | Flush interval for the stream micro-batch sink flush (v1.6.0, GH #78) — the bounded end-to-end latency budget. Buffered records are flushed when the oldest record has waited this long, even if `TRAM_STREAM_FLUSH_RECORDS` has not been reached. Lower it to shrink crash/latency windows, raise it for fewer, larger sink writes. `0` disables the interval trigger. Per-pipeline `stream_flush_interval_s` overrides this |
 | `TRAM_QUEUE_MANUAL_RUNS` | `1` | Queue manual runs on no-capacity (v1.4.0, GH #21). `1` (default): a manual run triggered when no healthy worker exists is durably queued (survives manager restarts) and dispatched automatically when capacity returns; `POST /api/pipelines/{name}/run` returns **202** `{"status":"queued","run_id","expires_at"}` and the pipeline shows status `queued`. `0` keeps the legacy fail-fast (`No healthy workers available for dispatch` → `error`). An unrecognized value is logged at WARNING and fails open (feature ON). Rollback is `0` + manager restart; residual `queued_runs` rows are inert while the flag is off |
 | `TRAM_QUEUE_TTL_SECONDS` | `900` | How long a queued manual run waits for capacity before it expires to a `FAILED` run-history row (`no worker capacity within N minutes — queued run expired`) and the pipeline flips to `error` (v1.4.0, GH #21). The absolute `expires_at` clock keeps running across manager restarts, so a request queued before a long manager downtime expires truthfully at the first drain pass instead of silently running stale YAML |
 | `TRAM_STATEFUL_TRANSFORMS` | `1` | Stateful transforms (v1.4.0, F.1 — `counter_delta` and `window_aggregate`). `1` (default) enables the `counter_delta` and `window_aggregate` transforms, their durable per-pipeline state blob (the `transform_state` table in standalone mode, the internal `/api/internal/transform-state/{pipeline}` endpoints in worker mode), and the `state_persist_interval_s` stream persistence knob. `0` disables stateful transforms: pipelines using them fail validation with "stateful transforms disabled", the internal endpoints 404, and the manager-side dispatch guard is inert. An unrecognized value is logged at WARNING and fails open (feature ON). Rollback is `0` (immediate — no worker restart needed; the endpoints and guard vanish and offending pipelines go to `error` with a truthful message); `DROP TABLE transform_state` is optional cleanup. The SNMP source's `_snmp_widths` record field is additive and ignored by older stacks |
@@ -126,6 +129,19 @@ section](#postgresql-subchart-v108)) or point `TRAM_DB_URL` at a managed databas
 30s instead of failing fast. Treat SQLite as a single-writer store and move to PostgreSQL
 when multiple writers or sustained throughput are expected.
 
+### Standalone stream observability (v1.6.0, GH #81)
+
+Single-topology stream runs are visible in run history with in/out/error
+counts: each stats tick that closes a segment with activity records one
+`SUCCESS` row carrying that segment's DELTA counts (`<run_id>-seg<N>`), and
+the stream's stop (or crash) always records a final lifecycle row under the
+stream's own `run_id` — `SUCCESS` on a clean stop, `FAILED` with the crash
+text on an exception. Quiet segments produce no row, and a single lifecycle
+stops producing periodic rows after 500 rollups, so a long-lived stream cannot
+spam run history (live dashboard stats continue regardless). The sum of all
+rows equals the lifecycle totals, keeping `/api/stats` aggregations correct.
+Segment cadence follows `TRAM_STATS_INTERVAL`.
+
 ## Manager + Worker Mode (v1.2.0)
 
 TRAM supports a split deployment where a single **manager** pod owns all scheduling, the database, and the UI, while one or more **worker** pods execute pipelines and return results.
@@ -161,7 +177,7 @@ TRAM_WORKER_PORT=8766                  # internal agent API
 TRAM_WORKER_INGRESS_PORT=8767          # public webhook ingress
 ```
 
-Workers only need `tram[worker,kafka,snmp,...]` — the `manager` extra (apscheduler, sqlalchemy) is not installed.
+Workers only need `tram[worker,kafka,snmp,...]` — the `manager` extra (apscheduler, sqlalchemy) is not installed. Since v1.6.0 (GH #79) the worker image bakes in the **full serializer set** (`avro`, `protobuf`, `protobuf_ser`/grpcio-tools, `asn1`, `msgpack_ser`, `parquet`), so every serializer the `/api/plugins` registry advertises works in-cluster with no `pip install` staging.
 
 ### Helm: manager.enabled=true
 
@@ -194,14 +210,33 @@ This creates:
 
 If you are upgrading from the older manager `Deployment`, set `manager.persistence.existingClaim` to reuse the current manager PVC instead of provisioning a new one.
 
+**Upgrading from standalone (`--reuse-values`):** topology wiring is authoritative
+in manager/worker pods. `TRAM_NODE_ID`, `TRAM_MODE`, `TRAM_MANAGER_URL`,
+`TRAM_WORKER_*`, and the `/data` directory vars (`TRAM_SCHEMA_DIR`,
+`TRAM_MIB_DIR`, `TRAM_DATA_DIR`, `TRAM_DLQ_SPOOL_DIR`) are always computed by the
+chart, and a `values.env` entry with one of those names is **dropped** for
+manager/worker pods instead of being merged (the same drop applies to
+`envSecret` entries with those names, which render after the topology wiring).
+In particular a
+`TRAM_MANAGER_URL=http://localhost:8765` set via `values.env` for the standalone
+topology no longer leaks into worker pods after
+`helm upgrade --reuse-values --set manager.enabled=true` (previously the duplicate
+env name let the stale value win and workers posted run-complete/pipeline-stats
+callbacks to themselves). Remove any such stale `env.TRAM_MANAGER_URL` override
+from your values — the chart now derives the callback URL from the manager
+Service. Standalone mode is unchanged: there `values.env` is the only source for
+`TRAM_MANAGER_URL` (the v1.6.0 GH #81 code default applies when unset).
+
 ### Worker image
 
 ```dockerfile
 # Build with Dockerfile.worker (no UI assets, no manager deps)
-docker build -f Dockerfile.worker -t trishul-ram-worker:1.4.5 .
+docker build -f Dockerfile.worker -t trishul-ram-worker:latest .
 ```
 
 The worker image exposes port `8766` for the internal agent API and port `8767` for ingress-only webhook traffic. Kubernetes liveness/readiness probes stay on `/agent/health` over port `8766`.
+
+**Serializer coverage (GH #79):** the worker image installs every serializer extra — `avro` (fastavro), `protobuf` + `protobuf_ser` (grpcio-tools — the serializer compiles `.proto` files at runtime on the worker), `asn1`, `msgpack_ser`, and `parquet` (pyarrow). Pipelines using msgpack (fastest measured format), Parquet, Avro, ASN.1, or protobuf run with zero staging. The pyarrow addition costs roughly **+100 MB** on the worker and standalone images.
 
 ### Worker agent endpoints
 
@@ -621,28 +656,34 @@ host bind override (`--data-dir`) when you explicitly do not want a Docker-manag
 
 ### Installed extras in the default image
 
-The default `tram:1.4.5` image installs (`clickhouse` added in v1.0.4):
+The default standalone image (built from `Dockerfile`) installs the union of manager +
+worker extras plus AI features:
 
-`kafka`, `opensearch`, `snmp`, `avro`, `protobuf_ser`, `msgpack_ser`, `mqtt`, `amqp`, `nats`,
-`gnmi`, `jmespath`, `sql`, `influxdb`, `redis`, `websocket`, `elasticsearch`, `metrics`,
-`prometheus_rw`, `corba`, `mib`, `watch`, `postgresql`, `mysql`
+`manager`, `worker`, `k8s`, `metrics`, `watch`, `mib`, `protobuf_ser`, `protobuf`,
+`asn1`, `msgpack_ser`, `parquet`, `kafka`, `snmp`, `avro`, `jmespath`, `sql`,
+`websocket`, `prometheus_rw`, `ai-anthropic`, `ai-openai`
 
-`corba` (`omniORBpy`) is included — the image pre-installs the required omniORB runtime libraries
-(`libomniorb4-2`, `libomnithread4`) so the pre-built PyPI wheel installs without a source build.
+**Serializer coverage (GH #79, v1.6.0):** all serializers advertised by `/api/plugins`
+work in the worker and standalone images — msgpack, Parquet (pyarrow), Avro (fastavro),
+ASN.1, and protobuf (runtime decode **and** `.proto` compilation via grpcio-tools, which
+the serializer performs on the worker at run time). The worker image (`Dockerfile.worker`)
+carries the same serializer set; the manager image adds fastavro (`avro`) for parity with
+the schema-registry / UI paths. The protobuf + grpcio-tools pins share the protobuf 6.x
+floor so the extras resolve without pip backtracking. Accept the pyarrow image-size cost:
+**~+100 MB** on the worker and standalone images.
 
 The following extras are **excluded by default** to keep the image lean. Extend with a custom layer:
 
 | Extra | Reason excluded | ~Size |
 |-------|----------------|-------|
-| `parquet` | pyarrow is large | ~150 MB |
 | `s3` | boto3/botocore | ~60 MB |
 | `gcs` | google-cloud-storage + deps | ~50 MB |
 | `azure` | azure-storage-blob + SDK | ~30 MB |
 | `otel` | only needed when `TRAM_OTEL_ENDPOINT` is set; no-op fallback when absent | ~15 MB |
 
 ```dockerfile
-FROM ghcr.io/tosumitdhaka/trishul-ram:1.4.5
-RUN pip install "tram[parquet,s3,gcs,azure,otel]"
+FROM ghcr.io/tosumitdhaka/trishul-ram:latest
+RUN pip install "tram[s3,gcs,azure,otel]"
 ```
 
 ### docker-compose

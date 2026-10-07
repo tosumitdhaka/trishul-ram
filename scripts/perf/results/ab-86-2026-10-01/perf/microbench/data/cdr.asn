@@ -1,0 +1,28 @@
+-- Canonical CDR schema for the TRAM capacity-study microbench (Phase 1c).
+-- Mirrors the study-wide flat CDR record. Charge is REAL (JPY, 2 dp).
+TRAM-Microbench-CDR DEFINITIONS ::= BEGIN
+
+CdrRecord ::= SEQUENCE {
+    recordId     UTF8String,
+    timestamp    UTF8String,
+    msisdn       UTF8String,
+    imsi         UTF8String,
+    imei         UTF8String,
+    cellId       INTEGER,
+    eventType    UTF8String,
+    direction    UTF8String,
+    durationS    INTEGER,
+    bytesUp      INTEGER,
+    bytesDown    INTEGER,
+    rat          UTF8String,
+    roaming      BOOLEAN,
+    chargeAmount REAL,
+    currency     UTF8String,
+    sessionStart UTF8String,
+    sessionEnd   UTF8String,
+    apn          UTF8String,
+    sgsnAddr     UTF8String,
+    ggsnAddr     UTF8String
+}
+
+END

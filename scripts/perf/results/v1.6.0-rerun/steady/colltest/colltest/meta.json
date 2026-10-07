@@ -1,0 +1,29 @@
+{
+  "run_id": "colltest",
+  "started_at": "2026-10-05T08:11:43.506186+00:00",
+  "finished_at": "2026-10-05T08:11:46.871403+00:00",
+  "namespace": "trishul-ram",
+  "sampling": {
+    "duration_s": 3.0,
+    "interval_s": 1.0
+  },
+  "env": {
+    "tram_version": "unknown",
+    "helm_values": {
+      "source": null,
+      "note": "no --helm-values provided"
+    },
+    "node_allocatable": {
+      "cpu": "12",
+      "memory": "16120920Ki"
+    },
+    "running_images": {
+      "kafka-0": "docker.io/apache/kafka:3.9.0",
+      "sftp-0": "docker.io/atmoz/sftp:latest",
+      "trishul-ram-manager-0": "docker.io/library/trishul-ram-manager:local-20261001rr",
+      "trishul-ram-worker-0": "docker.io/library/trishul-ram-worker:local-20261001rr",
+      "trishul-ram-worker-1": "docker.io/library/trishul-ram-worker:local-20261001rr",
+      "trishul-ram-worker-2": "docker.io/library/trishul-ram-worker:local-20261001rr"
+    }
+  }
+}

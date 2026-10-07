@@ -391,6 +391,11 @@ def create_worker_app(worker_id: str = "", manager_url: str = "", stats_interval
     if not worker_id:
         worker_id = os.environ.get("TRAM_WORKER_ID", socket.gethostname())
     if not manager_url:
+        # Worker-mode only (daemon/server.py routes TRAM_MODE=worker here).
+        # Deliberately NO localhost default: the worker's manager is remote in
+        # this topology, and defaulting would make the worker POST its own
+        # run-complete callbacks to itself. The v1.6.0 standalone default
+        # (GH #81) lives in AppConfig.from_env and never reaches this branch.
         manager_url = os.environ.get("TRAM_MANAGER_URL", "")
     if stats_interval is None:
         stats_interval = int(os.environ.get("TRAM_STATS_INTERVAL", "30"))

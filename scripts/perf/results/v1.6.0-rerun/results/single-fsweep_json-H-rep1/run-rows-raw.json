@@ -1,0 +1,18 @@
+[
+ {
+  "run_id": "d4edd23d-f108-4b07-9064-64d4c901737d",
+  "pipeline": "fsweep-json",
+  "status": "success",
+  "started_at": "2026-10-05T12:17:05.954251+00:00",
+  "finished_at": "2026-10-05T12:17:06.773203+00:00",
+  "records_in": 100000,
+  "records_out": 100000,
+  "records_skipped": 0,
+  "bytes_in": 52378916,
+  "bytes_out": 56278896,
+  "dlq_count": 0,
+  "error": null,
+  "errors": [],
+  "node": "trishul-ram-0"
+ }
+]

@@ -113,6 +113,72 @@ def state_max_bytes() -> int:
         return _STATE_MAX_BYTES_DEFAULT
 
 
+# GH #78 defaults: the stream flush-record threshold mirrors kafka
+# ``max_poll_records`` (500); the flush interval is the bounded end-to-end
+# latency budget for buffered records (1s). The capacity study measured the
+# per-message sink write as the dominant stream cost (~0.5-1 ms/record vs
+# 5-12 µs/record on the batch path), so 500 records / 1s is the measured
+# capacity window (kafka ~2x+, webhook ~1.2-1.5x) with a bounded latency trade.
+_STREAM_FLUSH_RECORDS_DEFAULT = 500
+_STREAM_FLUSH_INTERVAL_DEFAULT = 1.0
+
+
+def stream_flush_records() -> int:
+    """``TRAM_STREAM_FLUSH_RECORDS`` default record threshold for the stream
+    micro-batch sink flush (GH #78).
+
+    Stream pipelines buffer records and flush to sinks per batch instead of
+    one serialized sink write per message; this is the record-count trigger
+    (mirrors kafka ``max_poll_records``). ``1`` restores the pre-v1.6.0
+    per-message flush. Per-pipeline ``stream_flush_records`` overrides it.
+    Invalid values — non-integers and values < 1 (the model field is ``ge=1``,
+    so ``0`` is invalid there too) — are logged at WARNING and fall back to
+    the default (the webhook body-cap convention), consistent with the model
+    rejecting ``0`` at validation.
+    """
+    raw = os.environ.get("TRAM_STREAM_FLUSH_RECORDS")
+    if raw is None:
+        return _STREAM_FLUSH_RECORDS_DEFAULT
+    try:
+        value = int(raw)
+    except ValueError:
+        logger.warning(
+            "Invalid TRAM_STREAM_FLUSH_RECORDS=%r — using default",
+            raw,
+        )
+        return _STREAM_FLUSH_RECORDS_DEFAULT
+    if value < 1:
+        logger.warning(
+            "Invalid TRAM_STREAM_FLUSH_RECORDS=%r (must be >= 1) — using default",
+            raw,
+        )
+        return _STREAM_FLUSH_RECORDS_DEFAULT
+    return value
+
+
+def stream_flush_interval_seconds() -> float:
+    """``TRAM_STREAM_FLUSH_INTERVAL_SECONDS`` flush interval for the stream
+    micro-batch sink flush (GH #78).
+
+    Bounded end-to-end latency budget: buffered records are flushed when the
+    oldest record in the buffer has waited this long, even if the record
+    threshold has not been reached. ``0`` disables the interval trigger
+    (records then flush on the record threshold or the source batch end).
+    Per-pipeline ``stream_flush_interval_s`` overrides it.
+    """
+    raw = os.environ.get("TRAM_STREAM_FLUSH_INTERVAL_SECONDS")
+    if raw is None:
+        return _STREAM_FLUSH_INTERVAL_DEFAULT
+    try:
+        return max(float(raw), 0.0)
+    except ValueError:
+        logger.warning(
+            "Invalid TRAM_STREAM_FLUSH_INTERVAL_SECONDS=%r — using default",
+            raw,
+        )
+        return _STREAM_FLUSH_INTERVAL_DEFAULT
+
+
 @dataclass(frozen=True)
 class AppConfig:
     """Application-wide configuration loaded from environment variables."""
@@ -185,6 +251,18 @@ class AppConfig:
     @classmethod
     def from_env(cls) -> AppConfig:
         node_id = os.environ.get("TRAM_NODE_ID", socket.gethostname())
+        tram_mode = os.environ.get("TRAM_MODE", "standalone").lower()
+        # v1.6.0 (GH #81): standalone mode defaults TRAM_MANAGER_URL to the
+        # local daemon so the run-complete callback URL is never empty — an
+        # empty URL silently drops every run-history row in single topology.
+        # An explicitly-set value always wins (a hybrid standalone that reports
+        # to a remote manager keeps working), and manager/worker modes are
+        # deliberately NOT defaulted: their manager is remote, and a worker
+        # defaulting to localhost would POST its own run-complete callbacks to
+        # itself (tram/agent/server.py.create_worker_app reads the env raw).
+        manager_url = os.environ.get("TRAM_MANAGER_URL", "")
+        if tram_mode == "standalone" and not manager_url:
+            manager_url = "http://localhost:8765"
         stream_single_placement_raw = os.environ.get("TRAM_STREAM_SINGLE_PLACEMENT", "1")
         if stream_single_placement_raw not in ("0", "1"):
             # Fail open: anything other than an explicit "0" enables the
@@ -234,8 +312,8 @@ class AppConfig:
             ui_dir=os.environ.get("TRAM_UI_DIR", "/ui"),
             auth_users=os.environ.get("TRAM_AUTH_USERS", ""),
             templates_dir=os.environ.get("TRAM_TEMPLATES_DIR", "/tram-templates"),
-            tram_mode=os.environ.get("TRAM_MODE", "standalone").lower(),
-            manager_url=os.environ.get("TRAM_MANAGER_URL", ""),
+            tram_mode=tram_mode,
+            manager_url=manager_url,
             stats_interval=_env_int("TRAM_STATS_INTERVAL", 30),
             stream_single_placement=stream_single_placement_raw != "0",
             queue_manual_runs=queue_manual_runs_raw != "0",

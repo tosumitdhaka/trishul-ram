@@ -1,0 +1,55 @@
+version: "1"
+
+pipeline:
+  name: t4-counter-delta-window
+  description: >
+    Transform bench T4 — counter_delta + window_aggregate. Stateful
+    transforms over the flat CDR corpus: counter_delta emits per-msisdn
+    byte deltas/rates (with Counter32-style wrap correction), then
+    window_aggregate tumbles 60s epoch-aligned windows summing the deltas
+    per subscriber. thread_workers must stay 1 for stateful transforms
+    (schema-enforced). Requires TRAM_STATEFUL_TRANSFORMS=1 (default).
+  enabled: true
+
+  schedule:
+    type: manual
+
+  source:
+    type: local
+    path: ${PERF_IN_DIR:-/data/perf/in}
+    file_pattern: "*.jsonl"
+
+  serializer_in:
+    type: json
+
+  transforms:
+    - type: counter_delta
+      fields: [bytes_up, bytes_down]
+      key_fields: [msisdn]
+      timestamp_field: timestamp
+      output: both
+      keep_raw: true
+      first_sample: pass
+
+    - type: window_aggregate
+      window_seconds: 60
+      allowed_lateness_seconds: 0
+      timestamp_field: timestamp
+      group_by: [msisdn]
+      operations:
+        up_delta_total: "sum:bytes_up_delta"
+        down_delta_total: "sum:bytes_down_delta"
+        sessions: "count:record_id"
+      flush_on_close: true
+
+  thread_workers: 1
+
+  serializer_out:
+    type: json
+
+  sinks:
+    - type: local
+      path: ${PERF_OUT_DIR:-/data/perf/out}
+      filename_template: "t4_{pipeline}_{timestamp}.json"
+
+  on_error: continue

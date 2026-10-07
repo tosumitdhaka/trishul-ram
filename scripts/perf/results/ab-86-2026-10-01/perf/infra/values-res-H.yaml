@@ -1,0 +1,38 @@
+## Capacity study — resource overlay H (high): 2 CPU / 2Gi per TRAM pod.
+##
+## Helm paths touched (all three so the overlay works for either topology):
+##   manager.resources          — manager StatefulSet (manager-statefulset.yaml:230)
+##   worker.resources           — worker StatefulSet (worker-statefulset.yaml:134)
+##   resources                  — standalone StatefulSet (statefulset.yaml:180)
+##
+## Usage (layered AFTER a topology file / --reuse-values):
+##   helm upgrade trishul-ram helm/ -n trishul-ram --reuse-values \
+##     -f scripts/perf/infra/values-res-H.yaml
+## or with the dev script:
+##   VALUES_FILE=scripts/perf/infra/values-res-H.yaml ./scripts/deploy-kind-tram-dev.sh --mode manager
+
+manager:
+  resources:
+    requests:
+      cpu: "2"
+      memory: 2Gi
+    limits:
+      cpu: "2"
+      memory: 2Gi
+
+worker:
+  resources:
+    requests:
+      cpu: "2"
+      memory: 2Gi
+    limits:
+      cpu: "2"
+      memory: 2Gi
+
+resources:
+  requests:
+    cpu: "2"
+    memory: 2Gi
+  limits:
+    cpu: "2"
+    memory: 2Gi

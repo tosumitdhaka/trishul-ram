@@ -1,0 +1,19 @@
+run_id,scenario,res_profile,rep,records_in,records_out,errors,duration_s,throughput_recs_s,pod_cpu_peak_m,pod_mem_peak_mi,notes
+mw-t1-L-rep1,t1,L,1,100000,79781,0,3.4,23465.0,13,574,"rows=1 statuses=success nodes=trishul-ram-worker-0; transforms=project,filter; peak_pod=kafka-0"
+mw-t5-L-rep1,t5,L,1,100000,100000,0,5.3,18867.9,110,575,"rows=1 statuses=success nodes=trishul-ram-worker-0; transforms=rename,cast,add_field,filter,project; peak_pod=trishul-ram-manager-0"
+mw-t1-L-rep2,t1,L,2,100000,79781,0,4.1,19458.8,31,636,"rows=1 statuses=success nodes=trishul-ram-worker-0; transforms=project,filter; peak_pod=trishul-ram-worker-0"
+mw-t5-L-rep2,t5,L,2,100000,100000,0,6.0,16666.7,126,635,"rows=1 statuses=success nodes=trishul-ram-worker-0; transforms=rename,cast,add_field,filter,project; peak_pod=trishul-ram-manager-0"
+mw-t1-M-rep1,t1,M,1,100000,79781,0,2.3,34687.4,129,655,"rows=1 statuses=success nodes=trishul-ram-worker-0; transforms=project,filter; peak_pod=trishul-ram-worker-0"
+mw-t2-M-rep1,t2,M,1,100000,100000,0,2.8,35714.3,114,651,"rows=1 statuses=success nodes=trishul-ram-worker-0; transforms=json_flatten,enrich; peak_pod=trishul-ram-worker-0"
+mw-t3-M-rep1,t3,M,1,100000,100000,0,1.6,62500.0,13,651,rows=1 statuses=success nodes=trishul-ram-worker-0; transforms=deduplicate; peak_pod=kafka-0
+mw-t4-M-rep1,t4,M,1,100000,8,0,7.5,1.1,74,651,"rows=1 statuses=success nodes=trishul-ram-worker-0; transforms=counter_delta,window_aggregate; peak_pod=trishul-ram-manager-0"
+mw-t5-M-rep1,t5,M,1,100000,100000,0,3.6,27777.8,17,652,"rows=1 statuses=success nodes=trishul-ram-worker-0; transforms=rename,cast,add_field,filter,project; peak_pod=kafka-0"
+mw-t1-M-rep2,t1,M,2,100000,79781,0,1.7,46930.0,41,659,"rows=1 statuses=success nodes=trishul-ram-worker-0; transforms=project,filter; peak_pod=trishul-ram-worker-0"
+mw-t2-M-rep2,t2,M,2,100000,100000,0,2.6,38461.5,66,672,"rows=1 statuses=success nodes=trishul-ram-worker-0; transforms=json_flatten,enrich; peak_pod=trishul-ram-manager-0"
+mw-t3-M-rep2,t3,M,2,100000,100000,0,1.6,62500.0,64,657,rows=1 statuses=success nodes=trishul-ram-worker-0; transforms=deduplicate; peak_pod=trishul-ram-worker-0
+mw-t4-M-rep2,t4,M,2,100000,8,0,6.0,1.3,130,655,"rows=1 statuses=success nodes=trishul-ram-worker-0; transforms=counter_delta,window_aggregate; peak_pod=trishul-ram-worker-0"
+mw-t5-M-rep2,t5,M,2,100000,100000,0,3.3,30303.0,55,653,"rows=1 statuses=success nodes=trishul-ram-worker-0; transforms=rename,cast,add_field,filter,project; peak_pod=trishul-ram-manager-0"
+mw-t1-H-rep1,t1,H,1,100000,79781,0,1.5,53187.3,76,644,"rows=1 statuses=success nodes=trishul-ram-worker-0; transforms=project,filter; peak_pod=trishul-ram-manager-0"
+mw-t5-H-rep1,t5,H,1,100000,100000,0,2.2,45454.5,15,641,"rows=1 statuses=success nodes=trishul-ram-worker-0; transforms=rename,cast,add_field,filter,project; peak_pod=kafka-0"
+mw-t1-H-rep2,t1,H,2,100000,79781,0,0.9,88645.6,74,656,"rows=1 statuses=success nodes=trishul-ram-worker-0; transforms=project,filter; peak_pod=trishul-ram-worker-0"
+mw-t5-H-rep2,t5,H,2,100000,100000,0,1.3,76923.1,108,656,"rows=1 statuses=success nodes=trishul-ram-worker-0; transforms=rename,cast,add_field,filter,project; peak_pod=trishul-ram-worker-0"

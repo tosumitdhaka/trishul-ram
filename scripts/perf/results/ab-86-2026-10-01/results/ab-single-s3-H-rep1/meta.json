@@ -1,0 +1,26 @@
+{
+  "run_id": "ab-single-s3-H-rep1",
+  "started_at": "2026-10-01T11:42:02.566055+00:00",
+  "finished_at": "2026-10-01T11:42:17.924031+00:00",
+  "namespace": "trishul-ram",
+  "sampling": {
+    "duration_s": 15.0,
+    "interval_s": 5.0
+  },
+  "env": {
+    "tram_version": "unknown",
+    "helm_values": {
+      "source": null,
+      "note": "no --helm-values provided"
+    },
+    "node_allocatable": {
+      "cpu": "12",
+      "memory": "16120920Ki"
+    },
+    "running_images": {
+      "kafka-0": "docker.io/apache/kafka:3.9.0",
+      "sftp-0": "docker.io/atmoz/sftp:latest",
+      "trishul-ram-0": "docker.io/library/trishul-ram:local-20261001102732"
+    }
+  }
+}

@@ -1,0 +1,22 @@
+{
+  "runs_total": 7,
+  "runs_completed": 7,
+  "records_in": 300000,
+  "records_out": 300000,
+  "records_skipped": 40,
+  "bytes_in": 195976760,
+  "bytes_out": 83990040,
+  "dlq_count": 0,
+  "run_duration_ms": {
+    "count": 7,
+    "total_ms": 29718.169,
+    "avg_ms": 4245.453,
+    "max_ms": 10339.91
+  },
+  "errors": [],
+  "error_count": 0,
+  "run_id": "mw-fsweep_protobuf-M-rep1",
+  "pipeline": "fsweep-protobuf",
+  "api_url": "http://127.0.0.1:30001",
+  "collected_at": "2026-10-05T06:25:24.613487+00:00"
+}

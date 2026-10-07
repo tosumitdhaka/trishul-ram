@@ -1,0 +1,22 @@
+{
+  "runs_total": 12,
+  "runs_completed": 12,
+  "records_in": 800000,
+  "records_out": 800000,
+  "records_skipped": 40,
+  "bytes_in": 227383002,
+  "bytes_out": 151776386,
+  "dlq_count": 0,
+  "run_duration_ms": {
+    "count": 12,
+    "total_ms": 23026.024,
+    "avg_ms": 1918.835,
+    "max_ms": 6894.572
+  },
+  "errors": [],
+  "error_count": 0,
+  "run_id": "mw-fsweep_parquet-L-rep2",
+  "pipeline": "fsweep-parquet",
+  "api_url": "http://127.0.0.1:30001",
+  "collected_at": "2026-10-05T05:23:29.828554+00:00"
+}

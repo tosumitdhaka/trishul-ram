@@ -1,0 +1,22 @@
+{
+  "runs_total": 11,
+  "runs_completed": 11,
+  "records_in": 1100000,
+  "records_out": 1100000,
+  "records_skipped": 0,
+  "bytes_in": 298987986,
+  "bytes_out": 298987986,
+  "dlq_count": 0,
+  "run_duration_ms": {
+    "count": 11,
+    "total_ms": 23089.4,
+    "avg_ms": 2099.036,
+    "max_ms": 4121.451
+  },
+  "errors": [],
+  "error_count": 0,
+  "run_id": "single-s2csv-L-rep1",
+  "pipeline": "s2-local-local-csv",
+  "api_url": "http://127.0.0.1:30001",
+  "collected_at": "2026-10-05T09:33:36.291782+00:00"
+}

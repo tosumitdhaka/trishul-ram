@@ -1,0 +1,44 @@
+{
+  "run_id": "mw-fsweep_avro-M-rep1",
+  "scenario": "fsweep_avro",
+  "res_profile": "M",
+  "rep": 1,
+  "topology": "mw",
+  "rep_started_at": "2026-10-05T06:23:39.806590+00:00",
+  "run_one_rc": 0,
+  "aborted": null,
+  "run_history": {
+    "rows": 1,
+    "records_in": 100000,
+    "records_out": 100000,
+    "records_skipped": 0,
+    "bytes_in": 25390264,
+    "bytes_out": 25390264,
+    "errors": 0,
+    "error_msgs": [],
+    "statuses": [
+      "success"
+    ],
+    "wall_s": 3.521909,
+    "nodes": [
+      "trishul-ram-worker-0"
+    ]
+  },
+  "loadgens": [],
+  "rest_sink_stats": {},
+  "sink_export": {},
+  "kafka_out_cum": "",
+  "bytes_per_record_in": 253.9,
+  "peaks": {
+    "cpu_peak_m": 12.0,
+    "mem_peak_mi": 656.0,
+    "peak_pod": "kafka-0"
+  },
+  "metrics": {
+    "records_in": 100000,
+    "records_out": 100000,
+    "errors": 0,
+    "duration_s": 3.5,
+    "throughput_recs_s": 28571.4
+  }
+}

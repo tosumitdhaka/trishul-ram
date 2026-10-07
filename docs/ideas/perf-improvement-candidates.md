@@ -14,6 +14,31 @@ capacity-per-dollar, then hygiene.
 
 ---
 
+## v1.6.0 outcomes (2026-10-06)
+
+All thirteen candidates were executed (or resolved) in v1.6.0 — issues
+#76–#86. Measured before/after detail lives in
+`perf-v160-vs-v151-comparison-2026-10.md`; raw evidence under
+`scripts/perf/results/v1.6.0-rerun/` and `ab-86-2026-10-01/`.
+
+| # | candidate | v1.6.0 outcome |
+|---|---|---|
+| 1 | Kafka sink bounded-batch sends | **DONE** (GH #76) — s7 file→kafka out==in at every batch size (was 100% silent loss >1 MB); at-least-once across chunks, duplicates possible on retry |
+| 2 | Local-sink part-cap fail-loud | **DONE** (GH #77) — past-cap writes fail loudly; parts consumed per flush (~500 records) since #78, cap practically removed (220k-record run verified) |
+| 3 | Stream micro-batching | **DONE, partial gain** (GH #78) — kafka 2.0–3.9× (≥2,000 msg/s no-lag per 500m worker); webhook 1.19–1.47×, the 2× target missed (CPU-bound, concurrency-shaped plateau; latency ~20× better) |
+| 4 | Serializer extras in images | **DONE** (GH #79) — baked into worker/standalone images, protobuf 6.x pins aligned; verified in-cluster end-to-end |
+| 5 | window_aggregate heap | **DONE** (GH #80) — 18.6 µs/rec @1k groups (5.3×); group-scaling growth 1.64× over 10→5k groups (was ~8× to 1k) |
+| 6 | simpleeval compile-once | **DONE** (GH #80) — add_field 30.8 → 3.8 µs/rec (8.1×) |
+| 7 | deepcopy elimination | **DONE** (GH #80) — mid-tier transforms ~7–10× faster; aliasing invariant pinned by mutation tests |
+| 8 | Single-topology run history + URL default | **DONE** (GH #81) |
+| 9 | Webhook placement race | **DONE** (GH #82) — hold window; 4xx reduced to ~0.3% start-of-step residue |
+| 10 | protobuf E2E amplification | **PARTIAL** (GH #83) — parse 1.53× faster, E2E 0.92× (2–5× estimate was a wrong cost model: the dict conversion dominates and was kept for wire compat; further gains = new scope) |
+| 11 | counters hygiene | **DONE** (GH #84) — skipped == in − out verified across every rerun row |
+| 12 | mw-vs-single 2× gap | **WITHDRAWN** (GH #86) — measurement artifact (leftover-pipeline contamination + baseline H-cell inflation); true parity 0.94–1.15×, verified twice |
+| 13 | Registration-time condition validation | **DONE** (GH #85) — lint L015; deterministically-broken expressions reject, record-field-shaped names warn |
+
+---
+
 ## 1. Kafka sink: per-record / bounded-batch sends — [P] + [O]
 
 - **Evidence**: s7 records_out = 0 at every cell, both topologies — each

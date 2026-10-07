@@ -1,0 +1,24 @@
+{
+  "runs_total": 8,
+  "runs_completed": 8,
+  "records_in": 700000,
+  "records_out": 700000,
+  "records_skipped": 0,
+  "bytes_in": 213319260,
+  "bytes_out": 300779780,
+  "dlq_count": 0,
+  "run_duration_ms": {
+    "count": 8,
+    "total_ms": 247863.176,
+    "avg_ms": 30982.897,
+    "max_ms": 168023.081
+  },
+  "errors": [
+    "Manager recovered no active worker batch run for pipeline marked running"
+  ],
+  "error_count": 1,
+  "run_id": "ab-mw-s2pmxml-M-rep1",
+  "pipeline": "s2-local-local-pmxml",
+  "api_url": "http://127.0.0.1:30001",
+  "collected_at": "2026-10-01T10:57:24.982493+00:00"
+}

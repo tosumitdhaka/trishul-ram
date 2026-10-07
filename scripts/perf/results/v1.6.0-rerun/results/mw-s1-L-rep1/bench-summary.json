@@ -1,0 +1,65 @@
+{
+  "run_id": "mw-s1-L-rep1",
+  "scenario": "s1",
+  "res_profile": "L",
+  "rep": 1,
+  "topology": "mw",
+  "rep_started_at": "2026-10-05T04:56:56.700062+00:00",
+  "run_one_rc": 0,
+  "aborted": null,
+  "run_history": {
+    "rows": 3,
+    "records_in": 18000,
+    "records_out": 18000,
+    "records_skipped": 0,
+    "bytes_in": 9391780,
+    "bytes_out": 10129780,
+    "errors": 0,
+    "error_msgs": [],
+    "statuses": [
+      "success"
+    ],
+    "wall_s": 242.318328,
+    "nodes": [
+      "trishul-ram-worker-0",
+      "trishul-ram-worker-1",
+      "trishul-ram-worker-2"
+    ]
+  },
+  "loadgens": [
+    {
+      "tool": "loadgen_webhook",
+      "sent": 18000,
+      "http_2xx": 18000,
+      "http_4xx": 0,
+      "http_5xx": 0,
+      "errors": 0,
+      "latency_ms": {
+        "p50": 2.226,
+        "p95": 2.99,
+        "max": 53.927
+      },
+      "url": "http://127.0.0.1:30002/webhooks/ingest",
+      "rate": 100.0,
+      "concurrency": 20,
+      "duration_s": 180.0,
+      "payload_records": 100000
+    }
+  ],
+  "rest_sink_stats": {},
+  "sink_export": {},
+  "kafka_out_cum": "",
+  "bytes_per_record_in": 521.8,
+  "peaks": {
+    "cpu_peak_m": 10.0,
+    "mem_peak_mi": 575.0,
+    "peak_pod": "kafka-0"
+  },
+  "metrics": {
+    "records_in": 18000,
+    "records_out": 18000,
+    "errors": 0,
+    "duration_s": 180.0,
+    "throughput_recs_s": 100.0
+  }
+}

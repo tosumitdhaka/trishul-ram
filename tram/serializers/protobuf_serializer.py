@@ -3,7 +3,6 @@ from __future__ import annotations
 
 import atexit
 import hashlib
-import io
 import os
 import shutil
 import struct
@@ -53,6 +52,9 @@ class ProtobufSerializer(BaseSerializer):
         schema_registry_subject (str): Subject for latest lookup.
         schema_registry_id (int): Specific schema ID.
         use_magic_bytes (bool): Strip/prepend Confluent framing. Default True.
+        preserve_keys (bool): Keep original proto field names (snake_case) in
+            decoded records instead of converting to lowerCamelCase. Default
+            False (current wire convention: lowerCamelCase).
     """
     def __init__(self, config: dict) -> None:
         super().__init__(config)
@@ -75,6 +77,7 @@ class ProtobufSerializer(BaseSerializer):
         self.registry_subject: str | None = config.get("schema_registry_subject")
         self.registry_id: int | None = config.get("schema_registry_id")
         self.use_magic_bytes: bool = config.get("use_magic_bytes", True)
+        self.preserve_keys: bool = config.get("preserve_keys", False)
         self._tmpdir: str | None = None
         self._module = None
         self._registry_schema_id: int | None = None
@@ -199,27 +202,38 @@ class ProtobufSerializer(BaseSerializer):
             try:
                 msg = MsgClass()
                 msg.ParseFromString(data)
-                return [MessageToDict(msg)]
+                return [MessageToDict(msg, preserving_proto_field_name=self.preserve_keys)]
             except Exception as exc:
                 raise SerializerError(f"Protobuf parse error: {exc}") from exc
 
-        # framing=length_delimited (default): [4-byte BE length][proto bytes] per record
-        records = []
-        buf = io.BytesIO(data)
-        while True:
-            length_bytes = buf.read(4)
-            if not length_bytes:
-                break
-            if len(length_bytes) < 4:
+        # framing=length_delimited (default): [4-byte BE length][proto bytes] per record.
+        # Batch decode: all frame boundaries are split from the buffer in one pass
+        # (no per-record BytesIO + read calls), then every frame is decoded into a
+        # single reused message instance (ParseFromString clears prior state) instead
+        # of constructing one message object per record.
+        view = memoryview(data)
+        frames = []
+        offset = 0
+        total = len(view)
+        while offset < total:
+            if offset + 4 > total:
                 raise SerializerError("Truncated length prefix in protobuf stream")
-            (length,) = struct.unpack(">I", length_bytes)
-            proto_bytes = buf.read(length)
-            if len(proto_bytes) < length:
+            (length,) = struct.unpack_from(">I", view, offset)
+            offset += 4
+            end = offset + length
+            if end > total:
                 raise SerializerError("Truncated protobuf record")
+            frames.append((offset, end))
+            offset = end
+
+        records = []
+        msg = MsgClass()
+        to_dict = MessageToDict
+        preserve = self.preserve_keys
+        for start, end in frames:
             try:
-                msg = MsgClass()
-                msg.ParseFromString(proto_bytes)
-                records.append(MessageToDict(msg))
+                msg.ParseFromString(view[start:end])
+                records.append(to_dict(msg, preserving_proto_field_name=preserve))
             except Exception as exc:
                 raise SerializerError(f"Protobuf parse error: {exc}") from exc
         return records
@@ -230,17 +244,23 @@ class ProtobufSerializer(BaseSerializer):
         except ImportError as exc:
             raise SerializerError("Protobuf serializer requires protobuf") from exc
         MsgClass = self._get_message_class()
-        buf = io.BytesIO()
+        # Batch encode: one message instance is cleared and reused across the
+        # whole batch (ParseDict merges, so Clear restores fresh-message state),
+        # and the length-prefixed frames are joined once instead of written to a
+        # BytesIO per record.
+        chunks = []
+        msg = MsgClass()
         for rec in records:
             try:
-                msg = ParseDict(rec, MsgClass())
+                msg.Clear()
+                ParseDict(rec, msg)
                 proto_bytes = msg.SerializeToString()
-                buf.write(struct.pack(">I", len(proto_bytes)))
-                buf.write(proto_bytes)
+                chunks.append(struct.pack(">I", len(proto_bytes)))
+                chunks.append(proto_bytes)
             except Exception as exc:
                 raise SerializerError(f"Protobuf serialize error: {exc}") from exc
 
-        payload = buf.getvalue()
+        payload = b"".join(chunks)
 
         # Add magic bytes if using registry
         if self.use_magic_bytes and self.registry_url:

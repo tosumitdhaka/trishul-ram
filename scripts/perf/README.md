@@ -13,6 +13,8 @@ Workspace map (other lanes own `scripts/perf/infra/` and
 scripts/perf/
 ├── README.md                        ← this runbook
 ├── run_one.sh                       one-run orchestrator (register→loadgen→stop→collect→cleanup)
+├── check_hygiene.sh                 bench-hygiene pre-check (aborts on enabled leftover pipelines)
+├── ladder_s1.py                     canonical S1 webhook saturation ladder driver
 ├── generators/
 │   ├── gen_corpus.py                canonical CDR corpus (deterministic per seed+n)
 │   ├── loadgen_webhook.py           asyncio HTTP POST flood (httpx)
@@ -60,7 +62,14 @@ export TRAM_API_URL=${TRAM_API_URL:-http://127.0.0.1:30001}   # manager NodePort
 export TRAM_API_KEY=...                                        # X-API-Key if apiKey is set
 export TRAM_NAMESPACE=${TRAM_NAMESPACE:-trishul-ram}           # pod namespace
 export PERF_PYTHON=/home/dhaka/trishul/trishul-ram/.venv/bin/python
+export TRAM_PERF_ALLOW_DIRTY=0                                 # =1 skips the hygiene pre-check
 ```
+
+Additional knobs used by the ladder driver (`ladder_s1.py`):
+`PERF_LG_CONCURRENCY` (per-process loadgen concurrency, default 400),
+`PERF_LADDER_ROOT` (scratch root for a ladder run), and by `run_one.sh`:
+`PERF_RESULTS_DIR` (internal-collector results root),
+`PERF_RUN_WATCHDOG_S` (whole-run budget, default warmup+duration+900).
 
 - venv needs: httpx, pysnmp, kafka-python (all present in the repo venv;
   kafka-python arrived with the Phase 1b broker deploy — `kafka_loadgen.py
@@ -94,7 +103,18 @@ JSON record per line (~523B) for jsonl/ndjson; `--nested` for T2.
 ```
 One record per POST body. Global rate limiter (rate is offered load
 regardless of concurrency). Summary (stderr + `--summary`): sent, 2xx, 4xx,
-5xx, errors, latency p50/p95/max.
+5xx, errors, latency p50/p95/max, achieved_rps, inflight_peak,
+connection_limited.
+
+> **Concurrency is the headroom lever.** Achieved rps cannot exceed
+> `--concurrency / server-latency`; at ladder steps where the server slows
+> down (latency grows), a low concurrency silently caps the offered load and
+> the plateau reads as server saturation. Keep `--concurrency` high enough
+> that it clears `rate × expected-latency` (the ladder driver defaults to 400
+> per process). `connection_limited=True` means the generator could not
+> complete the offered rate while its connection pool was exhausted — the
+> plateau is loadgen-structural; pair it with `latency_ms` to tell
+> server-bound (high latency) from host-bound (low latency) saturation.
 
 > **Webhook ingress port — topology-dependent (verified on the live cluster):**
 > manager+worker mode serves `/webhooks/*` on the **worker ingress** NodePort
@@ -243,12 +263,55 @@ TRAM_NAMESPACE=trishul-ram ./scripts/perf/run_one.sh templates/s1_webhook_local.
         --url http://127.0.0.1:30002/webhooks/ingest \
         --rate 200 --concurrency 20 --duration 180 --payload-file corpus.jsonl"
 ```
-Flow: register pipeline via API (409 → delete + re-register) → stream
-pipelines auto-start / batch pipelines trigger via `/run` and poll to
-completion → warmup + steady state → stop → collector → delete pipeline
-(`--keep` to leave it stopped). Loadgen summary goes to stderr.
+Flow: bench-hygiene pre-check (aborts if any enabled non-bench pipeline
+exists — set `TRAM_PERF_ALLOW_DIRTY=1` to bypass) → register pipeline via API
+(409 → delete + re-register) → stream pipelines auto-start / batch pipelines
+trigger via `/run` and poll to completion → warmup + steady state → stop →
+collector → delete pipeline (`--keep` to leave it stopped). A whole-run
+watchdog (default warmup+duration+900s, `PERF_RUN_WATCHDOG_S`) aborts loudly
+if the run hangs. Loadgen summary goes to stderr. `PERF_RESULTS_DIR`
+redirects the internal collector's output.
 
-## 7. Methodology (Phase 2)
+## 7. Saturation ladders (S1 webhook)
+
+The canonical ladder driver lives at `scripts/perf/ladder_s1.py` — the
+successor to the ad-hoc working copies under `results/v1.6.0-rerun/`
+(kept for provenance; their two defects are fixed here):
+
+```bash
+PERF_PYTHON=... TRAM_NAMESPACE=trishul-ram \
+  .venv/bin/python scripts/perf/ladder_s1.py \
+    --topology mw --values scripts/perf/infra/values-mgrworker.yaml \
+    --results-root /tmp/ladder-run
+```
+
+- Deployment is out of band: the cluster must already be at the target
+  topology/profile (the ladder does not helm-install).
+- Per step (100 → 6,400 offered rps for mw; → 3,200 for single): `k` parallel
+  loadgen processes (`--rate rate//k`, `--concurrency` from
+  `PERF_LG_CONCURRENCY` default 400) run through `run_one.sh` while a parallel
+  steady collector samples `kubectl top` during the measurement window.
+- Rows land in `<results-root>/saturation-s1[-single].csv` with explicit
+  `pod_cpu_peak_m`, `pod_mem_peak_mi`, `peak_pod` columns plus notes carrying
+  `loadgen_achieved` and `connection_limited` (the loadgen-saturation signal —
+  see §3.2).
+- **Telemetry path (fixed):** the steady collector is invoked with
+  `--results-dir <root>/steady` and `--run-id <run_id>`, so `samples.csv`
+  lands at `<root>/steady/<run_id>/samples.csv`. The v1.6.0 re-run's copies
+  passed `--results-dir <root>/steady/<run_id>` *and* `--run-id <run_id>`, so
+  collect.py wrote to `<root>/steady/<run_id>/<run_id>/` — one directory
+  deeper than the ladder's peaks() looked, zeroing every telemetry row.
+- **Loadgen headroom (fixed):** the re-run's `--concurrency 50` capped
+  achieved rps at `concurrency / server-latency` (~1,600 rps aggregate),
+  below the ≥2,200 rps the webhook re-ladder must offer. Concurrency 400 per
+  process clears the connection ceiling at every step, so the next re-ladder
+  can measure whether the server sustains ≥2,200 rps.
+- Fail-fast: the driver runs `check_hygiene.sh` before generating any step
+  scripts; `run_one.sh` re-asserts per step.
+- A step stops the ladder on <95% 2xx, any 5xx, or >5% loadgen errors
+  (server-rejection signature under extreme queueing).
+
+## 8. Methodology (Phase 2)
 
 - **Warmup/ramp: 60 s** — loadgen starts and the stream reaches steady state
   before measurement.
@@ -264,7 +327,7 @@ completion → warmup + steady state → stop → collector → delete pipeline
   {records_in/s, records_out/s, bytes_in/s, bytes_out/s, p50, p95, max,
   peak pod CPU, peak pod mem, errors}.
 
-## 8. Phase-2 run matrix (exact)
+## 9. Phase-2 run matrix (exact)
 
 Topologies (infra lane owns `scripts/perf/infra/`; files present at Phase 1a
 smoke time):
@@ -316,9 +379,9 @@ TRAM_NAMESPACE=trishul-ram ./scripts/perf/run_one.sh \
     --pipeline "${PIPELINE}"
 ```
 
-> `${VALUES}` is the topology/profile values file for the cell (see §8).
+> `${VALUES}` is the topology/profile values file for the cell (see §9).
 
-## 9. Deployment notes & workarounds (for the Phase-2 runners)
+## 10. Deployment notes & workarounds (for the Phase-2 runners)
 
 1. **Webhook ingress port**: manager+worker → worker ingress NodePort 30002;
    standalone → manager NodePort 30001. A loadgen pointed at the wrong port
@@ -352,7 +415,7 @@ TRAM_NAMESPACE=trishul-ram ./scripts/perf/run_one.sh \
 9. **kafka-python**: required for S6/S7 + kafka_loadgen; present in the venv
    as of the Phase 1b broker deploy. `--check` reports availability.
 
-## 10. Smoke evidence (Phase 1a, this tree @ 326d9dd / v1.5.1)
+## 11. Smoke evidence (Phase 1a, this tree @ 326d9dd / v1.5.1)
 
 | tool | result |
 |---|---|
@@ -365,7 +428,7 @@ TRAM_NAMESPACE=trishul-ram ./scripts/perf/run_one.sh \
 | ruff check scripts/perf/ | clean |
 | e2e run_one.sh (s1 webhook, live kind cluster) | pass — 1600 sent/202s → records_in=records_out=1600, 0 errors |
 
-## 11. Phase-2 execution notes (corrections a re-runner must apply)
+## 12. Phase-2 execution notes (corrections a re-runner must apply)
 
 Learned during the actual Matrix A/B/C + ladder runs — the runbook above plus
 these notes is the complete re-run procedure.
@@ -397,8 +460,23 @@ these notes is the complete re-run procedure.
    99,999 file-part cap never masks the consumer ceiling.
 9. **kafka_loadgen sync producer caps ~1,400 msg/s per process** — run k
    parallel processes for offered-rate ladders.
+10. **webhook ladder loadgen headroom**: keep each `loadgen_webhook.py`
+    process at `--concurrency` ≥ `rate × expected-latency` (the v1.6.0 re-run
+    used 50 and the generator saturated at ~1,600 rps — below the ≥2,200 rps
+    the webhook re-ladder must offer; the canonical ladder driver defaults to
+    400). If `connection_limited` is True in a ladder row, the plateau is
+    loadgen-structural, not server-evidence.
+11. **ladder telemetry**: the steady collector must be called with
+    `--results-dir <root>` (no run_id suffix) — passing `<root>/<run_id>` too
+    double-nests `samples.csv` and zeroes `pod_cpu_peak_m`/`mem_peak`/
+    `peak_pod` on every ladder row (the §5 defect). `ladder_s1.py` does this
+    correctly.
+12. **bench hygiene**: `run_one.sh` aborts on any enabled pipeline unless
+    `TRAM_PERF_ALLOW_DIRTY=1` (the #86 lesson). A `--keep` pipeline stays
+    `enabled=true` (stopped), so the next invocation aborts — delete it or use
+    the bypass.
 
-## 12. Phase-2 result files
+## 13. Phase-2 result files
 
 | file | content |
 |---|---|

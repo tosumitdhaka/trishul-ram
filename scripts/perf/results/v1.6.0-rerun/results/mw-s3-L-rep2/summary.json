@@ -1,0 +1,22 @@
+{
+  "runs_total": 12,
+  "runs_completed": 12,
+  "records_in": 1200000,
+  "records_out": 1200000,
+  "records_skipped": 0,
+  "bytes_in": 627367416,
+  "bytes_out": 675355392,
+  "dlq_count": 0,
+  "run_duration_ms": {
+    "count": 12,
+    "total_ms": 361556.893,
+    "avg_ms": 30129.741,
+    "max_ms": 66747.964
+  },
+  "errors": [],
+  "error_count": 0,
+  "run_id": "mw-s3-L-rep2",
+  "pipeline": "s3-rest-rest",
+  "api_url": "http://127.0.0.1:30001",
+  "collected_at": "2026-10-05T05:19:20.235057+00:00"
+}

@@ -985,6 +985,23 @@ class KafkaSinkConfig(SinkCommonFieldsMixin):
     ssl_cafile: str | None = None
     acks: str | int = "all"
     compression_type: str | None = None
+    # Bounded-batch sends (issue #76): a source batch is delivered as multiple
+    # messages when it exceeds either cap. Both caps must stay <= the client
+    # max_request_size so no message is ever rejected as too large; a failed
+    # chunk surfaces as a run error (at-least-once across chunks, duplicates
+    # possible on retry).
+    chunk_records: int = Field(default=1000, ge=1)
+    chunk_bytes: int = Field(default=524288, ge=1)
+    max_request_size: int = Field(default=1048576, ge=1)
+
+    @model_validator(mode="after")
+    def validate_chunk_caps(self) -> KafkaSinkConfig:
+        if self.chunk_bytes > self.max_request_size:
+            raise ValueError(
+                f"chunk_bytes ({self.chunk_bytes}) must be <= max_request_size "
+                f"({self.max_request_size})"
+            )
+        return self
 
 
 
@@ -1269,6 +1286,10 @@ class ProtobufSerializerConfig(BaseModel):
     schema_registry_subject: str | None = None
     schema_registry_id: int | None = None
     use_magic_bytes: bool = True
+    # Keep original proto field names (snake_case) in decoded records instead of
+    # converting to lowerCamelCase (GH #83). The key convention is wire-visible
+    # to downstream consumers, so the default preserves today's camelCase output.
+    preserve_keys: bool = False
 
 
 class ParquetSerializerConfig(BaseModel):
@@ -1498,6 +1519,18 @@ class PipelineConfig(BaseModel):
     # one persist interval. Only meaningful for pipelines with stateful
     # transforms; ignored otherwise.
     state_persist_interval_s: float = Field(0, ge=0)
+
+    # Stream micro-batching (GH #78): buffer stream records and flush to sinks
+    # per batch (record threshold OR flush interval, mirroring kafka
+    # max_poll_records) instead of one serialized sink write per message.
+    # Defaults come from the environment (TRAM_STREAM_FLUSH_RECORDS /
+    # TRAM_STREAM_FLUSH_INTERVAL_SECONDS); these fields override them per
+    # pipeline. stream_flush_records: 1 restores the pre-v1.6.0 per-message
+    # flush; stream_flush_interval_s: 0 disables the interval trigger.
+    # ge=1 / ge=0: a zero record threshold would mean "flush every chunk" and
+    # a negative interval would break the time math — reject at validate time.
+    stream_flush_records: int | None = Field(default=None, ge=1)
+    stream_flush_interval_s: float | None = Field(default=None, ge=0)
 
     # Error handling
     on_error: Literal["continue", "abort", "retry", "dlq"] = "continue"

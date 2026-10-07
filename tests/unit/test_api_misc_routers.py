@@ -29,7 +29,10 @@ class TestWebhooks:
     def test_no_registered_path_returns_404(self):
         app = _make_webhook_app()
         client = TestClient(app, raise_server_exceptions=False)
-        with patch("tram.connectors.webhook.source._WEBHOOK_REGISTRY", {}):
+        env = {"TRAM_WEBHOOK_PLACEMENT_WINDOW_SECONDS": "0"}
+        with patch.dict(os.environ, env), patch(
+            "tram.connectors.webhook.source._WEBHOOK_REGISTRY", {}
+        ):
             resp = client.post("/webhooks/nonexistent", content=b"data")
         assert resp.status_code == 404
 

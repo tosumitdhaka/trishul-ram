@@ -554,3 +554,29 @@ Additional findings the runners missed (all verified against the raw rows):
    t1, t5, fsweep) — the "many-small-batch" generalization holds, and the
    root cause (per-batch worker-mode bookkeeping suspected) is an open
    item, not a settled explanation.
+
+## Correction (2026-10-06)
+
+Two measurement defects in this study invalidate parts of its absolute
+numbers. The authoritative replacements are the controlled #86 A/B
+(`scripts/perf/results/ab-86-2026-10-01/`) and the v1.6.0 harness re-run
+(`scripts/perf/results/v1.6.0-rerun/RESULTS.md`); the re-baselined values
+are tabulated in `scripts/perf/results/v1.6.0-rerun/sizing-updates.md`.
+
+1. **H-profile file-batch cells were ~2× inflated** — a duration-attribution
+   artifact (the round values give it away: 111,111.1 = 100k/0.9 s,
+   166,666.7 = 100k/0.6 s, 183,333.3 = 100k/0.545 s). Confirmed cells:
+   s2csv-H ~51k (not ~111k), s2pmxml-H ~16k (not ~38k), s3-H ~5.3k (not
+   ~11.5k). M-profile cells run ~5–20% high. The fsweep cells are affected
+   in kind (rerun values are authoritative, e.g. fsweep_json-M 72.9k, not
+   87.1k; fsweep_parquet-M 30.8k, not 77.4k — the parquet delta additionally
+   includes an unproven pyarrow-version factor).
+2. **The mw s2pmxml/s3 cells were contaminated** by 37 leftover registered
+   pipelines (6 enabled interval pollers) on the manager PVC, as documented
+   in #86 — the mw values there (3.3k / 9.8k) understate; true values are the
+   parity numbers (~5.3k / ~16.8k @ M).
+
+With both corrections, finding 7 above is **resolved**: there is no
+mw-vs-single gap on a clean host (A/B parity 0.94–1.15 across all cells) —
+the "per-batch worker-mode bookkeeping" hypothesis was an artifact of the
+two defects and is withdrawn.

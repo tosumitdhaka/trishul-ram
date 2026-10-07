@@ -30,6 +30,13 @@ class SFTPSink(BaseSink):
     - ``{part}`` / ``{index}`` — rolling file part number
     - ``{source_filename}`` — original source filename (from meta)
 
+    Also accepts the rolling-file options from the ``sftp`` config schema
+    (``file_mode``, ``max_records``, ``max_time``, ``max_bytes``,
+    ``max_index``). ``max_index`` (default 99,999) is the highest allowed part
+    index: streams consume one part per flush (one per ~500 records), and
+    writes past the cap fail loudly (run error + skipped count) instead of
+    silently dropping.
+
     The transport is opened once per run and reused across writes; it is
     closed by :meth:`close` (called by the executor after a run finishes). A
     write failure on a stale connection triggers exactly one reconnect before
@@ -160,5 +167,19 @@ class SFTPSink(BaseSink):
                 raise SinkError(f"Error finalizing SFTP sink output: {exc2}") from exc2
 
     def close(self) -> None:
-        """Release the pooled SFTP connection (review D7). Idempotent."""
+        """Release the pooled SFTP connection (review D7). Idempotent.
+
+        Also logs the run's past-cap dropped total loudly (issue #77 fail-loud):
+        the executor swallows close() failures, so this is a log surface, not a
+        raise — the per-record SinkError raises already put the loss on the run
+        result.
+        """
+        dropped = self._writer.dropped_past_cap_total
+        if dropped > 0:
+            logger.error(
+                "SFTP sink dropped %d record(s) past max_index=%d this run — "
+                "increase max_index or adjust rollover thresholds",
+                dropped,
+                self._writer.max_index,
+            )
         self._disconnect()

@@ -1,0 +1,22 @@
+{
+  "runs_total": 12,
+  "runs_completed": 12,
+  "records_in": 1200000,
+  "records_out": 600000,
+  "records_skipped": 600060,
+  "bytes_in": 628546992,
+  "bytes_out": 337673376,
+  "dlq_count": 0,
+  "run_duration_ms": {
+    "count": 12,
+    "total_ms": 165621.473,
+    "avg_ms": 13801.789,
+    "max_ms": 40118.022
+  },
+  "errors": [],
+  "error_count": 0,
+  "run_id": "single-s7-H-rep2",
+  "pipeline": "s7-local-kafka",
+  "api_url": "http://127.0.0.1:30001",
+  "collected_at": "2026-10-05T12:51:54.556727+00:00"
+}

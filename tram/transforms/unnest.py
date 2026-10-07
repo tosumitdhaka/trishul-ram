@@ -38,6 +38,12 @@ class UnnestTransform(BaseTransform):
                 f"unnest: 'on_non_dict' must be 'keep', 'drop', or 'raise', "
                 f"got {self.on_non_dict!r}"
             )
+        # Issue #80 cost center 3: a dotted field deletes inside a nested
+        # container (delete_path), which a shallow copy would share with the
+        # caller — those need a deepcopy. A top-level field only deletes the
+        # record's own key and writes hoisted top-level keys — shallow is
+        # provably safe (mutation tests).
+        self._needs_deepcopy = "." in self.field
 
     def apply(self, records: list[dict]) -> list[dict]:
         result = []
@@ -60,7 +66,7 @@ class UnnestTransform(BaseTransform):
                     )
                 continue
 
-            new_record = deepcopy(record)
+            new_record = deepcopy(record) if self._needs_deepcopy else dict(record)
             if self.drop_source:
                 delete_path(new_record, self.field)
             for k, v in val.items():

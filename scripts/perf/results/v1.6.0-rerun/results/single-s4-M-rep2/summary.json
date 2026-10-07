@@ -1,0 +1,22 @@
+{
+  "runs_total": 10,
+  "runs_completed": 10,
+  "records_in": 10000,
+  "records_out": 10000,
+  "records_skipped": 0,
+  "bytes_in": 3630440,
+  "bytes_out": 3630440,
+  "dlq_count": 0,
+  "run_duration_ms": {
+    "count": 10,
+    "total_ms": 6444542.715,
+    "avg_ms": 644454.272,
+    "max_ms": 784400.148
+  },
+  "errors": [],
+  "error_count": 0,
+  "run_id": "single-s4-M-rep2",
+  "pipeline": "s4-snmp-local",
+  "api_url": "http://127.0.0.1:30001",
+  "collected_at": "2026-10-05T11:36:23.641691+00:00"
+}
