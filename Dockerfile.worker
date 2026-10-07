@@ -64,7 +64,7 @@ RUN apt-get update && \
 COPY --from=builder /build/dist/*.whl .
 RUN --mount=type=cache,target=/root/.cache/pip whl=$(ls *.whl) && \
     pip install \
-        "${whl}[worker,kafka,snmp,avro,protobuf_ser,protobuf,asn1,msgpack_ser,parquet,jmespath,sql,websocket,metrics,prometheus_rw,watch]" && \
+        "${whl}[worker,kafka,snmp,avro,protobuf_ser,protobuf,asn1,msgpack_ser,parquet,jmespath,sql,websocket,metrics,prometheus_rw,watch,http_accel]" && \
     rm *.whl
 
 # Copy bundled SNMP MIB assets from the repo
