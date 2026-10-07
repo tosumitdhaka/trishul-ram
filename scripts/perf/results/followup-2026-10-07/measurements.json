@@ -1,0 +1,285 @@
+{
+  "date_utc": "2026-10-07T04:15:32.944430+00:00",
+  "git_commit": "fdcf371aef553c9d32382aebf9c5f02d15f7353c",
+  "python": "3.12.3",
+  "cpu": "Intel(R) Core(TM) Ultra 7 155H",
+  "method": "7 alternating paired reps; full-corpus warmup and equality assertion",
+  "scope": "Local CPU only; canonical corpus; fresh stateful instances per invocation",
+  "results": [
+    {
+      "name": "sink_condition_compile_once",
+      "units": 10000,
+      "us_per_unit": {
+        "baseline": 15.4938174,
+        "candidate": 1.7089341
+      },
+      "speedup": 9.066363296279242,
+      "raw_us_per_unit": {
+        "baseline": [
+          15.4193976,
+          15.2325432,
+          15.6578943,
+          16.1278305,
+          15.6401732,
+          15.4938174,
+          15.278197200000001
+        ],
+        "candidate": [
+          1.7315931,
+          1.7978224,
+          1.6447661,
+          1.7089341,
+          1.7938212,
+          1.6785945,
+          1.6426574
+        ]
+      },
+      "output_equivalence": true
+    },
+    {
+      "name": "timestamp_normalize_iso_first",
+      "units": 10000,
+      "us_per_unit": {
+        "baseline": 18.4178379,
+        "candidate": 4.1312861000000005
+      },
+      "speedup": 4.458136632076872,
+      "raw_us_per_unit": {
+        "baseline": [
+          18.5580991,
+          18.5200195,
+          18.325104,
+          18.003194500000003,
+          18.1498909,
+          19.077929400000002,
+          18.4178379
+        ],
+        "candidate": [
+          4.3965551,
+          4.117667900000001,
+          3.9595652,
+          4.1312861000000005,
+          4.0185706,
+          4.3239498,
+          4.7887259
+        ]
+      },
+      "output_equivalence": true
+    },
+    {
+      "name": "timestamp_normalize_iso_first_and_format",
+      "units": 10000,
+      "us_per_unit": {
+        "baseline": 18.3014227,
+        "candidate": 2.5357114999999997
+      },
+      "speedup": 7.217470402291429,
+      "raw_us_per_unit": {
+        "baseline": [
+          18.1495899,
+          18.0964711,
+          18.801239799999998,
+          18.352224,
+          18.3014227,
+          18.313202,
+          18.1824726
+        ],
+        "candidate": [
+          2.528739,
+          2.5226506,
+          2.5929924,
+          2.5357114999999997,
+          2.5240647,
+          2.6214841,
+          2.7301892
+        ]
+      },
+      "output_equivalence": true
+    },
+    {
+      "name": "counter_delta_iso_first",
+      "units": 10000,
+      "us_per_unit": {
+        "baseline": 10.3518451,
+        "candidate": 3.4682793999999997
+      },
+      "speedup": 2.9847206369821304,
+      "raw_us_per_unit": {
+        "baseline": [
+          10.3377984,
+          10.3165303,
+          10.303725700000001,
+          10.842044900000001,
+          10.892678,
+          10.827017,
+          10.3518451
+        ],
+        "candidate": [
+          3.5377483,
+          3.571676,
+          3.4212988,
+          3.4055038,
+          3.4475284999999998,
+          3.7905575,
+          3.4682793999999997
+        ]
+      },
+      "output_equivalence": true
+    },
+    {
+      "name": "window_aggregate_iso_first",
+      "units": 10000,
+      "us_per_unit": {
+        "baseline": 13.0119224,
+        "candidate": 5.527648500000001
+      },
+      "speedup": 2.353970662208351,
+      "raw_us_per_unit": {
+        "baseline": [
+          12.5473509,
+          13.9599894,
+          12.7782214,
+          13.4427734,
+          12.7569772,
+          13.1679874,
+          13.0119224
+        ],
+        "candidate": [
+          5.5306952,
+          5.62951,
+          5.521420600000001,
+          5.4954181,
+          5.4654496,
+          5.527648500000001,
+          5.5895237
+        ]
+      },
+      "output_equivalence": true
+    },
+    {
+      "name": "kafka_within_caps_500_records",
+      "units": 20,
+      "us_per_unit": {
+        "baseline": 2325.8427,
+        "candidate": 0.6469
+      },
+      "speedup": 3595.3666718194468,
+      "raw_us_per_unit": {
+        "baseline": [
+          2330.1477999999997,
+          2408.3854,
+          2277.2412000000004,
+          2319.5092,
+          2325.8427,
+          2309.19155,
+          2365.97705
+        ],
+        "candidate": [
+          0.72815,
+          0.42660000000000003,
+          0.6469,
+          0.43660000000000004,
+          0.68065,
+          0.45315,
+          0.7039
+        ]
+      },
+      "output_equivalence": true,
+      "payload_bytes": 264021,
+      "unit": "sink write (network excluded)"
+    },
+    {
+      "name": "kafka_within_caps_1000_records",
+      "units": 20,
+      "us_per_unit": {
+        "baseline": 6492.56755,
+        "candidate": 6517.764700000001
+      },
+      "speedup": 0.9961340810600295,
+      "raw_us_per_unit": {
+        "baseline": [
+          6759.039400000001,
+          6506.467799999999,
+          6456.4698,
+          6492.56755,
+          6402.51345,
+          6363.2891,
+          6534.395
+        ],
+        "candidate": [
+          6327.08335,
+          7235.89415,
+          6564.6853,
+          6517.764700000001,
+          6660.9483,
+          6496.1466,
+          6465.76525
+        ]
+      },
+      "output_equivalence": true,
+      "payload_bytes": 527656,
+      "unit": "sink write (network excluded)"
+    },
+    {
+      "name": "json_parse_vs_orjson",
+      "units": 1000,
+      "us_per_unit": {
+        "baseline": 1.575302,
+        "candidate": 0.869826
+      },
+      "speedup": 1.8110541648559597,
+      "raw_us_per_unit": {
+        "baseline": [
+          1.643106,
+          1.565555,
+          1.640577,
+          1.543942,
+          1.575302,
+          1.6007840000000002,
+          1.534543
+        ],
+        "candidate": [
+          1.1364880000000002,
+          0.852195,
+          0.887933,
+          0.853826,
+          0.869826,
+          0.824095,
+          0.93969
+        ]
+      },
+      "output_equivalence": true
+    },
+    {
+      "name": "json_serialize_vs_orjson_semantic_equivalence",
+      "units": 10000,
+      "us_per_unit": {
+        "baseline": 1.626748,
+        "candidate": 0.3723532
+      },
+      "speedup": 4.368830454525435,
+      "raw_us_per_unit": {
+        "baseline": [
+          1.6298469,
+          1.626748,
+          1.6797246,
+          1.5399984,
+          1.5393783,
+          1.6565739000000002,
+          1.5956895
+        ],
+        "candidate": [
+          0.3827533,
+          0.38109089999999995,
+          0.3723532,
+          0.31667110000000004,
+          0.316598,
+          0.38360120000000003,
+          0.3257893
+        ]
+      },
+      "output_equivalence": true,
+      "note": "Equality checked after decoding outside timing; bytes differ."
+    }
+  ]
+}
