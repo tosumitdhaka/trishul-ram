@@ -1514,7 +1514,9 @@ class PipelineConfig(BaseModel):
             "Caveat: unknown-field retention and encoding details may differ "
             "from today's dictionary round trip even when known-field values "
             "match. Registration rejects ineligible pipelines, listing every "
-            "unmet condition."
+            "unmet condition. Batch pipelines only — stream pipelines always "
+            "use the dictionary path (the micro-batch flush buffer is "
+            "unsupported by passthrough) with a runtime WARNING."
         ),
     )
     workers: WorkersConfig | None = None

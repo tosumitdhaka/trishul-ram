@@ -299,6 +299,14 @@ class TestEligibilityRegistration:
         with pytest.raises(ConfigError, match="schema_registry configuration is not"):
             _build_config(schema_a, schema_a, registry_url="http://registry:8081")
 
+    def test_schema_registry_env_default_disqualifies(self, schema_a, monkeypatch):
+        # The serializer resolves TRAM_SCHEMA_REGISTRY_URL as a deployment-level
+        # default when the pipeline sets no registry URL — eligibility must
+        # reject it too (magic-byte framing would wrap the frame stream).
+        monkeypatch.setenv("TRAM_SCHEMA_REGISTRY_URL", "http://registry:8081")
+        with pytest.raises(ConfigError, match="schema_registry configuration is not"):
+            _build_config(schema_a, schema_a)
+
     def test_serializer_in_not_protobuf_disqualifies(self, schema_a):
         with pytest.raises(ConfigError, match="serializer_in must be type=protobuf"):
             _build_config(schema_a, schema_a, ser_in_type="json")

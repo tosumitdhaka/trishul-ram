@@ -29,7 +29,6 @@ def _http_accel_kwargs() -> dict:
     if not http_accelerated():
         return dict(default_runtime)
     missing: list[str] = []
-    missing: list[str] = []
     try:
         import uvloop  # noqa: F401
     except ImportError:

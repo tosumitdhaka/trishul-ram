@@ -113,7 +113,14 @@ def protobuf_passthrough_reasons(config: PipelineConfig) -> list[str]:
             )
         # Registry/Confluent magic-byte framing wraps the payload before the
         # length-delimited frame stream; frame iteration would misparse it.
-        if ser_in.schema_registry_url or ser_out.schema_registry_url:
+        # Mirror the serializer's resolution: the registry URL may come from
+        # the pipeline config OR the deployment-level env default
+        # (TRAM_SCHEMA_REGISTRY_URL — see protobuf_serializer's registry_url).
+        if (
+            ser_in.schema_registry_url
+            or ser_out.schema_registry_url
+            or os.environ.get("TRAM_SCHEMA_REGISTRY_URL")
+        ):
             reasons.append(
                 "schema_registry configuration is not eligible for passthrough "
                 "(magic-byte framing wraps the frame stream)"
