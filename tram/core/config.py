@@ -321,6 +321,34 @@ def auth_clock_skew_s() -> int:
     return _env_int("TRAM_AUTH_CLOCK_SKEW_S", _AUTH_CLOCK_SKEW_S_DEFAULT)
 
 
+# V18-01 §9 (frozen): worker journal retention.  Audit retention (7 d) bounds
+# acked completion/outbox history; replay retention (1 d) bounds resolved
+# revocation tombstones.  Authorization validity is max TTL + skew (~10 min),
+# so ``gc_expired`` always outruns both — retention is the backstop sweep.
+_WORKER_JOURNAL_AUDIT_RETENTION_S_DEFAULT = 604800
+_WORKER_JOURNAL_REPLAY_RETENTION_S_DEFAULT = 86400
+
+
+def worker_journal_audit_retention_s() -> int:
+    """``TRAM_WORKER_JOURNAL_AUDIT_RETENTION_S`` (V18-01 §9) — audit retention
+    for acked completion/outbox rows, in seconds.
+
+    Invalid values fail loud via ``_env_int`` (the strictest pattern in this
+    module).
+    """
+    return _env_int("TRAM_WORKER_JOURNAL_AUDIT_RETENTION_S", _WORKER_JOURNAL_AUDIT_RETENTION_S_DEFAULT)
+
+
+def worker_journal_replay_retention_s() -> int:
+    """``TRAM_WORKER_JOURNAL_REPLAY_RETENTION_S`` (V18-01 §9) — replay
+    retention for resolved revocation tombstones, in seconds.
+
+    Invalid values fail loud via ``_env_int`` (the strictest pattern in this
+    module).
+    """
+    return _env_int("TRAM_WORKER_JOURNAL_REPLAY_RETENTION_S", _WORKER_JOURNAL_REPLAY_RETENTION_S_DEFAULT)
+
+
 @dataclass(frozen=True)
 class AppConfig:
     """Application-wide configuration loaded from environment variables."""

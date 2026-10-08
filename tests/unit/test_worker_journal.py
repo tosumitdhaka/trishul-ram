@@ -6,6 +6,7 @@ time-dependent.
 
 from __future__ import annotations
 
+import hashlib
 import json
 import stat
 from datetime import UTC, datetime, timedelta
@@ -13,6 +14,7 @@ from datetime import UTC, datetime, timedelta
 import pytest
 
 import tram.core.config as cfg_mod
+from tram.agent.auth_tokens import mint_start_authorization
 from tram.agent.journal import (
     AdmissionClosedError,
     AdmissionConflictError,
@@ -31,6 +33,11 @@ _FROZEN_TABLES = {
     "outbox",
     "spool_entries",
 }
+
+# The FakeClock default start; tokens are minted against it.
+_T0_DT = datetime(2026, 1, 1, tzinfo=UTC)
+T0 = int(_T0_DT.timestamp())
+SECRET = "test-secret"
 
 
 class FakeClock:
@@ -69,6 +76,29 @@ def _auth(
         token_hash=f"tok-{attempt_id}",
         issued_at="2026-01-01T00:00:00+00:00",
         expires_at="2026-01-01T00:05:00+00:00",
+    )
+
+
+def _mint_token(
+    *,
+    attempt_id: str = "a1",
+    run_id: str = "r1",
+    generation: int = 1,
+    slot_id: str = "s1",
+    worker_session: str = "ws-1",
+    ttl_s: int = 300,
+    secret: str = SECRET,
+    issued_at_unix: int = T0,
+) -> str:
+    return mint_start_authorization(
+        attempt_id=attempt_id,
+        run_id=run_id,
+        generation=generation,
+        slot_id=slot_id,
+        worker_session=worker_session,
+        ttl_s=ttl_s,
+        secret=secret,
+        issued_at_unix=issued_at_unix,
     )
 
 
@@ -453,3 +483,319 @@ def test_worker_journal_quota_invalid_raises(monkeypatch):
     monkeypatch.setenv("TRAM_WORKER_JOURNAL_QUOTA_MB", "not-an-int")
     with pytest.raises(ValueError):
         cfg_mod.worker_journal_quota_mb()
+
+
+def test_worker_journal_retention_defaults(monkeypatch):
+    monkeypatch.delenv("TRAM_WORKER_JOURNAL_AUDIT_RETENTION_S", raising=False)
+    monkeypatch.delenv("TRAM_WORKER_JOURNAL_REPLAY_RETENTION_S", raising=False)
+    assert cfg_mod.worker_journal_audit_retention_s() == 604800
+    assert cfg_mod.worker_journal_replay_retention_s() == 86400
+
+
+def test_worker_journal_retention_from_env(monkeypatch):
+    monkeypatch.setenv("TRAM_WORKER_JOURNAL_AUDIT_RETENTION_S", "3600")
+    monkeypatch.setenv("TRAM_WORKER_JOURNAL_REPLAY_RETENTION_S", "7200")
+    assert cfg_mod.worker_journal_audit_retention_s() == 3600
+    assert cfg_mod.worker_journal_replay_retention_s() == 7200
+
+
+# ── watermark ────────────────────────────────────────────────────────────────
+
+
+def test_admission_advances_watermark(tmp_path):
+    clock = FakeClock()
+    j = WorkerJournal(tmp_path / "journal.db", clock=clock)
+    try:
+        assert j.watermark_status().watermark_ms is None
+        j.admit(_auth("a1", "r1"), "pipe-a")
+        assert j.watermark_status().watermark_ms == int(clock().timestamp() * 1000)
+        clock.advance(120)
+        j.admit(_auth("a2", "r2"), "pipe-a")
+        assert j.watermark_status().watermark_ms == int(clock().timestamp() * 1000)
+    finally:
+        j.close()
+
+
+def test_rollback_below_watermark_fails_admission_closed(tmp_path):
+    clock = FakeClock()
+    j = WorkerJournal(tmp_path / "journal.db", clock=clock)
+    try:
+        j.admit(_auth("a1", "r1"), "pipe-a")  # watermark = t0
+        clock.advance(60)
+        j.admit(_auth("a2", "r2"), "pipe-a")  # watermark = t0 + 60
+        clock.advance(-50)  # now = t0 + 10, below watermark - skew (t0 + 55)
+        st = j.watermark_status()
+        assert st.admitting is False
+        assert st.behind_ms > 0
+        with pytest.raises(AdmissionClosedError, match="below watermark"):
+            j.admit(_auth("a3", "r3"), "pipe-a")
+    finally:
+        j.close()
+
+
+def test_restart_does_not_reset_watermark(tmp_path):
+    path = tmp_path / "journal.db"
+    clock = FakeClock()
+    j = WorkerJournal(path, clock=clock)
+    try:
+        clock.advance(3600)
+        j.admit(_auth("a1", "r1"), "pipe-a")  # watermark = t0 + 3600
+    finally:
+        j.close()
+    j2 = WorkerJournal(path, clock=FakeClock())  # restart at the earlier time
+    try:
+        assert j2.watermark_status().watermark_ms == int(
+            (_T0_DT + timedelta(seconds=3600)).timestamp() * 1000
+        )
+        with pytest.raises(AdmissionClosedError, match="below watermark"):
+            j2.admit(_auth("a2", "r2"), "pipe-a")
+    finally:
+        j2.close()
+
+
+# ── GC ───────────────────────────────────────────────────────────────────────
+
+
+def test_gc_advances_watermark_and_deletes_in_one_transaction(tmp_path):
+    clock = FakeClock()
+    j = WorkerJournal(tmp_path / "journal.db", clock=clock)
+    try:
+        t0 = clock()
+        j.admit(_auth("a1", "r1"), "pipe-a")
+        j.record_tombstone("a1", "r1", "revoked")
+        clock.advance(400)  # beyond ttl (300) + skew (5)
+        report = j.gc_expired()
+        assert report.authorizations_deleted == 1
+        assert report.tombstones_deleted == 1
+        assert report.watermark_ms == int((t0 + timedelta(seconds=400)).timestamp() * 1000)
+        assert j.watermark_status().watermark_ms == report.watermark_ms
+        conn = j._conn
+        assert conn is not None
+        assert conn.execute("SELECT COUNT(*) FROM start_authorizations").fetchone()[0] == 0
+        assert conn.execute("SELECT COUNT(*) FROM revocation_tombstones").fetchone()[0] == 0
+    finally:
+        j.close()
+
+
+def test_replay_after_gc_rejected_via_watermark_alone(tmp_path):
+    clock = FakeClock()
+    j = WorkerJournal(tmp_path / "journal.db", clock=clock)
+    try:
+        token = _mint_token(attempt_id="a1", run_id="r1")
+        assert (
+            j.validate_and_admit(token, "pipe-a", worker_session="ws-1", current_secret=SECRET).outcome
+            == "admitted"
+        )
+        clock.advance(400)
+        assert j.gc_expired().authorizations_deleted == 1
+        # Rewind the clock to the token's exact expiry boundary: the pure
+        # validator still accepts it (not expired, not future), but the
+        # watermark — advanced by GC in the same transaction as the delete —
+        # must refuse the replay on its own.
+        clock.advance(-100)  # now = t0 + 300
+        replay = j.validate_and_admit(token, "pipe-a", worker_session="ws-1", current_secret=SECRET)
+        assert replay.outcome == "refused_auth"
+        assert replay.refusal_reason == "token retired by watermark"
+        assert j.get_attempt("a1").kind == "active"  # the original stays intact
+    finally:
+        j.close()
+
+
+def test_gc_waits_for_expiry_plus_skew_and_keeps_unexpired(tmp_path):
+    clock = FakeClock()
+    j = WorkerJournal(tmp_path / "journal.db", clock=clock)
+    try:
+        t0 = clock()
+        j.admit(_auth("a1", "r1"), "pipe-a")
+        clock.advance(300)  # exactly expired — GC still needs expiry + skew
+        report = j.gc_expired()
+        assert report.authorizations_deleted == 0
+        assert report.tombstones_deleted == 0
+        # Even with nothing to delete, the watermark advance happened first.
+        assert j.watermark_status().watermark_ms == int(
+            (t0 + timedelta(seconds=300)).timestamp() * 1000
+        )
+        clock.advance(5)  # expiry + skew
+        now_unix = int(clock().timestamp())
+        token2 = _mint_token(attempt_id="a2", run_id="r2", issued_at_unix=now_unix)
+        assert (
+            j.validate_and_admit(token2, "pipe-a", worker_session="ws-1", current_secret=SECRET).outcome
+            == "admitted"
+        )
+        report = j.gc_expired()
+        assert report.authorizations_deleted == 1  # only a1
+        conn = j._conn
+        assert conn is not None
+        remaining = {
+            r["attempt_id"]
+            for r in conn.execute("SELECT attempt_id FROM start_authorizations")
+        }
+        assert remaining == {"a2"}
+    finally:
+        j.close()
+
+
+# ── trusted-time recovery (epoch invalidation) ───────────────────────────────
+
+
+def test_recover_clock_lowering_bumps_epoch_rejects_old_tokens_preserves_state(tmp_path):
+    clock = FakeClock()
+    j = WorkerJournal(tmp_path / "journal.db", clock=clock)
+    try:
+        assert j.session_epoch() == 1
+        token = _mint_token(attempt_id="a1", run_id="r1")  # issued at t0
+        assert (
+            j.validate_and_admit(token, "pipe-a", worker_session="ws-1", current_secret=SECRET).outcome
+            == "admitted"
+        )
+        clock.advance(200)
+        j.admit(_auth("a2", "r2"), "pipe-a")
+        j.record_completion("a2", "{}")
+        # Clock rolled back to t0+100: below the watermark (t0+200 - skew) so
+        # admission is closed, but still inside the token's validity window —
+        # only the epoch bump can retire the token.
+        clock.advance(-100)
+        assert j.watermark_status().admitting is False
+        assert j.recover_clock_lowering() == 2
+        assert j.session_epoch() == 2
+        # Old-epoch token refused by the epoch check on its surviving row.
+        replay = j.validate_and_admit(token, "pipe-a", worker_session="ws-1", current_secret=SECRET)
+        assert replay.outcome == "refused_auth"
+        assert replay.refusal_reason == "old session epoch"
+        # Reservations / active ownership / completions preserved for query.
+        assert j.get_attempt("a1").kind == "active"
+        assert j.get_attempt("a2").kind == "completion"
+        # New epoch's watermark baselined at the recovery-time clock.
+        st = j.watermark_status()
+        assert st.session_epoch == 2
+        assert st.watermark_ms == int(clock().timestamp() * 1000)
+        # Fresh admission at the recovery clock works in the new epoch.
+        assert j.admit(_auth("a3", "r3"), "pipe-a").outcome == "admitted"
+    finally:
+        j.close()
+
+
+# ── retention ────────────────────────────────────────────────────────────────
+
+
+def test_cleanup_retention_deletes_acked_and_resolved_keeps_unacked_and_unresolved(tmp_path):
+    clock = FakeClock()
+    j = WorkerJournal(tmp_path / "journal.db", clock=clock)
+    try:
+        # acked completion older than audit retention (7 d) + leftover outbox
+        j.record_completion("c-old", "{}", run_id="r-old")
+        j.mark_acked("c-old")
+        j.enqueue_outbox("c-old", "run_complete", {})  # leftover after the ack
+        clock.advance(2 * 86400)
+        # acked completion still inside audit retention
+        j.record_completion("c-new", "{}", run_id="r-new")
+        j.mark_acked("c-new")
+        # unacked completion — never deleted
+        j.record_completion("c-unacked", "{}", run_id="r-unacked")
+        j.enqueue_outbox("c-unacked", "run_complete", {})
+        # resolved tombstone: authorization long expired, revocation old
+        j.admit(_auth("t-resolved", "r-t1"), "pipe-a")
+        j.record_tombstone("t-resolved", "r-t1", "revoked")
+        # unresolved tombstone: authorization still valid at sweep time
+        clock.advance(6 * 86400 - 100)  # now = t0 + 8 d - 100 s
+        now_unix = int(clock().timestamp())
+        token_unresolved = _mint_token(
+            attempt_id="t-unresolved", run_id="r-t2", issued_at_unix=now_unix
+        )
+        assert (
+            j.validate_and_admit(
+                token_unresolved, "pipe-a", worker_session="ws-1", current_secret=SECRET
+            ).outcome
+            == "admitted"
+        )
+        j.record_tombstone("t-unresolved", "r-t2", "revoked")
+        # unresolved tombstone: no authorization row at all
+        j.record_tombstone("t-noauth", "r-t3", "revoked")
+        clock.advance(100)  # now = t0 + 8 d
+        report = j.cleanup_retention()
+        conn = j._conn
+        assert conn is not None
+        assert report.completions_deleted == 1
+        remaining = {r["attempt_id"] for r in conn.execute("SELECT attempt_id FROM completions")}
+        assert remaining == {"c-new", "c-unacked"}
+        assert report.outbox_deleted == 1
+        outbox = {r["attempt_id"] for r in conn.execute("SELECT attempt_id FROM outbox")}
+        assert outbox == {"c-unacked"}
+        assert report.tombstones_deleted == 1
+        tombs = {r["attempt_id"] for r in conn.execute("SELECT attempt_id FROM revocation_tombstones")}
+        assert tombs == {"t-unresolved", "t-noauth"}
+    finally:
+        j.close()
+
+
+# ── validate_and_admit wiring ────────────────────────────────────────────────
+
+
+def test_validate_and_admit_round_trip(tmp_path):
+    clock = FakeClock()
+    j = WorkerJournal(tmp_path / "journal.db", clock=clock)
+    try:
+        token = _mint_token(attempt_id="a1", run_id="r1")
+        res = j.validate_and_admit(token, "pipe-a", worker_session="ws-1", current_secret=SECRET)
+        assert res.outcome == "admitted"
+        rec = j.get_attempt("a1")
+        assert rec is not None and rec.kind == "active"
+        assert rec.worker_session == "ws-1"
+        # The start_authorizations row records the sha256 token hash.
+        conn = j._conn
+        assert conn is not None
+        row = conn.execute("SELECT token_hash FROM start_authorizations WHERE attempt_id = 'a1'").fetchone()
+        assert row["token_hash"] == hashlib.sha256(token.encode()).hexdigest()
+        # Idempotent repeat returns the existing acceptance.
+        repeat = j.validate_and_admit(token, "pipe-a", worker_session="ws-1", current_secret=SECRET)
+        assert repeat.outcome == "already_admitted"
+        # Wrong worker session → refused with the validator's reason.
+        bad_session = j.validate_and_admit(
+            token, "pipe-a", worker_session="ws-2", current_secret=SECRET
+        )
+        assert bad_session.outcome == "refused_auth"
+        assert bad_session.refusal_reason == "worker session mismatch"
+        # Wrong secret → refused.
+        bad_secret = j.validate_and_admit(
+            token, "pipe-a", worker_session="ws-1", current_secret="other-secret"
+        )
+        assert bad_secret.outcome == "refused_auth"
+        assert bad_secret.refusal_reason == "bad signature"
+        # Tampered token → refused.
+        tampered = token[:-1] + ("0" if token[-1] != "0" else "1")
+        assert tampered != token
+        tampered_res = j.validate_and_admit(
+            tampered, "pipe-a", worker_session="ws-1", current_secret=SECRET
+        )
+        assert tampered_res.outcome == "refused_auth"
+        assert tampered_res.refusal_reason == "bad signature"
+        # Expired token → refused.
+        clock.advance(301)
+        expired = j.validate_and_admit(token, "pipe-a", worker_session="ws-1", current_secret=SECRET)
+        assert expired.outcome == "refused_auth"
+        assert expired.refusal_reason == "expired"
+    finally:
+        j.close()
+
+
+def test_validate_and_admit_accepts_previous_secret_within_overlap(tmp_path):
+    clock = FakeClock()
+    j = WorkerJournal(tmp_path / "journal.db", clock=clock)
+    try:
+        token = _mint_token(secret="old-secret")
+        res = j.validate_and_admit(
+            token,
+            "pipe-a",
+            worker_session="ws-1",
+            current_secret=SECRET,
+            previous_secret="old-secret",
+        )
+        assert res.outcome == "admitted"
+        # Without the previous secret the same token is refused.
+        refused = j.validate_and_admit(
+            token, "pipe-a", worker_session="ws-1", current_secret=SECRET
+        )
+        assert refused.outcome == "refused_auth"
+        assert refused.refusal_reason == "bad signature"
+    finally:
+        j.close()

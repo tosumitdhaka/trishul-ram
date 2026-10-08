@@ -4,20 +4,30 @@ One journal file per worker (``TRAM_WORKER_JOURNAL_PATH``, frozen at
 ``/var/lib/tram/worker/journal.db``).  This module implements the journal
 CORE: the full frozen schema (all tables, so no schema change is ever added
 later), the atomic admission transaction, the revocation tombstone, the
-completion/outbox protocol, the replay query API, boot interruption, and the
-health/quota surface the server lane uses to fail readiness closed.
+completion/outbox protocol, the replay query API, boot interruption, the
+health/quota surface the server lane uses to fail readiness closed, and the
+V18-01 §4 rejection watermark / GC / retention lane.
 
 Deliberately stdlib-``sqlite3`` only — the worker image must not depend on
 SQLAlchemy.  Every journal is opened with WAL, ``synchronous=FULL``,
 ``busy_timeout=5000`` and file mode 0600.
 
-The start-authorization VALIDATOR and the watermark/GC/retention lane are
-separate follow-ups; the admission transaction here accepts a pre-validated
-``AuthorizationDecision``.
+Admission accepts either a pre-validated ``AuthorizationDecision`` (the
+server lane's legacy-admit path, raw ``admit()``) or a real
+start-authorization token via ``validate_and_admit`` (stdlib HMAC
+mint/validate helpers in ``tram.agent.auth_tokens``, reused by the manager).
+Every admission transaction first advances the current epoch's
+``clock_watermarks`` rejection watermark (frozen ordering); a local clock
+below ``watermark - skew`` fails admission closed.  ``gc_expired`` and
+``cleanup_retention`` delete expired/resolved idempotency rows only after the
+authorizations that could have admitted them are dead, with the watermark
+advance in the same transaction — after GC, replaying a retired token is
+refused by the watermark alone.
 """
 
 from __future__ import annotations
 
+import hashlib
 import json
 import logging
 import os
@@ -30,6 +40,7 @@ from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Literal
 
+from tram.agent.auth_tokens import validate_start_authorization
 from tram.core import config as cfg
 
 logger = logging.getLogger(__name__)
@@ -236,6 +247,42 @@ class JournalHealth:
     headroom_bytes: int | None = None
 
 
+@dataclass(frozen=True)
+class WatermarkStatus:
+    """Rejection watermark of the current session epoch (V18-01 §4).
+
+    ``admitting`` is ``False`` when the local clock is below
+    ``watermark_ms - skew_ms`` — new admission then fails closed and the
+    server lane reports the condition distinctly on ``/agent/status``.  The
+    watermark is never reset by a restart; ``behind_ms`` is how far the local
+    clock is behind the watermark (0 or negative when it is not behind).
+    """
+
+    session_epoch: int
+    watermark_ms: int | None
+    now_ms: int
+    behind_ms: int
+    admitting: bool
+
+
+@dataclass(frozen=True)
+class GcReport:
+    """Outcome of one ``gc_expired`` run (authorization/tombstone GC)."""
+
+    authorizations_deleted: int
+    tombstones_deleted: int
+    watermark_ms: int
+
+
+@dataclass(frozen=True)
+class RetentionReport:
+    """Outcome of one ``cleanup_retention`` run."""
+
+    completions_deleted: int
+    outbox_deleted: int
+    tombstones_deleted: int
+
+
 class WorkerJournal:
     """Durable per-worker journal (V18-01 §4) backed by stdlib sqlite3.
 
@@ -415,14 +462,38 @@ class WorkerJournal:
         except sqlite3.Error:
             pass
 
-    def _now(self) -> datetime:
-        now = self._clock()
+    @staticmethod
+    def _normalize_dt(now: datetime) -> datetime:
         if now.tzinfo is None:
             now = now.replace(tzinfo=UTC)
         return now.astimezone(UTC)
 
+    def _now(self) -> datetime:
+        return self._normalize_dt(self._clock())
+
     def _now_iso(self) -> str:
         return self._now().isoformat()
+
+    @staticmethod
+    def _session_epoch_locked(conn: sqlite3.Connection) -> int:
+        row = conn.execute("SELECT value FROM journal_meta WHERE key = 'session_epoch'").fetchone()
+        return int(row["value"]) if row is not None else 0
+
+    def _advance_watermark_locked(
+        self, conn: sqlite3.Connection, session_epoch: int, now_ms: int
+    ) -> None:
+        """Advance the epoch's watermark to MAX(existing, now_ms) (frozen ordering).
+
+        Called as the FIRST statement of every admission / GC / retention
+        transaction, before any identity-row work or delete.
+        """
+        conn.execute(
+            "INSERT INTO clock_watermarks (session_epoch, watermark_ms, updated_at) "
+            "VALUES (?, ?, ?) ON CONFLICT(session_epoch) DO UPDATE SET "
+            "watermark_ms = MAX(clock_watermarks.watermark_ms, excluded.watermark_ms), "
+            "updated_at = excluded.updated_at",
+            (session_epoch, now_ms, self._now_iso()),
+        )
 
     # ── health ──────────────────────────────────────────────────────────────
 
@@ -540,6 +611,28 @@ class WorkerJournal:
             assert conn is not None
             conn.execute("BEGIN IMMEDIATE")
             try:
+                # Step 0 — rejection watermark (frozen ordering, V18-01 §4):
+                # every admission decision FIRST advances the current epoch's
+                # clock_watermarks to MAX(existing, now_ms) in this same
+                # transaction.  A local clock below watermark - skew fails
+                # admission closed with a distinct reportable reason; the
+                # watermark itself is never lowered by a restart.
+                epoch = self._session_epoch_locked(conn)
+                now_ms = int(self._now().timestamp() * 1000)
+                self._advance_watermark_locked(conn, epoch, now_ms)
+                watermark_row = conn.execute(
+                    "SELECT watermark_ms FROM clock_watermarks WHERE session_epoch = ?",
+                    (epoch,),
+                ).fetchone()
+                assert watermark_row is not None
+                watermark_ms = int(watermark_row["watermark_ms"])
+                skew_ms = cfg.auth_clock_skew_s() * 1000
+                if now_ms < watermark_ms - skew_ms:
+                    raise AdmissionClosedError(
+                        "admission closed: local clock below watermark "
+                        f"(clock {now_ms} ms < watermark {watermark_ms} ms "
+                        f"- skew {skew_ms} ms)"
+                    )
                 # Step 1 — record the pre-validated authorization.  A repeat
                 # of the same attempt keeps its first token (ON CONFLICT DO
                 # NOTHING); reusing a token_hash for a *different* attempt is a
@@ -638,6 +731,100 @@ class WorkerJournal:
             finally:
                 self._chmod_files()
 
+    def validate_and_admit(
+        self,
+        token: str,
+        pipeline_name: str,
+        *,
+        worker_session: str,
+        current_secret: str,
+        previous_secret: str | None = None,
+        now: datetime | None = None,
+    ) -> AdmissionResult:
+        """Validate a start-authorization token and admit (V18-01 §4 wiring).
+
+        Uses ``tram.agent.auth_tokens.validate_start_authorization`` (the
+        stdlib HMAC validator, reused by the manager's minter), builds the
+        ``AuthorizationDecision``, and runs the existing ``admit()`` so the
+        admission transaction advances the watermark atomically.
+
+        Refusals: token-level reasons (bad signature, worker-session
+        mismatch, future-issued beyond skew, expired, over-max TTL, malformed)
+        come back as ``refused_auth`` with the validator's reason; a token
+        whose authorization row carries a retired session epoch is refused
+        ``old session epoch``; a token whose row is gone (GC'd) is refused by
+        the current epoch's watermark alone once the watermark has advanced
+        past the token's validity window — replaying a retired token is
+        rejected even if the local clock was rolled back inside the token's
+        validity.
+        """
+        with self._lock:
+            now_dt = self._normalize_dt(now if now is not None else self._now())
+            self._ensure_open()
+            conn = self._conn
+            assert conn is not None
+            result = validate_start_authorization(
+                token,
+                worker_session=worker_session,
+                current_secret=current_secret,
+                previous_secret=previous_secret,
+                max_ttl_s=cfg.auth_max_ttl_s(),
+                clock_skew_s=cfg.auth_clock_skew_s(),
+                now_unix=int(now_dt.timestamp()),
+            )
+            if not result.valid:
+                return self.admit(
+                    AuthorizationDecision(
+                        valid=False, reason=result.reason, attempt_id=result.attempt_id
+                    ),
+                    pipeline_name,
+                )
+            epoch = self._session_epoch_locked(conn)
+            token_hash = hashlib.sha256(token.encode()).hexdigest()
+            row = conn.execute(
+                "SELECT session_epoch FROM start_authorizations WHERE token_hash = ?",
+                (token_hash,),
+            ).fetchone()
+            if row is not None:
+                if int(row["session_epoch"]) != epoch:
+                    return AdmissionResult(
+                        outcome="refused_auth",
+                        attempt_id=result.attempt_id,
+                        refusal_reason="old session epoch",
+                    )
+            else:
+                watermark_row = conn.execute(
+                    "SELECT watermark_ms FROM clock_watermarks WHERE session_epoch = ?",
+                    (epoch,),
+                ).fetchone()
+                if watermark_row is not None:
+                    assert result.issued_at_unix is not None and result.ttl_s is not None
+                    window_end_ms = (
+                        result.issued_at_unix + result.ttl_s + cfg.auth_clock_skew_s()
+                    ) * 1000
+                    if int(watermark_row["watermark_ms"]) >= window_end_ms:
+                        return AdmissionResult(
+                            outcome="refused_auth",
+                            attempt_id=result.attempt_id,
+                            refusal_reason="token retired by watermark",
+                        )
+            issued_dt = datetime.fromtimestamp(result.issued_at_unix, tz=UTC)
+            decision = AuthorizationDecision(
+                valid=True,
+                attempt_id=result.attempt_id,
+                run_id=result.run_id,
+                generation=result.generation,
+                slot_id=result.slot_id,
+                worker_session=worker_session,
+                session_epoch=epoch,
+                token_hash=token_hash,
+                issued_at=issued_dt.isoformat(),
+                expires_at=datetime.fromtimestamp(
+                    result.issued_at_unix + result.ttl_s, tz=UTC
+                ).isoformat(),
+            )
+            return self.admit(decision, pipeline_name)
+
     def mark_running(self, attempt_id: str) -> bool:
         """Transition a reserved admission to running (thread started)."""
 
@@ -658,10 +845,7 @@ class WorkerJournal:
 
         def fn(conn: sqlite3.Connection) -> TombstoneRecord:
             now = self._now_iso()
-            row = conn.execute(
-                "SELECT value FROM journal_meta WHERE key = 'session_epoch'"
-            ).fetchone()
-            epoch = int(row["value"]) if row is not None else 0
+            epoch = self._session_epoch_locked(conn)
             conn.execute(
                 "INSERT OR REPLACE INTO revocation_tombstones "
                 "(attempt_id, run_id, reason, revoked_at, session_epoch) "
@@ -913,25 +1097,18 @@ class WorkerJournal:
             self._ensure_open()
             conn = self._conn
             assert conn is not None
-            row = conn.execute(
-                "SELECT value FROM journal_meta WHERE key = 'session_epoch'"
-            ).fetchone()
-            return int(row["value"]) if row is not None else 0
+            return self._session_epoch_locked(conn)
 
     def advance_session_epoch(self) -> int:
         """Bump the persisted session epoch by one; returns the new value.
 
-        The watermark/GC follow-up lane uses this to invalidate an old session
-        epoch (trusted-time recovery); the server lane may also call it at
-        boot.  Reservations, completions and tombstones are preserved.
+        The watermark/GC lane uses this to invalidate an old session epoch
+        (trusted-time recovery); the server lane may also call it at boot.
+        Reservations, completions and tombstones are preserved.
         """
 
         def fn(conn: sqlite3.Connection) -> int:
-            row = conn.execute(
-                "SELECT value FROM journal_meta WHERE key = 'session_epoch'"
-            ).fetchone()
-            current = int(row["value"]) if row is not None else 0
-            new_epoch = current + 1
+            new_epoch = self._session_epoch_locked(conn) + 1
             conn.execute(
                 "INSERT OR REPLACE INTO journal_meta (key, value) "
                 "VALUES ('session_epoch', ?)",
@@ -940,3 +1117,161 @@ class WorkerJournal:
             return new_epoch
 
         return int(self._txn(fn))
+
+    def recover_clock_lowering(self) -> int:
+        """Trusted-time recovery for a clock that fell below the watermark.
+
+        Bumps ``session_epoch`` — invalidating every old-epoch
+        ``start_authorizations`` row (``validate_and_admit`` refuses them as
+        ``old session epoch``) — and baselines the new epoch's watermark at
+        the recovery-time local clock.  Reservations, active ownership and
+        completions are preserved for query/recovery (nothing is deleted).
+        """
+
+        def fn(conn: sqlite3.Connection) -> int:
+            new_epoch = self._session_epoch_locked(conn) + 1
+            conn.execute(
+                "INSERT OR REPLACE INTO journal_meta (key, value) "
+                "VALUES ('session_epoch', ?)",
+                (str(new_epoch),),
+            )
+            now_ms = int(self._now().timestamp() * 1000)
+            self._advance_watermark_locked(conn, new_epoch, now_ms)
+            return new_epoch
+
+        return int(self._txn(fn))
+
+    # ── watermark ────────────────────────────────────────────────────────────
+
+    def watermark_status(self) -> WatermarkStatus:
+        """Current epoch's rejection watermark vs the local clock (V18-01 §4).
+
+        ``admitting=False`` means the local clock is below
+        ``watermark - skew``: new admission fails closed until a trusted-time
+        recovery (``recover_clock_lowering``) establishes a new epoch.  The
+        watermark is persisted — a restart can never reset it.
+        """
+        with self._lock:
+            self._ensure_open()
+            conn = self._conn
+            assert conn is not None
+            epoch = self._session_epoch_locked(conn)
+            row = conn.execute(
+                "SELECT watermark_ms FROM clock_watermarks WHERE session_epoch = ?",
+                (epoch,),
+            ).fetchone()
+            watermark_ms = int(row["watermark_ms"]) if row is not None else None
+            now_ms = int(self._now().timestamp() * 1000)
+            skew_ms = cfg.auth_clock_skew_s() * 1000
+            behind_ms = (watermark_ms - now_ms) if watermark_ms is not None else 0
+            admitting = watermark_ms is None or now_ms >= watermark_ms - skew_ms
+            return WatermarkStatus(
+                session_epoch=epoch,
+                watermark_ms=watermark_ms,
+                now_ms=now_ms,
+                behind_ms=behind_ms,
+                admitting=admitting,
+            )
+
+    # ── GC / retention ──────────────────────────────────────────────────────
+
+    def gc_expired(self, now: datetime | None = None) -> GcReport:
+        """GC expired authorizations and resolved tombstones (V18-01 §4).
+
+        One transaction: the current epoch's watermark is advanced to ``now``
+        FIRST, then ``start_authorizations`` whose ``expires_at + skew`` is in
+        the past are deleted, then the tombstones for those attempts (resolved
+        = the authorization that could have admitted them is provably dead).
+        After the run, replaying a retired token is refused by the watermark
+        alone — ``validate_and_admit`` consults the watermark when the token
+        row is gone.  Tombstones with no expired authorization (unresolved)
+        are never deleted here, and unexpired rows always survive.
+        """
+
+        def fn(conn: sqlite3.Connection) -> GcReport:
+            now_dt = self._normalize_dt(now if now is not None else self._now())
+            now_ms = int(now_dt.timestamp() * 1000)
+            cutoff = (now_dt - timedelta(seconds=cfg.auth_clock_skew_s())).isoformat()
+            epoch = self._session_epoch_locked(conn)
+            self._advance_watermark_locked(conn, epoch, now_ms)
+            expired = [
+                row["attempt_id"]
+                for row in conn.execute(
+                    "SELECT attempt_id FROM start_authorizations WHERE expires_at <= ?",
+                    (cutoff,),
+                )
+            ]
+            auths = conn.execute(
+                "DELETE FROM start_authorizations WHERE expires_at <= ?", (cutoff,)
+            ).rowcount
+            tombs = 0
+            if expired:
+                placeholders = ",".join("?" for _ in expired)
+                tombs = conn.execute(
+                    f"DELETE FROM revocation_tombstones WHERE attempt_id IN ({placeholders})",
+                    expired,
+                ).rowcount
+            return GcReport(
+                authorizations_deleted=auths, tombstones_deleted=tombs, watermark_ms=now_ms
+            )
+
+        return self._txn(fn)  # type: ignore[return-value]
+
+    def cleanup_retention(self, now: datetime | None = None) -> RetentionReport:
+        """Retention sweep for audit/replay data (V18-01 §9, frozen).
+
+        Deletes acked completions — and any leftover outbox rows for them —
+        whose ack is older than ``TRAM_WORKER_JOURNAL_AUDIT_RETENTION_S``, and
+        resolved tombstones (attempt has an expired authorization) whose
+        revocation is older than ``TRAM_WORKER_JOURNAL_REPLAY_RETENTION_S``.
+        Unacked completions and unresolved tombstones are NEVER deleted — an
+        undelivered completion or a live revocation is exactly what the
+        journal exists to preserve.  The current epoch's watermark is advanced
+        first (same transaction), so a resolved tombstone's retirement is also
+        enforced by the watermark.
+        """
+
+        def fn(conn: sqlite3.Connection) -> RetentionReport:
+            now_dt = self._normalize_dt(now if now is not None else self._now())
+            now_ms = int(now_dt.timestamp() * 1000)
+            audit_cutoff = (
+                now_dt - timedelta(seconds=cfg.worker_journal_audit_retention_s())
+            ).isoformat()
+            replay_cutoff = (
+                now_dt - timedelta(seconds=cfg.worker_journal_replay_retention_s())
+            ).isoformat()
+            resolved_cutoff = (
+                now_dt - timedelta(seconds=cfg.auth_clock_skew_s())
+            ).isoformat()
+            epoch = self._session_epoch_locked(conn)
+            self._advance_watermark_locked(conn, epoch, now_ms)
+            acked_old = [
+                row["attempt_id"]
+                for row in conn.execute(
+                    "SELECT attempt_id FROM completions WHERE acked = 1 AND acked_at <= ?",
+                    (audit_cutoff,),
+                )
+            ]
+            completions = conn.execute(
+                "DELETE FROM completions WHERE acked = 1 AND acked_at <= ?",
+                (audit_cutoff,),
+            ).rowcount
+            outbox = 0
+            if acked_old:
+                placeholders = ",".join("?" for _ in acked_old)
+                outbox = conn.execute(
+                    f"DELETE FROM outbox WHERE attempt_id IN ({placeholders})",
+                    acked_old,
+                ).rowcount
+            tombstones = conn.execute(
+                "DELETE FROM revocation_tombstones WHERE revoked_at <= ? AND attempt_id IN "
+                "(SELECT attempt_id FROM start_authorizations WHERE expires_at <= ?)",
+                (replay_cutoff, resolved_cutoff),
+            ).rowcount
+            return RetentionReport(
+                completions_deleted=completions,
+                outbox_deleted=outbox,
+                tombstones_deleted=tombstones,
+            )
+
+        return self._txn(fn)  # type: ignore[return-value]
