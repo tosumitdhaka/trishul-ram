@@ -55,22 +55,59 @@ export function fmtBytesRate(value) {
   return `${fmtBytes(value || 0)}/s`
 }
 
+// Status → badge classes (v1.8.0 run/lifecycle states included).
+// - `partial` — completed with losses under continue-on-error: yellow, its
+//   own status, never folded into error-red or success-green.
+// - `aborted` — stopped before completion (operator action / shutdown):
+//   deliberately NOT failed-red; aborted is a different signal than a fault.
+// - `stopping` / `draining` — pipeline lifecycle transitions: pulsing dots so
+//   a row in transition reads as "working on it", never as stuck.
+const STATUS_BADGE_CLS = {
+  running:    'badge-running has-dot running',
+  scheduled:  'badge-scheduled has-dot scheduled',
+  stopped:    'badge-stopped has-dot stopped',
+  degraded:   'badge-partial has-dot scheduled',
+  stale:      'badge-partial has-dot scheduled',
+  reconciling:'badge-paused has-dot paused',
+  queued:     'badge-queued has-dot queued',
+  error:      'badge-error has-dot error',
+  success:    'badge-success has-dot success',
+  partial:    'badge-partial has-dot partial',
+  failed:     'badge-failed has-dot failed',
+  aborted:    'badge-aborted has-dot aborted',
+  stopping:   'badge-stopping has-dot stopping',
+  draining:   'badge-draining has-dot draining',
+  disabled:   'badge-disabled',
+}
+
+// Hover copy for the states an operator most often needs explained in plain
+// language (also keeps screen readers from hearing a bare "partial").
+const STATUS_BADGE_TITLES = {
+  partial:  'Completed with losses — some records were lost or failed under the continue-on-error policy',
+  aborted:  'Stopped before completion — not a pipeline failure',
+  stopping: 'Stop requested — waiting for in-flight work to finish',
+  draining: 'Draining — finishing in-flight runs before stopping',
+}
+
 export function statusBadge(status) {
-  const cls = {
-    running:   'badge-running has-dot running',
-    scheduled: 'badge-scheduled has-dot scheduled',
-    stopped:   'badge-stopped has-dot stopped',
-    degraded:  'badge-partial has-dot scheduled',
-    stale:     'badge-partial has-dot scheduled',
-    reconciling:'badge-paused has-dot paused',
-    queued:    'badge-queued has-dot queued',
-    error:     'badge-error has-dot error',
-    success:   'badge-success has-dot success',
-    failed:    'badge-failed has-dot failed',
-    aborted:   'badge-failed has-dot failed',
-    disabled:  'badge-disabled',
-  }[status] || 'badge-stopped'
-  return `<span class="tram-badge ${cls}">${status ?? '—'}</span>`
+  const cls = STATUS_BADGE_CLS[status] || 'badge-stopped'
+  const title = STATUS_BADGE_TITLES[status]
+    ? ` title="${esc(STATUS_BADGE_TITLES[status])}"`
+    : ''
+  return `<span class="tram-badge ${cls}"${title}>${status ?? '—'}</span>`
+}
+
+// The run-outcome domain value (v1.8.0): `outcome` is authoritative when the
+// API reports it; fall back to `status` (pre-v1.8 rows, queued rows where
+// outcome is null).
+export function runOutcome(run) {
+  return (run && (run.outcome || run.status)) || '—'
+}
+
+// Pipeline lifecycle transition states — the pipeline is neither active in
+// the plain sense nor stopped; work is being wound down.
+export function isPipelineTransition(status) {
+  return status === 'stopping' || status === 'draining'
 }
 
 export function schedBadge(p) {

@@ -9,6 +9,8 @@ import {
   fmtDur,
   fmtNum,
   getSavedPollIntervalMs,
+  isPipelineTransition,
+  runOutcome,
   setOfflineBanner,
   statusBadge,
   esc,
@@ -187,8 +189,11 @@ function _renderPipelines(perPipeline) {
   }
   tbody.innerHTML = perPipeline.map(p => {
     const isRunning = p.status === 'running' || p.status === 'scheduled'
+    const isTransition = isPipelineTransition(p.status)
     const scheduleType = p.schedule_type || _pipelineMeta.get(p.name)?.schedule_type || ''
-    const primaryBtn = isRunning
+    const primaryBtn = isTransition
+      ? `<button class="btn-flat" type="button" disabled title="${p.status === 'draining' ? 'Draining — finishing in-flight runs' : 'Stopping — waiting for in-flight work to finish'}" aria-label="${esc(p.name)} is ${esc(p.status)}"><i class="bi bi-hourglass-split"></i></button>`
+      : isRunning
       ? `<button class="btn-flat-danger" type="button" title="Stop" aria-label="Stop ${esc(p.name)}" data-action="stop" data-name="${esc(p.name)}"><i class="bi bi-stop-fill"></i></button>`
       : scheduleType === 'manual'
         ? `<button class="btn-flat-primary" type="button" title="Run now" aria-label="Run ${esc(p.name)} now" data-action="run" data-name="${esc(p.name)}"><i class="bi bi-play-fill"></i></button>`
@@ -223,7 +228,7 @@ function _renderRuns(runs) {
   }
   tbody.innerHTML = runs.map(r => `<tr>
     <td class="mono-sm">${esc(r.pipeline)}</td>
-    <td>${statusBadge(r.status)}</td>
+    <td>${statusBadge(runOutcome(r))}</td>
     <td class="num-in">${fmtNum(r.records_in)}</td>
     <td class="num-out">${fmtNum(r.records_out)}</td>
     <td class="text-secondary">${fmtDur(r.started_at, r.finished_at)}</td>
@@ -270,6 +275,10 @@ async function startPipeline(name) {
 async function runPipeline(name) {
   try {
     const result = await api.pipelines.run(name)
+    // v1.8.0: quote the 202 operation_id receipt back to the operator.
+    if (result?.operation_id) {
+      toast(`Run triggered for ${name} — receipt ${String(result.operation_id).slice(0, 8)}`)
+    }
     setTimeout(() => controller.refresh(), 400)
     if (result?.run_id) {
       const token = ++_runMonitorToken

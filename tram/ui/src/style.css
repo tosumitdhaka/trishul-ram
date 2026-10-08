@@ -201,6 +201,14 @@ body {
 .tram-badge.success::before  { background:#3fb950; }
 .tram-badge.failed::before   { background:#f85149; }
 .tram-badge.stream::before   { background:#39c5cf; }
+/* v1.8.0 states: partial (completed with losses), aborted (stopped early —
+   not failed-red), stopping/draining (lifecycle transitions, pulsing), and
+   worker admission (admitting/draining on the cluster view). */
+.tram-badge.partial::before   { background:var(--badge-yellow-fg); }
+.tram-badge.aborted::before   { background:var(--badge-muted-fg); }
+.tram-badge.stopping::before  { background:var(--badge-yellow-fg); animation: pulse 2s infinite; }
+.tram-badge.draining::before  { background:#39c5cf; animation: pulse 2s infinite; }
+.tram-badge.admitting::before { background:#3fb950; }
 @keyframes pulse { 0%,100%{opacity:1}50%{opacity:.4} }
 
 .badge-running    { background: var(--badge-green-bg);  color: var(--badge-green-fg); }
@@ -213,6 +221,10 @@ body {
 .badge-paused   { background: var(--badge-cyan-bg);   color: var(--badge-cyan-fg); }
 .badge-queued   { background: var(--badge-yellow-bg); color: var(--badge-yellow-fg); }
 .badge-disabled { background: var(--badge-off-bg);    color: var(--badge-off-fg); }
+.badge-aborted   { background: var(--badge-muted-bg);  color: var(--badge-muted-fg); }
+.badge-stopping  { background: var(--badge-yellow-bg); color: var(--badge-yellow-fg); }
+.badge-draining  { background: var(--badge-cyan-bg);   color: var(--badge-cyan-fg); }
+.badge-admitting { background: var(--badge-green-bg);  color: var(--badge-green-fg); }
 .badge-stream   { background: var(--badge-cyan-bg);   color: var(--badge-cyan-fg); }
 .badge-interval { background: var(--badge-muted-bg);  color: var(--badge-muted-fg); }
 .badge-cron     { background: var(--badge-muted-bg);  color: var(--badge-muted-fg); }
@@ -486,7 +498,7 @@ body {
 .cluster-worker-expanded { padding: 6px 2px; }
 .cluster-worker-expanded-head {
   display: grid;
-  grid-template-columns: minmax(240px, 2fr) repeat(4, minmax(110px, 1fr));
+  grid-template-columns: minmax(240px, 2fr) repeat(auto-fit, minmax(110px, 1fr));
   gap: 10px 16px;
   align-items: start;
 }
@@ -500,6 +512,37 @@ body {
   display: grid;
   grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
   gap: 10px 16px;
+}
+/* ── Worker admission / drain runbook (v1.8.0) ───────────────────────────
+   Admission (admitting|draining) shows per worker; the drain block is the
+   restart runbook — `drained` is the safe-to-restart gate. */
+.cluster-drain-note {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  margin-top: 5px;
+  font-size: 11px;
+  color: var(--fg-muted);
+}
+.cluster-drain-note i { font-size: 11px; flex-shrink: 0; }
+.cluster-drain-note-safe {
+  color: var(--badge-green-fg);
+}
+.cluster-drain-note-deadline {
+  color: var(--badge-red-fg);
+}
+.cluster-drain-block {
+  margin-top: 12px;
+  padding: 10px 12px;
+  border: 1px solid var(--border-sub);
+  border-radius: 8px;
+  background: rgba(57,197,207,.04);
+}
+.cluster-drain-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-top: 8px;
 }
 .cluster-pill-running {
   background: #1a3328;
@@ -559,6 +602,28 @@ body {
   color: var(--badge-yellow-fg);
 }
 .detail-queued-info i { font-size: 13px; flex-shrink: 0; }
+/* Trigger receipt (v1.8.0): the 202 operation_id handle after a manual run,
+   linking to the pipeline's lifecycle operations view. */
+.detail-receipt-info {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 7px;
+  margin-top: 10px;
+  font-size: 12px;
+  color: var(--badge-cyan-fg);
+}
+.detail-receipt-info i { font-size: 13px; flex-shrink: 0; }
+.detail-receipt-link {
+  color: var(--accent-blue);
+  font-size: 12px;
+  text-decoration: none;
+  white-space: nowrap;
+}
+.detail-receipt-link:hover,
+.detail-receipt-link:focus-visible {
+  text-decoration: underline;
+}
 .detail-badges {
   display: flex;
   align-items: center;
@@ -1302,6 +1367,9 @@ body {
 }
 .run-issue-heading-danger {
   color: var(--badge-red-fg);
+}
+.run-issue-heading-warning {
+  color: var(--badge-yellow-fg);
 }
 .run-issue-list {
   display: flex;
