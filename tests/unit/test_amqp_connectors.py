@@ -14,6 +14,7 @@ from tram.connectors.amqp.sink import AmqpSink
 from tram.connectors.amqp.source import AmqpSource
 from tram.connectors.bridge import BoundedBridgeQueue
 from tram.core.exceptions import SinkError, SourceError
+from tram.interfaces.base_sink import DeliveryTier
 from tram.interfaces.base_source import AckDisposition
 
 
@@ -294,3 +295,59 @@ class TestAmqpSink:
             sink.write(b"data", {})
 
         mock_connection.close.assert_called_once()
+
+    # ── Delivery tier / publisher confirms (V18-01 sections 6 and 12.1) ────
+
+    @staticmethod
+    def _make_pika_mock():
+        mock_pika = MagicMock()
+        mock_channel = MagicMock()
+        mock_connection = MagicMock()
+        mock_connection.channel.return_value = mock_channel
+        mock_pika.BlockingConnection.return_value = mock_connection
+        mock_pika.URLParameters = MagicMock(return_value=MagicMock())
+        mock_pika.BasicProperties = MagicMock(return_value=MagicMock())
+        return mock_pika, mock_channel, mock_connection
+
+    def test_delivery_capability_declared_remote_durable(self):
+        cap = AmqpSink.delivery_capability
+        assert cap is not None
+        assert cap.tier == DeliveryTier.REMOTE_DURABLE
+        assert cap.replay_safe is False
+
+    def test_publish_uses_publisher_confirms(self):
+        """Audit finding (pending decision 1): pika supports publisher confirms
+        via channel.confirm_delivery(); every publish enables them before
+        basic_publish, so the synchronous return is broker-confirmed."""
+        mock_pika, mock_channel, _ = self._make_pika_mock()
+
+        with patch.dict(sys.modules, {"pika": mock_pika}):
+            sink = AmqpSink({"routing_key": "mykey"})
+            sink.write(b'{"x":1}', {})
+
+        mock_channel.confirm_delivery.assert_called_once()
+        mock_channel.basic_publish.assert_called_once()
+
+    def test_nack_failure_raises_sink_error(self):
+        """A broker basic.nack (or unroutable/connection failure) raises — no
+        false clean success."""
+        mock_pika, mock_channel, _ = self._make_pika_mock()
+        mock_channel.basic_publish.side_effect = Exception("NackError: message nacked")
+
+        with patch.dict(sys.modules, {"pika": mock_pika}):
+            sink = AmqpSink({"routing_key": "mykey"})
+            with pytest.raises(SinkError, match="AMQP publish failed"):
+                sink.write(b"data", {})
+
+    def test_commit_confirms_remote_durable(self):
+        sink = AmqpSink({"routing_key": "mykey"})
+        receipt = sink.commit()
+        assert receipt.tier == DeliveryTier.REMOTE_DURABLE
+        assert receipt.confirmed is True
+        assert "confirm" in receipt.notes
+
+    def test_latched_error_defaults_to_none(self):
+        # pika blocking mode surfaces publish failures synchronously as
+        # SinkError; this per-publish connection model buffers no delivery
+        # errors. Live-broker confirm behavior is the V18-02 broker-test gate.
+        assert AmqpSink({"routing_key": "mykey"}).latched_error() is None
