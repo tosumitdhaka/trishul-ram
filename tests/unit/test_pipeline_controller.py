@@ -2399,6 +2399,342 @@ class TestAttemptRunComplete:
             ctrl.stop()
 
 
+# ── W3: worker-loss reap terminalization ──────────────────────────────────────
+
+
+class TestWorkerLossReapTerminalization:
+    """Live-found kind bug (2026-10-08): a worker deleted mid-run had the
+    manager write the FAILED run-history row WITHOUT terminalizing the ledger —
+    the attempt stayed 'running' and the guard stayed held, so every subsequent
+    trigger claim-LOST and the pipeline stayed wedged until a manager restart.
+
+    The reap (mark_active_batch_run_lost) now uses the same identity-checked
+    ``_terminalize_attempt`` pattern as on_attempt_run_complete: attempt →
+    terminal (failed, worker_lost), guard released by identity, intent
+    resolved — and the run-history FAILED row is only written in that same
+    path. The conditional fence pins the outbox-wins ordering (a journal
+    completion that commits first makes the reap a no-op) and resurrected-
+    worker late completions stay idempotent no-ops."""
+
+    def _fetch(self, db, sql, params=None):
+        with db._engine.connect() as conn:
+            rows = conn.execute(text(sql), params or {}).mappings().fetchall()
+        return [dict(r) for r in rows]
+
+    def _started_with_db(self, tmp_path, wp=None, name="w3-reap.db"):
+        from tram.persistence.db import TramDB
+        db = TramDB(url=f"sqlite:///{tmp_path}/{name}")
+        pool = wp or _accepted_worker_pool()
+        # The lost-run FAILED row binds node_id to the owning worker — a
+        # MagicMock value would fail the sqlite INSERT (same wiring as the
+        # existing mark-lost tests).
+        pool.worker_id_for_url.return_value = "w0"
+        ctrl = _started_controller(
+            worker_pool=pool,
+            db=db,
+            manager_url="http://manager:8765",
+        )
+        return db, ctrl
+
+    def _register_batch(self, ctrl, yaml_text):
+        # Register via the manager directly (not ctrl.register) so no interval
+        # job is scheduled — a started scheduler fires interval jobs at
+        # next_run_time=now and would race the synchronous _run_batch calls.
+        config = load_pipeline_from_yaml(yaml_text)
+        ctrl.manager.register(config, yaml_text=yaml_text)
+        ctrl.manager.set_status(config.name, "scheduled")
+
+    def test_worker_loss_terminalizes_attempt_and_next_trigger_claims(self, tmp_path):
+        """Regression pin (the live failure): worker dies mid-run → the reap
+        terminalls the attempt (failed, worker_lost), releases the guard, and
+        resolves the intent — and the NEXT trigger claims successfully instead
+        of claim-LOST."""
+        db, ctrl = self._started_with_db(tmp_path)
+        self._register_batch(ctrl, _MANUAL_YAML)
+        try:
+            ctrl._run_batch("my-manual", run_id="r-die", origin="manual")
+            attempts = self._fetch(db, "SELECT state FROM execution_attempts WHERE run_id = 'r-die'")
+            assert attempts[0]["state"] == "running"
+            guards = self._fetch(db, "SELECT attempt_id FROM execution_guards WHERE guard_key = 'my-manual'")
+            assert guards[0]["attempt_id"] == "r-die-a1"
+
+            # Worker pod deleted mid-run — the BatchReconciler reap fires.
+            assert ctrl.mark_active_batch_run_lost(
+                "my-manual",
+                error="worker-owned batch run disappeared before callback: r-die",
+                run_id="r-die",
+            ) is True
+
+            # Ledger terminal + guard released + intent resolved (atomically).
+            attempts = self._fetch(
+                db,
+                "SELECT state, cancel_reason FROM execution_attempts WHERE run_id = 'r-die'",
+            )
+            assert attempts[0] == {"state": "terminal", "cancel_reason": "worker_lost"}
+            guards = self._fetch(db, "SELECT attempt_id FROM execution_guards WHERE guard_key = 'my-manual'")
+            assert guards[0]["attempt_id"] is None
+            intents = self._fetch(
+                db,
+                "SELECT final_outcome, final_attempt_id FROM run_intents WHERE run_id = 'r-die'",
+            )
+            assert intents[0] == {"final_outcome": "failed", "final_attempt_id": "r-die-a1"}
+            # The FAILED run-history row still lands.
+            result = ctrl.manager.get_run("r-die")
+            assert result is not None
+            assert result.status == RunStatus.FAILED
+            assert "disappeared" in (result.error or "")
+            assert ctrl.manager.get("my-manual").status == "error"
+
+            # THE regression pin: the next trigger CLAIMS (guard is free) and
+            # dispatches — it no longer claim-LOSTs.
+            ctrl._worker_pool.dispatch_with_result.reset_mock()
+            ctrl._run_batch("my-manual", run_id="r-next", origin="manual")
+            guards = self._fetch(db, "SELECT attempt_id FROM execution_guards WHERE guard_key = 'my-manual'")
+            assert guards[0]["attempt_id"] == "r-next-a1"
+            kwargs = ctrl._worker_pool.dispatch_with_result.call_args.kwargs
+            assert kwargs["attempt_id"] == "r-next-a1"
+        finally:
+            ctrl.stop()
+
+    def test_worker_loss_reap_is_idempotent(self, tmp_path):
+        """A second reap (e.g. a racing reconciler pass with a stale lease
+        read) is a 0-row no-op: the ledger stays terminal, the history keeps
+        exactly one FAILED row, and the status is not re-flipped."""
+        db, ctrl = self._started_with_db(tmp_path)
+        self._register_batch(ctrl, _MANUAL_YAML)
+        try:
+            ctrl._run_batch("my-manual", run_id="r-twice", origin="manual")
+            assert ctrl.mark_active_batch_run_lost(
+                "my-manual",
+                error="worker-owned batch run disappeared before callback: r-twice",
+                run_id="r-twice",
+            ) is True
+            assert ctrl.mark_active_batch_run_lost(
+                "my-manual",
+                error="worker-owned batch run disappeared before callback: r-twice",
+                run_id="r-twice",
+            ) is True
+
+            attempts = self._fetch(db, "SELECT state FROM execution_attempts WHERE run_id = 'r-twice'")
+            assert attempts[0]["state"] == "terminal"
+            guards = self._fetch(db, "SELECT attempt_id FROM execution_guards WHERE guard_key = 'my-manual'")
+            assert guards[0]["attempt_id"] is None
+            intents = self._fetch(db, "SELECT final_outcome FROM run_intents WHERE run_id = 'r-twice'")
+            assert intents[0]["final_outcome"] == "failed"
+            matches = [r for r in ctrl.manager.get("my-manual").run_history if r.run_id == "r-twice"]
+            assert len(matches) == 1
+            assert matches[0].status == RunStatus.FAILED
+        finally:
+            ctrl.stop()
+
+    def test_outbox_completion_before_reap_wins(self, tmp_path):
+        """Outbox-wins ordering: a resurrected worker whose journal completion
+        lands BEFORE the reap fires commits the ledger + SUCCESS row; the
+        stale reap then no-ops — attempt stays terminal, the history row stays
+        SUCCESS, and the pipeline status is not clobbered to 'error'."""
+        db, ctrl = self._started_with_db(tmp_path)
+        self._register_batch(ctrl, _MANUAL_YAML)
+        try:
+            ctrl._run_batch("my-manual", run_id="r-outbox", origin="manual")
+            attempts = self._fetch(db, "SELECT state FROM execution_attempts WHERE run_id = 'r-outbox'")
+            assert attempts[0]["state"] == "running"
+
+            # The worker restarted and its outbox delivered the completion.
+            resp = ctrl.on_attempt_run_complete(
+                attempt_id="r-outbox-a1", generation=1, run_id="r-outbox",
+                pipeline_name="my-manual", worker_id="w0", status="success",
+                records_in=4, records_out=4,
+            )
+            assert resp == {"ok": True}
+            assert ctrl.manager.get_run("r-outbox").status == RunStatus.SUCCESS
+
+            # A stale reap (the reconciler read the lease before the pop) fires.
+            assert ctrl.mark_active_batch_run_lost(
+                "my-manual",
+                error="worker-owned batch run disappeared before callback: r-outbox",
+                run_id="r-outbox",
+            ) is True
+
+            # The reap no-ops: attempt already terminal, intent resolved by the
+            # completion (success), guard free, history unchanged, status
+            # untouched.
+            attempts = self._fetch(db, "SELECT state FROM execution_attempts WHERE run_id = 'r-outbox'")
+            assert attempts[0]["state"] == "terminal"
+            intents = self._fetch(
+                db,
+                "SELECT final_outcome, final_attempt_id FROM run_intents WHERE run_id = 'r-outbox'",
+            )
+            assert intents[0] == {"final_outcome": "success", "final_attempt_id": "r-outbox-a1"}
+            guards = self._fetch(db, "SELECT attempt_id FROM execution_guards WHERE guard_key = 'my-manual'")
+            assert guards[0]["attempt_id"] is None
+            matches = [r for r in ctrl.manager.get("my-manual").run_history if r.run_id == "r-outbox"]
+            assert len(matches) == 1
+            assert matches[0].status == RunStatus.SUCCESS
+            assert ctrl.manager.get("my-manual").status != "error"
+        finally:
+            ctrl.stop()
+
+    def test_resurrected_worker_late_completion_is_noop(self, tmp_path):
+        """A resurrected worker that delivers its journal completion AFTER the
+        reap committed is an idempotent no-op: the attempt stays terminal
+        (worker_lost), the intent stays failed, the guard stays free, and the
+        FAILED history row is not superseded."""
+        db, ctrl = self._started_with_db(tmp_path)
+        self._register_batch(ctrl, _MANUAL_YAML)
+        try:
+            ctrl._run_batch("my-manual", run_id="r-late", origin="manual")
+            assert ctrl.mark_active_batch_run_lost(
+                "my-manual",
+                error="worker-owned batch run disappeared before callback: r-late",
+                run_id="r-late",
+            ) is True
+            assert ctrl.manager.get_run("r-late").status == RunStatus.FAILED
+
+            resp = ctrl.on_attempt_run_complete(
+                attempt_id="r-late-a1", generation=1, run_id="r-late",
+                pipeline_name="my-manual", worker_id="w0", status="success",
+                records_in=1, records_out=1,
+            )
+            assert resp == {"ok": True}
+
+            attempts = self._fetch(
+                db,
+                "SELECT state, cancel_reason FROM execution_attempts WHERE run_id = 'r-late'",
+            )
+            assert attempts[0] == {"state": "terminal", "cancel_reason": "worker_lost"}
+            intents = self._fetch(db, "SELECT final_outcome FROM run_intents WHERE run_id = 'r-late'")
+            assert intents[0]["final_outcome"] == "failed"
+            guards = self._fetch(db, "SELECT attempt_id FROM execution_guards WHERE guard_key = 'my-manual'")
+            assert guards[0]["attempt_id"] is None
+            matches = [r for r in ctrl.manager.get("my-manual").run_history if r.run_id == "r-late"]
+            assert len(matches) == 1
+            assert matches[0].status == RunStatus.FAILED
+        finally:
+            ctrl.stop()
+
+    def test_dispatch_failure_leaves_ledger_terminal(self, tmp_path):
+        """Dispatch timeout/rejection path: DISPATCH_FAILED writes the FAILED
+        row AND terminalls the attempt / releases the guard / resolves the
+        intent (audit — already-correct path pinned)."""
+        db, ctrl = self._started_with_db(tmp_path)
+        self._register_batch(ctrl, _MANUAL_YAML)
+        try:
+            ctrl._worker_pool.dispatch_with_result.return_value = DispatchOutcome(
+                worker_url=None,
+                outcome=DISPATCH_FAILED,
+                error="HTTP 504 gateway timeout",
+            )
+            ctrl._run_batch("my-manual", run_id="r-timeout", origin="manual")
+
+            attempts = self._fetch(
+                db,
+                "SELECT state, cancel_reason FROM execution_attempts WHERE run_id = 'r-timeout'",
+            )
+            assert attempts[0]["state"] == "terminal"
+            guards = self._fetch(db, "SELECT attempt_id FROM execution_guards WHERE guard_key = 'my-manual'")
+            assert guards[0]["attempt_id"] is None
+            intents = self._fetch(db, "SELECT final_outcome FROM run_intents WHERE run_id = 'r-timeout'")
+            assert intents[0]["final_outcome"] == "failed"
+            result = ctrl.manager.get_run("r-timeout")
+            assert result is not None
+            assert result.status == RunStatus.FAILED
+            assert "504" in (result.error or "")
+        finally:
+            ctrl.stop()
+
+    def test_no_capacity_non_queue_leaves_ledger_terminal(self, tmp_path):
+        """DISPATCH_NO_CAPACITY without the queue fallback (scheduled origin —
+        only manual-origin runs are enqueued) writes the FAILED row AND
+        terminalls the attempt / releases the guard / resolves the intent
+        (audit — already-correct path pinned)."""
+        db, ctrl = self._started_with_db(tmp_path)
+        self._register_batch(ctrl, _MANUAL_YAML)
+        try:
+            ctrl._worker_pool.dispatch_with_result.return_value = DispatchOutcome(
+                worker_url=None,
+                outcome=DISPATCH_NO_CAPACITY,
+                error="No healthy workers available for dispatch",
+            )
+            ctrl._run_batch("my-manual", run_id="r-nocap")  # origin="scheduled"
+
+            attempts = self._fetch(db, "SELECT state FROM execution_attempts WHERE run_id = 'r-nocap'")
+            assert attempts[0]["state"] == "terminal"
+            guards = self._fetch(db, "SELECT attempt_id FROM execution_guards WHERE guard_key = 'my-manual'")
+            assert guards[0]["attempt_id"] is None
+            intents = self._fetch(db, "SELECT final_outcome FROM run_intents WHERE run_id = 'r-nocap'")
+            assert intents[0]["final_outcome"] == "failed"
+        finally:
+            ctrl.stop()
+
+    def test_stop_mid_run_completion_leaves_ledger_terminal(self, tmp_path):
+        """Stop-mid-run audit: stop_pipeline does not write a FAILED row for
+        the in-flight batch — the run completes on the worker and its
+        completion callback terminalls the attempt / releases the guard /
+        resolves the intent (already-correct path pinned)."""
+        db, ctrl = self._started_with_db(tmp_path)
+        self._register_batch(ctrl, _MANUAL_YAML)
+        try:
+            ctrl._run_batch("my-manual", run_id="r-stop", origin="manual")
+            guards = self._fetch(db, "SELECT attempt_id FROM execution_guards WHERE guard_key = 'my-manual'")
+            assert guards[0]["attempt_id"] == "r-stop-a1"
+
+            ctrl.stop_pipeline("my-manual")
+            assert ctrl.manager.get("my-manual").status == "stopped"
+
+            # The in-flight worker run completes after the stop.
+            resp = ctrl.on_attempt_run_complete(
+                attempt_id="r-stop-a1", generation=1, run_id="r-stop",
+                pipeline_name="my-manual", worker_id="w0", status="success",
+                records_in=2, records_out=2,
+            )
+            assert resp == {"ok": True}
+
+            attempts = self._fetch(db, "SELECT state FROM execution_attempts WHERE run_id = 'r-stop'")
+            assert attempts[0]["state"] == "terminal"
+            guards = self._fetch(db, "SELECT attempt_id FROM execution_guards WHERE guard_key = 'my-manual'")
+            assert guards[0]["attempt_id"] is None
+            intents = self._fetch(db, "SELECT final_outcome FROM run_intents WHERE run_id = 'r-stop'")
+            assert intents[0]["final_outcome"] == "success"
+            assert ctrl.manager.get_run("r-stop").status == RunStatus.SUCCESS
+        finally:
+            ctrl.stop()
+
+    def test_stop_mid_drain_dispatch_failure_retires_attempt(self, tmp_path):
+        """Stop-mid-drain race: a lifecycle stop cancels the queued row while
+        the drain's dispatch is in flight; the dispatch then fails and the
+        revert fence misses (row no longer 'dispatching'). The attempt is
+        retired — terminal, guard released, intent resolved — so stop-mid-run
+        leaves the ledger terminal instead of wedging the guard."""
+        db, ctrl = self._started_with_db(tmp_path)
+        self._register_batch(ctrl, _MANUAL_YAML)
+        try:
+            # Enqueue with zero healthy workers, then let the drain claim it.
+            ctrl._worker_pool.healthy_workers.return_value = []
+            triggered = ctrl.trigger_run("my-manual")
+            assert triggered.disposition == "queued"
+            run_id = triggered.run_id
+            ctrl._worker_pool.healthy_workers.return_value = ["http://worker-0:8766"]
+            claimed = ctrl.claim_queued_run(run_id)
+            assert claimed is not None
+            guards = self._fetch(db, "SELECT attempt_id FROM execution_guards WHERE guard_key = 'my-manual'")
+            assert guards[0]["attempt_id"] == f"{run_id}-a1"
+
+            # Stop cancels the queued row while the dispatch is in flight.
+            ctrl.stop_pipeline("my-manual")
+
+            # The dispatch fails — the revert fence misses (row is 'cancelled').
+            assert ctrl.revert_queued_claim(run_id, result="failed") is False
+
+            attempts = self._fetch(db, "SELECT state FROM execution_attempts WHERE run_id = :r", {"r": run_id})
+            assert attempts[0]["state"] == "terminal"
+            guards = self._fetch(db, "SELECT attempt_id FROM execution_guards WHERE guard_key = 'my-manual'")
+            assert guards[0]["attempt_id"] is None
+            intents = self._fetch(db, "SELECT final_outcome FROM run_intents WHERE run_id = :r", {"r": run_id})
+            assert intents[0]["final_outcome"] == "aborted"
+        finally:
+            ctrl.stop()
+
+
 # ── V18-04: boot adoption ───────────────────────────────────────────────────
 
 
