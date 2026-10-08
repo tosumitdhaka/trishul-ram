@@ -91,6 +91,45 @@ worker:
     limits:
       cpu: "1"
       memory: 1Gi
+  ## Worker journal persistence (v1.8.0, V18-07).
+  ## One SQLite journal file per worker at /var/lib/tram/worker/journal.db
+  ## (TRAM_WORKER_JOURNAL_PATH frozen default). The journal makes run
+  ## completion + outbox delivery durable across pod restarts. The volume is
+  ## mounted at /var/lib/tram/worker — the frozen default parent dir — so no
+  ## TRAM_WORKER_JOURNAL_PATH env override is needed.
+  ##
+  ## enabled=false (DEFAULT in v1.8.0 — conservative): an emptyDir is mounted
+  ## at /var/lib/tram/worker so the directory exists, the journal opens, and
+  ## the worker reports healthy (never admission-closed at boot). Contents are
+  ## EPHEMERAL: pod deletion loses the journal and any unacknowledged outbox
+  ## completions. Enabling persistence is REQUIRED for the durable worker
+  ## guarantees (no duplicate dispatch on restart, durable completion before
+  ## callback ack).
+  ##
+  ## enabled=true: renders volumeClaimTemplates on the worker StatefulSet —
+  ## one PVC per replica. volumeClaimTemplates is an IMMUTABLE StatefulSet
+  ## field: it can only be added on a FRESH install. Existing v1.7 releases
+  ## CANNOT gain it via helm upgrade — upgrading operators must either
+  ## (i) stay with persistence.enabled=false and set existingClaim (the
+  ## validated upgrade path below), or (ii) recreate the worker StatefulSet.
+  ##
+  ## accessMode: ReadWriteOnce (default) binds each replica's PVC to its node —
+  ## on a single-node kind cluster (local-path) ALL worker replicas are pinned
+  ## to that one node. For multi-node replicas sharing one volume, use
+  ## accessMode: ReadWriteMany with a RWX StorageClass (dev cluster:
+  ## storageClass "nfs-rwx").
+  ##
+  ## existingClaim: pre-provisioned PVC name; takes precedence over enabled.
+  ## Mounted via a plain volumes entry (mutable — works via helm upgrade): the
+  ## validated upgrade path. All replicas share this claim — RWO pins them to
+  ## one node, RWX lets them spread.
+  journal:
+    persistence:
+      enabled: false
+      size: 1Gi
+      storageClass: ""
+      accessMode: ReadWriteOnce
+      existingClaim: ""
   ## Override the container image for worker pods.
   ## When not set (default), workers use the same image as the manager (.Values.image).
   ## Set repository to use a dedicated worker image (built from Dockerfile.worker):

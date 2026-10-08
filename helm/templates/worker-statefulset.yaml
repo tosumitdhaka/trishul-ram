@@ -132,6 +132,14 @@ spec:
             ## emptyDir for schemas/MIBs fetched from manager at runtime
             - name: data
               mountPath: /data
+            ## Worker journal (v1.8.0): one SQLite file per worker at
+            ## /var/lib/tram/worker/journal.db — the mount parent IS the frozen
+            ## TRAM_WORKER_JOURNAL_PATH default, so no env override is needed.
+            ## Always mounted (emptyDir / PVC / existingClaim): the directory
+            ## must exist or the journal fails closed at boot and the worker
+            ## reports admission-closed instead of healthy.
+            - name: worker-journal
+              mountPath: /var/lib/tram/worker
             {{- if .Values.keys.secretName }}
             - name: keys
               mountPath: {{ .Values.keys.mountPath | default "/secrets" }}
@@ -158,6 +166,23 @@ spec:
         ## No PVC needed — workers are stateless. Content is re-fetched on pod restart.
         - name: data
           emptyDir: {}
+        ## Worker journal volume (v1.8.0). Exactly one of:
+        ##   1. persistence.existingClaim set → pre-provisioned PVC via a plain
+        ##      volumes entry (mutable — the validated helm-upgrade path; RWO
+        ##      pins all replicas to one node, RWX lets them spread).
+        ##   2. persistence.enabled=false (default) → emptyDir fallback so
+        ##      /var/lib/tram/worker exists and the journal opens (ephemeral).
+        ##   3. persistence.enabled=true, no existingClaim → no volumes entry:
+        ##      the volumeClaimTemplates block below provisions one PVC per
+        ##      replica (fresh installs only — the field is immutable).
+        {{- if .Values.worker.journal.persistence.existingClaim }}
+        - name: worker-journal
+          persistentVolumeClaim:
+            claimName: {{ .Values.worker.journal.persistence.existingClaim }}
+        {{- else if not .Values.worker.journal.persistence.enabled }}
+        - name: worker-journal
+          emptyDir: {}
+        {{- end }}
         {{- if .Values.keys.secretName }}
         - name: keys
           secret:
@@ -176,4 +201,23 @@ spec:
       tolerations:
         {{- toYaml . | nindent 8 }}
       {{- end }}
+  {{- if and .Values.worker.journal.persistence.enabled (not .Values.worker.journal.persistence.existingClaim) }}
+  ## Per-replica journal PVCs (v1.8.0). volumeClaimTemplates is an IMMUTABLE
+  ## StatefulSet field — this block renders on fresh installs only and cannot
+  ## be added to a live release by helm upgrade (use existingClaim instead).
+  volumeClaimTemplates:
+    - metadata:
+        name: worker-journal
+        labels:
+          {{- include "tram.labels" . | nindent 10 }}
+          app.kubernetes.io/component: worker
+      spec:
+        accessModes: ["{{ .Values.worker.journal.persistence.accessMode | default "ReadWriteOnce" }}"]
+        resources:
+          requests:
+            storage: {{ .Values.worker.journal.persistence.size | default "1Gi" }}
+        {{- with .Values.worker.journal.persistence.storageClass }}
+        storageClassName: {{ . | quote }}
+        {{- end }}
+  {{- end }}
 {{- end }}
