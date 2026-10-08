@@ -1081,6 +1081,41 @@ class TestStatusQueries:
             "assigned_pipelines": ["pipe-a"],
         }]
 
+    def test_status_carries_worker_admission_state(self):
+        """V18-09 drain-runbook visibility: the worker's admission_state and
+        drain block ride through the status row when reported (absent on
+        v1.7 workers — the exact-equality test above pins the absence)."""
+        pool = _pool("http://w0:8766")
+        pool._health["http://w0:8766"] = {
+            "ok": True,
+            "active_runs": 0,
+            "running_pipelines": [],
+        }
+
+        def _get(url, **kwargs):
+            resp = MagicMock()
+            resp.raise_for_status = MagicMock()
+            resp.json.return_value = {
+                "worker_id": "w0",
+                "active_runs": 0,
+                "running": [],
+                "streams": [],
+                "admission_state": "draining",
+                "drain": {"draining": True, "idle": True, "drained": True},
+            }
+            return resp
+
+        mock_client = MagicMock()
+        mock_client.__enter__ = lambda s: mock_client
+        mock_client.__exit__ = MagicMock(return_value=False)
+        mock_client.get.side_effect = _get
+
+        with patch("httpx.Client", return_value=mock_client):
+            rows = pool.status()
+
+        assert rows[0]["admission_state"] == "draining"
+        assert rows[0]["drain"] == {"draining": True, "idle": True, "drained": True}
+
     def test_live_streams_returns_normalized_stream_entries(self):
         pool = _pool("http://w0:8766")
 

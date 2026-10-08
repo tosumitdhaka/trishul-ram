@@ -663,7 +663,7 @@ class WorkerPool:
                     for item in running_items + stream_items
                     if item.get("pipeline")
                 })
-            rows.append({
+            row = {
                 "url": url,
                 "worker_id": worker_id,
                 "ok": h["ok"],
@@ -673,7 +673,17 @@ class WorkerPool:
                 "running": running_items,
                 "streams": stream_items,
                 "assigned_pipelines": sorted(worker_pipelines.get(url, [])),
-            })
+            }
+            if live_status is not None:
+                # V18-09 drain-runbook visibility: the worker's admission
+                # state and drain block ride through so the UI's restart
+                # gate lights up (absent on v1.7 workers — the UI hides
+                # the column when no worker reports it).
+                if live_status.get("admission_state"):
+                    row["admission_state"] = live_status["admission_state"]
+                if live_status.get("drain"):
+                    row["drain"] = live_status["drain"]
+            rows.append(row)
         return rows
 
     def assignment_for_run(self, run_id: str) -> str | None:
@@ -693,7 +703,7 @@ class WorkerPool:
             )
             return None
 
-        return {
+        status = {
             "worker_id": data.get("worker_id"),
             "active_runs": int(
                 data.get("active_runs", len(data.get("running", [])) + len(data.get("streams", []))) or 0
@@ -702,6 +712,14 @@ class WorkerPool:
             "running": list(data.get("running", [])),
             "streams": list(data.get("streams", [])),
         }
+        # V18-09 drain-runbook visibility: pass through when the worker
+        # reports them (v1.7 workers omit both fields; consumers treat a
+        # missing key as absent and degrade).
+        if data.get("admission_state"):
+            status["admission_state"] = data["admission_state"]
+        if data.get("drain"):
+            status["drain"] = data["drain"]
+        return status
 
     def _worker_statuses(self, worker_urls: list[str]) -> dict[str, dict | None]:
         """Probe /agent/status on several workers concurrently.

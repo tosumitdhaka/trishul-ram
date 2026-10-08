@@ -63,6 +63,42 @@ class PipelineStatsPayload(BaseModel):
     snmp_stack: str = "legacy"
 
 
+class BatchedRunStats(BaseModel):
+    """One run's stats inside a V18-08 batched worker snapshot.
+
+    Identical to :class:`PipelineStatsPayload` minus the envelope fields
+    (worker identity, timestamp, SNMP stack) the batch carries once.
+    """
+
+    pipeline_name: str
+    run_id: str
+    schedule_type: str
+    uptime_seconds: float
+    records_in: int = 0
+    records_out: int = 0
+    records_skipped: int = 0
+    dlq_count: int = 0
+    error_count: int = 0
+    bytes_in: int = 0
+    bytes_out: int = 0
+    errors_last_window: list[str] = Field(default_factory=list)
+    is_final: bool = False
+
+
+class BatchedStatsPayload(BaseModel):
+    """V18-08 batched worker stats: ONE POST per interval per worker carrying
+    all active runs. The envelope holds worker identity + timestamp + SNMP
+    stack; each item is a single-run report minus those. Mixed fleets keep
+    the single-run shape during rollout, and per-run ``is_final`` completion
+    posts stay single-run — the endpoint accepts both shapes.
+    """
+
+    worker_id: str
+    timestamp: datetime
+    snmp_stack: str = "legacy"
+    runs: list[BatchedRunStats]
+
+
 # v1.5.0 (GH #72): rolling-upgrade stack-consistency guard. The manager warns
 # loudly once per worker when the worker's reported SNMP stack differs from
 # its own — a mixed fleet serves one stack's MIB corpus to the other (a
@@ -188,21 +224,40 @@ async def run_complete(payload: RunCompletePayload, request: Request) -> dict:
 
 
 @router.post("/api/internal/pipeline-stats")
-async def pipeline_stats(payload: PipelineStatsPayload, request: Request) -> dict:
+async def pipeline_stats(
+    payload: PipelineStatsPayload | BatchedStatsPayload, request: Request
+) -> dict:
     store = request.app.state.stats_store
     controller = request.app.state.controller
-    from tram.metrics.registry import MGR_PIPELINE_STATS_RECEIVED_TOTAL
-    MGR_PIPELINE_STATS_RECEIVED_TOTAL.inc()
 
-    # v1.5.0 (GH #72): stack-consistency guard — warn once per worker when the
-    # reported TRAM_SNMP_STACK differs from the manager's.
-    _warn_snmp_stack_mismatch(payload, request)
+    def _process(report: PipelineStatsPayload) -> None:
+        from tram.metrics.registry import MGR_PIPELINE_STATS_RECEIVED_TOTAL
+        MGR_PIPELINE_STATS_RECEIVED_TOTAL.inc()
+        # v1.5.0 (GH #72): stack-consistency guard — warn once per worker
+        # when the reported TRAM_SNMP_STACK differs from the manager's.
+        _warn_snmp_stack_mismatch(report, request)
+        if report.is_final:
+            store.remove(report.run_id)
+        else:
+            store.update(report)
+            controller.on_pipeline_stats(report)
 
-    if payload.is_final:
-        store.remove(payload.run_id)
+    if isinstance(payload, BatchedStatsPayload):
+        # V18-08: one batched POST per worker per interval — each run report
+        # is processed exactly like a single-run post, with the batch
+        # envelope supplying worker identity, timestamp, and SNMP stack.
+        # Per-run `is_final` items (completion posts) keep their semantics.
+        for item in payload.runs:
+            _process(
+                PipelineStatsPayload(
+                    worker_id=payload.worker_id,
+                    timestamp=payload.timestamp,
+                    snmp_stack=payload.snmp_stack,
+                    **item.model_dump(),
+                )
+            )
     else:
-        store.update(payload)
-        controller.on_pipeline_stats(payload)
+        _process(payload)
     return {"ok": True}
 
 

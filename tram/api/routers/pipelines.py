@@ -15,6 +15,7 @@ from tram.core.exceptions import (
     PipelineAlreadyExistsError,
     PipelineNotFoundError,
 )
+from tram.pipeline.controller import ExecutorOverloadError, QueueCapacityError
 from tram.pipeline.linter import lint
 from tram.pipeline.loader import load_pipeline_from_yaml, scan_pipeline_dir
 
@@ -413,6 +414,14 @@ async def trigger_run(
 
     try:
         result = controller.trigger_run(name, flush=flush)
+    except QueueCapacityError as exc:
+        # V18-08 budget rejection: the E.2 queue is at its count/byte cap —
+        # capacity, not a client error or a server fault.
+        raise HTTPException(status_code=503, detail=str(exc))
+    except ExecutorOverloadError as exc:
+        # V18-08: the bounded management executor is saturated — explicit
+        # backpressure instead of unbounded accumulation.
+        raise HTTPException(status_code=503, detail=str(exc))
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc))
     except Exception as exc:

@@ -12,6 +12,7 @@ from tram.agent.stats_store import StatsStore
 from tram.api.routers.internal import PipelineStatsPayload
 from tram.api.routers.pipelines import router
 from tram.core.exceptions import PipelineAlreadyExistsError, PipelineNotFoundError
+from tram.pipeline.controller import ExecutorOverloadError, QueueCapacityError
 from tram.pipeline.loader import load_pipeline_from_yaml
 from tram.pipeline.manager import PipelineState
 
@@ -584,6 +585,35 @@ class TestLifecycle:
         app.state.controller.trigger_run.assert_called_once_with(
             "test-pipe", flush=True
         )
+
+    def test_trigger_run_queue_capacity_maps_503(self):
+        """V18-08 budget rejection: the E.2 queue at its cap is capacity, not
+        a client error (400) or a server fault (500)."""
+        state = _make_state()
+        app = _make_app()
+        app.state.controller.get.return_value = state
+        app.state.controller.trigger_run.side_effect = QueueCapacityError(
+            "queue at capacity: 1000 rows"
+        )
+        client = TestClient(app)
+        resp = client.post("/api/pipelines/test-pipe/run")
+        assert resp.status_code == 503
+        assert "queue at capacity" in resp.json()["detail"]
+        app.state.controller._record_completed_lifecycle_operation.assert_not_called()
+
+    def test_trigger_run_executor_overload_maps_503(self):
+        """V18-08: bounded management executor saturation is explicit
+        backpressure (503), never unbounded accumulation or a 500."""
+        state = _make_state()
+        app = _make_app()
+        app.state.controller.get.return_value = state
+        app.state.controller.trigger_run.side_effect = ExecutorOverloadError(
+            "management executor saturated: ceiling 1000"
+        )
+        client = TestClient(app)
+        resp = client.post("/api/pipelines/test-pipe/run")
+        assert resp.status_code == 503
+        assert "saturated" in resp.json()["detail"]
 
     def test_trigger_run_flush_defaults_false(self):
         """Without ?flush, the run is a normal (non-flush) run."""

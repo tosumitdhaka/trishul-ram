@@ -263,6 +263,80 @@ class TestPipelineStatsEndpoint:
         store.update.assert_not_called()
         app.state.controller.on_pipeline_stats.assert_not_called()
 
+    def test_accepts_batched_worker_snapshot(self):
+        """V18-08: one POST per worker per interval with all runs — each run
+        report processed exactly like a single-run post."""
+        app, _, store = _make_app()
+        client = TestClient(app)
+
+        resp = client.post("/api/internal/pipeline-stats", json={
+            "worker_id": "w0",
+            "timestamp": "2026-10-08T16:00:00+00:00",
+            "snmp_stack": "legacy",
+            "runs": [
+                {
+                    "pipeline_name": "pipe-a",
+                    "run_id": "run-1",
+                    "schedule_type": "stream",
+                    "uptime_seconds": 10.5,
+                    "records_in": 5,
+                    "records_out": 4,
+                },
+                {
+                    "pipeline_name": "pipe-b",
+                    "run_id": "run-2",
+                    "schedule_type": "batch",
+                    "uptime_seconds": 3.0,
+                    "records_in": 2,
+                },
+            ],
+        })
+
+        assert resp.status_code == 200
+        assert resp.json() == {"ok": True}
+        assert store.update.call_count == 2
+        store.remove.assert_not_called()
+        assert app.state.controller.on_pipeline_stats.call_count == 2
+        # The envelope's worker identity lands on every merged report.
+        updated_workers = [
+            call.args[0].worker_id for call in store.update.call_args_list
+        ]
+        assert updated_workers == ["w0", "w0"]
+        updated_runs = [call.args[0].run_id for call in store.update.call_args_list]
+        assert updated_runs == ["run-1", "run-2"]
+
+    def test_batched_snapshot_processes_per_item_final(self):
+        """A batched snapshot may carry final items (e.g. a run that finished
+        between the worker's snapshot and the post) — per-item is_final
+        keeps the remove semantics, not the whole-batch behavior."""
+        app, _, store = _make_app()
+        client = TestClient(app)
+
+        resp = client.post("/api/internal/pipeline-stats", json={
+            "worker_id": "w0",
+            "timestamp": "2026-10-08T16:00:00+00:00",
+            "runs": [
+                {
+                    "pipeline_name": "pipe-a",
+                    "run_id": "run-1",
+                    "schedule_type": "batch",
+                    "uptime_seconds": 3.0,
+                    "is_final": True,
+                },
+                {
+                    "pipeline_name": "pipe-b",
+                    "run_id": "run-2",
+                    "schedule_type": "stream",
+                    "uptime_seconds": 7.0,
+                },
+            ],
+        })
+
+        assert resp.status_code == 200
+        store.remove.assert_called_once_with("run-1")
+        store.update.assert_called_once()
+        app.state.controller.on_pipeline_stats.assert_called_once()
+
 
 # ── Transform-state endpoints (F.1 §3.2b) ───────────────────────────────────
 
