@@ -12,12 +12,14 @@ On completion the worker POSTs to the manager's run-complete callback URL.
 from __future__ import annotations
 
 import hashlib
+import json
 import logging
 import os
 import random
 import socket
 import threading
 import time
+import uuid
 from contextlib import asynccontextmanager
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
@@ -25,9 +27,18 @@ from typing import TYPE_CHECKING
 
 import httpx
 from fastapi import FastAPI, HTTPException
+from fastapi.responses import JSONResponse
 from pydantic import BaseModel
 
+from tram.agent.journal import (
+    AdmissionClosedError,
+    AdmissionConflictError,
+    JournalUnavailableError,
+    WorkerJournal,
+)
 from tram.agent.metrics import PipelineStats
+from tram.core import config as cfg
+from tram.core.config import worker_legacy_admit
 
 if TYPE_CHECKING:
     from tram.models.pipeline import PipelineConfig
@@ -86,6 +97,15 @@ class RunRequest(BaseModel):
     callback_url: str = ""         # manager endpoint for run-complete; may be empty
     flush: bool = False            # F.1 §5: manual flush run — close(flush=True) emits
                                    # open windows as partials and clears them from state
+    # V18-01 §5: start-authorization admission fields (optional). Absent
+    # ``authorization`` → the legacy-admit rollback bridge
+    # (TRAM_WORKER_LEGACY_ADMIT=auto) keeps v1.7 dispatches working. The
+    # authoritative attempt identity comes from the token payload; the request
+    # fields are echoed for observability.
+    attempt_id: str = ""
+    generation: int | None = None
+    slot_id: str = ""
+    authorization: str | None = None
 
 
 class StopRequest(BaseModel):
@@ -113,6 +133,13 @@ class ActiveRun:
     # GH #39: degradation notes (e.g. skip_processed unhonored) merged into the
     # run-complete payload errors so the manager's run_history row records them.
     degradation_notes: list[str] = field(default_factory=list)
+    # V18-01 §5: attempt identity + legacy-admit marker. Empty ``attempt_id``
+    # means a legacy dispatch (no start authorization) — journal recording is
+    # skipped and no fencing is claimed; ``legacy`` marks it in status payloads.
+    attempt_id: str = ""
+    generation: int | None = None
+    slot_id: str = ""
+    legacy: bool = False
 
     def __post_init__(self) -> None:
         if self.started_at_dt is None:
@@ -375,7 +402,59 @@ def _active_run_status(run: ActiveRun, worker_id: str, now: datetime) -> dict[st
         "uptime_seconds": uptime_seconds,
         "config_sha256": run.config_sha256,
         "stats": stats,
+        # V18-01 §5: attempt identity on status items; ``legacy`` marks a
+        # rollback-bridge dispatch (no start authorization, no fencing).
+        "attempt_id": run.attempt_id,
+        "generation": run.generation,
+        "slot_id": run.slot_id,
+        "legacy": run.legacy,
     }
+
+
+def _completion_result_json(
+    *,
+    run_id: str,
+    pipeline_name: str,
+    worker_id: str,
+    attempt_id: str,
+    status: str,
+    records_in: int = 0,
+    records_out: int = 0,
+    records_skipped: int = 0,
+    bytes_in: int = 0,
+    bytes_out: int = 0,
+    error: str | None = None,
+    errors: list[str] | None = None,
+    started_at: str | None = None,
+    finished_at: str | None = None,
+    legacy: bool = False,
+) -> str:
+    """Build the journal ``completions.result_json`` payload (V18-01 §4).
+
+    Journal-first ordering: the completion row commits BEFORE the run leaves
+    ``WorkerState`` and before the run-complete callback, so a crash between
+    the two never loses the outcome. The follow-up outbox lane reads this
+    payload when the direct callback cannot be delivered.
+    """
+    return json.dumps(
+        {
+            "run_id": run_id,
+            "pipeline_name": pipeline_name,
+            "worker_id": worker_id,
+            "attempt_id": attempt_id,
+            "status": status,
+            "records_in": records_in,
+            "records_out": records_out,
+            "records_skipped": records_skipped,
+            "bytes_in": bytes_in,
+            "bytes_out": bytes_out,
+            "error": error,
+            "errors": errors or [],
+            "started_at": started_at,
+            "finished_at": finished_at,
+            "legacy": legacy,
+        }
+    )
 
 
 def _stats_loop(state: WorkerState, interval: int) -> None:
@@ -386,8 +465,18 @@ def _stats_loop(state: WorkerState, interval: int) -> None:
 # ── App factory ────────────────────────────────────────────────────────────
 
 
-def create_worker_app(worker_id: str = "", manager_url: str = "", stats_interval: int | None = None) -> FastAPI:
-    """Create and return the worker agent FastAPI application."""
+def create_worker_app(
+    worker_id: str = "",
+    manager_url: str = "",
+    stats_interval: int | None = None,
+    *,
+    journal: WorkerJournal | None = None,
+) -> FastAPI:
+    """Create and return the worker agent FastAPI application.
+
+    ``journal`` injects a pre-built ``WorkerJournal`` (tests pass a temp-path
+    journal); production and the default fall back to ``TRAM_WORKER_JOURNAL_PATH``.
+    """
     if not worker_id:
         worker_id = os.environ.get("TRAM_WORKER_ID", socket.gethostname())
     if not manager_url:
@@ -408,6 +497,26 @@ def create_worker_app(worker_id: str = "", manager_url: str = "", stats_interval
     from tram.core.config import AppConfig
     snmp_stack_value = AppConfig.from_env().snmp_stack
 
+    # V18-01 §4/§5: per-worker durable journal. Tests/dev inject a temp-path
+    # journal; production uses the frozen default path. A corrupt or
+    # unavailable journal is cached and reported by health() — the app still
+    # starts and /agent/status surfaces the condition distinctly.
+    journal = journal if journal is not None else WorkerJournal(cfg.worker_journal_path())
+
+    # V18-01 §4: the manager–worker session secret for start-authorization
+    # tokens. The /agent/handshake lane establishes this secret at runtime;
+    # until then the worker reads TRAM_AUTH_SESSION_SECRET so deployments can
+    # pre-share it. Empty secret = no manager can mint a valid token, so
+    # authorized dispatches are refused until the handshake lane lands.
+    auth_secret = os.environ.get("TRAM_AUTH_SESSION_SECRET", "")
+
+    # V18-01 §4: session identity {worker_id}-{boot_uuid8}, minted once per
+    # process start. Reported on /agent/status and stamped on journal rows so
+    # a newer session for the same worker_id is proof of process termination
+    # (the handshake lane builds the full exchange on this value).
+    boot_uuid8 = uuid.uuid4().hex[:8]
+    worker_session = f"{worker_id}-{boot_uuid8}"
+
     state = WorkerState(
         worker_id=worker_id,
         manager_url=manager_url,
@@ -421,6 +530,27 @@ def create_worker_app(worker_id: str = "", manager_url: str = "", stats_interval
         import tram.connectors  # noqa: F401
         import tram.serializers  # noqa: F401
         import tram.transforms  # noqa: F401
+
+        # V18-01 §4: mark reserved/running rows from a previous process boot as
+        # interrupted — never silently re-executed before the manager resolves
+        # ownership. Best-effort at boot: a corrupt/unavailable journal must
+        # not block worker startup (status reports it distinctly) and
+        # admission stays closed until recovery.
+        try:
+            interrupted = journal.mark_interrupted_on_boot()
+        except JournalUnavailableError as exc:
+            logger.error(
+                "worker journal unavailable at boot — admission closed, "
+                "status reports the condition",
+                extra={"worker_id": worker_id, "error": str(exc)},
+            )
+        else:
+            if interrupted:
+                logger.warning(
+                    "worker journal boot recovery — marked %d interrupted attempts",
+                    interrupted,
+                    extra={"worker_id": worker_id, "count": interrupted},
+                )
 
         state.stats_stop.clear()
         stats_thread = threading.Thread(
@@ -441,6 +571,7 @@ def create_worker_app(worker_id: str = "", manager_url: str = "", stats_interval
         if stats_thread.is_alive():
             stats_thread.join(timeout=stats_interval + 1)
         logger.info("Worker agent stopped", extra={"worker_id": worker_id})
+        journal.close()
 
     app = FastAPI(
         title="TRAM Worker Agent",
@@ -448,6 +579,8 @@ def create_worker_app(worker_id: str = "", manager_url: str = "", stats_interval
         lifespan=lifespan,
     )
     app.state.worker = state
+    app.state.journal = journal
+    app.state.worker_session = worker_session
 
     # Internal agent API: same API-key middleware as the manager ingress, with
     # the /agent/* routes as the protected internal surface. /agent/health is
@@ -487,22 +620,79 @@ def create_worker_app(worker_id: str = "", manager_url: str = "", stats_interval
             for r in active
             if r.schedule_type == "stream"
         ]
+        # V18-01 §4: readiness-relevant journal health (never raises — a fatal
+        # journal reports its state here rather than crashing status) plus the
+        # current session epoch's rejection watermark.
+        journal_health = journal.health()
+        try:
+            watermark = journal.watermark_status()
+            watermark_payload = {
+                "session_epoch": watermark.session_epoch,
+                "watermark_ms": watermark.watermark_ms,
+                "now_ms": watermark.now_ms,
+                "behind_ms": watermark.behind_ms,
+                "admitting": watermark.admitting,
+            }
+        except JournalUnavailableError as exc:
+            watermark_payload = {
+                "session_epoch": None,
+                "watermark_ms": None,
+                "now_ms": None,
+                "behind_ms": None,
+                "admitting": False,
+                "error": str(exc),
+            }
         return {
             "worker_id": worker_id,
+            "worker_session": worker_session,
             "active_runs": len(active),
             "running_pipelines": sorted({r.pipeline_name for r in active}),
             "running": running,
             "streams": streams,
+            "journal": {
+                "state": journal_health.state,
+                "detail": journal_health.detail,
+                "size_bytes": journal_health.size_bytes,
+                "quota_bytes": journal_health.quota_bytes,
+                "headroom_bytes": journal_health.headroom_bytes,
+            },
+            "watermark": watermark_payload,
         }
 
     # ── POST /agent/run ────────────────────────────────────────────────────
 
     @app.post("/agent/run", status_code=202)
     def run(req: RunRequest):  # noqa: A001
-        if state.get(req.run_id) is not None:
-            raise HTTPException(
-                status_code=409,
-                detail=f"run_id {req.run_id!r} is already active on this worker",
+        # ── V18-01 §5: admission path selection ────────────────────────────
+        # ``authorization`` present → start-authorization admission against the
+        # journal (per-attempt idempotency — a repeat returns 200, never a
+        # second thread). Absent → the legacy-admit rollback bridge when
+        # TRAM_WORKER_LEGACY_ADMIT=auto (v1.7-shaped dispatch, explicit legacy
+        # marker, no fencing claimed); ``off`` rejects such dispatches with 400.
+        authorized = req.authorization is not None
+        if not authorized:
+            if worker_legacy_admit() == "off":
+                raise HTTPException(
+                    status_code=400,
+                    detail={
+                        "reason": "dispatch without authorization rejected "
+                        "(TRAM_WORKER_LEGACY_ADMIT=off)"
+                    },
+                )
+            if state.get(req.run_id) is not None:
+                raise HTTPException(
+                    status_code=409,
+                    detail=f"run_id {req.run_id!r} is already active on this worker",
+                )
+            logger.info(
+                "legacy dispatch accepted (no authorization) — rollback "
+                "bridge, no fencing claimed",
+                extra={
+                    "run_id": req.run_id,
+                    "pipeline": req.pipeline_name,
+                    "worker_id": worker_id,
+                    "legacy": True,
+                },
             )
 
         from tram.pipeline.executor import PipelineExecutor
@@ -516,6 +706,86 @@ def create_worker_app(worker_id: str = "", manager_url: str = "", stats_interval
             config = load_pipeline_from_yaml(req.yaml_text)
         except Exception as exc:
             raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+        # ── V18-01 §4: journal admission (authorized path only) ────────────
+        # Runs BEFORE any thread is created — the reservation must exist before
+        # the executor can start, so a crash between admission and thread start
+        # leaves an interrupted reservation the manager can resolve, never an
+        # untracked execution. YAML validation precedes admission so a bad
+        # dispatch is a 422 and never wedges an attempt in the reserved state.
+        attempt_id: str | None = None
+        if authorized:
+            try:
+                admission = journal.validate_and_admit(
+                    req.authorization,
+                    req.pipeline_name,
+                    worker_session=worker_session,
+                    current_secret=auth_secret,
+                )
+            except AdmissionConflictError as exc:
+                raise HTTPException(
+                    status_code=409,
+                    detail={"attempt_id": exc.attempt_id, "reason": str(exc)},
+                ) from exc
+            except AdmissionClosedError as exc:
+                raise HTTPException(
+                    status_code=503,
+                    detail={"reason": str(exc), "admission": "closed"},
+                ) from exc
+            if admission.outcome == "revoked":
+                raise HTTPException(
+                    status_code=410,
+                    detail={
+                        "attempt_id": admission.attempt_id,
+                        "reason": admission.tombstone_reason,
+                        "revoked_at": admission.tombstone_revoked_at,
+                        "worker_id": worker_id,
+                    },
+                )
+            if admission.outcome == "refused_auth":
+                # 403 when the token belongs to a superseded session (old
+                # session epoch / retired by watermark); 401 for every other
+                # authorization refusal.
+                status_code = (
+                    403
+                    if admission.refusal_reason
+                    in ("old session epoch", "token retired by watermark")
+                    else 401
+                )
+                raise HTTPException(
+                    status_code=status_code,
+                    detail={
+                        "attempt_id": admission.attempt_id,
+                        "reason": admission.refusal_reason,
+                    },
+                )
+            if admission.outcome == "already_admitted":
+                # Repeat of an active/completed attempt: echo the existing
+                # acceptance/result at 200 — never a second thread.
+                rec = journal.get_attempt(admission.attempt_id)
+                body: dict[str, object] = {
+                    "accepted": True,
+                    "run_id": req.run_id,
+                    "attempt_id": admission.attempt_id,
+                    "worker_id": worker_id,
+                    "state": (
+                        rec.state
+                        if rec is not None
+                        else (
+                            admission.existing.state
+                            if admission.existing is not None
+                            else "active"
+                        )
+                    ),
+                    "already_admitted": True,
+                }
+                if rec is not None and rec.kind == "completion":
+                    try:
+                        body["result"] = json.loads(rec.result_json or "{}")
+                    except ValueError:
+                        pass
+                return JSONResponse(status_code=200, content=body)
+            attempt_id = admission.attempt_id
 
         # Resolve callback URL: explicit > derived from manager_url
         callback_url = req.callback_url
@@ -534,6 +804,12 @@ def create_worker_app(worker_id: str = "", manager_url: str = "", stats_interval
                 pipeline_name=req.pipeline_name,
                 schedule_type=req.schedule_type,
             ),
+            # V18-01 §5: attempt identity from the admission; legacy dispatches
+            # carry an empty attempt_id and the legacy marker.
+            attempt_id=attempt_id or "",
+            generation=req.generation,
+            slot_id=req.slot_id,
+            legacy=not authorized,
         )
         # F.1 (§3.2b): worker-mode runs reach the transform-state blob through
         # the manager's internal API (the same availability envelope as the
@@ -601,6 +877,31 @@ def create_worker_app(worker_id: str = "", manager_url: str = "", stats_interval
                     # the run-complete callback so the next run sees them.
                     _flush_file_tracker(file_tracker)
                     stats_snapshot = _final_stats_snapshot(active_run)
+                    if attempt_id:
+                        # V18-01 §4: journal-first completion — the row commits
+                        # BEFORE the run leaves WorkerState and before the
+                        # run-complete callback (outbox-driven retry lands in
+                        # the follow-up lane; the direct post is retained).
+                        journal.record_completion(
+                            attempt_id,
+                            _completion_result_json(
+                                run_id=req.run_id,
+                                pipeline_name=req.pipeline_name,
+                                worker_id=state.worker_id,
+                                attempt_id=attempt_id,
+                                status="success",
+                                records_in=int(stats_snapshot["records_in"]),
+                                records_out=int(stats_snapshot["records_out"]),
+                                records_skipped=int(stats_snapshot["records_skipped"]),
+                                bytes_in=int(stats_snapshot["bytes_in"]),
+                                bytes_out=int(stats_snapshot["bytes_out"]),
+                                errors=list(stats_snapshot["errors_last_window"])
+                                + active_run.degradation_notes,
+                                started_at=active_run.started_at,
+                                finished_at=datetime.now(UTC).isoformat(),
+                                legacy=active_run.legacy,
+                            ),
+                        )
                     _post_run_complete(
                         callback_url, req.run_id, req.pipeline_name, state.worker_id,
                         "success",
@@ -628,6 +929,22 @@ def create_worker_app(worker_id: str = "", manager_url: str = "", stats_interval
                     # C2: files finalized before the failure still get their
                     # buffered marks flushed.
                     _flush_file_tracker(file_tracker)
+                    if attempt_id:
+                        journal.record_completion(
+                            attempt_id,
+                            _completion_result_json(
+                                run_id=req.run_id,
+                                pipeline_name=req.pipeline_name,
+                                worker_id=state.worker_id,
+                                attempt_id=attempt_id,
+                                status="error",
+                                error=str(exc),
+                                errors=[str(exc)],
+                                started_at=active_run.started_at,
+                                finished_at=datetime.now(UTC).isoformat(),
+                                legacy=active_run.legacy,
+                            ),
+                        )
                     _post_run_complete(
                         callback_url, req.run_id, req.pipeline_name, state.worker_id,
                         "error", 0, 0, 0, 0, str(exc),
@@ -656,6 +973,31 @@ def create_worker_app(worker_id: str = "", manager_url: str = "", stats_interval
                     # C2: emit buffered processed-file marks (batched) before
                     # the run-complete callback so the next run sees them.
                     _flush_file_tracker(file_tracker)
+                    if attempt_id:
+                        # V18-01 §4: journal-first completion — the row commits
+                        # BEFORE the run leaves WorkerState and before the
+                        # run-complete callback (outbox-driven retry lands in
+                        # the follow-up lane; the direct post is retained).
+                        journal.record_completion(
+                            attempt_id,
+                            _completion_result_json(
+                                run_id=req.run_id,
+                                pipeline_name=req.pipeline_name,
+                                worker_id=state.worker_id,
+                                attempt_id=attempt_id,
+                                status=result.status.value,
+                                records_in=result.records_in,
+                                records_out=result.records_out,
+                                records_skipped=result.records_skipped,
+                                bytes_in=result.bytes_in,
+                                bytes_out=result.bytes_out,
+                                error=result.error,
+                                errors=list(result.errors or []),
+                                started_at=result.started_at.isoformat(),
+                                finished_at=result.finished_at.isoformat(),
+                                legacy=active_run.legacy,
+                            ),
+                        )
                     if active_run.stats is not None:
                         payload = {
                             "worker_id": state.worker_id,
@@ -701,6 +1043,22 @@ def create_worker_app(worker_id: str = "", manager_url: str = "", stats_interval
                     # C2: files finalized before the failure still get their
                     # buffered marks flushed.
                     _flush_file_tracker(file_tracker)
+                    if attempt_id:
+                        journal.record_completion(
+                            attempt_id,
+                            _completion_result_json(
+                                run_id=req.run_id,
+                                pipeline_name=req.pipeline_name,
+                                worker_id=state.worker_id,
+                                attempt_id=attempt_id,
+                                status="error",
+                                error=str(exc),
+                                errors=[str(exc)],
+                                started_at=active_run.started_at,
+                                finished_at=datetime.now(UTC).isoformat(),
+                                legacy=active_run.legacy,
+                            ),
+                        )
                     _post_run_complete(
                         callback_url, req.run_id, req.pipeline_name, state.worker_id,
                         "error", 0, 0, 0, 0, str(exc),
@@ -721,7 +1079,25 @@ def create_worker_app(worker_id: str = "", manager_url: str = "", stats_interval
         state.add(active_run)
         t.start()
 
-        return {"accepted": True, "run_id": req.run_id, "worker_id": worker_id}
+        if attempt_id:
+            # V18-01 §4: transition the reservation to running once the thread
+            # has started. A fast-completing run may already be 'completed'
+            # (mark_running is a no-op then) — the read-back state is echoed.
+            journal.mark_running(attempt_id)
+            rec = journal.get_attempt(attempt_id)
+            return {
+                "accepted": True,
+                "run_id": req.run_id,
+                "attempt_id": attempt_id,
+                "worker_id": worker_id,
+                "state": rec.state if rec is not None else "running",
+            }
+        return {
+            "accepted": True,
+            "run_id": req.run_id,
+            "worker_id": worker_id,
+            "legacy": True,
+        }
 
     # ── POST /agent/stop ───────────────────────────────────────────────────
 
