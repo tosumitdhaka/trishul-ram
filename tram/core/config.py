@@ -249,6 +249,42 @@ def source_bridge_max_count() -> int:
         return _SOURCE_BRIDGE_MAX_COUNT_DEFAULT
 
 
+# V18-01 §4 (frozen): worker journal — one stdlib-sqlite journal per worker
+# at the frozen path, bounded by quota with admission headroom (admission
+# fails closed once size >= quota - headroom so in-flight completions and
+# outbox writes still commit).
+_WORKER_JOURNAL_PATH_DEFAULT = "/var/lib/tram/worker/journal.db"
+
+
+def worker_journal_path() -> str:
+    """``TRAM_WORKER_JOURNAL_PATH`` (V18-01 §4) — frozen worker journal path.
+
+    Dedicated PVC mount (``/var/lib/tram/worker``), separate from the
+    ``/data`` asset ``emptyDir``. Read each call so a re-exec'd worker picks
+    up the value the process was started with.
+    """
+    return os.environ.get("TRAM_WORKER_JOURNAL_PATH", _WORKER_JOURNAL_PATH_DEFAULT)
+
+
+def worker_journal_quota_mb() -> int:
+    """``TRAM_WORKER_JOURNAL_QUOTA_MB`` (V18-01 §4) — journal quota in MiB.
+
+    ``0`` disables the quota bound (tests and dev). Invalid values fail loud
+    via ``_env_int`` (the strictest pattern in this module).
+    """
+    return _env_int("TRAM_WORKER_JOURNAL_QUOTA_MB", 512)
+
+
+def worker_journal_headroom_mb() -> int:
+    """``TRAM_WORKER_JOURNAL_HEADROOM_MB`` (V18-01 §4) — admission headroom in MiB.
+
+    Admission fails closed once the journal size reaches ``quota - headroom``;
+    the headroom is the budget left for in-flight completions and outbox
+    writes to commit before the hard quota.
+    """
+    return _env_int("TRAM_WORKER_JOURNAL_HEADROOM_MB", 64)
+
+
 @dataclass(frozen=True)
 class AppConfig:
     """Application-wide configuration loaded from environment variables."""
