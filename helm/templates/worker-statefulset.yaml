@@ -1,4 +1,16 @@
 {{- if .Values.manager.enabled }}
+{{- /* Nil-safe journal-persistence view. Upgrades with --reuse-values from a
+       pre-v1.8 release carry no worker.journal at all — found live by the
+       drain-first rollback rehearsal (the template crashed dereferencing
+       .persistence under helm upgrade --reuse-values). The nested withs fall
+       through to an empty dict so the default branches (emptyDir, no VCT)
+       apply exactly like enabled=false. */ -}}
+{{- $jp := dict }}
+{{- with .Values.worker }}
+  {{- with .journal }}
+    {{- $jp = .persistence | default dict }}
+  {{- end }}
+{{- end }}
 ## Worker StatefulSet (v1.2.0 manager+worker mode)
 ## Stateless executors — receive run requests from manager, execute pipelines,
 ## POST results back via callback. No UI. No scheduler.
@@ -175,11 +187,11 @@ spec:
         ##   3. persistence.enabled=true, no existingClaim → no volumes entry:
         ##      the volumeClaimTemplates block below provisions one PVC per
         ##      replica (fresh installs only — the field is immutable).
-        {{- if .Values.worker.journal.persistence.existingClaim }}
+        {{- if $jp.existingClaim }}
         - name: worker-journal
           persistentVolumeClaim:
-            claimName: {{ .Values.worker.journal.persistence.existingClaim }}
-        {{- else if not .Values.worker.journal.persistence.enabled }}
+            claimName: {{ $jp.existingClaim }}
+        {{- else if not $jp.enabled }}
         - name: worker-journal
           emptyDir: {}
         {{- end }}
@@ -201,7 +213,7 @@ spec:
       tolerations:
         {{- toYaml . | nindent 8 }}
       {{- end }}
-  {{- if and .Values.worker.journal.persistence.enabled (not .Values.worker.journal.persistence.existingClaim) }}
+  {{- if and $jp.enabled (not $jp.existingClaim) }}
   ## Per-replica journal PVCs (v1.8.0). volumeClaimTemplates is an IMMUTABLE
   ## StatefulSet field — this block renders on fresh installs only and cannot
   ## be added to a live release by helm upgrade (use existingClaim instead).
@@ -212,11 +224,11 @@ spec:
           {{- include "tram.labels" . | nindent 10 }}
           app.kubernetes.io/component: worker
       spec:
-        accessModes: ["{{ .Values.worker.journal.persistence.accessMode | default "ReadWriteOnce" }}"]
+        accessModes: ["{{ $jp.accessMode | default "ReadWriteOnce" }}"]
         resources:
           requests:
-            storage: {{ .Values.worker.journal.persistence.size | default "1Gi" }}
-        {{- with .Values.worker.journal.persistence.storageClass }}
+            storage: {{ $jp.size | default "1Gi" }}
+        {{- with $jp.storageClass }}
         storageClassName: {{ . | quote }}
         {{- end }}
   {{- end }}
