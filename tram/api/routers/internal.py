@@ -6,12 +6,15 @@ They are excluded from the public OpenAPI schema and exempt from API key auth.
 
 from __future__ import annotations
 
+import json
 import logging
 import threading
-from datetime import datetime
+import uuid
+from datetime import UTC, datetime
 
 from fastapi import APIRouter, HTTPException, Request
 from pydantic import BaseModel, Field
+from sqlalchemy import text
 
 logger = logging.getLogger(__name__)
 
@@ -214,6 +217,194 @@ class ProcessedFileEntry(BaseModel):
     filepath: str
 
 
+class SinkReceiptPayload(BaseModel):
+    """One sink's commit receipt inside a checkpoint request (frozen §7)."""
+
+    sink_key: str
+    tier: str
+    confirmed: bool
+    notes: str = ""
+
+
+class CheckpointPayload(BaseModel):
+    """POST body for /api/internal/checkpoint (frozen V18-01 §7).
+
+    The manager mints ``checkpoint_id`` at the unit's first commit; the worker
+    never supplies one. ``frontier`` is the human-readable frontier (the
+    committed offset for broker units, the unit position for one-shot/file
+    units) and ``frontier_seq`` the comparable scalar driving the monotonic
+    guard. ``state_base_revision`` is the writer's transform-state revision
+    base for the generation-/revision-fenced CAS.
+    """
+
+    pipeline_name: str
+    generation: int
+    attempt_id: str
+    run_id: str
+    source_unit: str
+    frontier: dict = Field(default_factory=dict)
+    frontier_seq: int
+    sink_receipts: list[SinkReceiptPayload] = Field(default_factory=list)
+    state: dict = Field(default_factory=dict)
+    config_sha256: str = ""
+    state_base_revision: int = 0
+
+
+class StaleStateRevisionError(Exception):
+    """The generation-/revision-fenced transform_state CAS rejected the writer.
+
+    Frozen §7: stale writers are rejected (plan C) — the whole checkpoint
+    transaction rolls back so neither the delivery_checkpoints row nor the
+    state advance survives.
+    """
+
+
+def _commit_atomic_checkpoint(
+    engine,
+    *,
+    checkpoint_id: str,
+    pipeline_name: str,
+    generation: int,
+    attempt_id: str,
+    run_id: str,
+    source_unit: str,
+    frontier_json: str,
+    frontier_seq: int,
+    sink_receipts_json: str,
+    state_json: str,
+    config_sha256: str,
+    state_base_revision: int,
+) -> dict:
+    """Atomic checkpoint commit (frozen §7) in ONE manager-DB transaction.
+
+    Writes the ``delivery_checkpoints`` row (the frozen upsert under the
+    monotonic ``frontier_seq`` guard — the same statement the ledger helper
+    ``commit_checkpoint`` executes) AND the generation-/revision-fenced
+    ``transform_state`` CAS. The CAS is an INSERT-when-absent + fenced
+    ON CONFLICT UPDATE so a pipeline's first-ever checkpoint can commit; for
+    an existing row the frozen fence applies and rowcount is the authority.
+
+    ``checkpoint_id`` is minted by the manager at the unit's first commit and
+    the DO UPDATE never rewrites it — both outcomes report the *stored*
+    identity. SQLite runs ``BEGIN IMMEDIATE`` (the writer lock covers the
+    rowcount reads); PostgreSQL uses a plain ``BEGIN`` (row-level locking).
+
+    Returns ``{"already_committed": bool, "checkpoint_id": str,
+    "state_revision": int}``. Raises :class:`StaleStateRevisionError` when the
+    checkpoint advanced but the state fence rejected the writer — the whole
+    transaction is rolled back.
+    """
+    now = datetime.now(UTC).isoformat()
+    conn = engine.connect().execution_options(isolation_level="AUTOCOMMIT")
+    try:
+        if engine.dialect.name == "sqlite":
+            conn.execute(text("BEGIN IMMEDIATE"))
+        else:
+            conn.execute(text("BEGIN"))
+        try:
+            result = conn.execute(
+                text("""
+                    INSERT INTO delivery_checkpoints
+                        (checkpoint_id, pipeline_name, generation, attempt_id, run_id,
+                         source_unit, frontier_json, frontier_seq, sink_receipts,
+                         state_revision, committed_at)
+                    VALUES
+                        (:checkpoint_id, :pipeline_name, :generation, :attempt_id, :run_id,
+                         :source_unit, :frontier_json, :frontier_seq, :sink_receipts,
+                         :state_revision, :committed_at)
+                    ON CONFLICT (pipeline_name, source_unit) DO UPDATE
+                       SET frontier_json = :frontier_json, frontier_seq = :frontier_seq,
+                           sink_receipts = :sink_receipts, state_revision = :state_revision,
+                           generation = :generation, attempt_id = :attempt_id,
+                           committed_at = :committed_at
+                     WHERE :frontier_seq > delivery_checkpoints.frontier_seq
+                """),
+                {
+                    "checkpoint_id": checkpoint_id,
+                    "pipeline_name": pipeline_name,
+                    "generation": generation,
+                    "attempt_id": attempt_id,
+                    "run_id": run_id,
+                    "source_unit": source_unit,
+                    "frontier_json": frontier_json,
+                    "frontier_seq": frontier_seq,
+                    "sink_receipts": sink_receipts_json,
+                    "state_revision": state_base_revision + 1,
+                    "committed_at": now,
+                },
+            )
+            # Post-write read of the stored identity + revision — the write
+            # already happened (rowcount is the authority); this only reports
+            # the row's checkpoint_id, which the DO UPDATE never changes.
+            stored = conn.execute(
+                text("""
+                    SELECT checkpoint_id, state_revision
+                    FROM delivery_checkpoints
+                    WHERE pipeline_name = :pipeline_name AND source_unit = :source_unit
+                """),
+                {"pipeline_name": pipeline_name, "source_unit": source_unit},
+            ).mappings().fetchone()
+            stored_row = dict(stored) if stored is not None else None
+            stored_id = stored_row["checkpoint_id"] if stored_row else checkpoint_id
+            if result.rowcount != 1:
+                # An older/equal frontier_seq was rejected by the monotonic
+                # guard — the unit was already committed. Report the stored
+                # identity + committed state revision; the state CAS is
+                # skipped (a duplicate must never advance the revision).
+                conn.execute(text("COMMIT"))
+                return {
+                    "already_committed": True,
+                    "checkpoint_id": stored_id,
+                    "state_revision": (
+                        stored_row["state_revision"] if stored_row is not None else state_base_revision
+                    ),
+                }
+            cas = conn.execute(
+                text("""
+                    INSERT INTO transform_state
+                        (pipeline_name, state_json, config_sha256, updated_at, updated_by,
+                         generation, revision)
+                    VALUES
+                        (:pipeline_name, :state_json, :config_sha256, :now, :run_id,
+                         :generation, 1)
+                    ON CONFLICT (pipeline_name) DO UPDATE
+                       SET state_json = :state_json, config_sha256 = :config_sha256,
+                           updated_at = :now, updated_by = :run_id,
+                           generation = :generation, revision = transform_state.revision + 1
+                     WHERE transform_state.revision = :state_base_revision
+                       AND (transform_state.generation IS NULL
+                            OR transform_state.generation = :generation)
+                """),
+                {
+                    "pipeline_name": pipeline_name,
+                    "state_json": state_json,
+                    "config_sha256": config_sha256,
+                    "now": now,
+                    "run_id": run_id,
+                    "generation": generation,
+                    "state_base_revision": state_base_revision,
+                },
+            )
+            if cas.rowcount != 1:
+                # Stale writer: the outer handler rolls the whole transaction
+                # back — no checkpoint row, no state advance (atomicity).
+                raise StaleStateRevisionError()
+            conn.execute(text("COMMIT"))
+            return {
+                "already_committed": False,
+                "checkpoint_id": stored_id,
+                "state_revision": state_base_revision + 1,
+            }
+        except BaseException:
+            try:
+                conn.execute(text("ROLLBACK"))
+            except Exception:
+                conn.invalidate()
+            raise
+    finally:
+        conn.close()
+
+
 class ProcessedFilesPayload(BaseModel):
     """POST body for the processed-files check/mark endpoints (GH #54).
 
@@ -299,6 +490,51 @@ async def mark_processed_files(
     for f in payload.files:
         db.mark_processed(payload.pipeline_name, f.source_key, f.filepath)
     return {"ok": True}
+
+
+@router.post("/api/internal/checkpoint")
+async def checkpoint(payload: CheckpointPayload, request: Request) -> dict:
+    """Worker → manager: atomic delivery checkpoint (frozen V18-01 §7).
+
+    One manager-DB transaction writes the ``delivery_checkpoints`` row (the
+    monotonic frontier upsert) AND the generation-/revision-fenced
+    ``transform_state`` CAS. ``checkpoint_id`` is returned only after commit;
+    a repeat for the same ``(pipeline_name, source_unit)`` returns the stored
+    id with ``already_committed: true`` plus the committed state revision (the
+    worker restores committed state and retries the ack without reapplying
+    transforms). A writer whose state fence fails is rejected with 409 and
+    nothing is written. Auth rides the existing internal middleware (the same
+    machine-key mode as run-complete).
+    """
+    db = request.app.state.db
+    if db is None:
+        raise HTTPException(status_code=503, detail="database unavailable")
+    try:
+        outcome = _commit_atomic_checkpoint(
+            db._engine,
+            checkpoint_id=str(uuid.uuid4()),
+            pipeline_name=payload.pipeline_name,
+            generation=payload.generation,
+            attempt_id=payload.attempt_id,
+            run_id=payload.run_id,
+            source_unit=payload.source_unit,
+            frontier_json=json.dumps(payload.frontier),
+            frontier_seq=payload.frontier_seq,
+            sink_receipts_json=json.dumps([r.model_dump() for r in payload.sink_receipts]),
+            state_json=json.dumps(payload.state),
+            config_sha256=payload.config_sha256,
+            state_base_revision=payload.state_base_revision,
+        )
+    except StaleStateRevisionError as exc:
+        raise HTTPException(
+            status_code=409,
+            detail="stale transform-state revision — writer rejected",
+        ) from exc
+    return {
+        "checkpoint_id": outcome["checkpoint_id"],
+        "already_committed": outcome["already_committed"],
+        "state_revision": outcome["state_revision"],
+    }
 
 
 def _stateful_transforms_enabled(request: Request) -> bool:

@@ -19,6 +19,8 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import TYPE_CHECKING
 
+import httpx
+
 from tram.connectors.file_sink_common import extract_field_paths, validate_template_tokens
 from tram.core.config import (
     stream_flush_interval_seconds as _default_stream_flush_interval,
@@ -269,6 +271,59 @@ def _stream_source_unit_key(source, meta: dict) -> tuple[str, str] | None:
         meta[_UNIT_KEY_META] = key
         return key
     return None
+
+
+def _source_durable_unit_id(source, meta: dict) -> str | None:
+    """The connector-declared durable replay identity for a checkpoint.
+
+    Frozen §7 replay matrix: only ``source_unit_id(meta)`` is authoritative
+    for the ``delivery_checkpoints`` row key — a unit without a durable
+    identity is never delivery-checkpointed (strict retention is rejected at
+    validation for such sources). The generic broker-coordinate key used for
+    ack accounting is deliberately NOT used here: it embeds the frontier
+    (offset), which would mint a new checkpoint row per record instead of
+    advancing the ``(pipeline_name, source_unit)`` upsert in place.
+    """
+    unit_id_fn = getattr(source, "source_unit_id", None)
+    if not callable(unit_id_fn):
+        return None
+    try:
+        unit_id = unit_id_fn(meta)
+    except Exception as exc:
+        logger.warning(
+            "Source unit identity lookup failed",
+            extra={"source_type": type(source).__name__, "error": str(exc)},
+        )
+        return None
+    if isinstance(unit_id, str) and unit_id:
+        return unit_id
+    return None
+
+
+def _checkpoint_frontier(meta: dict) -> tuple[dict, int]:
+    """Frontier payload + comparable scalar for a delivery checkpoint (§7).
+
+    Broker units advance the committed offset (the ``{ns}_offset`` meta family
+    — Kafka); one-shot/file units are insert-once — their unit identity
+    already carries the position — so the scalar is 1.
+    """
+    for key in meta:
+        if not isinstance(key, str) or not key.endswith("_offset"):
+            continue
+        value = meta.get(key)
+        if isinstance(value, int) and value >= 0:
+            return {"offset": value}, value
+    return {"position": 1}, 1
+
+
+def _sink_receipt_dict(receipt) -> dict:
+    """Serialize one ``SinkCommitReceipt`` for the checkpoint payload."""
+    return {
+        "sink_key": receipt.sink_key,
+        "tier": str(receipt.tier),
+        "confirmed": receipt.confirmed,
+        "notes": receipt.notes,
+    }
 
 
 def _augment_chunk_meta(meta: dict, ctx: PipelineRunContext) -> dict:
@@ -630,6 +685,13 @@ class _RunDeliveryAccounting:
         self.records_failed = 0
         self.dlq_succeeded = 0
         self.dlq_failed = 0
+        # V18-06: DELIVERED units whose manager-authoritative checkpoint did
+        # not commit — they stay pending (never acked) and the run can never
+        # report clean success.
+        self.checkpoint_pending = 0
+        # The pipeline's transform-state revision this attempt is based on
+        # (the frozen §7 CAS base); advanced from checkpoint responses.
+        self.state_revision = 0
 
     def register_unit(self, key: tuple[str, str], meta: dict) -> _UnitOutcome:
         with self._lock:
@@ -674,9 +736,244 @@ class _RunDeliveryAccounting:
                 unit.dlq_succeeded += dlq_succeeded
                 unit.dlq_failed += dlq_failed
 
+    def record_checkpoint_pending(self) -> None:
+        """Count a DELIVERED unit whose checkpoint did not commit (strict)."""
+        with self._lock:
+            self.checkpoint_pending += 1
+
+    def has_pending_checkpoints(self) -> bool:
+        with self._lock:
+            return self.checkpoint_pending > 0
+
     def has_loss(self) -> bool:
         with self._lock:
             return self.records_failed > 0 or self.dlq_failed > 0
+
+
+class CheckpointError(Exception):
+    """A delivery-checkpoint POST failed (timeout, HTTP error, rejection).
+
+    The caller decides the disposition: legacy pipelines keep today's
+    behavior, strict pipelines leave the unit pending (no ack) so replay
+    retries the checkpoint.
+    """
+
+
+class CheckpointResult:
+    """Parsed manager response for one checkpoint POST (frozen §7)."""
+
+    __slots__ = ("committed", "already_committed", "checkpoint_id", "state_revision")
+
+    def __init__(
+        self,
+        *,
+        committed: bool,
+        already_committed: bool,
+        checkpoint_id: str | None,
+        state_revision: int | None,
+    ) -> None:
+        self.committed = committed
+        self.already_committed = already_committed
+        self.checkpoint_id = checkpoint_id
+        self.state_revision = state_revision
+
+
+class CheckpointClient:
+    """Worker-mode delivery-checkpoint client (frozen V18-01 §7).
+
+    POSTs to the manager's ``/api/internal/checkpoint`` authenticated with the
+    shared internal API key (the same machine-key mode ``run-complete`` uses).
+    The attempt identity (``generation``, ``attempt_id``) is bound at
+    construction — the wiring lane builds one client per run from the
+    admission. ``transport`` is a test seam (``httpx.MockTransport``).
+    """
+
+    _CHECKPOINT_TIMEOUT = 10.0
+
+    def __init__(
+        self,
+        manager_url: str,
+        api_key: str = "",
+        *,
+        generation: int | None = None,
+        attempt_id: str = "",
+        transport: httpx.BaseTransport | None = None,
+        timeout: float | None = None,
+    ) -> None:
+        self.manager_url = manager_url.rstrip("/")
+        self.api_key = api_key
+        self.generation = generation
+        self.attempt_id = attempt_id
+        self._transport = transport
+        self._timeout = timeout if timeout is not None else self._CHECKPOINT_TIMEOUT
+
+    def _client(self) -> httpx.Client:
+        return httpx.Client(timeout=self._timeout, transport=self._transport)
+
+    def _headers(self) -> dict[str, str] | None:
+        return {"X-API-Key": self.api_key} if self.api_key else None
+
+    def checkpoint(
+        self,
+        *,
+        pipeline_name: str,
+        run_id: str,
+        source_unit: str,
+        frontier: dict,
+        frontier_seq: int,
+        sink_receipts: list[dict],
+        state: dict,
+        config_sha256: str = "",
+        state_base_revision: int = 0,
+    ) -> CheckpointResult:
+        """POST one delivery checkpoint; returns the parsed manager response.
+
+        Raises :class:`CheckpointError` on timeout, HTTP error, or a rejected
+        writer (409 stale state revision).
+        """
+        url = f"{self.manager_url}/api/internal/checkpoint"
+        payload = {
+            "pipeline_name": pipeline_name,
+            "generation": self.generation,
+            "attempt_id": self.attempt_id,
+            "run_id": run_id,
+            "source_unit": source_unit,
+            "frontier": frontier,
+            "frontier_seq": frontier_seq,
+            "sink_receipts": sink_receipts,
+            "state": state,
+            "config_sha256": config_sha256,
+            "state_base_revision": state_base_revision,
+        }
+        try:
+            with self._client() as client:
+                resp = client.post(url, json=payload, headers=self._headers())
+            if resp.status_code == 409:
+                raise CheckpointError(
+                    f"checkpoint rejected (stale state revision): {resp.text}"
+                )
+            resp.raise_for_status()
+            data = resp.json()
+        except CheckpointError:
+            raise
+        except Exception as exc:
+            raise CheckpointError(f"checkpoint POST failed: {exc}") from exc
+        return CheckpointResult(
+            committed=not data.get("already_committed", False),
+            already_committed=bool(data.get("already_committed", False)),
+            checkpoint_id=data.get("checkpoint_id"),
+            state_revision=data.get("state_revision"),
+        )
+
+
+class _CheckpointGate:
+    """Per-run delivery-checkpoint gate (frozen §7) — the ack gate's manager
+    side.
+
+    Assembled once per run (per batch attempt) and threaded to every unit
+    finalize point. Wraps the executor's checkpoint client, the run's stateful
+    transforms, and the config fingerprint so the ack gate can ask "is this
+    DELIVERED unit authoritatively committed?" and, on a duplicate, restore
+    the committed state. ``check_unit`` returns True when the ack may proceed;
+    for a strict pipeline a checkpoint that cannot be confirmed leaves the
+    unit PENDING (never acknowledged) so replay retries it.
+    """
+
+    def __init__(
+        self,
+        executor: PipelineExecutor,
+        *,
+        config,
+        transforms: list,
+        config_sha256: str,
+    ) -> None:
+        self._executor = executor
+        self._config = config
+        self._transforms = transforms
+        self._config_sha256 = config_sha256
+
+    @property
+    def strict(self) -> bool:
+        """delivery.contract == strict (the executor reads config groups the
+        same way it reads every other pipeline group)."""
+        delivery = getattr(self._config, "delivery", None)
+        return bool(getattr(delivery, "contract", "legacy") == "strict")
+
+    def check_unit(
+        self,
+        source,
+        meta: dict,
+        receipts: list,
+        ctx: PipelineRunContext,
+        delivery: _RunDeliveryAccounting | None,
+    ) -> bool:
+        """Attempt the delivery checkpoint for one DELIVERED unit.
+
+        Returns True when the ack may proceed: the manager committed the
+        checkpoint, the unit was already committed (duplicate — the committed
+        state is restored and the ack retried, never a re-transform), or the
+        pipeline is legacy (the checkpoint is best-effort and never gates the
+        ack). Returns False for a strict pipeline when the checkpoint cannot
+        be confirmed — the unit stays pending.
+        """
+        client = self._executor._checkpoint_client
+        if client is None:
+            # No checkpoint reachable (standalone offline, unwired lane):
+            # legacy keeps today's behavior; strict fails closed — never ack
+            # without the manager-authoritative commit.
+            if self.strict and delivery is not None:
+                delivery.record_checkpoint_pending()
+            return not self.strict
+        unit_id = _source_durable_unit_id(source, meta)
+        if unit_id is None:
+            # No durable replay identity — nothing to checkpoint. Legacy acks
+            # as today; strict is a validation-rejected configuration and the
+            # unit stays pending rather than acking uncommitted.
+            if self.strict and delivery is not None:
+                delivery.record_checkpoint_pending()
+            return not self.strict
+        frontier_json, frontier_seq = _checkpoint_frontier(meta)
+        state_blob = self._executor._collect_state_blob(self._transforms)
+        base_revision = delivery.state_revision if delivery is not None else 0
+        try:
+            result = client.checkpoint(
+                pipeline_name=self._config.name,
+                run_id=ctx.run_id,
+                source_unit=unit_id,
+                frontier=frontier_json,
+                frontier_seq=frontier_seq,
+                sink_receipts=[_sink_receipt_dict(r) for r in receipts],
+                state=state_blob,
+                config_sha256=self._config_sha256,
+                state_base_revision=base_revision,
+            )
+        except CheckpointError as exc:
+            logger.error(
+                "Delivery checkpoint failed — unit stays pending (no ack)",
+                extra={
+                    "pipeline": self._config.name,
+                    "run_id": ctx.run_id,
+                    "source_unit": unit_id,
+                    "error": str(exc),
+                },
+            )
+            if self.strict and delivery is not None:
+                delivery.record_checkpoint_pending()
+            return not self.strict
+        if delivery is not None:
+            delivery.state_revision = (
+                result.state_revision
+                if result.state_revision is not None
+                else base_revision
+            )
+        if result.already_committed:
+            # Duplicate of an earlier commit (e.g. a lost ack retried): the
+            # committed state is authoritative — restore it and retry the ack,
+            # never reapplying transforms or re-emitting recorded outputs.
+            self._executor._restore_committed_state(
+                self._config, self._transforms, self._config_sha256
+            )
+        return True
 
 
 class PipelineExecutor:
@@ -686,6 +983,7 @@ class PipelineExecutor:
         self,
         file_tracker: ProcessedFileTracker | None = None,
         state_store: TransformStateStore | None = None,
+        checkpoint_client: CheckpointClient | None = None,
     ) -> None:
         self._last_refill: float = 0.0
         self._tokens: float = 0.0
@@ -695,6 +993,11 @@ class PipelineExecutor:
         # persistence entirely (stateful transforms then stay in-memory only,
         # which is correct for single-run manual execution).
         self._state_store = state_store
+        # V18-06: the manager-authoritative delivery-checkpoint client (frozen
+        # §7). None means no checkpoint reachable — legacy pipelines keep
+        # today's behavior; strict pipelines fail closed (never ack a DELIVERED
+        # unit without the authoritative commit).
+        self._checkpoint_client = checkpoint_client
         # Circuit breaker state: {sink_key: (failure_count, open_until_monotonic)}
         self._cb_state: dict[str, tuple[int, float]] = {}
         self._cb_lock = threading.Lock()
@@ -849,17 +1152,16 @@ class PipelineExecutor:
         self._apply_state(transforms, loaded.state)
         return loaded.state
 
-    def _save_state_to_store(
-        self, config: PipelineConfig, transforms: list, config_sha256: str, run_id: str
-    ) -> None:
-        """Collect stateful transforms' blobs and persist them (best-effort)."""
-        if self._state_store is None:
-            return
-        stateful = self._stateful_transforms(transforms)
-        if not stateful:
-            return
+    @staticmethod
+    def _collect_state_blob(transforms: list) -> dict:
+        """Collect every stateful transform's blob ({state_key: blob}).
+
+        The transform-state payload a delivery checkpoint carries (frozen §7);
+        shared with ``_save_state_to_store`` so the checkpointed blob and the
+        persisted blob are collected identically. Best-effort per transform.
+        """
         blob: dict = {}
-        for transform in stateful:
+        for transform in PipelineExecutor._stateful_transforms(transforms):
             try:
                 blob[transform.state_key] = transform.get_state() or {}
             except Exception as exc:
@@ -868,6 +1170,49 @@ class PipelineExecutor:
                     "Transform state collection failed",
                     extra={"state_key": transform.state_key, "error": str(exc)},
                 )
+        return blob
+
+    def _restore_committed_state(
+        self, config: PipelineConfig, transforms: list, config_sha256: str
+    ) -> None:
+        """Rehydrate stateful transforms from the manager's committed blob.
+
+        Called when a checkpoint reports ``already_committed``: the unit was
+        previously committed and its state is authoritative — restore it
+        instead of letting the duplicate pass's in-memory mutations ride
+        forward, and never reapply transforms or re-emit recorded outputs.
+        Best-effort: a restore failure logs and leaves the transforms as-is
+        (the ack still proceeds — the unit IS committed).
+        """
+        if self._state_store is None:
+            return
+        try:
+            loaded = self._state_store.get(config.name)
+        except Exception as exc:
+            logger.warning(
+                "Committed state restore failed",
+                extra={"pipeline": config.name, "error": str(exc)},
+            )
+            return
+        if loaded is None:
+            return
+        if config_sha256 and loaded.config_sha256 != config_sha256:
+            logger.info(
+                "Committed state discarded — config_sha256 mismatch",
+                extra={"pipeline": config.name},
+            )
+            return
+        self._apply_state(transforms, loaded.state)
+
+    def _save_state_to_store(
+        self, config: PipelineConfig, transforms: list, config_sha256: str, run_id: str
+    ) -> None:
+        """Collect stateful transforms' blobs and persist them (best-effort)."""
+        if self._state_store is None:
+            return
+        if not self._stateful_transforms(transforms):
+            return
+        blob = self._collect_state_blob(transforms)
         try:
             self._state_store.put(config.name, blob, config_sha256, run_id=run_id)
         except Exception as exc:
@@ -1046,20 +1391,20 @@ class PipelineExecutor:
         raise TramError(msg) from cause
 
     @staticmethod
-    def _commit_sinks(
+    def _commit_sinks_receipts(
         sinks: list[tuple],
         ctx: PipelineRunContext,
         *,
         on_error: str,
-    ) -> bool:
+    ) -> list[SinkCommitReceipt] | None:
         """Delivery commit barrier for every matched sink (V18-01 §6/§7).
 
         Calls ``commit(deadline=None)`` on each sink and collects the
         ``SinkCommitReceipt``s, then checks every sink's ``latched_error()``
         (buffered/background writers surface latched failures here). Returns
-        True when every sink confirmed; a commit or latched failure never
-        produces clean success (``_commit_failure`` raises or returns False
-        per the error policy). Deadline plumbing (one monotonic deadline) is
+        the receipts when every sink confirmed, None when a commit or latched
+        failure occurred (``_commit_failure`` raises or records the skip per
+        the error policy). Deadline plumbing (one monotonic deadline) is
         V18-07.
         """
         receipts: list[SinkCommitReceipt] = []
@@ -1071,11 +1416,12 @@ class PipelineExecutor:
             try:
                 receipts.append(commit(deadline=None))
             except Exception as exc:
-                return PipelineExecutor._commit_failure(
+                PipelineExecutor._commit_failure(
                     sinks, ctx, on_error,
                     f"Sink commit failed: {exc}",
                     exc,
                 )
+                return None
         for sink_tuple in sinks:
             sink_instance = sink_tuple[0]
             latched_error = getattr(sink_instance, "latched_error", None)
@@ -1084,17 +1430,19 @@ class PipelineExecutor:
             try:
                 latched = latched_error()
             except Exception as exc:
-                return PipelineExecutor._commit_failure(
+                PipelineExecutor._commit_failure(
                     sinks, ctx, on_error,
                     f"Sink latched_error check failed: {exc}",
                     exc,
                 )
+                return None
             if isinstance(latched, BaseException):
-                return PipelineExecutor._commit_failure(
+                PipelineExecutor._commit_failure(
                     sinks, ctx, on_error,
                     f"Sink has a latched delivery failure: {latched}",
                     latched,
                 )
+                return None
         if receipts:
             logger.debug(
                 "Sink commit barrier confirmed",
@@ -1110,7 +1458,20 @@ class PipelineExecutor:
                     ],
                 },
             )
-        return True
+        return receipts
+
+    @staticmethod
+    def _commit_sinks(
+        sinks: list[tuple],
+        ctx: PipelineRunContext,
+        *,
+        on_error: str,
+    ) -> bool:
+        """True when every matched sink confirmed its commit barrier."""
+        return (
+            PipelineExecutor._commit_sinks_receipts(sinks, ctx, on_error=on_error)
+            is not None
+        )
 
     @staticmethod
     def _ack_source_unit(source, meta: dict, disposition: AckDisposition) -> None:
@@ -1150,18 +1511,26 @@ class PipelineExecutor:
         on_error: str,
         *,
         finalize_source: bool,
+        checkpointer: _CheckpointGate | None = None,
     ) -> None:
-        """Delivery barrier + ack + legacy finalize for one batch source unit.
+        """Delivery barrier + checkpoint gate + ack + legacy finalize for one
+        batch source unit.
 
-        Ordering (V18-01 §6/§7, plan C): commit every matched sink and check
-        latched errors BEFORE any source finalization; then the sink's
-        ``finalize_source`` hook; then ``source.ack(meta, disposition)`` for
-        decided units only; then the legacy ``source.finalize(success)`` on its
-        existing schedule. ``finalize_source`` is False for a batch_size
-        boundary stop — the incomplete file is never marked done and its unit
-        is never acknowledged.
+        Ordering (V18-01 §6/§7): commit every matched sink and check latched
+        errors BEFORE any source finalization; then the sink's
+        ``finalize_source`` hook; then — for DELIVERED units — the
+        manager-authoritative delivery checkpoint (V18-06); then
+        ``source.ack(meta, disposition)`` for decided units only; then the
+        legacy ``source.finalize(success)`` on its existing schedule.
+        Filtered/DLQ/dropped units record their disposition but are never
+        delivery-checkpointed. A strict pipeline whose checkpoint does not
+        commit leaves the unit PENDING (no ack) so replay retries it.
+        ``finalize_source`` is False for a batch_size boundary stop — the
+        incomplete file is never marked done and its unit is never
+        acknowledged.
         """
-        commit_ok = PipelineExecutor._commit_sinks(sinks, ctx, on_error=on_error)
+        receipts = PipelineExecutor._commit_sinks_receipts(sinks, ctx, on_error=on_error)
+        commit_ok = receipts is not None
         PipelineExecutor._finalize_source_for_sinks(
             sinks, meta, success=commit_ok, ctx=ctx
         )
@@ -1170,7 +1539,11 @@ class PipelineExecutor:
         if commit_ok and finalize_source and unit is not None:
             disposition = unit.disposition(on_error)
             if disposition is not None:
-                PipelineExecutor._ack_source_unit(source, meta, disposition)
+                if disposition == AckDisposition.DELIVERED and checkpointer is not None:
+                    if checkpointer.check_unit(source, meta, receipts, ctx, delivery):
+                        PipelineExecutor._ack_source_unit(source, meta, disposition)
+                else:
+                    PipelineExecutor._ack_source_unit(source, meta, disposition)
         if finalize_source:
             source.finalize(meta, success=commit_ok)
 
@@ -1194,6 +1567,11 @@ class PipelineExecutor:
         if commit_failed:
             return RunStatus.PARTIAL
         if on_error in ("continue", "retry") and delivery.has_loss():
+            return RunStatus.PARTIAL
+        # V18-06: DELIVERED units whose manager-authoritative checkpoint did
+        # not commit stay pending (never acked) — the run can never report
+        # clean success while delivery is uncommitted.
+        if delivery.has_pending_checkpoints():
             return RunStatus.PARTIAL
         return RunStatus.SUCCESS
 
@@ -2026,11 +2404,18 @@ class PipelineExecutor:
                 # rebuilt ctx): a failed attempt's losses never leak into the
                 # final attempt's outcome.
                 delivery = _RunDeliveryAccounting()
+                # V18-06: one checkpoint gate per attempt — its transforms
+                # reference the attempt's rebuilt instances and its base state
+                # revision tracks the attempt's committed checkpoints.
+                checkpointer = _CheckpointGate(
+                    self, config=config, transforms=transforms,
+                    config_sha256=config_sha256,
+                )
                 try:
                     self._run_batch_chunks(
                         config, source, sinks, serializer_in, serializer_out,
                         transforms, dlq_sink, ctx, sink_cb_keys=sink_cb_keys, stats=stats,
-                        delivery=delivery,
+                        delivery=delivery, checkpointer=checkpointer,
                     )
 
                     if flush:
@@ -2160,6 +2545,7 @@ class PipelineExecutor:
         sink_cb_keys: list[str] | None = None,
         stats: PipelineStats | None = None,
         delivery: _RunDeliveryAccounting | None = None,
+        checkpointer: _CheckpointGate | None = None,
     ) -> None:
         """Inner loop: read source chunks and process with optional thread pool."""
         passthrough = False
@@ -2189,13 +2575,13 @@ class PipelineExecutor:
             self._run_batch_chunks_threaded(
                 config, source, sinks, serializer_in, serializer_out,
                 transforms, dlq_sink, ctx, sink_cb_keys=sink_cb_keys, stats=stats,
-                passthrough=passthrough, delivery=delivery,
+                passthrough=passthrough, delivery=delivery, checkpointer=checkpointer,
             )
             return
         self._run_batch_chunks_sequential(
             config, source, sinks, serializer_in, serializer_out,
             transforms, dlq_sink, ctx, sink_cb_keys=sink_cb_keys, stats=stats,
-            passthrough=passthrough, delivery=delivery,
+            passthrough=passthrough, delivery=delivery, checkpointer=checkpointer,
         )
 
     def _run_batch_chunks_sequential(
@@ -2212,6 +2598,7 @@ class PipelineExecutor:
         stats: PipelineStats | None = None,
         passthrough: bool = False,
         delivery: _RunDeliveryAccounting | None = None,
+        checkpointer: _CheckpointGate | None = None,
     ) -> None:
         """Single-threaded batch loop. Each chunk is fully processed before the
         next one is pulled, so source finalize runs strictly after the chunk
@@ -2236,7 +2623,7 @@ class PipelineExecutor:
                         self._finalize_batch_source_unit(
                             sinks, source, delivery, current_source_key,
                             current_source_meta, current_unit, ctx, on_error,
-                            finalize_source=True,
+                            finalize_source=True, checkpointer=checkpointer,
                         )
                         current_source_key = None
                         current_source_meta = None
@@ -2282,7 +2669,7 @@ class PipelineExecutor:
                 self._finalize_batch_source_unit(
                     sinks, source, delivery, current_source_key,
                     current_source_meta, current_unit, ctx, on_error,
-                    finalize_source=not stopped_early,
+                    finalize_source=not stopped_early, checkpointer=checkpointer,
                 )
 
     def _run_batch_chunks_threaded(
@@ -2299,6 +2686,7 @@ class PipelineExecutor:
         stats: PipelineStats | None = None,
         passthrough: bool = False,
         delivery: _RunDeliveryAccounting | None = None,
+        checkpointer: _CheckpointGate | None = None,
     ) -> None:
         """Multi-threaded batch loop: bounded in-flight chunks + deferred finalize.
 
@@ -2387,6 +2775,7 @@ class PipelineExecutor:
                     self._finalize_batch_source_unit(
                         sinks, source, delivery, finished[0], finished[1],
                         finished[4], ctx, on_error, finalize_source=True,
+                        checkpointer=checkpointer,
                     )
 
         with ThreadPoolExecutor(max_workers=config.thread_workers) as pool:
@@ -2475,6 +2864,13 @@ class PipelineExecutor:
         # the interval flusher — so per-unit ack dispositions come from the
         # same _UnitOutcome machinery as the batch path.
         delivery = _RunDeliveryAccounting()
+
+        # V18-06: one checkpoint gate per stream run (transforms are never
+        # rebuilt on the stream path); its base state revision tracks the run's
+        # committed checkpoints.
+        checkpointer = _CheckpointGate(
+            self, config=config, transforms=transforms, config_sha256=config_sha256,
+        )
 
         # Hydrate stateful transforms at run start; a D.2 redispatch then
         # recovers state up to the last persisted snapshot.
@@ -2572,6 +2968,7 @@ class PipelineExecutor:
                     flush_buffer=flush_buffer,
                     flush_lock=flush_lock,
                     delivery=delivery,
+                    checkpointer=checkpointer,
                 )
             else:
                 current_source_key: tuple[str, str] | None = None
@@ -2602,6 +2999,7 @@ class PipelineExecutor:
                                 sinks, source, delivery, current_source_key,
                                 current_source_meta, current_unit, ctx,
                                 config.on_error, finalize_source=True,
+                                checkpointer=checkpointer,
                             )
                             current_source_key = None
                             current_source_meta = None
@@ -2635,6 +3033,7 @@ class PipelineExecutor:
                         sinks, source, delivery, current_source_key,
                         current_source_meta, current_unit, ctx,
                         config.on_error, finalize_source=True,
+                        checkpointer=checkpointer,
                     )
             # The chunk loop drained (or was stopped) without an exception:
             # drain the micro-batch buffer so records counted in at arrival are
@@ -2734,6 +3133,7 @@ class PipelineExecutor:
         flush_buffer: _StreamFlushBuffer | None = None,
         flush_lock: threading.Lock | None = None,
         delivery: _RunDeliveryAccounting | None = None,
+        checkpointer: _CheckpointGate | None = None,
     ) -> None:
         """Stream mode with N worker threads. Producer reads; workers process.
 
@@ -2839,7 +3239,7 @@ class PipelineExecutor:
                         self._finalize_batch_source_unit(
                             sinks, source, delivery, current_source_key,
                             current_source_meta, current_unit, ctx, on_error,
-                            finalize_source=True,
+                            finalize_source=True, checkpointer=checkpointer,
                         )
                         current_source_key = None
                         current_source_meta = None
@@ -2862,7 +3262,7 @@ class PipelineExecutor:
                 self._finalize_batch_source_unit(
                     sinks, source, delivery, current_source_key,
                     current_source_meta, current_unit, ctx, on_error,
-                    finalize_source=True,
+                    finalize_source=True, checkpointer=checkpointer,
                 )
         finally:
             # Signal all workers to stop

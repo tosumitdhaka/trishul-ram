@@ -7,6 +7,7 @@ from unittest.mock import MagicMock
 
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
+from sqlalchemy import text
 
 from tram.api.routers.internal import router
 from tram.persistence.db import TramDB
@@ -453,3 +454,225 @@ class TestProcessedFilesEndpoints:
         paths = client.get("/openapi.json").json().get("paths", {})
         assert "/api/internal/processed-files/check" not in paths
         assert "/api/internal/processed-files/mark" not in paths
+
+
+# ── Delivery-checkpoint endpoint (V18-06 / frozen V18-01 §7) ────────────────
+
+
+class TestCheckpointEndpoint:
+    """POST /api/internal/checkpoint — the atomic delivery checkpoint.
+
+    One manager-DB transaction writes the delivery_checkpoints row (monotonic
+    frontier upsert) AND the generation-/revision-fenced transform_state CAS.
+    """
+
+    def _make_app(self, tmp_path):
+        app = FastAPI()
+        app.include_router(router)
+        app.state.controller = MagicMock()
+        app.state.stats_store = MagicMock()
+        app.state.db = TramDB(url=f"sqlite:///{tmp_path}/internal.db")
+        return TestClient(app)
+
+    @staticmethod
+    def _payload(
+        pipeline="pipe-a",
+        unit="local:/in/f.json:<fp>:0",
+        seq=5,
+        base_rev=0,
+        gen=1,
+        attempt="run-1-a1",
+        run_id="run-1",
+        state=None,
+        frontier=None,
+    ):
+        return {
+            "pipeline_name": pipeline,
+            "generation": gen,
+            "attempt_id": attempt,
+            "run_id": run_id,
+            "source_unit": unit,
+            "frontier": frontier if frontier is not None else {"offset": seq},
+            "frontier_seq": seq,
+            "sink_receipts": [
+                {"sink_key": "sftp", "tier": "fsynced_local", "confirmed": True},
+            ],
+            "state": state if state is not None else {"t:0": {"k": "v"}},
+            "config_sha256": "abc123",
+            "state_base_revision": base_rev,
+        }
+
+    @staticmethod
+    def _fetch(db, sql, params=None):
+        with db._engine.connect() as conn:
+            row = conn.execute(text(sql), params or {}).mappings().fetchone()
+        return dict(row) if row is not None else None
+
+    def test_first_commit_writes_checkpoint_and_state_together(self, tmp_path):
+        """A fresh pipeline's first checkpoint commits BOTH the
+        delivery_checkpoints row and the transform_state row (revision 1,
+        generation adopted) in one place."""
+        client = self._make_app(tmp_path)
+        resp = client.post("/api/internal/checkpoint", json=self._payload())
+        assert resp.status_code == 200
+        body = resp.json()
+        assert body["already_committed"] is False
+        assert body["state_revision"] == 1
+        assert body["checkpoint_id"]
+
+        db = client.app.state.db
+        cp = self._fetch(
+            db,
+            "SELECT checkpoint_id, pipeline_name, generation, source_unit, "
+            "frontier_seq, state_revision FROM delivery_checkpoints "
+            "WHERE pipeline_name = 'pipe-a' AND source_unit = :source_unit",
+            {"source_unit": "local:/in/f.json:<fp>:0"},
+        )
+        assert cp is not None
+        assert cp["checkpoint_id"] == body["checkpoint_id"]
+        assert cp["generation"] == 1
+        assert cp["frontier_seq"] == 5
+        assert cp["state_revision"] == 1
+        ts = self._fetch(
+            db,
+            "SELECT generation, revision, config_sha256 FROM transform_state "
+            "WHERE pipeline_name = 'pipe-a'",
+        )
+        assert ts == {"generation": 1, "revision": 1, "config_sha256": "abc123"}
+
+    def test_repeat_returns_already_committed_with_committed_revision(self, tmp_path):
+        """A repeat for the same (pipeline_name, source_unit) with an
+        older/equal frontier returns the stored id, already_committed: true,
+        and the committed state revision — without advancing the state."""
+        client = self._make_app(tmp_path)
+        first = client.post("/api/internal/checkpoint", json=self._payload()).json()
+        second = client.post("/api/internal/checkpoint", json=self._payload())
+
+        assert second.status_code == 200
+        body = second.json()
+        assert body["already_committed"] is True
+        assert body["checkpoint_id"] == first["checkpoint_id"]
+        assert body["state_revision"] == 1
+
+        db = client.app.state.db
+        ts = self._fetch(db, "SELECT revision FROM transform_state WHERE pipeline_name = 'pipe-a'")
+        assert ts == {"revision": 1}  # a duplicate never advances the revision
+
+    def test_advancing_frontier_keeps_identity_and_bumps_revision(self, tmp_path):
+        """A higher frontier_seq upserts in place: the first-minted
+        checkpoint_id survives and the state revision advances (base 1 → 2)."""
+        client = self._make_app(tmp_path)
+        first = client.post("/api/internal/checkpoint", json=self._payload()).json()
+        # An older frontier is rejected as already-committed.
+        stale = client.post(
+            "/api/internal/checkpoint",
+            json=self._payload(seq=3, frontier={"offset": 3}),
+        ).json()
+        assert stale["already_committed"] is True
+        assert stale["checkpoint_id"] == first["checkpoint_id"]
+        # The writer knows revision 1 now; advancing the frontier commits.
+        advanced = client.post(
+            "/api/internal/checkpoint",
+            json=self._payload(seq=9, frontier={"offset": 9}, base_rev=1),
+        )
+        assert advanced.status_code == 200
+        body = advanced.json()
+        assert body["already_committed"] is False
+        assert body["checkpoint_id"] == first["checkpoint_id"]
+        assert body["state_revision"] == 2
+
+        db = client.app.state.db
+        cp = self._fetch(
+            db,
+            "SELECT frontier_seq, state_revision FROM delivery_checkpoints "
+            "WHERE pipeline_name = 'pipe-a' AND source_unit = :source_unit",
+            {"source_unit": "local:/in/f.json:<fp>:0"},
+        )
+        assert cp == {"frontier_seq": 9, "state_revision": 2}
+
+    def test_stale_revision_writer_rejected_atomically(self, tmp_path):
+        """A writer whose state fence fails is rejected with 409 and BOTH the
+        checkpoint row and the state advance roll back (atomicity)."""
+        client = self._make_app(tmp_path)
+        assert client.post("/api/internal/checkpoint", json=self._payload()).status_code == 200
+        # A NEW unit with a stale base revision: the checkpoint upsert would
+        # insert, but the CAS fence (revision 1 != base 0) rejects it.
+        resp = client.post(
+            "/api/internal/checkpoint",
+            json=self._payload(unit="local:/in/g.json:<fp2>:0", seq=7, base_rev=0),
+        )
+        assert resp.status_code == 409
+
+        db = client.app.state.db
+        # The new unit's checkpoint row was rolled back.
+        assert self._fetch(
+            db,
+            "SELECT 1 AS x FROM delivery_checkpoints "
+            "WHERE pipeline_name = 'pipe-a' AND source_unit = :source_unit",
+            {"source_unit": "local:/in/g.json:<fp2>:0"},
+        ) is None
+        # The committed unit's row is untouched.
+        cp = self._fetch(
+            db,
+            "SELECT frontier_seq, state_revision FROM delivery_checkpoints "
+            "WHERE pipeline_name = 'pipe-a' AND source_unit = :source_unit",
+            {"source_unit": "local:/in/f.json:<fp>:0"},
+        )
+        assert cp == {"frontier_seq": 5, "state_revision": 1}
+        # The transform_state revision did not advance.
+        ts = self._fetch(db, "SELECT revision FROM transform_state WHERE pipeline_name = 'pipe-a'")
+        assert ts == {"revision": 1}
+
+    def test_foreign_generation_writer_rejected(self, tmp_path):
+        """A writer under a different generation is rejected by the CAS fence
+        ((generation IS NULL OR generation = :gen) fails) and nothing is
+        written."""
+        client = self._make_app(tmp_path)
+        assert client.post("/api/internal/checkpoint", json=self._payload()).status_code == 200
+        resp = client.post(
+            "/api/internal/checkpoint",
+            json=self._payload(unit="local:/in/h.json:<fp3>:0", gen=2, base_rev=1),
+        )
+        assert resp.status_code == 409
+
+        db = client.app.state.db
+        assert self._fetch(
+            db,
+            "SELECT 1 AS x FROM delivery_checkpoints "
+            "WHERE pipeline_name = 'pipe-a' AND source_unit = :source_unit",
+            {"source_unit": "local:/in/h.json:<fp3>:0"},
+        ) is None
+        ts = self._fetch(db, "SELECT generation, revision FROM transform_state WHERE pipeline_name = 'pipe-a'")
+        assert ts == {"generation": 1, "revision": 1}
+
+    def test_legacy_generation_null_row_adopted_by_first_checkpoint(self, tmp_path):
+        """M5 legacy transform_state rows (generation NULL, revision 0) are
+        adopted by the first generation-identified checkpoint writer."""
+        client = self._make_app(tmp_path)
+        db = client.app.state.db
+        db.save_transform_state("pipe-a", {"old": "blob"}, "legacy-sha", updated_by="r0")
+
+        resp = client.post("/api/internal/checkpoint", json=self._payload())
+        assert resp.status_code == 200
+        assert resp.json()["state_revision"] == 1
+
+        ts = self._fetch(db, "SELECT generation, revision FROM transform_state WHERE pipeline_name = 'pipe-a'")
+        assert ts == {"generation": 1, "revision": 1}
+
+    def test_db_unavailable_503(self, tmp_path):
+        app = FastAPI()
+        app.include_router(router)
+        app.state.controller = MagicMock()
+        app.state.stats_store = MagicMock()
+        app.state.db = None
+        client = TestClient(app)
+        assert client.post("/api/internal/checkpoint", json=self._payload()).status_code == 503
+
+    def test_missing_body_422(self, tmp_path):
+        client = self._make_app(tmp_path)
+        assert client.post("/api/internal/checkpoint", content=b"").status_code == 422
+
+    def test_not_in_openapi_schema(self, tmp_path):
+        client = self._make_app(tmp_path)
+        paths = client.get("/openapi.json").json().get("paths", {})
+        assert "/api/internal/checkpoint" not in paths

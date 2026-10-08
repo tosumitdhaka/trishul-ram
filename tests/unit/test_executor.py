@@ -5,13 +5,22 @@ from __future__ import annotations
 import json
 import textwrap
 import threading
+import types
 from unittest.mock import MagicMock, patch
 
 import pytest
 
 from tram.core.context import RunStatus
+from tram.interfaces.base_sink import DeliveryTier, SinkCommitReceipt
 from tram.interfaces.base_source import AckDisposition
-from tram.pipeline.executor import PipelineExecutor, _filter_by_condition
+from tram.pipeline.executor import (
+    CheckpointClient,
+    CheckpointError,
+    CheckpointResult,
+    PipelineExecutor,
+    _checkpoint_frontier,
+    _filter_by_condition,
+)
 from tram.pipeline.loader import load_pipeline_from_yaml
 
 
@@ -1893,3 +1902,438 @@ class TestSinkConditionCompileOnce:
         assert [r["id"] for r in serialized_calls[0]] == ["1", "3"]
         assert [r["id"] for r in serialized_calls[1]] == ["2"]
         assert list(executor._condition_cache) == ["val == 'a'", "val == 'b'"]
+
+
+class TestDeliveryCheckpointGate:
+    """V18-06 — the manager-authoritative delivery checkpoint (frozen §7).
+
+    The ack gate ordering is commit barrier → checkpoint → source.ack. Only
+    DELIVERED units with a durable replay identity are checkpointed;
+    filtered/DLQ/dropped units record their disposition and are never
+    delivery-checkpointed. Strict pipelines fail closed (never ack a DELIVERED
+    unit without the authoritative commit); legacy pipelines keep today's
+    behavior.
+    """
+
+    UNIT = "local:/in/f.json:<fp>:0"
+
+    def _run(self, config, mock_source, mock_sink, mock_ser_in, mock_ser_out,
+             dlq_sink=None, checkpoint_client=None, state_store=None,
+             transforms=None):
+        executor = PipelineExecutor(
+            checkpoint_client=checkpoint_client, state_store=state_store,
+        )
+        with (
+            patch.object(executor, "_build_source", return_value=mock_source),
+            patch.object(executor, "_build_sinks", return_value=[(mock_sink, None, [])]),
+            patch.object(executor, "_build_serializer_in", return_value=mock_ser_in),
+            patch.object(executor, "_build_serializer_out", return_value=mock_ser_out),
+            patch.object(
+                executor, "_build_transforms",
+                return_value=transforms if transforms is not None else [],
+            ),
+            patch.object(executor, "_build_dlq_sink", return_value=dlq_sink),
+        ):
+            return executor.batch_run(config)
+
+    def _one_chunk_run(self, config, sink, *, records=None, source_meta=None,
+                       dlq_sink=None, checkpoint_client=None, state_store=None,
+                       transforms=None, unit_id=UNIT):
+        records = records if records is not None else [{"id": "1"}]
+        mock_source = MagicMock()
+        mock_source.read.return_value = iter([
+            (json.dumps(records).encode(), source_meta or {"source_filename": "f.json"}),
+        ])
+        if unit_id is not None:
+            mock_source.source_unit_id.return_value = unit_id
+        mock_ser_in = MagicMock()
+        mock_ser_in.parse.return_value = records
+        mock_ser_out = MagicMock()
+        mock_ser_out.serialize.return_value = json.dumps(records).encode()
+        return (
+            self._run(config, mock_source, sink, mock_ser_in, mock_ser_out,
+                      dlq_sink=dlq_sink, checkpoint_client=checkpoint_client,
+                      state_store=state_store, transforms=transforms),
+            mock_source,
+        )
+
+    @staticmethod
+    def _committed(checkpoint_id="cp-1", revision=1):
+        return CheckpointResult(
+            committed=True, already_committed=False,
+            checkpoint_id=checkpoint_id, state_revision=revision,
+        )
+
+    # ── (a) delivered units: checkpoint between commit barrier and ack ─────
+
+    def test_delivered_unit_checkpointed_before_ack(self):
+        """A DELIVERED unit with a durable identity is checkpointed strictly
+        between the commit barrier and the ack, with the assembled frontier /
+        per-sink receipts / transform-state payload."""
+        config = _make_pipeline()
+        client = MagicMock()
+        calls = []
+
+        def _checkpoint(**kwargs):
+            calls.append("checkpoint")
+            return self._committed()
+
+        client.checkpoint.side_effect = _checkpoint
+        mock_source = MagicMock()
+        mock_source.read.return_value = iter([
+            (json.dumps([{"id": "1"}]).encode(), {"source_filename": "f.json"}),
+        ])
+        mock_source.source_unit_id.return_value = self.UNIT
+        mock_source.ack.side_effect = lambda meta, disp: calls.append("ack")
+        mock_sink = MagicMock()
+        mock_sink.commit.return_value = SinkCommitReceipt(
+            sink_key="sftp", tier=DeliveryTier.FSYNCED_LOCAL, confirmed=True, notes="",
+        )
+        mock_ser_in = MagicMock()
+        mock_ser_in.parse.return_value = [{"id": "1"}]
+        mock_ser_out = MagicMock()
+        mock_ser_out.serialize.return_value = b"[]"
+
+        result = self._run(
+            config, mock_source, mock_sink, mock_ser_in, mock_ser_out,
+            checkpoint_client=client,
+        )
+
+        assert result.status == RunStatus.SUCCESS
+        # The ack gate ordering: checkpoint (manager-authoritative) first.
+        assert calls == ["checkpoint", "ack"]
+        client.checkpoint.assert_called_once()
+        kwargs = client.checkpoint.call_args.kwargs
+        assert kwargs["pipeline_name"] == "test-exec"
+        assert kwargs["run_id"]
+        assert kwargs["source_unit"] == self.UNIT
+        # One-shot/file unit: insert-once scalar with its position frontier.
+        assert kwargs["frontier_seq"] == 1
+        assert kwargs["frontier"] == {"position": 1}
+        assert kwargs["sink_receipts"] == [
+            {"sink_key": "sftp", "tier": "fsynced_local",
+             "confirmed": True, "notes": ""},
+        ]
+        assert kwargs["state"] == {}          # no stateful transforms
+        assert kwargs["config_sha256"] == ""  # batch_run default
+        assert kwargs["state_base_revision"] == 0
+
+    def test_kafka_committed_offset_is_the_checkpoint_frontier_scalar(self):
+        """Broker units advance the committed offset: the frontier_seq is the
+        ``{ns}_offset`` meta value (the comparable scalar for the monotonic
+        guard), not the insert-once default."""
+        assert _checkpoint_frontier(
+            {"kafka_topic": "t", "kafka_partition": 0, "kafka_offset": 42}
+        ) == ({"offset": 42}, 42)
+        # Non-broker (file) metas fall back to the insert-once position.
+        assert _checkpoint_frontier({"source_path": "/in/f.json"}) == ({"position": 1}, 1)
+
+    def test_stream_path_checkpoints_and_acks_delivered_unit(self):
+        """The stream path runs the same checkpoint gate at the unit boundary
+        (commit barrier → checkpoint → ack) for a delivered file unit."""
+        config = _make_pipeline()
+        client = MagicMock()
+        client.checkpoint.return_value = self._committed()
+        executor = PipelineExecutor(checkpoint_client=client)
+        mock_source = MagicMock()
+        mock_source.read.return_value = iter([
+            (json.dumps([{"id": "1"}]).encode(), {"source_filename": "f.json"}),
+        ])
+        mock_source.source_unit_id.return_value = self.UNIT
+        mock_sink = MagicMock()
+        mock_sink.commit.return_value = SinkCommitReceipt(
+            sink_key="sftp", tier=DeliveryTier.FSYNCED_LOCAL, confirmed=True, notes="",
+        )
+
+        with (
+            patch.object(executor, "_build_source", return_value=mock_source),
+            patch.object(executor, "_build_sinks", return_value=[(mock_sink, None, [])]),
+            patch.object(executor, "_build_serializer_in",
+                         return_value=MagicMock(**{"parse.return_value": [{"id": "1"}]})),
+            patch.object(executor, "_build_serializer_out",
+                         return_value=MagicMock(**{"serialize.return_value": b"[]"})),
+            patch.object(executor, "_build_transforms", return_value=[]),
+        ):
+            executor.stream_run(config, threading.Event())
+
+        client.checkpoint.assert_called_once()
+        assert client.checkpoint.call_args.kwargs["source_unit"] == self.UNIT
+        mock_source.ack.assert_called_once()
+        assert mock_source.ack.call_args[0][1] == AckDisposition.DELIVERED
+
+    # ── (b) filtered / dlq / dropped: never delivery-checkpointed ──────────
+
+    def test_filtered_unit_not_checkpointed(self):
+        """A condition-filtered unit is decided FILTERED (successful intentional
+        non-delivery) and is not delivery-checkpointed."""
+        config = _make_pipeline()
+        client = MagicMock()
+        executor = PipelineExecutor(checkpoint_client=client)
+        records = [{"id": "1", "val": "a"}]
+        mock_source = MagicMock()
+        mock_source.read.return_value = iter([
+            (json.dumps(records).encode(), {"source_filename": "f.json"}),
+        ])
+        mock_source.source_unit_id.return_value = self.UNIT
+        mock_sink = MagicMock()
+        mock_ser_in = MagicMock()
+        mock_ser_in.parse.return_value = records
+        mock_ser_out = MagicMock()
+        mock_ser_out.serialize.return_value = b"[]"
+
+        with (
+            patch.object(executor, "_build_source", return_value=mock_source),
+            patch.object(executor, "_build_sinks",
+                         return_value=[(mock_sink, "val == 'zzz'", [])]),
+            patch.object(executor, "_build_serializer_in", return_value=mock_ser_in),
+            patch.object(executor, "_build_serializer_out", return_value=mock_ser_out),
+            patch.object(executor, "_build_transforms", return_value=[]),
+        ):
+            result = executor.batch_run(config)
+
+        assert result.status == RunStatus.SUCCESS
+        mock_source.ack.assert_called_once()
+        assert mock_source.ack.call_args[0][1] == AckDisposition.FILTERED
+        client.checkpoint.assert_not_called()
+
+    def test_dlq_unit_not_checkpointed(self):
+        """A durably DLQ'd unit is decided DLQ and is not delivery-
+        checkpointed (the DLQ disposition IS the accounting)."""
+        config = _make_pipeline(
+            "on_error: dlq\n"
+            "          dlq:\n"
+            "            type: local\n"
+            "            path: /tmp/dlq"
+        )
+        client = MagicMock()
+        mock_sink = MagicMock()
+        mock_sink.write.side_effect = OSError("sink down")
+        mock_dlq = MagicMock()
+
+        result, mock_source = self._one_chunk_run(
+            config, mock_sink, dlq_sink=mock_dlq, checkpoint_client=client,
+        )
+
+        assert result.status == RunStatus.SUCCESS
+        mock_source.ack.assert_called_once()
+        assert mock_source.ack.call_args[0][1] == AckDisposition.DLQ
+        client.checkpoint.assert_not_called()
+
+    def test_dropped_unit_not_checkpointed(self):
+        """An explicitly dropped unit (continue) is decided DROPPED and is not
+        delivery-checkpointed."""
+        config = _make_pipeline()  # on_error: continue
+        client = MagicMock()
+        mock_sink = MagicMock()
+        mock_sink.write.side_effect = OSError("sink down")
+
+        result, mock_source = self._one_chunk_run(
+            config, mock_sink, checkpoint_client=client,
+        )
+
+        assert result.status == RunStatus.PARTIAL
+        mock_source.ack.assert_called_once()
+        assert mock_source.ack.call_args[0][1] == AckDisposition.DROPPED
+        client.checkpoint.assert_not_called()
+
+    # ── (c) timeout / failure: strict fails closed, legacy keeps today ──────
+
+    def test_strict_checkpoint_timeout_no_ack_then_retry_acks(self):
+        """A strict pipeline whose checkpoint times out leaves the unit PENDING
+        (no ack, run never clean-success); the replay retry commits and acks."""
+        config = _make_pipeline("delivery:\n            contract: strict")
+        client = MagicMock()
+        client.checkpoint.side_effect = CheckpointError("checkpoint POST failed: timeout")
+
+        result, mock_source = self._one_chunk_run(
+            config, MagicMock(), checkpoint_client=client,
+        )
+
+        assert result.status == RunStatus.PARTIAL  # pending delivery, not SUCCESS
+        mock_source.ack.assert_not_called()
+
+        # Replay retry: the manager is reachable now — the unit commits.
+        client.checkpoint.side_effect = lambda **kw: self._committed()
+        result2, mock_source2 = self._one_chunk_run(
+            config, MagicMock(), checkpoint_client=client,
+        )
+
+        assert result2.status == RunStatus.SUCCESS
+        mock_source2.ack.assert_called_once()
+        assert mock_source2.ack.call_args[0][1] == AckDisposition.DELIVERED
+
+    def test_strict_without_checkpoint_client_never_acks_delivered(self):
+        """No checkpoint reachable (client not configured): a strict pipeline
+        must NOT ack as delivered — the unit stays pending and the run reports
+        PARTIAL."""
+        config = _make_pipeline("delivery:\n            contract: strict")
+
+        result, mock_source = self._one_chunk_run(
+            config, MagicMock(), checkpoint_client=None,
+        )
+
+        assert result.status == RunStatus.PARTIAL
+        mock_source.ack.assert_not_called()
+
+    def test_legacy_checkpoint_failure_keeps_today_behavior(self):
+        """A legacy pipeline whose checkpoint fails keeps today's behavior: the
+        unit still acks (the checkpoint is best-effort, never the gate)."""
+        config = _make_pipeline()  # legacy
+        client = MagicMock()
+        client.checkpoint.side_effect = CheckpointError("checkpoint POST failed: timeout")
+
+        result, mock_source = self._one_chunk_run(
+            config, MagicMock(), checkpoint_client=client,
+        )
+
+        assert result.status == RunStatus.SUCCESS
+        mock_source.ack.assert_called_once()
+        assert mock_source.ack.call_args[0][1] == AckDisposition.DELIVERED
+
+    # ── (d) already_committed: restore committed state, retry ack ──────────
+
+    def test_already_committed_restores_state_and_acks_without_retransform(self):
+        """A duplicate checkpoint (lost ack retried) returns already_committed:
+        the committed state is restored and the ack is retried — transforms
+        are never re-applied and recorded outputs never re-emitted."""
+        class FakeStateful:
+            """Minimal StatefulTransform (the runtime_checkable protocol needs
+            class-level members, so a plain MagicMock is not isinstance)."""
+
+            state_key = "t:0"
+
+            def __init__(self):
+                self.state: dict = {}
+                self.applied = 0
+
+            def get_state(self) -> dict:
+                return dict(self.state)
+
+            def set_state(self, blob: dict) -> None:
+                self.state = dict(blob)
+
+            def close(self, flush: bool) -> None:
+                return None
+
+            def apply(self, records):
+                self.applied += 1
+                return records
+
+        config = _make_pipeline()
+        committed_blob = {"t:0": {"committed": True}}
+        store = types.SimpleNamespace(
+            get=lambda name: types.SimpleNamespace(
+                state=committed_blob, config_sha256="",
+            ),
+        )
+        client = MagicMock()
+        client.checkpoint.return_value = CheckpointResult(
+            committed=False, already_committed=True,
+            checkpoint_id="cp-1", state_revision=3,
+        )
+        stateful = FakeStateful()
+
+        result, mock_source = self._one_chunk_run(
+            config, MagicMock(), checkpoint_client=client, state_store=store,
+            transforms=[stateful],
+        )
+
+        assert result.status == RunStatus.SUCCESS
+        mock_source.ack.assert_called_once()
+        assert mock_source.ack.call_args[0][1] == AckDisposition.DELIVERED
+        client.checkpoint.assert_called_once()
+        # The duplicate pass applied the transform exactly once — the
+        # already_committed response never re-applies it.
+        assert stateful.applied == 1
+        # Committed state restored: hydration at run start + the
+        # already_committed restore both carry the manager's committed blob
+        # (the per-transform slice under its state_key).
+        assert stateful.state == {"committed": True}
+        # The base revision tracks the committed revision from the response.
+        assert client.checkpoint.call_args.kwargs["state_base_revision"] == 0
+
+    # ── (e) no durable identity: skip checkpointing ────────────────────────
+
+    def test_no_identity_unit_skips_checkpoint_and_acks_under_legacy(self):
+        """A unit without a connector-declared durable identity is never
+        delivery-checkpointed; under the legacy contract it still acks."""
+        config = _make_pipeline()  # legacy
+        client = MagicMock()
+
+        result, mock_source = self._one_chunk_run(
+            config, MagicMock(), checkpoint_client=client, unit_id=None,
+        )
+
+        assert result.status == RunStatus.SUCCESS
+        mock_source.ack.assert_called_once()
+        assert mock_source.ack.call_args[0][1] == AckDisposition.DELIVERED
+        client.checkpoint.assert_not_called()
+
+    def test_strict_no_identity_never_acks_delivered(self):
+        """Strict retention is rejected at validation for identity-less
+        sources; a strict run that somehow reaches a delivered identity-less
+        unit fails closed (no ack)."""
+        config = _make_pipeline("delivery:\n            contract: strict")
+        client = MagicMock()
+
+        result, mock_source = self._one_chunk_run(
+            config, MagicMock(), checkpoint_client=client, unit_id=None,
+        )
+
+        assert result.status == RunStatus.PARTIAL
+        mock_source.ack.assert_not_called()
+        client.checkpoint.assert_not_called()
+
+    # ── (f) client plumbing ────────────────────────────────────────────────
+
+    def test_checkpoint_client_posts_attempt_identity_and_raises_on_error(self):
+        """The worker-mode client POSTs the bound attempt identity and wraps
+        HTTP/timeout failures in CheckpointError (the executor's gate only
+        sees committed / already_committed / CheckpointError)."""
+        import httpx
+
+        transport = httpx.MockTransport(
+            handler=lambda request: httpx.Response(
+                200, json={
+                    "checkpoint_id": "cp-9",
+                    "already_committed": False,
+                    "state_revision": 2,
+                },
+            )
+        )
+        client = CheckpointClient(
+            "http://manager:8765", "sekret", generation=3, attempt_id="run-1-a1",
+            transport=transport,
+        )
+        result = client.checkpoint(
+            pipeline_name="p", run_id="run-1", source_unit="u",
+            frontier={"offset": 5}, frontier_seq=5, sink_receipts=[],
+            state={}, state_base_revision=1,
+        )
+        assert result.committed is True
+        assert result.checkpoint_id == "cp-9"
+        assert result.state_revision == 2
+
+        failing = httpx.MockTransport(
+            handler=lambda request: httpx.Response(503, text="unavailable"),
+        )
+        client = CheckpointClient("http://manager:8765", transport=failing)
+        with pytest.raises(CheckpointError):
+            client.checkpoint(
+                pipeline_name="p", run_id="run-1", source_unit="u",
+                frontier={"offset": 5}, frontier_seq=5, sink_receipts=[],
+                state={},
+            )
+
+        rejected = httpx.MockTransport(
+            handler=lambda request: httpx.Response(
+                409, json={"detail": "stale transform-state revision — writer rejected"},
+            ),
+        )
+        client = CheckpointClient("http://manager:8765", transport=rejected)
+        with pytest.raises(CheckpointError, match="stale state revision"):
+            client.checkpoint(
+                pipeline_name="p", run_id="run-1", source_unit="u",
+                frontier={"offset": 5}, frontier_seq=5, sink_receipts=[],
+                state={},
+            )
