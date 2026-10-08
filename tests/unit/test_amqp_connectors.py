@@ -1,6 +1,7 @@
 """Tests for AMQP source and sink connectors."""
 from __future__ import annotations
 
+import logging
 import os
 import queue
 import sys
@@ -180,6 +181,90 @@ class TestAmqpSourceTagRetention:
         assert source.source_unit_id({"amqp_message_id": ""}) is None
         # The delivery tag is only an ack handle — never part of the identity.
         assert source.source_unit_id({"amqp_delivery_tag": 1}) is None
+
+
+class TestAmqpSourceRequireMessageId:
+    """V18-01 §7 runtime consumption of ``require_message_id``.
+
+    When the config sets it true, a delivery without a usable message_id is
+    refused at intake: never enqueued, error-logged, and nacked with requeue
+    via the thread-marshalled path (at-least-once). Default false = exactly
+    today's behavior.
+    """
+
+    def test_require_message_id_read_from_config(self):
+        assert AmqpSource({"queue": "q"}).require_message_id is False
+        assert AmqpSource({"queue": "q", "require_message_id": True}).require_message_id is True
+
+    def _read_with(self, source, message_id, content=b'{"x":1}'):
+        """Run source.read() with one delivered message; return (results, mock_connection)."""
+        mock_pika = MagicMock()
+        mock_channel = MagicMock()
+        mock_connection = MagicMock()
+        mock_connection.channel.return_value = mock_channel
+        mock_pika.BlockingConnection.return_value = mock_connection
+        mock_pika.URLParameters = MagicMock(return_value=MagicMock())
+
+        def fake_basic_consume(queue, on_message_callback, auto_ack):
+            method = MagicMock()
+            method.delivery_tag = 42
+            method.routing_key = "myqueue"
+            properties = MagicMock()
+            properties.message_id = message_id
+            on_message_callback(mock_channel, method, properties, content)
+            source._stop_event.set()
+
+        mock_channel.basic_consume.side_effect = fake_basic_consume
+
+        with patch.dict(sys.modules, {"pika": mock_pika}):
+            results = list(source.read())
+        return results, mock_connection, mock_channel
+
+    def test_refuses_delivery_without_message_id(self, caplog):
+        """No message_id under require_message_id: not enqueued, error logged,
+        nacked with requeue=True on the connection thread."""
+        source = AmqpSource({"queue": "myqueue", "require_message_id": True})
+
+        with caplog.at_level(logging.ERROR, logger="tram.connectors.amqp.source"):
+            results, mock_connection, mock_channel = self._read_with(source, message_id=None)
+
+        assert results == []  # refused — never enqueued
+        assert "refused" in caplog.text
+        assert "require_message_id" in caplog.text
+        # Nothing touches the channel from the intake thread.
+        mock_channel.basic_ack.assert_not_called()
+        mock_channel.basic_nack.assert_not_called()
+        # The refusal is marshalled onto the connection thread and requeues.
+        mock_connection.add_callback_threadsafe.assert_called_once()
+        callback = mock_connection.add_callback_threadsafe.call_args[0][0]
+        callback()
+        mock_channel.basic_nack.assert_called_once_with(delivery_tag=42, requeue=True)
+        mock_channel.basic_ack.assert_not_called()
+
+    def test_accepts_delivery_with_message_id(self):
+        source = AmqpSource({"queue": "myqueue", "require_message_id": True})
+        results, mock_connection, _ = self._read_with(source, message_id="mid-9")
+        assert len(results) == 1
+        assert results[0][1]["amqp_message_id"] == "mid-9"
+        mock_connection.add_callback_threadsafe.assert_not_called()
+
+    def test_default_behavior_unchanged_without_message_id(self):
+        """require_message_id absent (default false): a delivery without a
+        message_id is processed exactly as today — no refusal, no nack."""
+        source = AmqpSource({"queue": "myqueue"})
+        results, mock_connection, _ = self._read_with(source, message_id=None)
+        assert len(results) == 1
+        assert "amqp_message_id" not in results[0][1]
+        mock_connection.add_callback_threadsafe.assert_not_called()
+
+    def test_refusal_skips_nack_when_auto_ack(self):
+        """auto_ack has already settled the tag broker-side — the delivery is
+        still refused (not processed) but nothing is nacked (a nack would be a
+        protocol error on a settled tag)."""
+        source = AmqpSource({"queue": "myqueue", "require_message_id": True, "auto_ack": True})
+        results, mock_connection, _ = self._read_with(source, message_id=None)
+        assert results == []
+        mock_connection.add_callback_threadsafe.assert_not_called()
 
 
 class TestSourceBridgeBounds:

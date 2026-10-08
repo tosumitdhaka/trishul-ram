@@ -39,7 +39,11 @@ class AmqpSource(BaseSource):
     Replay identity: ``source_unit_id(meta)`` is ``{queue}/{producer message
     ID}`` when the ``message_id`` property is present and non-empty; the
     channel/session delivery tag is only an acknowledgement handle and never
-    a durable identity.
+    a durable identity. With ``require_message_id: true`` (V18-01 §7) a
+    delivery without a usable ``message_id`` is refused at intake — never
+    enqueued, error-logged, and ``basic_nack(requeue=True)`` marshalled onto
+    the connection thread so the broker redelivers it (at-least-once, never
+    silently lost nor silently processed).
     """
 
     def __init__(self, config: dict) -> None:
@@ -48,6 +52,10 @@ class AmqpSource(BaseSource):
         self.queue_name: str = config["queue"]
         self.prefetch_count: int = int(config.get("prefetch_count", 10))
         self.auto_ack: bool = bool(config.get("auto_ack", False))
+        # V18-01 §7: when true, a delivery without a producer ``message_id``
+        # is refused at intake (never processed, nacked with requeue) — no
+        # durable identity means no honest ack under strict delivery.
+        self.require_message_id: bool = bool(config.get("require_message_id", False))
         self._stop_event = threading.Event()
         self._msg_queue: queue.SimpleQueue = queue.SimpleQueue()
         self._connection = None
@@ -97,6 +105,37 @@ class AmqpSource(BaseSource):
             message_id = getattr(properties, "message_id", None)
             if message_id:
                 meta["amqp_message_id"] = message_id
+            elif self.require_message_id:
+                # Strict identity (V18-01 §7): no producer message ID = no
+                # durable identity = no honest ack. Refuse the delivery — it is
+                # never enqueued, the refusal is logged, and the message is
+                # nacked with requeue via the thread-marshalled path so the
+                # broker redelivers it (at-least-once: neither silently lost
+                # nor silently processed). With auto_ack the broker has already
+                # settled the tag at delivery, so there is nothing to nack.
+                logger.error(
+                    "AMQP delivery refused: require_message_id is true but the "
+                    "message has no message_id property",
+                    extra={
+                        "amqp_queue": self.queue_name,
+                        "amqp_delivery_tag": method.delivery_tag,
+                        "amqp_redelivered": bool(getattr(method, "redelivered", False)),
+                    },
+                )
+                if not self.auto_ack:
+                    try:
+                        connection.add_callback_threadsafe(
+                            lambda: self._deliver_ack(
+                                channel, method.delivery_tag, "nack", requeue=True
+                            )
+                        )
+                    except Exception as exc:
+                        logger.warning(
+                            "AMQP refusal nack scheduling failed for tag %s",
+                            method.delivery_tag,
+                            extra={"error": str(exc)},
+                        )
+                return
             self._msg_queue.put((body, meta))
             # Deliberately NO basic_ack at intake (V18-01 R2): the tag stays
             # with the message until the executor calls ack(); the broker
@@ -181,11 +220,16 @@ class AmqpSource(BaseSource):
                 "AMQP ack scheduling failed for tag %s", tag, extra={"error": str(exc)}
             )
 
-    def _deliver_ack(self, channel, tag, action: str) -> None:
-        """Run on the pika connection thread (scheduled by ``ack``)."""
+    def _deliver_ack(self, channel, tag, action: str, requeue: bool = False) -> None:
+        """Run on the pika connection thread (scheduled by ``ack``).
+
+        ``requeue`` only applies to ``nack``: False for the dropped-unit ack
+        mapping, True for the require_message_id intake refusal (the broker
+        redelivers so the message is never silently lost).
+        """
         try:
             if action == "nack":
-                channel.basic_nack(delivery_tag=tag, requeue=False)
+                channel.basic_nack(delivery_tag=tag, requeue=requeue)
             else:
                 channel.basic_ack(delivery_tag=tag)
         except Exception as exc:
