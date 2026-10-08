@@ -13,6 +13,7 @@ from pathlib import Path
 from unittest.mock import MagicMock, patch
 
 from tram.connectors.local.source import LocalSource
+from tram.interfaces.base_source import AckDisposition
 from tram.models.pipeline import LocalSourceConfig, SFTPSourceConfig
 
 NOW = time.time()
@@ -161,7 +162,7 @@ class TestLocalSourceFileDone:
         })
         results = list(source.read())
         for _, meta in results:
-            source.finalize(meta, success=True)
+            source.ack(meta, AckDisposition.DELIVERED)
 
         assert not (src / "pm.done").exists()
         assert (dst / "pm").exists()
@@ -176,7 +177,7 @@ class TestLocalSourceFileDone:
         })
         results = list(source.read())
         for _, meta in results:
-            source.finalize(meta, success=True)
+            source.ack(meta, AckDisposition.DELIVERED)
         assert not (tmp_path / "pm.done").exists()
 
 
