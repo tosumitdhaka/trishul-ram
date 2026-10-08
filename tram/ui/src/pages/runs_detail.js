@@ -52,6 +52,7 @@ async function refreshRun() {
 function renderRun(run) {
   const content = document.getElementById('run-detail-content')
   if (!content) return
+  const outcome = run.outcome || run.status
 
   // Back returns to the run list scoped to this run's pipeline.
   document.getElementById('run-detail-back-btn').onclick = () => {
@@ -79,7 +80,10 @@ function renderRun(run) {
       <div class="col-12 col-md-4">
         <div class="detail-card">
           <div class="detail-label">Outcome</div>
-          <div class="detail-val">${statusBadge(run.status)}</div>
+          <div class="detail-val">${statusBadge(outcome)}</div>
+          ${outcome === 'partial'
+            ? '<div class="detail-sub ui-status-warning">Completed with losses — some records were lost or failed under continue-on-error</div>'
+            : ''}
           <div class="detail-sub">${esc(fmtDur(run.started_at, run.finished_at))}${run.finished_at ? ` · finished ${relTime(run.finished_at)}` : ''}</div>
         </div>
       </div>

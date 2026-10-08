@@ -10,7 +10,53 @@
       "running_pipelines": ["sftp-pm-to-kafka"],
       "running": [],
       "streams": [],
-      "assigned_pipelines": ["sftp-pm-to-kafka"]
+      "assigned_pipelines": ["sftp-pm-to-kafka"],
+      "admission_state": "admitting",
+      "drain": {
+        "draining": false,
+        "started_at": null,
+        "deadline_expired": false,
+        "idle": false,
+        "drained": false
+      }
+    },
+    {
+      "url": "http://trishul-ram-worker-1.trishul-ram-worker.trishul-ram.svc.cluster.local:8766",
+      "worker_id": "trishul-ram-worker-1",
+      "ok": true,
+      "active_runs": 2,
+      "active_streams": 0,
+      "running_pipelines": ["snmp-to-kafka"],
+      "running": [],
+      "streams": [],
+      "assigned_pipelines": ["snmp-to-kafka"],
+      "admission_state": "draining",
+      "drain": {
+        "draining": true,
+        "started_at": "2026-09-22T06:31:02.000000+00:00",
+        "deadline_expired": false,
+        "idle": false,
+        "drained": false
+      }
+    },
+    {
+      "url": "http://trishul-ram-worker-2.trishul-ram-worker.trishul-ram.svc.cluster.local:8766",
+      "worker_id": "trishul-ram-worker-2",
+      "ok": true,
+      "active_runs": 0,
+      "active_streams": 0,
+      "running_pipelines": [],
+      "running": [],
+      "streams": [],
+      "assigned_pipelines": [],
+      "admission_state": "draining",
+      "drain": {
+        "draining": true,
+        "started_at": "2026-09-22T06:29:47.000000+00:00",
+        "deadline_expired": false,
+        "idle": true,
+        "drained": true
+      }
     }
   ]
 }

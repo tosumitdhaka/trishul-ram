@@ -1,4 +1,4 @@
-import { relTime, fmtDur, fmtNum, statusBadge, esc } from '../utils.js'
+import { relTime, fmtDur, fmtNum, statusBadge, runOutcome, esc } from '../utils.js'
 
 // Expanded run-issue rows, keyed by run id per tbody. Keying by id (not row
 // index) keeps expansions open across poll re-renders and aligned even when
@@ -34,11 +34,15 @@ export function renderRunsTable({
   const rows = []
   runs.forEach((r) => {
     const runId = String(r.run_id || r.id || '')
+    const outcome = runOutcome(r)
     const failureReason = topLevelFailureReason(r)
     const reasonGroups = groupedIssueReasons(r, failureReason)
     const summary = issueSummary(r, failureReason, reasonGroups)
     const tooltip = issueTooltip(r, failureReason, reasonGroups)
-    const hasDetail = Boolean(failureReason) || Boolean(reasonGroups.length) || r.records_skipped > 0 || r.dlq_count > 0
+    const isPartial = outcome === 'partial'
+    // A partial run always expands: even with no skip/DLQ counts captured,
+    // the "completed with losses" explanation is the detail worth reading.
+    const hasDetail = Boolean(failureReason) || Boolean(reasonGroups.length) || r.records_skipped > 0 || r.dlq_count > 0 || isPartial
     const toggle = hasDetail
       ? `<button class="btn-flat runs-expand-btn" type="button" data-run-toggle="${esc(runId)}" aria-label="Toggle run details"><i class="bi ${expanded.has(runId) ? 'bi-chevron-down' : 'bi-chevron-right'} runs-chevron"></i></button>`
       : ''
@@ -52,7 +56,7 @@ export function renderRunsTable({
       <td class="num-out">${fmtNum(r.records_out)}</td>
       <td class="text-secondary">${fmtNum(r.records_skipped)}</td>
       <td class="text-secondary">${fmtNum(r.dlq_count)}</td>
-      <td>${statusBadge(r.status)}</td>
+      <td>${statusBadge(outcome)}</td>
       <td class="text-secondary runs-issue-cell" title="${esc(tooltip)}">${esc(summary)}</td>
       <td class="text-end runs-toggle-cell">${toggle}</td>
     </tr>`)
@@ -110,9 +114,36 @@ function _detailRow(r, colspan) {
 // The shared issue-detail renderer — used by the expandable row here and by
 // the #runs/:id detail page (L4).
 export function runDetailHtml(r) {
+  const outcome = runOutcome(r)
   const failureReason = topLevelFailureReason(r)
   const reasonGroups = groupedIssueReasons(r, failureReason)
   const details = []
+  if (outcome === 'partial') {
+    // v1.8.0: partial is its own outcome — completed, but with losses. Lead
+    // with it so the page reads "finished with losses" before any skip/DLQ
+    // bookkeeping below, and never as a plain failure.
+    details.push(`
+      <div class="run-issue-block">
+        <div class="run-issue-heading run-issue-heading-warning">
+          <i class="bi bi-exclamation-triangle"></i>
+          <span>Completed with losses (partial)</span>
+        </div>
+        <div class="run-issue-text text-secondary">The run finished, but some records were lost or failed under the continue-on-error policy — see the counts and reasons below.</div>
+      </div>`)
+  }
+  if (outcome === 'aborted') {
+    // v1.8.0: aborted is stopped-before-completion — distinct from a
+    // pipeline failure, so it gets its own block instead of the red one.
+    const reason = abortedReason(r)
+    details.push(`
+      <div class="run-issue-block">
+        <div class="run-issue-heading">
+          <i class="bi bi-slash-circle"></i>
+          <span>Run aborted</span>
+        </div>
+        <div class="run-issue-text text-secondary">${reason ? esc(reason) : 'The run was stopped before it completed. This is not a pipeline failure.'}</div>
+      </div>`)
+  }
   if (failureReason) {
     details.push(`
       <div class="run-issue-block">
@@ -155,12 +186,20 @@ export function runDetailHtml(r) {
 }
 
 function topLevelFailureReason(r) {
-  const status = String(r.status || '').toLowerCase()
-  const failed = status === 'failed' || status === 'aborted' || status === 'error'
+  const outcome = runOutcome(r)
+  // Aborted runs carry their reason in the aborted block instead — a stop
+  // before completion is not a pipeline failure.
+  const failed = outcome === 'failed' || outcome === 'error'
   if (!failed) return ''
   if (r.error) return r.error
   const fallback = Array.from(new Set((r.errors || []).filter(Boolean)))[0]
   return fallback || ''
+}
+
+// Why an aborted run stopped (operator stop, shutdown, revocation) — best
+// effort: the API does not guarantee a dedicated field.
+function abortedReason(r) {
+  return r.error || Array.from(new Set((r.errors || []).filter(Boolean)))[0] || ''
 }
 
 function issueSummary(r, failureReason, reasonGroups) {

@@ -1,7 +1,7 @@
 import { api } from '../api.js'
 import { router } from '../router.js'
 import { createPageController } from '../page.js'
-import { bindDataActions, closeAllModals, confirmAction, downloadText, getSavedPollIntervalMs, relTime, schedBadge, statusBadge, esc, toast, pipelineStartFeedback } from '../utils.js'
+import { bindDataActions, closeAllModals, confirmAction, downloadText, getSavedPollIntervalMs, isPipelineTransition, relTime, schedBadge, statusBadge, esc, toast, pipelineStartFeedback } from '../utils.js'
 import { monitorTriggeredRun, runOutcomeToast } from '../run_monitor.js'
 import { filterTemplates, normalizeTemplates, populateTemplateFilters, templateFlowText, templateScheduleClass } from './template_helpers.js'
 import { renderDiffStats, renderNumberedDiffLine, renderSideBySideYamlDiff } from '../yaml_diff.js'
@@ -236,6 +236,12 @@ async function stopPipeline(name) {
 async function runPipeline(name) {
   try {
     const result = await api.pipelines.run(name)
+    // v1.8.0: quote the 202 operation_id receipt back to the operator —
+    // the audit handle for this trigger (full trail on the detail page's
+    // Operations tab).
+    if (result?.operation_id) {
+      toast(`Run triggered for ${name} — receipt ${String(result.operation_id).slice(0, 8)}`)
+    }
     await controller.refresh()
     if (result?.run_id) {
       const token = ++_runMonitorToken
@@ -475,8 +481,13 @@ function renderTable(pipelines) {
   }
   tbody.innerHTML = pipelines.map(p => {
     const isActive = p.status === 'running' || p.status === 'scheduled'
+    const isTransition = isPipelineTransition(p.status)
     const isManual = p.schedule_type === 'manual'
-    const actionBtn = isActive
+    // stopping/draining: work is winding down — a disabled spinner (not a
+    // dead Stop button) keeps the row reading as "in transition".
+    const actionBtn = isTransition
+      ? `<button class="btn-flat" type="button" disabled title="${p.status === 'draining' ? 'Draining — finishing in-flight runs' : 'Stopping — waiting for in-flight work to finish'}" aria-label="${esc(p.name)} is ${esc(p.status)}"><i class="bi bi-hourglass-split"></i></button>`
+      : isActive
       ? `<button class="btn-flat-danger" type="button" title="Stop" aria-label="Stop ${esc(p.name)}" data-action="stop" data-name="${esc(p.name)}"><i class="bi bi-stop-fill"></i></button>`
       : isManual
         ? `<button class="btn-flat-primary" type="button" title="Run now" aria-label="Run ${esc(p.name)} now" data-action="run" data-name="${esc(p.name)}"><i class="bi bi-play-fill"></i></button>`

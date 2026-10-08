@@ -1,0 +1,52 @@
+[
+  {
+    "operation_id": "op-3f8a91c2d4e6",
+    "pipeline_name": "sftp-pm-to-kafka",
+    "op_kind": "trigger",
+    "state": "complete",
+    "attempt_id": null,
+    "detail": "manual run triggered",
+    "created_at": "2026-09-22T06:44:10.482015+00:00",
+    "updated_at": "2026-09-22T06:44:10.482015+00:00"
+  },
+  {
+    "operation_id": "op-8d17b0a4c9f2",
+    "pipeline_name": "sftp-pm-to-kafka",
+    "op_kind": "stop",
+    "state": "complete",
+    "attempt_id": "att-77b1e0d4a2",
+    "detail": "graceful stop requested via API",
+    "created_at": "2026-09-22T06:41:22.000000+00:00",
+    "updated_at": "2026-09-22T06:41:39.000000+00:00"
+  },
+  {
+    "operation_id": "op-2c94f6e1a8b3",
+    "pipeline_name": "sftp-pm-to-kafka",
+    "op_kind": "boot_adopt",
+    "state": "complete",
+    "attempt_id": "att-31f0c8b9e5",
+    "detail": "boot adoption: attempt resolved from journal completion record",
+    "created_at": "2026-09-22T06:16:07.000000+00:00",
+    "updated_at": "2026-09-22T06:16:08.000000+00:00"
+  },
+  {
+    "operation_id": "op-6a52d9c7f0e1",
+    "pipeline_name": "sftp-pm-to-kafka",
+    "op_kind": "drain",
+    "state": "pending",
+    "attempt_id": null,
+    "detail": "drain requested — waiting for in-flight runs",
+    "created_at": "2026-09-22T06:43:11.000000+00:00",
+    "updated_at": "2026-09-22T06:43:11.000000+00:00"
+  },
+  {
+    "operation_id": "op-9e40b2f5c8d7",
+    "pipeline_name": "sftp-pm-to-kafka",
+    "op_kind": "restart",
+    "state": "failed",
+    "attempt_id": null,
+    "detail": "restart failed: no healthy workers available",
+    "created_at": "2026-09-22T06:12:45.000000+00:00",
+    "updated_at": "2026-09-22T06:12:46.000000+00:00"
+  }
+]

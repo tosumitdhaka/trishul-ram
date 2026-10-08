@@ -1,7 +1,7 @@
 import { api } from '../api.js'
 import { router } from '../router.js'
 import { createPageController } from '../page.js'
-import { bindDataActions, confirmAction, downloadText, relTime, fmtNum, schedBadge, statusBadge, esc, toast, pipelineStartFeedback } from '../utils.js'
+import { bindDataActions, confirmAction, downloadText, isPipelineTransition, relTime, fmtNum, schedBadge, statusBadge, esc, toast, pipelineStartFeedback } from '../utils.js'
 import { monitorTriggeredRun, runOutcomeToast } from '../run_monitor.js'
 import {
   renderDiffStats,
@@ -40,7 +40,7 @@ export async function init() {
   const { params, query } = router.route()
   _name = params[0] || null
   if (!_name) { router.navigate('pipelines'); return }
-  _activeTab = ['runs', 'config', 'versions', 'alerts'].includes(query.tab) ? query.tab : 'runs'
+  _activeTab = ['runs', 'operations', 'config', 'versions', 'alerts'].includes(query.tab) ? query.tab : 'runs'
   _versionYamlCache.clear()
 
   await controller.mount()
@@ -68,6 +68,7 @@ function showTab(tabName) {
   document.getElementById(`tab-panel-${_activeTab}`)?.classList.remove('d-none')
 
   if (_activeTab === 'runs') loadDetailRuns()
+  if (_activeTab === 'operations') loadOperations()
   if (_activeTab === 'config') loadConfig()
   if (_activeTab === 'versions') loadVersions()
   if (_activeTab === 'alerts') loadAlerts()
@@ -131,6 +132,22 @@ function renderHeader(p) {
     } else {
       queuedInfo.classList.add('d-none')
       queuedInfo.innerHTML = ''
+    }
+  }
+  // v1.8.0 lifecycle transitions: a stopping/draining pipeline gets an
+  // explicit "winding down" line so the row never reads as stuck.
+  const lifecycleInfo = document.getElementById('detail-lifecycle-info')
+  if (lifecycleInfo) {
+    if (isPipelineTransition(p.status)) {
+      lifecycleInfo.innerHTML =
+        '<i class="bi bi-hourglass-split"></i>' +
+        `<span>${p.status === 'draining'
+          ? 'Draining — finishing in-flight runs before stopping'
+          : 'Stopping — waiting for in-flight work to finish'}</span>`
+      lifecycleInfo.classList.remove('d-none')
+    } else {
+      lifecycleInfo.classList.add('d-none')
+      lifecycleInfo.innerHTML = ''
     }
   }
 }
@@ -209,6 +226,7 @@ function wireActions(pipeline) {
     router.navigate(`runs?pipeline=${encodeURIComponent(_name)}`)
   }
   document.getElementById('detail-refresh-btn').onclick = () => { void _detailRefresh() }
+  document.getElementById('detail-operations-refresh-btn').onclick = () => { void _refreshOperations() }
   document.getElementById('detail-restart-btn').onclick = () => { void _detailRestart() }
   document.getElementById('detail-test-btn').onclick = () => { void _detailTestConnectors() }
   document.getElementById('detail-download-btn').onclick = () => { void _detailDownload() }
@@ -216,6 +234,7 @@ function wireActions(pipeline) {
   const triggerBtn = document.getElementById('detail-trigger-btn')
   if (!btn) return
   const isActive = pipeline.status === 'running' || pipeline.status === 'scheduled'
+  const isTransition = isPipelineTransition(pipeline.status)
   const isQueued = pipeline.status === 'queued'
   const isManual = pipeline.schedule_type === 'manual'
   const isStream = pipeline.schedule_type === 'stream'
@@ -223,6 +242,15 @@ function wireActions(pipeline) {
 
   if (isQueued && isManual) {
     btn.innerHTML = '<i class="bi bi-hourglass-split"></i><span>Queued…</span>'
+    btn.className = 'btn btn-sm btn-outline-secondary detail-action-btn'
+    btn.disabled = true
+    btn.onclick = null
+  } else if (isTransition) {
+    // stopping/draining: in-flight work is winding down — no new start/stop
+    // until it settles. A spinner (not a dead Stop button) says "working".
+    btn.innerHTML = pipeline.status === 'draining'
+      ? '<i class="bi bi-hourglass-split"></i><span>Draining…</span>'
+      : '<i class="bi bi-hourglass-split"></i><span>Stopping…</span>'
     btn.className = 'btn btn-sm btn-outline-secondary detail-action-btn'
     btn.disabled = true
     btn.onclick = null
@@ -250,7 +278,7 @@ function wireActions(pipeline) {
         triggerBtn.innerHTML = '<i class="bi bi-hourglass-split"></i><span>Queued…</span>'
         triggerBtn.onclick = null
       } else {
-        triggerBtn.disabled = isActive
+        triggerBtn.disabled = isActive || isTransition
         triggerBtn.onclick = () => { void _detailTrigger() }
       }
     }
@@ -280,6 +308,12 @@ async function _detailTrigger() {
       triggerBtn.innerHTML = '<i class="bi bi-hourglass-split"></i><span>Queued…</span>'
     }
     setTimeout(() => init(), 400)
+    // v1.8.0 (V18-09): the 202 trigger receipt — surface the operation_id
+    // where the operator can find it again (the operations tab).
+    if (result?.operation_id) {
+      _showTriggerReceipt(result)
+      toast(`Run triggered — receipt ${String(result.operation_id).slice(0, 8)}`)
+    }
     if (result?.run_id) {
       const monitorToken = ++_runMonitorToken
       void _monitorTriggeredRun(result.run_id, monitorToken).catch((err) => {
@@ -294,6 +328,17 @@ async function _detailTrigger() {
       triggerBtn.innerHTML = '<i class="bi bi-lightning"></i><span>Run Now</span>'
     }
   }
+}
+
+function _showTriggerReceipt(result) {
+  const el = document.getElementById('detail-receipt-info')
+  if (!el) return
+  const opId = String(result.operation_id || '')
+  el.innerHTML =
+    '<i class="bi bi-receipt"></i>' +
+    `<span>Manual run triggered — receipt <span class="mono-sm">${esc(opId.slice(0, 8))}</span></span>` +
+    `<a class="detail-receipt-link" href="#detail/${encodeURIComponent(_name)}?tab=operations">View operations</a>`
+  el.classList.remove('d-none')
 }
 
 async function _detailStop() {
@@ -391,6 +436,78 @@ async function loadDetailRuns() {
     if (count) count.textContent = ''
     tbody.innerHTML = '<tr><td colspan="12" class="text-secondary text-center py-4">Could not load run history</td></tr>'
     toast(`Run history error: ${e.message}`, 'error')
+  }
+}
+
+// ── Operations tab (v1.8.0 / V18-09) ─────────────────────────────────────────
+// The pipeline-scoped lifecycle audit trail: stop/restart/update/delete/
+// drain/force_release/boot_adopt/trigger rows with state + detail + time.
+// The receipt column is the operation_id the 202 trigger response hands
+// back — the idempotency/audit handle an operator can quote back.
+
+const OP_KIND_LABELS = {
+  stop: 'stop',
+  restart: 'restart',
+  update: 'update',
+  delete: 'delete',
+  drain: 'drain',
+  force_release: 'force release',
+  boot_adopt: 'boot adopt',
+  trigger: 'trigger',
+}
+
+function opStateBadge(state) {
+  const cls = {
+    pending:  'badge-queued has-dot queued',
+    complete: 'badge-success has-dot success',
+    failed:   'badge-failed has-dot failed',
+  }[state] || 'badge-stopped'
+  return `<span class="tram-badge ${cls}">${esc(state || '—')}</span>`
+}
+
+function opRowHtml(op) {
+  const kind = op.op_kind || '—'
+  const label = OP_KIND_LABELS[kind] || kind
+  const opId = String(op.operation_id || '')
+  return `<tr>
+    <td class="text-secondary" title="${esc(op.created_at || '')}">
+      ${op.created_at ? relTime(op.created_at) : '—'}
+      <div class="detail-muted-small">updated ${op.updated_at ? relTime(op.updated_at) : '—'}</div>
+    </td>
+    <td><span class="type-pill cluster-pill-neutral" title="op_kind: ${esc(kind)}">${esc(label)}</span></td>
+    <td>${opStateBadge(op.state)}</td>
+    <td class="mono-sm text-secondary" title="${esc(opId)}">${esc(opId.slice(0, 8)) || '—'}</td>
+    <td class="text-secondary">${esc(op.detail || '—')}</td>
+  </tr>`
+}
+
+async function loadOperations() {
+  const tbody = document.getElementById('detail-operations-body')
+  const count = document.getElementById('detail-operations-count')
+  if (!tbody) return
+  tbody.innerHTML = '<tr><td colspan="5" class="text-secondary text-center py-4">Loading lifecycle operations…</td></tr>'
+  try {
+    const ops = await api.pipelines.operations(_name, { limit: 50 })
+    if (count) count.textContent = ops.length
+    if (!ops.length) {
+      tbody.innerHTML = '<tr><td colspan="5" class="text-secondary text-center py-4">No lifecycle operations recorded</td></tr>'
+      return
+    }
+    tbody.innerHTML = ops.map(opRowHtml).join('')
+  } catch (e) {
+    if (count) count.textContent = ''
+    tbody.innerHTML = '<tr><td colspan="5" class="text-secondary text-center py-4">Could not load lifecycle operations</td></tr>'
+    toast(`Operations error: ${e.message}`, 'error')
+  }
+}
+
+async function _refreshOperations() {
+  const icon = document.getElementById('detail-operations-refresh-icon')
+  if (icon) icon.className = 'bi bi-arrow-clockwise spin'
+  try {
+    await loadOperations()
+  } finally {
+    if (icon) icon.className = 'bi bi-arrow-clockwise'
   }
 }
 
