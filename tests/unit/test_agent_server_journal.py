@@ -1164,7 +1164,11 @@ class TestOutboxDrain:
             with _patch_manager_client(manager), TestClient(
                 app, raise_server_exceptions=True
             ):
-                deadline = time.time() + 5
+                # Load-tolerant ceiling: the loop's healthy cadence is 1 s,
+                # but under full-suite CPU contention the background thread
+                # can be starved well past 5 s — early-exit keeps the test
+                # fast when healthy, the ceiling only bounds a real hang.
+                deadline = time.time() + 30
                 while time.time() < deadline and not _is_acked(j, "a1"):
                     time.sleep(0.05)
             assert _is_acked(j, "a1")

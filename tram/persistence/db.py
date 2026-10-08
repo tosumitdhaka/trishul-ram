@@ -389,7 +389,7 @@ def _create_ledger_tables(conn) -> None:
         CREATE TABLE IF NOT EXISTS lifecycle_operations (
             operation_id  TEXT PRIMARY KEY NOT NULL,
             pipeline_name TEXT NOT NULL,
-            op_kind       TEXT NOT NULL,              -- stop|restart|update|delete|drain|force_release|boot_adopt
+            op_kind       TEXT NOT NULL,              -- stop|restart|update|delete|drain|force_release|boot_adopt|trigger
             state         TEXT NOT NULL CHECK (state IN ('pending','complete','failed')),
             attempt_id    TEXT,
             detail        TEXT,
