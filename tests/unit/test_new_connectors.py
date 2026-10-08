@@ -11,6 +11,7 @@ from tram.connectors.local.sink import LocalSink
 from tram.connectors.local.source import LocalSource
 from tram.connectors.sftp.sink import SFTPSink
 from tram.core.exceptions import SinkError, SourceError
+from tram.interfaces.base_source import AckDisposition
 
 # ── LocalSource ────────────────────────────────────────────────────────────
 
@@ -49,7 +50,7 @@ class TestLocalSource:
         })
         results = list(source.read())  # read() no longer moves files itself
         for _, meta in results:
-            source.finalize(meta, success=True)
+            source.ack(meta, AckDisposition.DELIVERED)
 
         assert not (src / "f.txt").exists()
         assert (dst / "f.txt").exists()
@@ -59,7 +60,7 @@ class TestLocalSource:
         source = LocalSource({"path": str(tmp_path), "delete_after_read": True})
         results = list(source.read())
         for _, meta in results:
-            source.finalize(meta, success=True)
+            source.ack(meta, AckDisposition.DELIVERED)
         assert not (tmp_path / "f.txt").exists()
 
     def test_missing_path_raises(self):
@@ -80,6 +81,131 @@ class TestLocalSource:
     def test_empty_dir_yields_nothing(self, tmp_path):
         source = LocalSource({"path": str(tmp_path)})
         assert list(source.read()) == []
+
+    def test_no_destructive_action_until_ack(self, tmp_path):
+        """finalize() is non-destructive (V18-01 §6): the file is only
+        moved/deleted/marked when ack() is called with a decided disposition."""
+        src = tmp_path / "in"
+        dst = tmp_path / "processed"
+        src.mkdir()
+        (src / "f.txt").write_bytes(b"data")
+
+        source = LocalSource({"path": str(src), "move_after_read": str(dst)})
+        results = list(source.read())
+        meta = results[0][1]
+
+        # finalize() — the executor's current hook — must never destroy input.
+        source.finalize(meta, success=True)
+        assert (src / "f.txt").exists()
+        assert not (dst / "f.txt").exists()
+
+        # The unit is consumed only behind a decided ack().
+        source.ack(meta, AckDisposition.DELIVERED)
+        assert not (src / "f.txt").exists()
+        assert (dst / "f.txt").exists()
+
+    def test_incomplete_at_boundary_never_marked_done(self, tmp_path):
+        """A unit abandoned at a batch_size boundary is never acked, so it is
+        never marked done, moved, or deleted (R10 preserved at the source)."""
+        src = tmp_path / "in"
+        dst = tmp_path / "processed"
+        src.mkdir()
+        (src / "f.txt").write_bytes(b"data")
+
+        source = LocalSource({
+            "path": str(src),
+            "move_after_read": str(dst),
+            "skip_processed": True,
+            "_pipeline_name": "pipe",
+        })
+        tracker = MagicMock()
+        tracker.is_processed.return_value = False
+        source._file_tracker = tracker
+
+        results = list(source.read())
+        meta = results[0][1]
+        # The executor's batch_size-stop path never acks the incomplete unit.
+        source.finalize(meta, success=True)
+
+        assert (src / "f.txt").exists()
+        assert not (dst / "f.txt").exists()
+        tracker.mark_processed.assert_not_called()
+
+    def test_source_unit_id_stable_and_fingerprinted(self, tmp_path):
+        import hashlib
+
+        (tmp_path / "f.txt").write_bytes(b"hello")
+        source = LocalSource({"path": str(tmp_path)})
+        results = list(source.read())
+        meta = results[0][1]
+
+        expected = hashlib.sha256(b"hello").hexdigest()
+        unit_id = source.source_unit_id(meta)
+        assert unit_id == f"local:{tmp_path}:{expected}:0"
+        # Stable across calls (retries within a run must not change identity).
+        assert source.source_unit_id(meta) == unit_id
+
+        # Same-path replacement is detected by a fingerprint change.
+        (tmp_path / "f.txt").write_bytes(b"hello-changed")
+        replaced_meta = list(source.read())[0][1]
+        assert source.source_unit_id(replaced_meta) != unit_id
+
+    def test_source_unit_id_none_without_file_identity(self):
+        source = LocalSource({"path": "/tmp"})
+        assert source.source_unit_id({}) is None
+        assert source.source_unit_id({"source_filename": "x.txt"}) is None
+
+    def test_partial_fan_out_failed_sink_does_not_finalize_source_unit(
+        self, tmp_path
+    ):
+        """One sink publishes, another fails → the source unit is NOT consumed;
+        it survives for replay until a decided ack() (R10)."""
+        src = tmp_path / "in"
+        dst = tmp_path / "processed"
+        src.mkdir()
+        (src / "f.txt").write_bytes(b'[{"x":1}]')
+
+        sink_ok = LocalSink({
+            "path": str(tmp_path / "out_ok"),
+            "filename_template": "rows.ndjson",
+            "file_mode": "single",
+        })
+        sink_bad = LocalSink({
+            "path": str(tmp_path / "out_bad"),
+            "filename_template": "rows.ndjson",
+            "file_mode": "single",
+        })
+        meta = {
+            "pipeline_name": "p",
+            "run_id": "run-1",
+            "source_filename": "f.txt",
+            "source_path": str(src / "f.txt"),
+            "serializer_type": "ndjson",
+            "serializer_config": {"type": "ndjson"},
+            "output_record_count": 1,
+            "enable_safe_finalize": True,
+        }
+
+        sink_ok.write(b'{"x":1}', meta)
+        sink_bad.write(b'{"x":1}', meta)
+
+        source = LocalSource({"path": str(src), "move_after_read": str(dst)})
+
+        # Executor per-sink finalize loop: one sink publishes, one fails.
+        sink_ok.finalize_source(meta, success=True)
+        assert (tmp_path / "out_ok" / "rows.ndjson").exists()
+        with patch.object(sink_bad._backend, "replace", side_effect=OSError("boom")):
+            with pytest.raises(SinkError):
+                sink_bad.finalize_source(meta, success=True)
+
+        # The source unit is not finalized while any required publication is
+        # unresolved — only a decided ack() consumes it.
+        assert (src / "f.txt").exists()
+        assert not (dst / "f.txt").exists()
+
+        source.ack(meta, AckDisposition.DELIVERED)
+        assert not (src / "f.txt").exists()
+        assert (dst / "f.txt").exists()
 
 
 # ── LocalSink ──────────────────────────────────────────────────────────────
