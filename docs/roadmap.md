@@ -3,6 +3,10 @@
 Planned features and known issues. Items are assigned to a version once scope is confirmed;
 unconfirmed work lives in the backlog at the bottom.
 
+This page is the current version index and backlog. Detailed release plans live
+under `docs/plans/`; the [consolidated roadmap](ideas/consolidated-roadmap.md)
+preserves earlier grouping decisions and links to the current release scope.
+
 ---
 
 ## v1.2.3 — SNMP Poll v3 Validation & ASN.1 Decode Hardening
@@ -171,6 +175,29 @@ unconfirmed work lives in the backlog at the bottom.
 - [x] Select shipping features from measured compatibility/performance results — both pilots ship default-off opt-in; process-separated ingress and native-message plugin APIs remain conditional follow-up designs
 - [x] Independent full-diff review and release gate
 
+## v1.8.0 — Reliable Execution, Delivery, Recovery & Bounded Capacity
+
+> Assigned 2026-10-08: resolve **all R1–R16** from the [end-to-end worker/pipeline review](reviews/worker-pipeline-reliability-performance-2026-10-08.md). Full scope, contracts, dependencies, migration/rollback, fault scenarios, effort envelope, and quantitative release criteria: [v1.8.0 implementation plan](plans/v1.8.0-reliability-performance-plan.md). Independent plan review and amendment disposition: [review record](reviews/v1.8.0-plan-independent-review.md). Implementation has not started; plan review does not constitute release sign-off.
+
+- [x] **Plan and independent review**: two reviewers approve the amended plan; all review blockers and recommendations resolved, including delayed admission revocation, atomic checkpoints, stable replay identities, DLQ failures and reachable unready control endpoints; a third review round, run blind to the prior record, approved with three Wave-0 amendments (wave-2 storage validation via manual persistent mount, enumerated `unknown` exits, two added merge-serialization files) and five recommendations, all incorporated
+- [x] **V18-01 — contracts and fault oracles**: freeze delivery receipts, source acknowledgement, logical run/attempt/generation/session identity, partial/unknown outcomes, ownership and fencing, protocol capabilities, and migrations before code changes — [contracts frozen](plans/v1.8.0-v18-01-contracts.md); independent review approved with all nine blocking amendments and ten recommendations incorporated ([review record](reviews/v18-01-contracts-independent-review.md))
+- [ ] **V18-02/03 — delivery integrity**: ClickHouse durable commit and retained failed buffers; AMQP acknowledgement after disposition; durable DLQ/spool policy; real processing retries and cross-thread abort propagation; stable replay identities and Kafka assignment epochs/threaded frontiers; manifest-based serial/threaded/incremental/passthrough file publication; bounded source bridges and idle-source stop
+- [ ] **V18-04 — durable execution ownership and complete queue requests**: DB-backed batch/slot claims, generation-checked callbacks and state updates, manager boot adoption before scheduling, full queued `flush`/config envelope, and durable cancellation/expiry audit
+- [ ] **V18-05 — worker journal and completion replay**: atomic duplicate-attempt reservation/revocation, expiring dispatch authorization and durable rejection watermark, persistent result outbox/query, independent boot/session reporting, storage quota/headroom and safe retention; worker image remains independent of manager-only dependencies
+- [ ] **V18-06 — recovery and readiness**: active/absent/unknown liveness, conditional lost-run resolution, empty stream placement recovery, atomic state/frontier/outcome checkpoints and config-state migration, worker-rollout re-adoption investigation, shared per-worker status snapshots, and required manager persistence
+- [ ] **V18-07 — lifecycle and deployment**: actual batch cancellation, observable asynchronous stop/update/restart/delete, main-thread SIGTERM supervision, authenticated worker drain, one global deadline, persistent worker journal/DLQ storage, internal DNS reachable when unready, and StatefulSet upgrade/rollback rehearsal
+- [ ] **V18-08 — capacity and control-plane efficiency**: worker-enforced slots plus atomic manager reservations, fair placement, queue/buffer and transform-state byte/cardinality budgets, bounded management executor, network calls outside lifecycle locks/event loop, pooled RPC/REST/sink execution, and worker-level batched telemetry
+- [ ] **V18-09 — operational contracts**: visible partial/unknown/stopping/draining/capacity states, per-sink disposition, bounded errors/stats and safe audit retention; API/UI/browser fixtures, configuration/schema, Helm and migration documentation
+- [ ] **V18-10 — fault and performance campaign**: real manager/worker/broker/ClickHouse failure oracles, process SIGTERM, partition/uncertain ownership, SQLite/PostgreSQL migration, overload and sustained durable-throughput measurements; all R1–R16 have recorded evidence
+- [ ] **Release closure**: independent review of the full implementation diff and self-review in the release PR; version alignment/changelog; all 11 mandatory release checks green before tagging `v1.8.0`
+
+The critical path is delivery → durable ownership/journal → recovery/drain →
+bounded capacity → integrated verification. Plan for 65–99 engineering days plus
+20% contingency (approximately 16–24 working weeks for one maintainer); release
+timing is gate-driven. Single-manager deployment, UTC/coalesced schedules, one
+pending manual run, and explicitly in-memory webhook 202 remain documented
+contracts. No universal exactly-once or blind partition-failover guarantee.
+
 ## Post-v1.5.0 — AI Provider Layer (open design question)
 
 - [ ] treq `_providers/` vendoring (GH #71) + Wave C (A9 streaming; B3–B6 = MIB compile-error explanation, alert-rule authoring, throughput-anomaly explanation, connector test-failure explanation, per `docs/plans/ai-expansion-plan.md`) + A.2/A.3 plugin docstrings/examples (GH #41/#42) — **not scheduled to a version**; the maintainer runs a design round after the v1.6.0 re-measurement reevaluation. Calibration from the 2026-09-28 plan review: vendor 4–6 days, Wave C 2–3 weeks, A.2/A.3 ~1 week; treq's portable tests ~1,346 lines, no bedrock coverage.
@@ -219,7 +246,7 @@ unconfirmed work lives in the backlog at the bottom.
 
 ### Infrastructure
 - [ ] **Manager HA** — standby manager with DB-backed leader election (GH #68)
-- [ ] **Graceful worker drain** — `POST /api/workers/{id}/drain`; Helm pre-stop hook (GH #68)
+- [ ] **Graceful worker drain — assigned to v1.8.0 V18-07** — manager-facing drain operation, main-thread SIGTERM supervision, shared deadline and Helm readiness/termination wiring; manager HA remains separate (GH #68)
 - [x] **Coverage target increase** — CI threshold raised to 75%; current coverage ~80%
 
 ### Performance follow-ups (deferred from the v1.6.0 review, non-blocking, outside the locked v1.6.1 scope)
@@ -262,7 +289,9 @@ unconfirmed work lives in the backlog at the bottom.
 
 ## Released
 
-> **Superseded by [`docs/ideas/consolidated-roadmap.md`](ideas/consolidated-roadmap.md)** — that document is the living plan for pending work and version assignment. This page keeps the released-version table and the historical planning sections above.
+> Current release scope and the unversioned backlog are maintained above. The
+> [consolidated roadmap](ideas/consolidated-roadmap.md) preserves historical
+> grouping decisions; the table below records shipped versions only.
 
 | Version | Theme |
 |---------|-------|
@@ -299,6 +328,6 @@ unconfirmed work lives in the backlog at the bottom.
 | v0.9.0 | Thread workers; batch_size; DLQ; CORBA source; processed-file tracking |
 
 ### Performance follow-ups (2026-10-07, from v1.7.0 pilots)
-- [ ] **Stream re-adoption after worker restart** — measured on kind: no re-dispatch of a running stream pipeline within 900 s (asyncio/h11) / 600 s (uvloop) after a worker rollout; suspected cause is the cold-start stats deadlock (workers only send per-run stats, so a cluster running nothing reports nothing and the reconciler's liveness hysteresis never resolves). Flag-independent, pre-existing. Evidence: `scripts/perf/results/v170-http-pilot/`
+- [ ] **Stream re-adoption after worker restart — assigned to v1.8.0 V18-06/07/10** — measured on kind: no re-dispatch within 900 s (asyncio/h11) / 600 s (uvloop) after rollout. Reproduce and establish the cause before fixing; per-run-only stats are a hypothesis, not a confirmed RCA. Include worker session reporting independent of runs and automatic desired-stream recovery. Evidence: `scripts/perf/results/v170-http-pilot/`
 - [ ] **Pilot B real-pipeline eligibility** — passthrough eligibility (same-schema in/out, no transforms/conditions, local sinks, DLQ off) currently matches no real pipeline (all transform records; cisco_pm_proto_to_json and proto-device-event do not qualify); the 30× result is on the canonical eligible shape. Re-evaluate when pure-transport pipelines appear
 - [ ] **Accel-on cluster saturation check** — the 202-accepted/503-queue-full contract under overload with `TRAM_HTTP_ACCELERATED=1` is unit-covered but not kind-exercised; run before any fleet-wide enablement
