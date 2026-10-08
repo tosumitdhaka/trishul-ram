@@ -634,6 +634,287 @@ class TestKafkaSourceEpochFrontier:
         assert src._completed == {}
 
 
+class TestKafkaSourceGapFrontier:
+    """V18-01 §7 / plan C: gap-aware per-partition completed frontiers.
+
+    Per-record ack completion for threaded execution: a partition's committable
+    frontier advances only across its contiguous completed prefix — never past
+    a queued/in-flight record — and completion order is independent of read
+    order. Out-of-order completions sit in a per-partition gap set until the
+    missing offsets complete; tombstones (recorded by read()) are bridged by
+    the frontier sweep without firing a commit of their own.
+    """
+
+    @staticmethod
+    def _make_source(extra: dict | None = None) -> KafkaSource:
+        cfg = {"brokers": ["kafka:9092"], "topic": "events"}
+        if extra:
+            cfg.update(extra)
+        return KafkaSource(cfg)
+
+    @staticmethod
+    def _ack(src: KafkaSource, partition: int, offset: int, epoch: int = 1) -> None:
+        src.ack(
+            {"kafka_topic": "events", "kafka_partition": partition,
+             "kafka_offset": offset, "kafka_epoch": epoch},
+            AckDisposition.DELIVERED,
+        )
+
+    @staticmethod
+    def _committed_offsets(consumer) -> dict[int, int]:
+        """Map partition → committed resume offset from the last commit call."""
+        offsets = consumer.commit.call_args[0][0]
+        return {tp.partition: om.offset for tp, om in offsets.items()}
+
+    def test_out_of_order_completion_never_commits_past_gap(self):
+        src = self._make_source()
+        mock_consumer = MagicMock()
+        src._consumer = mock_consumer
+        src._assignment_epoch = 1
+        src._read_min = {("events", 0): 5}  # partition read from offset 5
+
+        # Record 7 completes before 5 and 6: the gap at 5/6 blocks any commit.
+        self._ack(src, 0, 7)
+        mock_consumer.commit.assert_not_called()
+        assert src._completed == {}  # frontier did not advance
+        assert src._completed_ooo == {("events", 0): {7}}
+
+        # Record 5 completes; 6 is still queued/in-flight → frontier 5, so the
+        # commit (resume 6) never passes the in-flight record 6.
+        self._ack(src, 0, 5)
+        assert self._committed_offsets(mock_consumer) == {0: 6}
+        assert src._completed == {("events", 0): 5}
+        assert src._completed_ooo == {("events", 0): {7}}
+
+    def test_closing_gap_advances_frontier_across_it(self):
+        src = self._make_source()
+        mock_consumer = MagicMock()
+        src._consumer = mock_consumer
+        src._assignment_epoch = 1
+        src._read_min = {("events", 0): 5}  # partition read from offset 5
+
+        self._ack(src, 0, 7)
+        mock_consumer.commit.assert_not_called()
+        self._ack(src, 0, 5)
+        assert self._committed_offsets(mock_consumer) == {0: 6}
+
+        # Acknowledging 6 closes the gap: the frontier sweeps 6→7 (7 was
+        # already completed out of order) and commits resume offset 8.
+        self._ack(src, 0, 6)
+        assert self._committed_offsets(mock_consumer) == {0: 8}
+        assert src._completed == {("events", 0): 7}
+        assert src._completed_ooo == {}
+
+    def test_in_flight_record_blocks_the_commit(self):
+        src = self._make_source()
+        mock_consumer = MagicMock()
+        src._consumer = mock_consumer
+        src._assignment_epoch = 1
+        src._read_min = {("events", 0): 5}  # partition read from offset 5
+
+        self._ack(src, 0, 5)  # contiguous prefix 5 → commit resume 6
+        assert self._committed_offsets(mock_consumer) == {0: 6}
+
+        # Record 8 completes while 6/7 are still queued/in-flight: no advance.
+        self._ack(src, 0, 8)
+        assert mock_consumer.commit.call_count == 1
+        assert src._completed == {("events", 0): 5}
+        assert src._completed_ooo == {("events", 0): {8}}
+
+        # Record 6 completes; 7 still in flight → frontier 6 only.
+        self._ack(src, 0, 6)
+        assert mock_consumer.commit.call_count == 2
+        assert self._committed_offsets(mock_consumer) == {0: 7}
+        assert src._completed == {("events", 0): 6}
+        assert src._completed_ooo == {("events", 0): {8}}
+
+        # Record 7 completes → sweep 6→7→8, commit resume 9.
+        self._ack(src, 0, 7)
+        assert mock_consumer.commit.call_count == 3
+        assert self._committed_offsets(mock_consumer) == {0: 9}
+        assert src._completed == {("events", 0): 8}
+        assert src._completed_ooo == {}
+
+    def test_revoke_drops_gap_tracking(self):
+        from kafka import TopicPartition
+
+        src = self._make_source()
+        mock_consumer = MagicMock()
+        mock_consumer.assignment.return_value = [TopicPartition("events", 1)]
+        src._assigned = {TopicPartition("events", 0)}
+        src._completed = {("events", 0): 4}
+        src._completed_ooo = {("events", 0): {7}, ("events", 1): {5}}
+        src._tombstone_offsets = {("events", 0): {6}, ("events", 1): {4}}
+        src._read_min = {("events", 0): 4, ("events", 1): 5}
+
+        src._sync_assignment(mock_consumer)
+
+        assert src._assignment_epoch == 1
+        assert src._assigned == {TopicPartition("events", 1)}
+        # Revoked partition's frontier, out-of-order, tombstone, and read
+        # tracking are dropped; the still-owned partition keeps its state.
+        assert src._completed == {}
+        assert src._completed_ooo == {("events", 1): {5}}
+        assert src._tombstone_offsets == {("events", 1): {4}}
+        assert src._read_min == {("events", 1): 5}
+
+    def test_stale_epoch_completion_never_touches_gap_state(self):
+        """A completion read under an old assignment epoch never advances a new
+        assignment's frontier and never touches its gap state."""
+        src = self._make_source()
+        mock_consumer = MagicMock()
+        src._consumer = mock_consumer
+        src._assignment_epoch = 4
+        src._completed = {("events", 0): 3}
+        src._completed_ooo = {("events", 0): {9}}
+
+        self._ack(src, 0, 4, epoch=3)  # stale
+
+        mock_consumer.commit.assert_not_called()
+        assert src._completed == {("events", 0): 3}
+        assert src._completed_ooo == {("events", 0): {9}}
+
+    def test_tombstone_offset_bridged_without_its_own_commit(self):
+        src = self._make_source()
+        mock_consumer = MagicMock()
+        src._consumer = mock_consumer
+        src._assignment_epoch = 1
+        src._read_min = {("events", 0): 5}  # partition read from offset 5
+        src._tombstone_offsets = {("events", 0): {6}}  # tombstone read at 6
+
+        # Acknowledging 5 sweeps the tombstone at 6 → frontier 6, commit resume 7.
+        self._ack(src, 0, 5)
+        assert self._committed_offsets(mock_consumer) == {0: 7}
+        assert src._completed == {("events", 0): 6}
+        assert src._tombstone_offsets == {}
+
+    def test_tombstone_only_partition_never_commits_via_ack_path(self):
+        src = self._make_source()
+        mock_consumer = MagicMock()
+        src._consumer = mock_consumer
+        src._assignment_epoch = 1
+        src._tombstone_offsets = {("events", 0): {0, 1, 2}}
+
+        # No payload record is ever acked → the frontier never advances and no
+        # ack-path commit fires; a tombstone-only partition is covered only by
+        # the legacy batch path.
+        assert src._completed == {}
+        mock_consumer.commit.assert_not_called()
+
+    def test_multi_partition_interleaved_completion_commits_independently(self):
+        src = self._make_source()
+        mock_consumer = MagicMock()
+        src._consumer = mock_consumer
+        src._assignment_epoch = 1
+        src._read_min = {("events", 0): 5, ("events", 1): 9}
+
+        self._ack(src, 0, 5)  # p0 frontier 5 → commit p0 resume 6
+        assert self._committed_offsets(mock_consumer) == {0: 6}
+        self._ack(src, 1, 9)  # p1 frontier 9 → commit p1 resume 10
+        assert self._committed_offsets(mock_consumer) == {1: 10}
+        self._ack(src, 0, 8)  # p0 gap at 6/7 → no commit
+        assert mock_consumer.commit.call_count == 2
+        assert src._completed_ooo == {("events", 0): {8}}
+        self._ack(src, 0, 6)  # p0 frontier 6, gap at 7 → commit p0 resume 7
+        assert self._committed_offsets(mock_consumer) == {0: 7}
+        self._ack(src, 0, 7)  # p0 sweep 6→7→8 → commit p0 resume 9
+        assert self._committed_offsets(mock_consumer) == {0: 9}
+
+        assert src._completed == {("events", 0): 8, ("events", 1): 9}
+        assert src._completed_ooo == {}
+
+    def test_duplicate_ack_does_not_recommit(self):
+        src = self._make_source()
+        mock_consumer = MagicMock()
+        src._consumer = mock_consumer
+        src._assignment_epoch = 1
+        src._read_min = {("events", 0): 5}
+
+        self._ack(src, 0, 5)
+        assert mock_consumer.commit.call_count == 1
+        self._ack(src, 0, 5)  # duplicate → ignored, no spurious commit
+        assert mock_consumer.commit.call_count == 1
+        assert src._completed == {("events", 0): 5}
+        self._ack(src, 0, 6)  # sequential completion still advances
+        assert mock_consumer.commit.call_count == 2
+        assert self._committed_offsets(mock_consumer) == {0: 7}
+
+    def test_legacy_batch_commit_path_unchanged(self):
+        """The batch-boundary commit path keeps its exact behavior for
+        non-strict/legacy pipelines: epoch-guarded, commits the batch-observed
+        frontier, and never touches the per-record gap tracking."""
+        from kafka import TopicPartition
+
+        src = self._make_source()
+        mock_consumer = MagicMock()
+        src._consumer = mock_consumer
+        src._assignment_epoch = 2
+        src._completed = {("events", 0): 3}
+        src._completed_ooo = {("events", 0): {8}}
+        src._tombstone_offsets = {("events", 0): {6}}
+        src._read_min = {("events", 0): 3}
+
+        src._commit_batch(mock_consumer, {TopicPartition("events", 0): 9}, epoch=1)
+        mock_consumer.commit.assert_not_called()  # stale epoch: skipped
+
+        src._commit_batch(mock_consumer, {TopicPartition("events", 0): 9}, epoch=2)
+        assert self._committed_offsets(mock_consumer) == {0: 10}  # resume past 9
+
+        # Gap tracking is untouched by the batch path.
+        assert src._completed == {("events", 0): 3}
+        assert src._completed_ooo == {("events", 0): {8}}
+        assert src._tombstone_offsets == {("events", 0): {6}}
+        assert src._read_min == {("events", 0): 3}
+
+    def test_read_records_tombstones_so_ack_can_bridge_them(self):
+        """read() records tombstone offsets; a payload ack sweeps across them
+        (no per-record completion for the tombstone) and commits the payload
+        frontier."""
+        tp = _TopicPartition("events", 0)
+        tombstone0 = TestKafkaSourceRead._make_msg(value=None, offset=0)
+        payload1 = TestKafkaSourceRead._make_msg(offset=1)
+        tombstone2 = TestKafkaSourceRead._make_msg(value=None, offset=2)
+        payload3 = TestKafkaSourceRead._make_msg(offset=3)
+        sentinel = TestKafkaSourceRead._make_msg(value=b"SENTINEL", offset=4)
+        mock_consumer = MagicMock()
+        mock_consumer.assignment.return_value = []
+        mock_consumer.end_offsets.return_value = {}
+        mock_consumer.poll.side_effect = [
+            {tp: [tombstone0, payload1, tombstone2, payload3]},
+            {tp: [sentinel]},
+        ]
+
+        # Patch only KafkaConsumer so the real kafka TopicPartition /
+        # OffsetAndMetadata structs resolve inside the source and the commit
+        # offsets can be asserted directly.
+        with patch("kafka.KafkaConsumer", return_value=mock_consumer):
+            src = self._make_source()
+            it = src.read()
+            _payload, meta1 = next(it)  # offset 1
+            _payload, meta3 = next(it)  # offset 3
+            assert src._read_min == {("events", 0): 0}
+            assert src._tombstone_offsets == {("events", 0): {0, 2}}
+            assert src._completed == {}
+
+            # Out-of-order completion (3 before 1): the sweep bridges tombstone
+            # 0 only — record 1 is still queued/in-flight, so the frontier stops
+            # at 0 and the commit (resume 1) never passes it.
+            src.ack(meta3, AckDisposition.DELIVERED)
+            assert self._committed_offsets(mock_consumer) == {0: 1}
+            assert src._completed == {("events", 0): 0}
+            assert src._completed_ooo == {("events", 0): {3}}
+            assert src._tombstone_offsets == {("events", 0): {2}}
+
+            # Closing the gap (1) sweeps record 1, tombstone 2, and the
+            # already-completed 3 → frontier 3, commit resume 4.
+            src.ack(meta1, AckDisposition.DELIVERED)
+            assert self._committed_offsets(mock_consumer) == {0: 4}
+            assert src._completed == {("events", 0): 3}
+            assert src._completed_ooo == {}
+            assert src._tombstone_offsets == {}
+            it.close()
+
+
 class TestKafkaSinkFastPath:
     """Kafka sink single-message fast path (perf follow-up 2026-10-07).
 

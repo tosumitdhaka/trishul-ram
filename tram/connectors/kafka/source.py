@@ -39,20 +39,34 @@ class KafkaSource(BaseSource):
 
     Commit semantics (at-least-once default):
     With ``enable_auto_commit: false`` (the default) offsets are committed
-    explicitly as per-partition completed frontiers (V18-01 §7 / plan C). In
-    the legacy pre-ack path each poll batch is committed once the caller has
-    consumed every message in it (the at-least-once contract of the current
-    single-threaded executor: a crash at any point leaves the uncommitted
-    batch to be re-polled on restart). Once the executor calls
-    ``ack(meta, disposition)`` for a unit, its partition frontier advances
-    and the explicit offset (frontier + 1) is committed for that partition on
-    the owning consumer. Completion is bound to the consumer session and
-    partition-assignment epoch: any assignment change (rebalance/revoke)
-    bumps the epoch and in-flight completions from the old epoch are ignored
-    — they can never advance a new assignment's frontier. ``thread_workers >
-    1`` under ``delivery.contract: strict`` remains rejected at validation
+    explicitly as per-partition completed frontiers (V18-01 §7 / plan C).
+    Two paths share the epoch-fenced explicit commits:
+
+    * Legacy batch path — each poll batch is committed once the caller has
+      consumed every message in it (the at-least-once contract of the
+      single-threaded executor: a crash at any point leaves the uncommitted
+      batch to be re-polled on restart). Serves non-strict/legacy pipelines.
+    * Per-record ack path — ``ack(meta, disposition)`` marks one record
+      complete; a partition's committable frontier advances only across its
+      contiguous completed prefix (V18-01 §7 / plan C: threaded execution
+      must not commit past queued/in-flight records; completion order is
+      independent of read order). Out-of-order completions are tracked per
+      partition until the missing offsets complete; each time the frontier
+      advances, the explicit offset (frontier + 1) is committed for that
+      partition on the owning consumer. Tombstone records (value None) need
+      no processing: read() records their offsets and the frontier sweep
+      bridges them, but a tombstone never advances a frontier or fires a
+      commit by itself — a tombstone-only partition is committed only by the
+      legacy batch path.
+
+    Completion is bound to the consumer session and partition-assignment
+    epoch: any assignment change (rebalance/revoke) bumps the epoch and
+    in-flight completions from the old epoch are ignored — they can never
+    advance a new assignment's frontier. Revocation drops the revoked
+    partition's frontier, out-of-order, and tombstone tracking. ``thread_workers
+    > 1`` under ``delivery.contract: strict`` remains rejected at validation
     until the gap-aware threaded frontier implementation passes broker tests
-    (plan C); this connector is single-consumer epoch+frontier only.
+    (plan C); the per-record path is exercised by deterministic unit tests.
 
     Under stream micro-batching (GH #78) the last message of each poll batch
     carries ``source_batch_end: true`` in its meta; the executor flushes its
@@ -91,8 +105,25 @@ class KafkaSource(BaseSource):
         self._lock = threading.Lock()
         self._assignment_epoch: int = 0
         self._assigned: set = set()
-        # Per-partition completed frontier: {(topic, partition): offset}.
+        # Per-partition completed frontier: {(topic, partition): offset} — the
+        # highest offset whose entire prefix (≤ offset) has been completed via
+        # ack(). Only this offset + 1 is ever committed per partition.
         self._completed: dict[tuple[str, int], int] = {}
+        # Out-of-order completions per partition (plan C, per-record ack
+        # path): offsets acked beyond the current frontier, waiting for the
+        # missing (queued/in-flight) offsets to complete before the frontier
+        # can advance across them. Never committed on their own.
+        self._completed_ooo: dict[tuple[str, int], set[int]] = {}
+        # Tombstone offsets per partition observed by read() (value None):
+        # they need no processing, so the frontier sweep bridges them without
+        # a per-record completion. A tombstone never advances the frontier or
+        # fires a commit by itself; only a payload ack can.
+        self._tombstone_offsets: dict[tuple[str, int], set[int]] = {}
+        # Lowest offset read per partition this session: offsets below it were
+        # never handed to the executor (consumer joined mid-log, or a previous
+        # session/batch already committed them), so they are implicitly
+        # complete — the frontier floor for the partition is read_min - 1.
+        self._read_min: dict[tuple[str, int], int] = {}
 
     # ── Lifecycle ──────────────────────────────────────────────────────────
 
@@ -157,9 +188,10 @@ class KafkaSource(BaseSource):
         compared across polls. Any change bumps ``_assignment_epoch``: metas
         yielded after the bump carry the new epoch, and completions read under
         the old epoch can no longer advance the frontier or commit (plan C —
-        "old-epoch completions cannot advance a new assignment"). Frontier
-        state for revoked partitions is dropped; the new owner re-polls from
-        the last committed offsets (at-least-once, never loss).
+        "old-epoch completions cannot advance a new assignment"). Frontier,
+        out-of-order, and tombstone tracking for revoked partitions is dropped;
+        the new owner re-polls from the last committed offsets (at-least-once,
+        never loss).
         """
         current_set = set(consumer.assignment())
         with self._lock:
@@ -168,7 +200,11 @@ class KafkaSource(BaseSource):
                 return
             self._assignment_epoch += 1
             for tp in previous - current_set:
-                self._completed.pop((tp.topic, tp.partition), None)
+                key = (tp.topic, tp.partition)
+                self._completed.pop(key, None)
+                self._completed_ooo.pop(key, None)
+                self._tombstone_offsets.pop(key, None)
+                self._read_min.pop(key, None)
             self._assigned = current_set
 
     def _commit_offsets(self, consumer, offsets: dict, *, raise_on_error: bool) -> None:
@@ -211,11 +247,23 @@ class KafkaSource(BaseSource):
         """Advance the per-partition completed frontier and commit it.
 
         Called by the executor for a decided unit (delivered/filtered/dlq/
-        dropped). Fenced by the assignment epoch captured at yield time: a
-        completion whose epoch no longer matches (rebalance/revoke, or a new
-        consumer session since the message was read) is ignored and never
-        commits. The explicit offset (frontier + 1) is committed on the owning
-        consumer; commit failures are logged, never raised into the executor.
+        dropped) — once per record under threaded execution (plan C: threaded
+        execution must not commit past queued/in-flight records; completion
+        order is independent of read order). Each record completion is tracked
+        individually per partition; a partition's committable frontier advances
+        only across its contiguous completed prefix. Out-of-order completions
+        sit in a per-partition gap set until the missing offsets complete, and
+        the frontier never commits past a queued/in-flight record (an unacked
+        payload offset is a permanent gap). Tombstone offsets recorded by
+        read() need no processing and are bridged by the frontier sweep without
+        firing a commit of their own. Fenced by the assignment epoch captured
+        at yield time: a completion whose epoch no longer matches (rebalance/
+        revoke, or a new consumer session since the message was read) is
+        ignored and never commits. When the frontier advances, the explicit
+        offset (frontier + 1) is committed on the owning consumer; commit
+        failures are logged, never raised into the executor. The legacy
+        batch-boundary commit path (_commit_batch) is unchanged and continues
+        to serve non-strict/legacy pipelines.
         """
         if self.enable_auto_commit:
             return
@@ -239,8 +287,55 @@ class KafkaSource(BaseSource):
                 )
                 return
             key = (topic, partition)
-            self._completed[key] = max(self._completed.get(key, -1), offset)
-            frontier = self._completed[key]
+            frontier = self._completed.get(key, -1)
+            read_min = self._read_min.get(key)
+            if read_min is None:
+                # No read() coverage recorded for this partition (acks driven
+                # directly, e.g. unit tests): the first completion establishes
+                # the frontier — offsets below it were never read, so none of
+                # them can be queued/in-flight.
+                if offset <= frontier:
+                    return
+                self._completed[key] = offset
+                frontier = offset
+            else:
+                # Offsets below the first read were never handed to the
+                # executor (mid-log join, or already committed by a previous
+                # session/batch) — they are implicitly complete.
+                if read_min - 1 > frontier:
+                    frontier = read_min - 1
+                if offset <= frontier:
+                    # Already covered by the contiguous prefix (duplicate ack):
+                    # nothing new is committable.
+                    return
+                ooo = self._completed_ooo.setdefault(key, set())
+                if offset in ooo:
+                    # Already recorded as an out-of-order completion.
+                    return
+                ooo.add(offset)
+                tombstones = self._tombstone_offsets.get(key)
+                # Sweep the contiguous completed prefix: the next offset is
+                # complete when it was acked out of order or is a tombstone
+                # that needs no processing. The frontier can never pass an
+                # unacked payload record (queued/in-flight).
+                next_offset = frontier + 1
+                advanced = False
+                while next_offset in ooo or (
+                    tombstones is not None and next_offset in tombstones
+                ):
+                    ooo.discard(next_offset)
+                    if tombstones is not None:
+                        tombstones.discard(next_offset)
+                    frontier = next_offset
+                    next_offset += 1
+                    advanced = True
+                if not ooo:
+                    self._completed_ooo.pop(key, None)
+                if tombstones is not None and not tombstones:
+                    self._tombstone_offsets.pop(key, None)
+                if not advanced:
+                    return  # gap remains: the frontier did not move, no commit
+                self._completed[key] = frontier
         try:
             from kafka import TopicPartition
 
@@ -330,6 +425,9 @@ class KafkaSource(BaseSource):
                     self._assignment_epoch += 1
                     self._assigned = set()
                     self._completed.clear()
+                    self._completed_ooo.clear()
+                    self._tombstone_offsets.clear()
+                    self._read_min.clear()
                 self._consumer = consumer
                 while True:
                     if self._stop_event.is_set():
@@ -359,11 +457,34 @@ class KafkaSource(BaseSource):
                     batch_tps = {
                         tp: max(m.offset for m in msgs) for tp, msgs in batch.items()
                     }
+                    with self._lock:
+                        # Lowest offset read per partition this session (the
+                        # first record of each partition's poll list): offsets
+                        # below it were never handed to the executor and are
+                        # implicitly complete — the ack-path frontier floor.
+                        for topic, partition, _m in ordered:
+                            if (topic, partition) not in self._read_min:
+                                self._read_min[(topic, partition)] = _m.offset
                     live_count = sum(1 for _t, _p, m in ordered if m.value is not None)
                     yielded = 0
                     for topic, partition, msg in ordered:
                         value = msg.value
                         if value is None:
+                            # Tombstone: needs no processing, so it is never
+                            # yielded and never acked. Record its offset so the
+                            # ack-path frontier sweep can bridge it without a
+                            # per-record completion; a tombstone alone never
+                            # advances a frontier or fires a commit (only a
+                            # payload ack can), and offsets already covered by
+                            # the frontier are not retained. The sweep
+                            # discards each bridged offset, bounding the set.
+                            with self._lock:
+                                if msg.offset > self._completed.get(
+                                    (topic, partition), -1
+                                ):
+                                    self._tombstone_offsets.setdefault(
+                                        (topic, partition), set()
+                                    ).add(msg.offset)
                             continue
                         yielded += 1
                         yield value, {
