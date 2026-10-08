@@ -11,6 +11,7 @@ Verifies that after removing coordinator / rebalance / sync machinery:
 """
 from __future__ import annotations
 
+import os
 import threading
 import time
 import uuid
@@ -3298,5 +3299,536 @@ class TestLifecycleOperationsWiring:
             ops = ctrl.get_lifecycle_operations(pipeline_name="my-manual")
             assert len(ops) == 1 and ops[0]["op_kind"] == "stop"
             assert ctrl.get_lifecycle_operations(pipeline_name="nope") == []
+        finally:
+            ctrl.stop()
+
+
+# ── Live PostgreSQL mirror of the wave-2 gate scenarios ─────────────────────
+#
+# Same env-gating pattern as TestLivePostgres in test_execution_ledger.py:
+# the class skips entirely unless TRAM_TEST_POSTGRES_URL points at a live
+# server. Shared-database discipline: the PG database is shared across the
+# whole class, so every test mints a unique pipeline_name / run_id /
+# attempt_id namespace (uuid-suffixed) and a fresh guard_key (the pipeline
+# name); nothing is truncated or deleted, and other rows are never touched
+# by the tests themselves. Boot-adoption assertions are namespace-scoped
+# (filtered by our attempt_id) rather than global mock call-counts, because
+# a controller boot resolves EVERY non-terminal attempt in the shared DB —
+# including rows left by other tests.
+
+PG_URL = os.environ.get("TRAM_TEST_POSTGRES_URL", "")
+
+
+@pytest.mark.skipif(not PG_URL, reason="TRAM_TEST_POSTGRES_URL not set — no live PostgreSQL fixture")
+class TestLivePostgresGateScenarios:
+    """Wave-2 exit-gate scenarios mirrored against a real PostgreSQL server.
+
+    Covers the four gate-scenario groups: restart/boot adoption
+    (TestBootAdoption), uncertain dispatch (no-journal-evidence +
+    unrecognized-journal-reply variants), duplicate callbacks
+    (TestAttemptRunComplete identity/idempotency + late-foreign fences), and
+    queue identity (TestLedgerClaimBeforeDispatch drain claim + the R16
+    TestQueueTerminalCancellation stop/cancel/drain-skip).
+    """
+
+    @pytest.fixture
+    def pgdb(self):
+        from tram.persistence.db import TramDB
+        d = TramDB(url=PG_URL)
+        yield d
+        d.close()
+
+    def _fetch(self, db, sql, params=None):
+        with db._engine.connect() as conn:
+            rows = conn.execute(text(sql), params or {}).mappings().fetchall()
+        return [dict(r) for r in rows]
+
+    def _controller(self, pgdb, wp):
+        return _make_controller(db=pgdb, worker_pool=wp, manager_url="http://manager:8765")
+
+    def _started_controller(self, pgdb, wp):
+        """Controller with a running scheduler (the batch post-run transition
+        re-schedules interval pipelines via _do_schedule → _add_interval_job,
+        which needs a live BackgroundScheduler)."""
+        return _started_controller(db=pgdb, worker_pool=wp, manager_url="http://manager:8765")
+
+    def _ns(self, prefix: str) -> str:
+        """Unique namespace fragment for a shared-database test."""
+        return f"{prefix}-{uuid.uuid4().hex[:10]}"
+
+    def _interval_yaml(self, name: str) -> str:
+        return _INTERVAL_YAML.replace("name: my-interval", f"name: {name}")
+
+    def _manual_yaml(self, name: str) -> str:
+        return _MANUAL_YAML.replace("name: my-manual", f"name: {name}")
+
+    def _register_batch(self, ctrl, name, yaml_text):
+        # Register via the manager directly (no interval job is scheduled, and
+        # save_version=False keeps the shared PG database free of version rows).
+        config = load_pipeline_from_yaml(yaml_text)
+        ctrl.manager.register(config, yaml_text=yaml_text, save_version=False)
+        ctrl.manager.set_status(config.name, "scheduled")
+
+    def _seed_attempt(
+        self,
+        db,
+        *,
+        run_id,
+        pipeline_name,
+        state="dispatching",
+        generation=1,
+        ordinal=1,
+        worker_id="w0",
+        dispatch_sent_at=None,
+    ):
+        """Seed run_intents + execution_guards + execution_attempts (claimed)."""
+        attempt_id = f"{run_id}-a{ordinal}"
+        now = datetime.now(UTC).isoformat()
+        with db._engine.begin() as conn:
+            conn.execute(text("""
+                INSERT INTO run_intents
+                    (run_id, pipeline_name, origin, flush, requested_at, expires_at,
+                     requested_generation, yaml_snapshot, schedule_type)
+                VALUES (:r, :p, 'scheduled', 0, :now, NULL, :gen, 'yaml', 'interval')
+            """), {"r": run_id, "p": pipeline_name, "now": now, "gen": generation})
+            conn.execute(text("""
+                INSERT INTO execution_guards (guard_key, guard_kind, run_id, attempt_id, generation, acquired_at)
+                VALUES (:p, 'batch', :r, :a, :gen, :now)
+            """), {"p": pipeline_name, "r": run_id, "a": attempt_id, "gen": generation, "now": now})
+            conn.execute(text("""
+                INSERT INTO execution_attempts
+                    (attempt_id, run_id, pipeline_name, ordinal, generation, slot_id,
+                     fence_token, state, dispatch_sent_at, worker_id)
+                VALUES (:a, :r, :p, :ordinal, :gen, '', 'ft', :state, :dsp, :wid)
+            """), {
+                "a": attempt_id, "r": run_id, "p": pipeline_name, "ordinal": ordinal,
+                "gen": generation, "state": state, "dsp": dispatch_sent_at, "wid": worker_id,
+            })
+        return attempt_id
+
+    def _query_calls_for(self, wp, attempt_id):
+        """query_attempt calls whose second positional arg is *attempt_id*."""
+        return [
+            call
+            for call in wp.query_attempt.call_args_list
+            if call.args and call.args[1] == attempt_id
+        ]
+
+    # ── Group 1: restart / boot adoption ─────────────────────────────────
+
+    def test_boot_adoption_claimed_unsent_aborts_locally(self, pgdb):
+        """claimed + dispatch_sent_at IS NULL → terminal 'aborted' locally,
+        never a worker query, guard released (manager_lost_before_dispatch)."""
+        name = self._ns("pg-int")
+        run_id = self._ns("pg-run")
+        wp = MagicMock()
+        # Other tests' shared-DB attempts do fan out on boot; ours must not.
+        wp.query_attempt.return_value = None
+        ctrl = self._controller(pgdb, wp)
+        attempt_id = self._seed_attempt(
+            pgdb, run_id=run_id, pipeline_name=name,
+            state="claimed", dispatch_sent_at=None,
+        )
+        try:
+            ctrl.start()
+            attempts = self._fetch(
+                pgdb, "SELECT state, cancel_reason FROM execution_attempts WHERE run_id = :r",
+                {"r": run_id},
+            )
+            assert attempts[0]["state"] == "terminal"
+            assert attempts[0]["cancel_reason"] == "manager_lost_before_dispatch"
+            intents = self._fetch(
+                pgdb, "SELECT final_outcome FROM run_intents WHERE run_id = :r",
+                {"r": run_id},
+            )
+            assert intents[0]["final_outcome"] == "aborted"
+            guards = self._fetch(
+                pgdb, "SELECT attempt_id FROM execution_guards WHERE guard_key = :p",
+                {"p": name},
+            )
+            assert guards[0]["attempt_id"] is None  # guard released
+            # local resolution — this attempt is never sent to a worker query
+            assert self._query_calls_for(wp, attempt_id) == []
+        finally:
+            ctrl.stop()
+
+    def test_boot_adoption_dispatching_unreachable_worker_unknown_guard_retained(self, pgdb):
+        """dispatching + unreachable worker (query → None) → 'unknown' with the
+        guard RETAINED; intent unresolved; lifecycle row op_kind='boot_adopt'."""
+        name = self._ns("pg-int")
+        run_id = self._ns("pg-run")
+        wp = MagicMock()
+        wp.url_for_worker_id.return_value = "http://worker-0:8766"
+        wp.worker_urls.return_value = ["http://worker-0:8766"]
+        wp.query_attempt.return_value = None  # 404 / transport error / no endpoint
+        ctrl = self._controller(pgdb, wp)
+        attempt_id = self._seed_attempt(
+            pgdb, run_id=run_id, pipeline_name=name,
+            state="dispatching", worker_id="w0",
+        )
+        try:
+            ctrl.start()
+            attempts = self._fetch(
+                pgdb, "SELECT state, uncertainty_reason FROM execution_attempts WHERE run_id = :r",
+                {"r": run_id},
+            )
+            assert attempts[0]["state"] == "unknown"
+            assert attempts[0]["uncertainty_reason"] == "boot_adoption_no_journal_evidence"
+            guards = self._fetch(
+                pgdb, "SELECT attempt_id FROM execution_guards WHERE guard_key = :p",
+                {"p": name},
+            )
+            assert guards[0]["attempt_id"] == attempt_id  # guard RETAINED
+            intents = self._fetch(
+                pgdb, "SELECT final_outcome FROM run_intents WHERE run_id = :r",
+                {"r": run_id},
+            )
+            assert intents[0]["final_outcome"] is None  # unresolved
+            ops = self._fetch(
+                pgdb, "SELECT op_kind, state, attempt_id FROM lifecycle_operations WHERE pipeline_name = :p",
+                {"p": name},
+            )
+            assert len(ops) == 1
+            assert ops[0]["op_kind"] == "boot_adopt"
+            assert ops[0]["state"] == "complete"
+            assert ops[0]["attempt_id"] == attempt_id
+        finally:
+            ctrl.stop()
+
+    def test_boot_adoption_journal_completed_resolves_intent(self, pgdb):
+        """dispatching + journal-completion reply → intent resolved + terminal,
+        outcome decoded into run_history (success), guard released."""
+        name = self._ns("pg-int")
+        run_id = self._ns("pg-run")
+        wp = MagicMock()
+        wp.url_for_worker_id.return_value = "http://worker-0:8766"
+        wp.worker_urls.return_value = ["http://worker-0:8766"]
+        wp.query_attempt.return_value = {
+            "kind": "completion",
+            "result_json": {
+                "status": "success",
+                "records_in": 5,
+                "records_out": 5,
+                "records_skipped": 0,
+                "bytes_in": 100,
+                "bytes_out": 90,
+                "started_at": "2026-09-01T10:00:00+00:00",
+                "finished_at": "2026-09-01T10:00:05+00:00",
+            },
+        }
+        ctrl = self._controller(pgdb, wp)
+        attempt_id = self._seed_attempt(
+            pgdb, run_id=run_id, pipeline_name=name,
+            state="dispatching", worker_id="w0",
+        )
+        try:
+            ctrl.start()
+            # the owning worker's journal was consulted for THIS attempt
+            # (shared-DB leftovers may be probed too, hence assert_any_call)
+            wp.query_attempt.assert_any_call("http://worker-0:8766", attempt_id)
+            attempts = self._fetch(
+                pgdb, "SELECT state FROM execution_attempts WHERE run_id = :r",
+                {"r": run_id},
+            )
+            assert attempts[0]["state"] == "terminal"
+            intents = self._fetch(
+                pgdb, "SELECT final_outcome, final_attempt_id FROM run_intents WHERE run_id = :r",
+                {"r": run_id},
+            )
+            assert intents == [{"final_outcome": "success", "final_attempt_id": attempt_id}]
+            guards = self._fetch(
+                pgdb, "SELECT attempt_id FROM execution_guards WHERE guard_key = :p",
+                {"p": name},
+            )
+            assert guards[0]["attempt_id"] is None  # guard released
+            # outcome decoded into the run-history row (V18-06 task 1)
+            rows = self._fetch(
+                pgdb,
+                "SELECT run_id, status, records_in, records_out, outcome, attempt_id"
+                " FROM run_history WHERE run_id = :r",
+                {"r": run_id},
+            )
+            assert len(rows) == 1
+            assert rows[0]["status"] == "success"
+            assert rows[0]["outcome"] == "success"
+            assert rows[0]["attempt_id"] == attempt_id
+            assert rows[0]["records_in"] == 5
+            assert rows[0]["records_out"] == 5
+            assert ctrl.get_run(run_id) is not None
+        finally:
+            ctrl.stop()
+
+    def test_boot_adoption_order_desired_state_adoption_scheduler(self, pgdb, monkeypatch):
+        """Order pin (plan D / V18-06): desired-state load → boot adoption →
+        scheduler start — unchanged on PostgreSQL."""
+        from apscheduler.schedulers.background import BackgroundScheduler
+
+        name = self._ns("pg-int")
+        run_id = self._ns("pg-run")
+        wp = MagicMock()
+        wp.url_for_worker_id.return_value = "http://worker-0:8766"
+        wp.worker_urls.return_value = ["http://worker-0:8766"]
+        wp.query_attempt.return_value = {
+            "kind": "completion", "result_json": {"status": "success"},
+        }
+        ctrl = self._controller(pgdb, wp)
+        self._seed_attempt(
+            pgdb, run_id=run_id, pipeline_name=name,
+            state="dispatching", worker_id="w0",
+        )
+        order: list[str] = []
+        orig_load = PipelineController._load_desired_state
+        orig_resolve = PipelineController._resolve_non_terminal_attempts_at_boot
+
+        def _load(self):
+            order.append("desired_state")
+            return orig_load(self)
+
+        def _resolve(self):
+            order.append("adoption")
+            return orig_resolve(self)
+
+        orig_sched_start = BackgroundScheduler.start
+
+        def _sched_start(self, *args, **kwargs):
+            order.append("scheduler_start")
+            return orig_sched_start(self, *args, **kwargs)
+
+        monkeypatch.setattr(PipelineController, "_load_desired_state", _load)
+        monkeypatch.setattr(
+            PipelineController, "_resolve_non_terminal_attempts_at_boot", _resolve
+        )
+        monkeypatch.setattr(BackgroundScheduler, "start", _sched_start)
+        try:
+            ctrl.start()
+            assert order == ["desired_state", "adoption", "scheduler_start"]
+        finally:
+            ctrl.stop()
+
+    # ── Group 2: uncertain dispatch ──────────────────────────────────────
+
+    def test_uncertain_dispatch_unrecognized_journal_reply_unknown_guard_retained(self, pgdb):
+        """A journal reply that classifies as neither completed/interrupted/
+        tombstone/active → 'unknown', guard RETAINED, lifecycle row
+        op_kind='boot_adopt' with the unrecognized-reply detail."""
+        name = self._ns("pg-int")
+        run_id = self._ns("pg-run")
+        wp = MagicMock()
+        wp.url_for_worker_id.return_value = "http://worker-0:8766"
+        wp.worker_urls.return_value = ["http://worker-0:8766"]
+        wp.query_attempt.return_value = {"kind": "not-a-known-kind"}
+        ctrl = self._controller(pgdb, wp)
+        attempt_id = self._seed_attempt(
+            pgdb, run_id=run_id, pipeline_name=name,
+            state="dispatching", worker_id="w0",
+        )
+        try:
+            ctrl.start()
+            attempts = self._fetch(
+                pgdb, "SELECT state, uncertainty_reason FROM execution_attempts WHERE run_id = :r",
+                {"r": run_id},
+            )
+            assert attempts[0]["state"] == "unknown"
+            assert attempts[0]["uncertainty_reason"] == "boot_adoption_unrecognized_journal_reply"
+            guards = self._fetch(
+                pgdb, "SELECT attempt_id FROM execution_guards WHERE guard_key = :p",
+                {"p": name},
+            )
+            assert guards[0]["attempt_id"] == attempt_id  # guard RETAINED
+            ops = self._fetch(
+                pgdb, "SELECT op_kind, state, attempt_id, detail FROM lifecycle_operations WHERE pipeline_name = :p",
+                {"p": name},
+            )
+            assert len(ops) == 1
+            assert ops[0]["op_kind"] == "boot_adopt"
+            assert ops[0]["state"] == "complete"
+            assert ops[0]["attempt_id"] == attempt_id
+            assert "unrecognized journal reply" in ops[0]["detail"]
+        finally:
+            ctrl.stop()
+
+    # ── Group 3: duplicate callback ──────────────────────────────────────
+
+    def test_duplicate_identity_matched_completion_is_idempotent(self, pgdb):
+        """Identity-matched run-complete resolves once; a second delivery is a
+        no-op — no state corruption in the intent/attempt/guard or history."""
+        name = self._ns("pg-int")
+        run_id = self._ns("pg-dup")
+        wp = _accepted_worker_pool()
+        ctrl = self._started_controller(pgdb, wp)
+        self._register_batch(ctrl, name, self._interval_yaml(name))
+        attempt_id = f"{run_id}-a1"
+        try:
+            ctrl._run_batch(name, run_id=run_id, origin="manual")
+            attempts = self._fetch(
+                pgdb, "SELECT state FROM execution_attempts WHERE run_id = :r",
+                {"r": run_id},
+            )
+            assert attempts[0]["state"] == "running"  # 202 acceptance advanced it
+
+            first = ctrl.on_attempt_run_complete(
+                attempt_id=attempt_id, generation=1, run_id=run_id,
+                pipeline_name=name, worker_id="w0", status="success",
+                records_in=3, records_out=3,
+            )
+            assert first == {"ok": True}
+            second = ctrl.on_attempt_run_complete(
+                attempt_id=attempt_id, generation=1, run_id=run_id,
+                pipeline_name=name, worker_id="w0", status="success",
+                records_in=3, records_out=3,
+            )
+            assert second == {"ok": True}
+
+            # the winner's intent/attempt/guard are untouched by the duplicate
+            intents = self._fetch(
+                pgdb, "SELECT final_outcome, final_attempt_id FROM run_intents WHERE run_id = :r",
+                {"r": run_id},
+            )
+            assert intents == [{"final_outcome": "success", "final_attempt_id": attempt_id}]
+            attempts = self._fetch(
+                pgdb, "SELECT state, finished_at FROM execution_attempts WHERE run_id = :r",
+                {"r": run_id},
+            )
+            assert attempts[0]["state"] == "terminal"
+            assert attempts[0]["finished_at"] is not None
+            guards = self._fetch(
+                pgdb, "SELECT attempt_id FROM execution_guards WHERE guard_key = :p",
+                {"p": name},
+            )
+            assert guards[0]["attempt_id"] is None
+            matches = [r for r in ctrl.manager.get(name).run_history if r.run_id == run_id]
+            assert len(matches) == 1
+            assert ctrl.get_run(run_id) is not None
+            assert ctrl.get_run(run_id).status == RunStatus.SUCCESS
+        finally:
+            ctrl.stop()
+
+    def test_late_callback_cannot_clobber_newer_attempt(self, pgdb):
+        """A late callback for a retired attempt records diagnostics only and
+        cannot touch the newer run's lease, guard, status, or history."""
+        name = self._ns("pg-int")
+        old_run = self._ns("pg-old")
+        new_run = self._ns("pg-new")
+        wp = _accepted_worker_pool()
+        ctrl = self._started_controller(pgdb, wp)
+        self._register_batch(ctrl, name, self._interval_yaml(name))
+        try:
+            # run 1 dispatched and completed (guard released)
+            ctrl._run_batch(name, run_id=old_run, origin="manual")
+            ctrl.on_attempt_run_complete(
+                attempt_id=f"{old_run}-a1", generation=1, run_id=old_run,
+                pipeline_name=name, worker_id="w0", status="success",
+                records_in=1, records_out=1,
+            )
+            # run 2 dispatched and still active
+            ctrl._worker_pool.dispatch_with_result.reset_mock()
+            ctrl._run_batch(name, run_id=new_run, origin="manual")
+            assert ctrl.manager.get(name).status == "running"
+            assert len(ctrl.get_active_batch_runs()) == 1
+            assert ctrl.get_active_batch_runs()[0]["run_id"] == new_run
+
+            # late duplicate callback for the retired attempt
+            late = ctrl.on_attempt_run_complete(
+                attempt_id=f"{old_run}-a1", generation=1, run_id=old_run,
+                pipeline_name=name, worker_id="w0", status="success",
+                records_in=1, records_out=1,
+            )
+            assert late == {"ok": True}
+
+            # the newer run's guard, lease, and status are untouched
+            guards = self._fetch(
+                pgdb, "SELECT attempt_id, run_id FROM execution_guards WHERE guard_key = :p",
+                {"p": name},
+            )
+            assert guards[0] == {"attempt_id": f"{new_run}-a1", "run_id": new_run}
+            assert len(ctrl.get_active_batch_runs()) == 1
+            assert ctrl.get_active_batch_runs()[0]["run_id"] == new_run
+            assert ctrl.manager.get(name).status == "running"
+            matches = [r for r in ctrl.manager.get(name).run_history if r.run_id == old_run]
+            assert len(matches) == 1
+        finally:
+            ctrl.stop()
+
+    # ── Group 4: queue identity ──────────────────────────────────────────
+
+    def test_queued_drain_claim_acquires_guard_exactly_once(self, pgdb):
+        """A queued-run claim at drain acquires the guard exactly once; a
+        second claim loses (the queued fence is consumed) and the guard stays
+        with the first attempt."""
+        name = self._ns("pg-man")
+        wp = MagicMock()
+        wp.healthy_workers.return_value = []
+        ctrl = self._controller(pgdb, wp)
+        self._register_batch(ctrl, name, self._manual_yaml(name))
+        try:
+            triggered = ctrl.trigger_run(name)
+            assert triggered.disposition == "queued"
+
+            # reservation only — no guard yet
+            guards = self._fetch(
+                pgdb, "SELECT attempt_id FROM execution_guards WHERE guard_key = :p",
+                {"p": name},
+            )
+            assert guards == []
+
+            claimed = ctrl.claim_queued_run(triggered.run_id)
+            assert claimed is not None
+            assert claimed["attempt_id"] == f"{triggered.run_id}-a1"
+
+            guards = self._fetch(
+                pgdb, "SELECT attempt_id FROM execution_guards WHERE guard_key = :p",
+                {"p": name},
+            )
+            assert guards[0]["attempt_id"] == f"{triggered.run_id}-a1"
+            attempts = self._fetch(
+                pgdb, "SELECT state FROM execution_attempts WHERE run_id = :r",
+                {"r": triggered.run_id},
+            )
+            assert attempts[0]["state"] == "dispatching"
+            ctrl._worker_pool.register_attempt.assert_called_once_with(
+                triggered.run_id, f"{triggered.run_id}-a1", 1, ""
+            )
+
+            # a second drain claim loses — the guard is already held and the
+            # queued fence was consumed by the first claim
+            second = ctrl.claim_queued_run(triggered.run_id)
+            assert second is None
+            guards = self._fetch(
+                pgdb, "SELECT attempt_id FROM execution_guards WHERE guard_key = :p",
+                {"p": name},
+            )
+            assert guards[0]["attempt_id"] == f"{triggered.run_id}-a1"
+            attempts = self._fetch(
+                pgdb, "SELECT COUNT(*) AS c FROM execution_attempts WHERE run_id = :r",
+                {"r": triggered.run_id},
+            )
+            assert attempts[0]["c"] == 1
+        finally:
+            ctrl.stop()
+
+    def test_stop_terminal_cancels_queued_row_and_drain_skips(self, pgdb):
+        """Pipeline stop terminal-cancels the queued row with the recorded
+        reason and the drain skips it; the run intent resolves 'aborted'."""
+        name = self._ns("pg-man")
+        wp = MagicMock()
+        wp.healthy_workers.return_value = []
+        ctrl = self._controller(pgdb, wp)
+        self._register_batch(ctrl, name, self._manual_yaml(name))
+        try:
+            triggered = ctrl.trigger_run(name)
+            assert triggered.disposition == "queued"
+            ctrl.stop_pipeline(name)
+            rows = self._fetch(
+                pgdb, "SELECT status, terminal_reason FROM queued_runs WHERE run_id = :r",
+                {"r": triggered.run_id},
+            )
+            assert rows[0]["status"] == "cancelled"
+            assert rows[0]["terminal_reason"] == "pipeline_stopped"
+            assert ctrl.drainable_queued_runs() == []  # drain skips cancelled rows
+            intents = self._fetch(
+                pgdb, "SELECT final_outcome FROM run_intents WHERE run_id = :r",
+                {"r": triggered.run_id},
+            )
+            assert intents[0]["final_outcome"] == "aborted"
         finally:
             ctrl.stop()
