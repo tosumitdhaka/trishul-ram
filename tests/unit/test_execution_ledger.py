@@ -19,6 +19,7 @@ import os
 import sqlite3
 import threading
 import types
+import uuid
 from datetime import UTC, datetime
 
 import pytest
@@ -714,31 +715,39 @@ class TestLivePostgres:
         d.close()
 
     def test_live_pg_claim_and_release(self, pgdb):
-        _make_intent(pgdb._engine, run_id="pg-run-1", pipeline_name="p")
-        out = claim_run(pgdb._engine, guard_key="p", guard_kind="batch", pipeline_name="p",
-                        run_id="pg-run-1", generation=1)
+        # Unique namespace per run: the live server is shared and outlives the
+        # test session — fixed ids would collide on a second run.
+        sfx = uuid.uuid4().hex[:8]
+        _make_intent(pgdb._engine, run_id=f"pg-run-1-{sfx}", pipeline_name=f"pg-p-{sfx}")
+        out = claim_run(pgdb._engine, guard_key=f"pg-guard-{sfx}", guard_kind="batch",
+                        pipeline_name=f"pg-p-{sfx}", run_id=f"pg-run-1-{sfx}", generation=1)
         assert out.status == CLAIMED
-        assert release_guard(pgdb._engine, guard_key="p",
-                             attempt_id=out.attempt_id, run_id="pg-run-1") == 1
+        assert release_guard(pgdb._engine, guard_key=f"pg-guard-{sfx}",
+                             attempt_id=out.attempt_id, run_id=f"pg-run-1-{sfx}") == 1
 
     def test_live_pg_transition_fence(self, pgdb):
-        _make_intent(pgdb._engine, run_id="pg-run-2", pipeline_name="p")
-        claim_run(pgdb._engine, guard_key="pg2", guard_kind="batch", pipeline_name="p",
-                  run_id="pg-run-2", generation=1)
+        sfx = uuid.uuid4().hex[:8]
+        _make_intent(pgdb._engine, run_id=f"pg-run-2-{sfx}", pipeline_name=f"pg-p-{sfx}")
+        claim_run(pgdb._engine, guard_key=f"pg-guard-{sfx}", guard_kind="batch",
+                  pipeline_name=f"pg-p-{sfx}", run_id=f"pg-run-2-{sfx}", generation=1)
         assert transition_attempt(
-            pgdb._engine, attempt_id="pg-run-2-a1", run_id="pg-run-2",
+            pgdb._engine, attempt_id=f"pg-run-2-{sfx}-a1", run_id=f"pg-run-2-{sfx}",
             from_state="claimed", to_state="dispatching", generation=1,
         ) == 1
         assert transition_attempt(
-            pgdb._engine, attempt_id="pg-run-2-a1", run_id="pg-run-2",
+            pgdb._engine, attempt_id=f"pg-run-2-{sfx}-a1", run_id=f"pg-run-2-{sfx}",
             from_state="claimed", to_state="running", generation=1,
         ) == 0
 
     def test_live_pg_checkpoint_monotonic(self, pgdb):
+        sfx = uuid.uuid4().hex[:8]
+
         def _commit(seq, cid):
             return commit_checkpoint(
-                pgdb._engine, checkpoint_id=cid, pipeline_name="p", generation=1,
-                attempt_id="pg-run-3-a1", run_id="pg-run-3", source_unit="kafka/t/0",
+                pgdb._engine, checkpoint_id=f"{cid}-{sfx}", pipeline_name=f"pg-p-{sfx}",
+                generation=1,
+                attempt_id=f"pg-run-3-{sfx}-a1", run_id=f"pg-run-3-{sfx}",
+                source_unit="kafka/t/0",
                 frontier_json="{}", frontier_seq=seq, sink_receipts="[]", state_revision=1,
             )
 
