@@ -939,6 +939,28 @@ class TestRestSource:
 
 
 class TestRestSink:
+    def _patch_pool(self, mock_resp):
+        """Patch the shared-client construction seam and return the mock client.
+
+        The pool caches one client per ``verify_ssl`` value, so tests reset the
+        pool first (and afterwards) to keep the construction count pinned and
+        avoid leaking a mock into later tests.
+        """
+        from tram.connectors import http_pool
+
+        http_pool.reset_pool_for_tests()
+        mock_client = MagicMock()
+        mock_client.request.return_value = mock_resp
+        mock_class = MagicMock()
+        mock_class.return_value = mock_client
+        patcher = patch("tram.connectors.http_pool.httpx.Client", mock_class)
+        patcher.start()
+        return mock_client, mock_class, patcher, http_pool
+
+    def _cleanup_pool(self, http_pool, patcher):
+        patcher.stop()
+        http_pool.reset_pool_for_tests()
+
     def test_post_data(self):
         from tram.connectors.rest.sink import RestSink
 
@@ -946,14 +968,12 @@ class TestRestSink:
         mock_resp.status_code = 201
         mock_resp.raise_for_status = MagicMock()
 
-        with patch("httpx.Client") as mock_client_cls:
-            mock_client = MagicMock()
-            mock_client_cls.return_value.__enter__ = lambda s: mock_client
-            mock_client_cls.return_value.__exit__ = MagicMock(return_value=False)
-            mock_client.request.return_value = mock_resp
-
+        mock_client, _mock_class, patcher, http_pool = self._patch_pool(mock_resp)
+        try:
             sink = RestSink({"url": "http://example.com/ingest"})
             sink.write(b'[{"x":1}]', {})
+        finally:
+            self._cleanup_pool(http_pool, patcher)
 
         mock_client.request.assert_called_once()
         call_args = mock_client.request.call_args
@@ -967,12 +987,84 @@ class TestRestSink:
         mock_resp.status_code = 500
         mock_resp.text = "Internal Server Error"
 
-        with patch("httpx.Client") as mock_client_cls:
-            mock_client = MagicMock()
-            mock_client_cls.return_value.__enter__ = lambda s: mock_client
-            mock_client_cls.return_value.__exit__ = MagicMock(return_value=False)
-            mock_client.request.return_value = mock_resp
-
+        mock_client, _mock_class, patcher, http_pool = self._patch_pool(mock_resp)
+        try:
             sink = RestSink({"url": "http://example.com/ingest"})
             with pytest.raises(SinkError):
                 sink.write(b"data", {})
+        finally:
+            self._cleanup_pool(http_pool, patcher)
+
+    def test_shared_client_pooled_across_requests_and_sinks(self):
+        """V18-08: one shared httpx.Client serves ALL writes of ALL RestSink
+        instances — construction count pinned to 1, not one per request."""
+        from tram.connectors.rest.sink import RestSink
+
+        mock_resp = MagicMock()
+        mock_resp.status_code = 200
+        mock_resp.raise_for_status = MagicMock()
+
+        mock_client, mock_class, patcher, http_pool = self._patch_pool(mock_resp)
+        try:
+            sink_a = RestSink({"url": "http://example.com/a"})
+            sink_b = RestSink({"url": "http://example.com/b"})
+            for _ in range(3):
+                sink_a.write(b"data", {})
+                sink_b.write(b"data", {})
+        finally:
+            self._cleanup_pool(http_pool, patcher)
+
+        assert mock_client.request.call_count == 6
+        # Exactly ONE pooled client serves every request of every sink
+        # instance (the pool cache pins the construction count).
+        assert mock_class.call_count == 1
+
+    def test_shared_client_reused_across_sink_instances(self):
+        """V18-08: a second sink instance (a later run) reuses the pooled
+        client instead of constructing a new one."""
+        from tram.connectors.rest.sink import RestSink
+
+        mock_resp = MagicMock()
+        mock_resp.status_code = 200
+        mock_resp.raise_for_status = MagicMock()
+
+        mock_client, mock_class, patcher, http_pool = self._patch_pool(mock_resp)
+        try:
+            sink_a = RestSink({"url": "http://example.com/a"})
+            sink_a.write(b"1", {})
+            sink_a.write(b"2", {})          # reuse within the run
+            sink_b = RestSink({"url": "http://example.com/b"})
+            sink_b.write(b"3", {})          # "next run" reuse
+        finally:
+            self._cleanup_pool(http_pool, patcher)
+
+        assert mock_class.call_count == 1
+        assert mock_client.request.call_count == 3
+
+    def test_close_is_per_sink_and_does_not_tear_down_shared_client(self):
+        """V18-08: the executor's per-sink close() stays a no-op for REST (the
+        shared client is NOT run-scoped) — closing a sink must not break the
+        commit barrier (the synchronous write-return) of a later run."""
+        from tram.connectors.rest.sink import RestSink
+
+        mock_resp = MagicMock()
+        mock_resp.status_code = 200
+        mock_resp.raise_for_status = MagicMock()
+
+        mock_client, mock_class, patcher, http_pool = self._patch_pool(mock_resp)
+        try:
+            sink_a = RestSink({"url": "http://example.com/a"})
+            sink_a.write(b"run1", {})
+            close = getattr(sink_a, "close", None)
+            assert callable(close)
+            close()  # per-sink close (idempotent no-op — no run-scoped resource)
+            # A "next run" sink keeps delivering on the SAME pooled client.
+            sink_b = RestSink({"url": "http://example.com/b"})
+            sink_b.write(b"run2", {})
+            close()
+            sink_b.close()
+        finally:
+            self._cleanup_pool(http_pool, patcher)
+
+        assert mock_client.request.call_count == 2
+        assert mock_class.call_count == 1

@@ -1086,8 +1086,10 @@ class TestWorkerStatsSnmpStack:
             mock_client_cls.return_value = mock_client
             _emit_stats_once(state)
 
+        # V18-08: the periodic payload is one batched snapshot per worker —
+        # snmp_stack rides the batch envelope, run stats ride in ``runs``.
         assert captured["json"]["snmp_stack"] == "trishul"
-        assert captured["json"]["records_in"] == 5
+        assert captured["json"]["runs"][0]["records_in"] == 5
 
     def test_worker_app_selects_stack_from_settings(self, monkeypatch):
         monkeypatch.setenv("TRAM_SNMP_STACK", "trishul")

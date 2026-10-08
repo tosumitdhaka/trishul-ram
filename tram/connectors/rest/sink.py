@@ -3,10 +3,14 @@
 from __future__ import annotations
 
 import logging
+from typing import TYPE_CHECKING
 
 from tram.core.exceptions import SinkError
 from tram.interfaces.base_sink import BaseSink
 from tram.registry.registry import register_sink
+
+if TYPE_CHECKING:
+    import httpx
 
 logger = logging.getLogger(__name__)
 
@@ -44,6 +48,17 @@ class RestSink(BaseSink):
         self.timeout: int = int(config.get("timeout", 30))
         self.verify_ssl: bool = bool(config.get("verify_ssl", True))
         self.expected_status: list[int] = config.get("expected_status", [200, 201, 202, 204])
+        # V18-08: pooled client reference, resolved once per sink instance so
+        # the write hot path is a single attribute check (no lock/dict lookup
+        # per request). The shared client's connections persist across runs;
+        # the sink's own ``timeout`` still applies per request.
+        self._client = None
+
+    def _get_client(self) -> httpx.Client:
+        if self._client is None:
+            from tram.connectors.http_pool import shared_http_client
+            self._client = shared_http_client(self.verify_ssl)
+        return self._client
 
     def _build_headers(self) -> dict:
         headers = {**self.headers, "Content-Type": self.content_type}
@@ -59,11 +74,6 @@ class RestSink(BaseSink):
         return None
 
     def write(self, data: bytes, meta: dict) -> None:
-        try:
-            import httpx
-        except ImportError as exc:
-            raise SinkError("REST sink requires httpx (already a TRAM dependency)") from exc
-
         kwargs = dict(
             content=data,
             headers=self._build_headers(),
@@ -74,8 +84,7 @@ class RestSink(BaseSink):
             kwargs["auth"] = auth
 
         try:
-            with httpx.Client(verify=self.verify_ssl) as client:
-                resp = client.request(self.method, self.url, **kwargs)
+            resp = self._get_client().request(self.method, self.url, **kwargs)
         except Exception as exc:
             raise SinkError(f"REST sink request failed: {exc}") from exc
 

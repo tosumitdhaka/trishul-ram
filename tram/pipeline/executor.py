@@ -23,6 +23,9 @@ import httpx
 
 from tram.connectors.file_sink_common import extract_field_paths, validate_template_tokens
 from tram.core.config import (
+    rpc_max_concurrency,
+)
+from tram.core.config import (
     stream_flush_interval_seconds as _default_stream_flush_interval,
 )
 from tram.core.config import (
@@ -1384,6 +1387,7 @@ class PipelineExecutor:
         ctx: PipelineRunContext,
         dlq_sink=None,
         sink_cb_keys: list[str] | None = None,
+        sink_pool: ThreadPoolExecutor | None = None,
     ) -> None:
         """Write partial-window records from ``close(flush=True)`` to the sinks.
 
@@ -1405,6 +1409,7 @@ class PipelineExecutor:
                 dlq_sink=dlq_sink,
                 parallel_sinks=getattr(config, "parallel_sinks", False),
                 sink_cb_keys=sink_cb_keys,
+                sink_pool=sink_pool,
             )
         except Exception as exc:
             logger.warning(
@@ -1817,6 +1822,7 @@ class PipelineExecutor:
         count_records_in: bool = True,
         rate_limit_per_record: bool = False,
         delivery: _RunDeliveryAccounting | None = None,
+        sink_pool: ThreadPoolExecutor | None = None,
     ) -> bool:
         """Process one decoded record batch.
 
@@ -2117,7 +2123,16 @@ class PipelineExecutor:
                 return written
 
             if parallel_sinks and len(sinks) > 1:
-                with ThreadPoolExecutor(max_workers=len(sinks)) as pool:
+                # V18-08 (plan F): the parallel-sink executor is pooled per
+                # run — one ThreadPoolExecutor for the whole run instead of
+                # one per chunk (thread churn per chunk on streams). When no
+                # run-scoped pool is provided (direct callers) the per-chunk
+                # pool is created and shut down exactly as before.
+                pool = sink_pool if sink_pool is not None else ThreadPoolExecutor(
+                    max_workers=len(sinks),
+                    thread_name_prefix="tram-sink",
+                )
+                try:
                     futures = [
                         pool.submit(_write_one_sink, s, records, i)
                         for i, s in enumerate(sinks)
@@ -2136,6 +2151,9 @@ class PipelineExecutor:
                             # them into TramError so the retry/abort paths in
                             # the run loop apply, preserving the cause.
                             raise TramError(f"Sink write error: {exc}") from exc
+                finally:
+                    if sink_pool is None:
+                        pool.shutdown(wait=True)
             else:
                 written_counts = [
                     _write_one_sink(sink_tuple, records, i)
@@ -2216,6 +2234,7 @@ class PipelineExecutor:
         flush_buffer: _StreamFlushBuffer | None = None,
         passthrough: bool = False,
         delivery: _RunDeliveryAccounting | None = None,
+        sink_pool: ThreadPoolExecutor | None = None,
     ) -> bool:
         """Process one (raw, meta) chunk. Returns True on success.
 
@@ -2307,7 +2326,7 @@ class PipelineExecutor:
             return self._process_records(
                 records, meta, transforms, serializer_out, sinks, ctx, on_error,
                 rate_limit_rps, dlq_sink, parallel_sinks, sink_cb_keys, stats,
-                delivery=delivery,
+                delivery=delivery, sink_pool=sink_pool,
             )
 
         except TramError as exc:
@@ -2341,6 +2360,7 @@ class PipelineExecutor:
         sink_cb_keys: list[str] | None = None,
         stats: PipelineStats | None = None,
         delivery: _RunDeliveryAccounting | None = None,
+        sink_pool: ThreadPoolExecutor | None = None,
     ) -> bool:
         """Process one raw chunk through serializer-provided record batches."""
         from tram.metrics.registry import DLQ_RECORDS, ERRORS
@@ -2367,7 +2387,7 @@ class PipelineExecutor:
                     self._process_records(
                         records, meta, transforms, serializer_out, sinks, ctx, on_error,
                         rate_limit_rps, dlq_sink, parallel_sinks, sink_cb_keys, stats,
-                        delivery=delivery,
+                        delivery=delivery, sink_pool=sink_pool,
                     )
                     if batch_size and ctx.records_in >= batch_size:
                         return True
@@ -2429,6 +2449,7 @@ class PipelineExecutor:
         sink_cb_keys: list[str] | None,
         stats: PipelineStats | None,
         delivery: _RunDeliveryAccounting | None = None,
+        sink_pool: ThreadPoolExecutor | None = None,
     ) -> bool:
         """Drain the stream micro-batch buffer through the shared sink path (GH #78).
 
@@ -2467,6 +2488,7 @@ class PipelineExecutor:
             # up to 500 records must not bypass the configured rate (finding 6).
             rate_limit_per_record=True,
             delivery=delivery,
+            sink_pool=sink_pool,
         )
         return True
 
@@ -2539,6 +2561,18 @@ class PipelineExecutor:
         dlq_sink = self._build_dlq_sink(config)
         # Pre-compute stable circuit-breaker keys for all sinks.
         sink_cb_keys = [self._make_sink_cb_key(config, i) for i in range(len(sinks))]
+        # V18-08 (plan F): one pooled parallel-sink executor per run — the
+        # sink fan-out threads are created once and reused across every chunk
+        # instead of one ThreadPoolExecutor (and N threads) per chunk. The
+        # size is bounded by the frozen TRAM_RPC_MAX_CONCURRENCY cap; per-sink
+        # write ordering/commit semantics are unchanged (the pool only
+        # parallelizes independent sink writes within a chunk).
+        sink_pool: ThreadPoolExecutor | None = None
+        if getattr(config, "parallel_sinks", False) and len(sinks) > 1:
+            sink_pool = ThreadPoolExecutor(
+                max_workers=min(len(sinks), rpc_max_concurrency()),
+                thread_name_prefix="tram-sink",
+            )
         # Load the durable state once at run start and hydrate; retries re-hydrate
         # from this same in-run snapshot (failed attempts persist nothing). The
         # snapshot's revision is the run's frozen §7 CAS base — each attempt's
@@ -2571,6 +2605,7 @@ class PipelineExecutor:
                         transforms, dlq_sink, ctx, sink_cb_keys=sink_cb_keys, stats=stats,
                         delivery=delivery, checkpointer=checkpointer,
                         stop_event=stop_event, deadline=deadline,
+                        sink_pool=sink_pool,
                     )
 
                     # V18-07 (plan E): a cooperative stop (drain stop_event or
@@ -2593,6 +2628,7 @@ class PipelineExecutor:
                             self._route_stateful_flush_records(
                                 config, flush_records, serializer_out, sinks,
                                 ctx, dlq_sink=dlq_sink, sink_cb_keys=sink_cb_keys,
+                                sink_pool=sink_pool,
                             )
 
                     # V18-01 §6/§7: the delivery barrier sits before run
@@ -2700,6 +2736,11 @@ class PipelineExecutor:
             return result
         finally:
             self._close_stateful_transforms(transforms)
+            # V18-08: shut the pooled parallel-sink executor down BEFORE the
+            # sink close so no in-flight sink.write() races the teardown
+            # (shutdown(wait=True) drains any straggler futures first).
+            if sink_pool is not None:
+                sink_pool.shutdown(wait=True)
             self._close_sinks(sinks, dlq_sink)
             self._close_source(source)
             if getattr(config, "post_batch_cleanup", False):
@@ -2721,6 +2762,7 @@ class PipelineExecutor:
         checkpointer: _CheckpointGate | None = None,
         stop_event: threading.Event | None = None,
         deadline: float | None = None,
+        sink_pool: ThreadPoolExecutor | None = None,
     ) -> None:
         """Inner loop: read source chunks and process with optional thread pool."""
         passthrough = False
@@ -2751,14 +2793,14 @@ class PipelineExecutor:
                 config, source, sinks, serializer_in, serializer_out,
                 transforms, dlq_sink, ctx, sink_cb_keys=sink_cb_keys, stats=stats,
                 passthrough=passthrough, delivery=delivery, checkpointer=checkpointer,
-                stop_event=stop_event, deadline=deadline,
+                stop_event=stop_event, deadline=deadline, sink_pool=sink_pool,
             )
             return
         self._run_batch_chunks_sequential(
             config, source, sinks, serializer_in, serializer_out,
             transforms, dlq_sink, ctx, sink_cb_keys=sink_cb_keys, stats=stats,
             passthrough=passthrough, delivery=delivery, checkpointer=checkpointer,
-            stop_event=stop_event, deadline=deadline,
+            stop_event=stop_event, deadline=deadline, sink_pool=sink_pool,
         )
 
     def _run_batch_chunks_sequential(
@@ -2778,6 +2820,7 @@ class PipelineExecutor:
         checkpointer: _CheckpointGate | None = None,
         stop_event: threading.Event | None = None,
         deadline: float | None = None,
+        sink_pool: ThreadPoolExecutor | None = None,
     ) -> None:
         """Single-threaded batch loop. Each chunk is fully processed before the
         next one is pulled, so source finalize runs strictly after the chunk
@@ -2834,7 +2877,7 @@ class PipelineExecutor:
                         serializer_out, sinks, ctx, on_error, record_chunk_size,
                         batch_size, rate_limit_rps, dlq_sink,
                         parallel_sinks, sink_cb_keys, stats,
-                        delivery=delivery,
+                        delivery=delivery, sink_pool=sink_pool,
                     )
                 else:
                     self._process_chunk(
@@ -2842,7 +2885,7 @@ class PipelineExecutor:
                         serializer_out, sinks, ctx, on_error,
                         rate_limit_rps, dlq_sink, parallel_sinks, sink_cb_keys, stats,
                         passthrough=passthrough,
-                        delivery=delivery,
+                        delivery=delivery, sink_pool=sink_pool,
                     )
                 if batch_size and ctx.records_in >= batch_size:
                     logger.info(
@@ -2887,6 +2930,7 @@ class PipelineExecutor:
         checkpointer: _CheckpointGate | None = None,
         stop_event: threading.Event | None = None,
         deadline: float | None = None,
+        sink_pool: ThreadPoolExecutor | None = None,
     ) -> None:
         """Multi-threaded batch loop: bounded in-flight chunks + deferred finalize.
 
@@ -2940,7 +2984,7 @@ class PipelineExecutor:
                     serializer_out, sinks, ctx, on_error,
                     record_chunk_size, batch_size, config.rate_limit_rps,
                     dlq_sink, parallel_sinks, sink_cb_keys, stats,
-                    delivery=delivery,
+                    delivery=delivery, sink_pool=sink_pool,
                 )
             else:
                 fut = pool.submit(
@@ -2949,7 +2993,7 @@ class PipelineExecutor:
                     serializer_out, sinks, ctx, on_error,
                     config.rate_limit_rps, dlq_sink, parallel_sinks, sink_cb_keys, stats,
                     passthrough=passthrough,
-                    delivery=delivery,
+                    delivery=delivery, sink_pool=sink_pool,
                 )
             in_flight.append((fut, key, meta))
 
@@ -3057,6 +3101,16 @@ class PipelineExecutor:
         transforms = self._build_transforms(config)
         dlq_sink = self._build_dlq_sink(config)
         sink_cb_keys = [self._make_sink_cb_key(config, i) for i in range(len(sinks))]
+        # V18-08 (plan F): one pooled parallel-sink executor per stream run
+        # (see ``_batch_run_inner``) — fan-out threads created once, reused
+        # across every flush instead of per-chunk pool churn. Bounded by the
+        # frozen TRAM_RPC_MAX_CONCURRENCY cap.
+        sink_pool: ThreadPoolExecutor | None = None
+        if getattr(config, "parallel_sinks", False) and len(sinks) > 1:
+            sink_pool = ThreadPoolExecutor(
+                max_workers=min(len(sinks), rpc_max_concurrency()),
+                thread_name_prefix="tram-sink",
+            )
 
         if getattr(config, "protobuf_passthrough", False) is True:
             # v1.7.0 pilot B: stream mode always uses the micro-batch flush
@@ -3138,7 +3192,7 @@ class PipelineExecutor:
                     flush_buffer, serializer_out, sinks, ctx, config.on_error,
                     config.rate_limit_rps, dlq_sink,
                     getattr(config, "parallel_sinks", False), sink_cb_keys, stats,
-                    delivery=delivery,
+                    delivery=delivery, sink_pool=sink_pool,
                 )
 
         def _interval_flusher() -> None:
@@ -3194,6 +3248,7 @@ class PipelineExecutor:
                     delivery=delivery,
                     checkpointer=checkpointer,
                     deadline=deadline,
+                    sink_pool=sink_pool,
                 )
             else:
                 current_source_key: tuple[str, str] | None = None
@@ -3250,6 +3305,7 @@ class PipelineExecutor:
                         stats,
                         flush_buffer=flush_buffer,
                         delivery=delivery,
+                        sink_pool=sink_pool,
                     ):
                         # Record threshold / flush interval / source-batch-end.
                         _flush_now()
@@ -3328,8 +3384,13 @@ class PipelineExecutor:
                 self._route_stateful_flush_records(
                     config, flush_records, serializer_out, sinks, ctx,
                     dlq_sink=dlq_sink, sink_cb_keys=sink_cb_keys,
+                    sink_pool=sink_pool,
                 )
             self._save_state_to_store(config, transforms, config_sha256, ctx.run_id)
+            # V18-08: shut the pooled parallel-sink executor down BEFORE the
+            # sink close (no in-flight sink.write() may race the teardown).
+            if sink_pool is not None:
+                sink_pool.shutdown(wait=True)
             # Close sinks AFTER flush-record routing (the flush writes ride the
             # same sink instances) and BEFORE the source — mirrors the batch
             # finally. Releases run-scoped resources (ClickHouse flush
@@ -3380,6 +3441,7 @@ class PipelineExecutor:
         delivery: _RunDeliveryAccounting | None = None,
         checkpointer: _CheckpointGate | None = None,
         deadline: float | None = None,
+        sink_pool: ThreadPoolExecutor | None = None,
     ) -> None:
         """Stream mode with N worker threads. Producer reads; workers process.
 
@@ -3408,7 +3470,7 @@ class PipelineExecutor:
                     flush_buffer, serializer_out, sinks, ctx, on_error,
                     config.rate_limit_rps, dlq_sink,
                     getattr(config, "parallel_sinks", False), sink_cb_keys, stats,
-                    delivery=delivery,
+                    delivery=delivery, sink_pool=sink_pool,
                 )
 
         def _drain_before_finalize() -> None:
@@ -3440,6 +3502,7 @@ class PipelineExecutor:
                         stats,
                         flush_buffer=flush_buffer,
                         delivery=delivery,
+                        sink_pool=sink_pool,
                     )
                     if flush_buffer is not None and needs_flush:
                         _flush_now()

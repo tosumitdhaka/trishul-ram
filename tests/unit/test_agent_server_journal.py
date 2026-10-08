@@ -1788,7 +1788,7 @@ class TestOutboxLoopBackoff:
         real_info = server_mod.logger.info
         calls: list[int] = []
 
-        def _flaky_drain(journal_, manager_url, api_key=""):
+        def _flaky_drain(journal_, manager_url, api_key="", client=None):
             calls.append(1)
             if len(calls) <= failures_before_recovery:
                 raise JournalUnavailableError("journal unavailable")

@@ -387,6 +387,50 @@ def worker_legacy_admit() -> str:
     return raw
 
 
+# V18-01 §9 (frozen): worker RPC deadlines and concurrency bound for the
+# pooled manager→worker / worker→manager HTTP clients (plan F: "Pool worker
+# RPC/REST sink clients and the parallel-sink executor; set
+# connect/read/write/pool deadlines and maximum concurrency"). The read
+# timeout matches today's dispatch client (worker_pool.py:637); the connect
+# timeout bounds the TCP/TLS handshake; the max concurrency caps the parallel
+# sink fan-out (REST/VES writes are RPC calls). Per-request timeouts from
+# pipeline config (e.g. a REST sink's ``timeout``) still override these as the
+# user-facing control; these are the pooled base deadlines.
+_RPC_CONNECT_TIMEOUT_S_DEFAULT = 5
+_RPC_READ_TIMEOUT_S_DEFAULT = 10
+_RPC_MAX_CONCURRENCY_DEFAULT = 32
+
+
+def rpc_connect_timeout_s() -> int:
+    """``TRAM_RPC_CONNECT_TIMEOUT_S`` (V18-01 §9) — pooled RPC connect deadline.
+
+    Bounds the TCP/TLS handshake of the shared manager↔worker and sink HTTP
+    clients. Invalid values fail loud via ``_env_int`` (the strictest pattern
+    in this module).
+    """
+    return _env_int("TRAM_RPC_CONNECT_TIMEOUT_S", _RPC_CONNECT_TIMEOUT_S_DEFAULT)
+
+
+def rpc_read_timeout_s() -> int:
+    """``TRAM_RPC_READ_TIMEOUT_S`` (V18-01 §9) — pooled RPC read deadline.
+
+    Frozen to match today's dispatch client (``worker_pool.py:637``). Invalid
+    values fail loud via ``_env_int`` (the strictest pattern in this module).
+    """
+    return _env_int("TRAM_RPC_READ_TIMEOUT_S", _RPC_READ_TIMEOUT_S_DEFAULT)
+
+
+def rpc_max_concurrency() -> int:
+    """``TRAM_RPC_MAX_CONCURRENCY`` (V18-01 §9) — pooled RPC concurrency bound.
+
+    Caps the parallel-sink fan-out executor (REST/VES sink writes are RPC
+    calls) so a wide fan-out never spawns unbounded concurrent HTTP work.
+    Invalid values fail loud via ``_env_int`` (the strictest pattern in this
+    module).
+    """
+    return _env_int("TRAM_RPC_MAX_CONCURRENCY", _RPC_MAX_CONCURRENCY_DEFAULT)
+
+
 @dataclass(frozen=True)
 class AppConfig:
     """Application-wide configuration loaded from environment variables."""
