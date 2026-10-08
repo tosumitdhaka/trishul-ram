@@ -597,6 +597,59 @@ class TestListRuns:
         call_kwargs = app.state.controller.get_runs.call_args.kwargs
         assert call_kwargs["status"] == "failed"
 
+    def test_partial_status_filter_passed_to_manager(self):
+        app = _make_runs_app()
+        client = TestClient(app)
+        r = client.get("/api/runs?status=partial")
+        assert r.status_code == 200
+        call_kwargs = app.state.controller.get_runs.call_args.kwargs
+        assert call_kwargs["status"] == "partial"
+
+    def test_partial_run_reports_partial_status_and_outcome(self, tmp_path):
+        """V18-09: a PARTIAL run surfaces as its own status in the listing —
+        never folded into 'error' — with the outcome field exposed."""
+        app = _make_runs_app()
+        db = TramDB(url=f"sqlite:///{tmp_path}/runs-partial.db")
+        db.save_run(_db_run("run-partial", pipeline_name="alpha", status="partial"))
+        app.state.db = db
+        # Route through the real DB read so the row is a real PARTIAL RunResult.
+        app.state.controller.get_runs.side_effect = db.get_runs
+        client = TestClient(app)
+        r = client.get("/api/runs")
+        assert r.status_code == 200
+        row = r.json()[0]
+        assert row["status"] == "partial"
+        assert row["outcome"] == "partial"
+
+    def test_listing_exposes_recorded_outcome_column(self, tmp_path):
+        """V18-09: the listing reads the recorded run_history.outcome column
+        directly — the recorded value takes precedence over the
+        status-derived fallback."""
+        app = _make_runs_app()
+        db = TramDB(url=f"sqlite:///{tmp_path}/runs-outcome-col.db")
+        db.save_run(_db_run("run-o", pipeline_name="alpha", status="success"))
+        with db._engine.begin() as conn:
+            conn.execute(
+                text("UPDATE run_history SET outcome = 'partial' WHERE run_id = 'run-o'")
+            )
+        app.state.db = db
+        app.state.controller.get_runs.side_effect = db.get_runs
+        client = TestClient(app)
+        row = client.get("/api/runs").json()[0]
+        assert row["status"] == "success"
+        assert row["outcome"] == "partial"
+
+    def test_no_db_listing_falls_back_to_status_outcome(self):
+        """Without persistence the outcome is derived from status (in-memory
+        mode) instead of being dropped."""
+        app = _make_runs_app()
+        mock_run = _run_result_mock(status="partial")
+        app.state.controller.get_runs.return_value = [mock_run]
+        client = TestClient(app)
+        row = client.get("/api/runs").json()[0]
+        assert row["status"] == "partial"
+        assert row["outcome"] == "partial"
+
     def test_limit_and_offset(self):
         app = _make_runs_app()
         client = TestClient(app)
@@ -917,6 +970,39 @@ class TestGetRunDetailAdditive:
         assert data["state"] == "unknown"
         assert data["attempts"][0]["attempt_id"] == "run-unk-a1"
         assert data["outcome"] == "failed"  # recorded history status
+
+    def test_partial_history_run_surfaces_partial_status_and_outcome(self, tmp_path):
+        """V18-09: a PARTIAL run reports status/outcome 'partial' in the
+        detail — the controller's pipeline-level 'error' mapping never leaks
+        into the run detail surface."""
+        app, db, ctrl = self._app(tmp_path, "detail-partial.db")
+        db.save_run(_db_run("run-partial", pipeline_name="alpha", status="partial"))
+        now = datetime.now(UTC).isoformat()
+        with db._engine.begin() as conn:
+            conn.execute(
+                text("UPDATE run_history SET outcome = 'partial' WHERE run_id = 'run-partial'")
+            )
+            conn.execute(text("""
+                INSERT INTO run_intents
+                    (run_id, pipeline_name, origin, flush, requested_at,
+                     requested_generation, final_outcome, final_attempt_id, resolved_at)
+                VALUES ('run-partial', 'alpha', 'scheduled', 0, :now, 1, 'partial',
+                        'run-partial-a1', :now)
+            """), {"now": now})
+            conn.execute(text("""
+                INSERT INTO execution_attempts
+                    (attempt_id, run_id, pipeline_name, ordinal, generation, slot_id,
+                     fence_token, state, worker_id)
+                VALUES ('run-partial-a1', 'run-partial', 'alpha', 1, 1, '', 'ft',
+                        'terminal', 'w0')
+            """))
+        client = TestClient(app)
+        r = client.get("/api/runs/run-partial")
+        assert r.status_code == 200
+        data = r.json()
+        assert data["status"] == "partial"
+        assert data["outcome"] == "partial"
+        assert data["state"] == "terminal"
 
     def test_queued_run_fallback_gets_ledger_context(self, tmp_path):
         app, db, ctrl = self._app(tmp_path, "detail-queued.db")

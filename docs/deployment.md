@@ -87,6 +87,20 @@ All configuration is via environment variables (12-factor).
 | `TRAM_STATEFUL_TRANSFORMS` | `1` | Stateful transforms (v1.4.0, F.1 — `counter_delta` and `window_aggregate`). `1` (default) enables the `counter_delta` and `window_aggregate` transforms, their durable per-pipeline state blob (the `transform_state` table in standalone mode, the internal `/api/internal/transform-state/{pipeline}` endpoints in worker mode), and the `state_persist_interval_s` stream persistence knob. `0` disables stateful transforms: pipelines using them fail validation with "stateful transforms disabled", the internal endpoints 404, and the manager-side dispatch guard is inert. An unrecognized value is logged at WARNING and fails open (feature ON). Rollback is `0` (immediate — no worker restart needed; the endpoints and guard vanish and offending pipelines go to `error` with a truthful message); `DROP TABLE transform_state` is optional cleanup. The SNMP source's `_snmp_widths` record field is additive and ignored by older stacks |
 | `TRAM_STATE_MAX_BYTES` | `20971520` | Maximum accepted transform-state blob size in bytes for the internal `PUT /api/internal/transform-state/{pipeline}` (F.1 §3.2b); oversized blobs are rejected with 413. Default 20 MiB ≈ 8× the design's ~2.5 MB / 50k-key `counter_delta` bound, leaving headroom for `window_aggregate` group/window state without letting a runaway blob inflate the `transform_state` DB row unbounded |
 | `TRAM_DLQ_SPOOL_DIR` | `~/.tram/dlq-spool` (worker mode: `<TRAM_DATA_DIR>/dlq-spool`, i.e. `/data/dlq-spool` in the Helm chart) | Local directory where DLQ envelopes are spooled when the DLQ sink write itself fails (v1.4.7, GH #55). Spooled JSON envelopes can be re-fed to the DLQ manually; a failure to even spool is counted in metrics and logged as ERROR — DLQ records are never silently dropped. In worker mode the default resolves under `TRAM_DATA_DIR` so envelopes land on the mounted data volume (`/data` in the chart) instead of the container overlay; the Helm chart value `worker.dlqSpoolDir` sets it explicitly |
+| `TRAM_WORKER_JOURNAL_PATH` | `/var/lib/tram/worker/journal.db` | Worker journal file (v1.8.0, V18-01 §4) — one stdlib-`sqlite3` journal per worker at this frozen path, WAL, `synchronous=FULL`, mode 0600, bounded by quota with admission headroom. Dedicated PVC mount (`worker.journal.persistence.enabled` in the chart), separate from the `/data` asset volume |
+| `TRAM_WORKER_JOURNAL_QUOTA_MB` | `512` | Worker journal quota (v1.8.0 §9, frozen). Admission fails closed when the journal is within headroom of the quota (`journal unavailable/full` → 503 admission closed) |
+| `TRAM_WORKER_JOURNAL_HEADROOM_MB` | `64` | Worker journal admission headroom (v1.8.0 §9, frozen) — the free-space margin that triggers closed admission before the quota is actually hit |
+| `TRAM_WORKER_JOURNAL_AUDIT_RETENTION_S` | `604800` | Worker journal audit retention (v1.8.0 §9, frozen) — bounds acked completion/outbox history; **unacked** completions are never swept. Authorization validity (max TTL + skew, ~10 min) always outruns both retention windows |
+| `TRAM_WORKER_JOURNAL_REPLAY_RETENTION_S` | `86400` | Worker journal replay retention (v1.8.0 §9, frozen) — bounds resolved revocation tombstones; **unresolved** tombstones are never swept |
+| `TRAM_AUTH_TOKEN_TTL_S` | `300` | Start-authorization token TTL (v1.8.0 §4, frozen). The manager mints HMAC tokens carried on `/agent/run` dispatches; the worker validates signature, `worker_session`, clock skew, expiry, and the TTL cap |
+| `TRAM_AUTH_MAX_TTL_S` | `600` | Maximum start-authorization TTL (v1.8.0 §4, frozen). Key-rotation overlap = max TTL + clock skew (605 s at defaults) |
+| `TRAM_AUTH_CLOCK_SKEW_S` | `5` | Start-authorization clock-skew tolerance (v1.8.0 §4, frozen) — a token whose `issued_at` is in the future beyond this window is rejected |
+| `TRAM_AUTH_SESSION_SECRET` | _(empty)_ | Manager↔worker session secret for start-authorization tokens (v1.8.0 §4). Bootstrap/fallback **only**: the `/agent/handshake` exchange mints a fresh secret at runtime and rotates it (previous secret stays valid for max-TTL + skew). Pre-share it so dispatches work before the first handshake; empty ⇒ no manager can mint a valid token until a handshake occurs. Generate with `openssl rand -base64 32` |
+| `TRAM_WORKER_LEGACY_ADMIT` | `auto` | Legacy-admit rollback bridge (v1.8.0 §5, frozen). `auto` (default): a dispatch carrying no `authorization` field is accepted exactly as today with an explicit `legacy` marker and **no fencing claimed** — keeps v1.7 managers dispatching during rollout. `off`: such dispatches are rejected with 400 (authorized dispatches are unaffected). Never force v1.8 guarantees for legacy dispatches |
+| `TRAM_SOURCE_BRIDGE_MAX_BYTES` | `16777216` | Internal source→executor bridge queue budget, payload bytes (v1.8.0 §9, frozen) — bounds the producer→reader queues of mqtt / websocket / nats / prometheus_rw / syslog-TCP. Overflow pauses intake (blocking/cooperative put) or is rejected explicitly (webhook router 503) — never a silent drop, never an early acknowledgement. AMQP is bounded by broker prefetch instead |
+| `TRAM_SOURCE_BRIDGE_MAX_COUNT` | `10000` | Internal source→executor bridge queue budget, item count (v1.8.0 §9, frozen) |
+| `TRAM_AUDIT_RETENTION_DAYS` | `30` | Run/audit history retention (v1.8.0 §9, frozen) — `run_id` values stay resolvable against run history until audit retention expires |
+| `TRAM_DRAIN_TIMEOUT_S` | `30` | Cooperative drain timeout (v1.8.0 §9, frozen) — the single source for the one monotonic deadline of the drain state machine (matches the 30 s cooperative drain / 45 s pod grace gate); no independent second timeout |
 
 ### SNMP library stack (v1.5.0, GH #72)
 
@@ -114,9 +128,19 @@ TRAM_DB_URL=sqlite:////data/tram.db
 # PostgreSQL (requires pip install tram[postgresql])
 TRAM_DB_URL=postgresql+psycopg2://tram:secret@postgres:5432/tramdb
 
-# MySQL / MariaDB (requires pip install tram[mysql])
-TRAM_DB_URL=mysql+pymysql://tram:secret@mysql:3306/tramdb
+# MySQL / MariaDB — v1.7 legacy URL, UNSUPPORTED in v1.8.0 (see below)
+# TRAM_DB_URL=mysql+pymysql://tram:secret@mysql:3306/tramdb
 ```
+
+**MySQL disposition (v1.8.0, frozen).** v1.7 documented a MySQL deployment
+option, but **v1.8.0 supports SQLite and PostgreSQL only**. A v1.8 manager
+started with a MySQL `TRAM_DB_URL` fails closed at startup with an explicit
+unsupported-dialect message (the frozen v1.8.0 DDL is not valid on MySQL: no
+`TEXT PRIMARY KEY` without key length, no `INSERT … ON CONFLICT DO NOTHING`),
+and no third-dialect branch is added. **Migrate to PostgreSQL before upgrading
+to v1.8.0** — dump and reload the run history / pipeline tables (or point the
+chart's `postgresql.enabled` subchart at the migrated data) as part of the
+upgrade runbook.
 
 Schema migrations run automatically at startup: `CREATE TABLE IF NOT EXISTS` + `ALTER TABLE ADD COLUMN` guards handle upgrades from v0.6.0 databases.
 
@@ -387,6 +411,57 @@ sink:
   retry_delay_seconds: 1.0   # base delay; doubles each attempt (exponential back-off)
   circuit_breaker_threshold: 5  # skip sink for 60s after 5 consecutive failures
 ```
+
+### Delivery contract (v1.8.0, V18-01 §6/§7/§9)
+
+```yaml
+delivery:
+  contract: legacy        # legacy (default) | strict
+```
+
+`delivery.contract` is the pipeline YAML field that opts a pipeline into the
+v1.8.0 delivery guarantees (frozen V18-01 §9):
+
+- **`legacy` (default)** — exactly today's behavior. No additional checks, no
+  new guarantees; existing pipelines are unaffected.
+- **`strict`** — enforced **at validation time** (`tram validate` and API
+  registration share `PipelineConfig.model_validate`, so a non-compliant
+  pipeline is rejected before it can run). `strict` requires:
+  - **Tier-declared sinks** — every configured sink must declare a
+    `delivery_capability`. An undeclared built-in or custom sink (including an
+    unknown custom plugin whose `delivery_capability = None`) is rejected with
+    a capability error — a capability is never guessed.
+  - **Durable source replay identity** — Kafka units carry the epoch-fenced
+    `{cluster}/{topic}/{partition}` frontier; AMQP requires
+    `require_message_id: true` (identity is `{queue}/{producer message ID}`);
+    every other source must implement `source_unit_id()` itself. Sources where
+    identity is demonstrably absent are rejected (identity-less
+    sources cannot provide replay without duplicate risk).
+  - **Single-threaded Kafka** — a Kafka source with `thread_workers > 1` is
+    rejected until the threaded frontier implementation passes broker tests.
+    Rejection, never silent weakness.
+  - Every unmet condition is listed in the validation error.
+
+**Confirmation tiers (frozen V18-01 §6).** Each built-in sink declares the
+durability tier its `commit()` barrier confirms:
+
+| Tier | Meaning | Built-ins at this tier |
+|---|---|---|
+| `fsynced_local` | File published (atomic rename); local fsync confirmed where the transport expresses it — per-sink notes bound any limitation | local file sink (publication manifest + fsync); sftp file sink (atomic `posix_rename`; server-side fsync not expressible in SFTP — durability limited to rename atomicity); DLQ fallback spool |
+| `remote_durable` | Service-confirmed durable write | ClickHouse (confirmed insert, retained buffer); Kafka sink (`acks=all`); AMQP sink (publisher confirms); s3 / gcs / azure_blob (per-write server-confirmed PUT/upload; objects appear atomically) |
+| `remote_accepted` | Synchronous service acceptance, durability not asserted | REST sink; ftp sink (STOR completion reply; no client-observable fsync; publication not atomic — a failed mid-transfer STOR can leave a partial file at the final path) |
+| `none` | Memory/undefined | stdio / debug sinks |
+
+**PARTIAL outcome semantics (v1.8.0 §8).** A run that delivered part of its
+records and lost the rest (e.g. `on_error: continue` with failed records, or
+an unconfirmed commit barrier) reports `partial` — never clean success for
+failed records, and never folded into `error`. Filtering stays `success`.
+`partial` is a first-class run status: it appears as its own status in
+`GET /api/runs` and `GET /api/runs/{run_id}` (plus the `outcome` field read
+from the run-history outcome column), and it can be filtered with
+`?status=partial`. Note: the **pipeline-level** status still transitions to
+`error` after a non-success run (the controller's state machine); run-level
+`partial` is independent of that surface.
 
 ## SNMP MIB Management (v1.0.3)
 
@@ -747,6 +822,7 @@ helm upgrade tram oci://ghcr.io/tosumitdhaka/charts/trishul-ram \
 | `worker.ingressService.type` | `NodePort` | Service type for published worker ingress (`NodePort`, `ClusterIP`, or `LoadBalancer`) |
 | `worker.ingressService.port` | `8767` | Service port for worker ingress |
 | `worker.ingressService.nodePort` | `30002` | Fixed NodePort for worker ingress when `type=NodePort`; set null to let Kubernetes assign one |
+| `worker.journal.persistence.enabled` | `false` | Worker journal persistence (v1.8.0, V18-01 §4). `true` provisions a dedicated per-worker RWO PVC mounted at `/var/lib/tram/worker` (the journal's frozen path) — separate from the `/data` asset volume, so journal loss (admission-closed, operator recovery) is decoupled from asset loss. **Upgrade path:** the chart renders the journal PVC only when the flag is on; enabling it on an existing release provisions the PVC through `volumeClaimTemplates` on the next `helm upgrade` (workers roll one at a time). For operators who prefer a manually managed PVC, pre-create a `PersistentVolumeClaim` named `<release>-worker-journal-<index>` (per worker ordinal) before the upgrade so the template binds to it instead of provisioning |
 | Pipeline `kubernetes.service_type` | `NodePort` | Per-pipeline dedicated Service exposure for active `webhook` / `prometheus_rw` streams; requires image built with `tram[k8s]` |
 | `persistence.enabled` | `true` | Provision a per-pod RWO PVC via `volumeClaimTemplates` mounted at `/data`; auto-sets `TRAM_DB_URL=sqlite:////data/tram.db`, `TRAM_SCHEMA_DIR=/data/schemas`, `TRAM_MIB_DIR=/data/mibs`; disable in cluster mode when using `sharedStorage` |
 | `persistence.size` | `1Gi` | PVC size per pod (standalone mode only) |

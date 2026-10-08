@@ -1366,7 +1366,7 @@ class TestRunEndpoint:
         finally:
             ctrl.stop()
 
-    def test_run_endpoint_200_triggered(self, db):
+    def test_run_endpoint_202_triggered(self, db):
         wp = MagicMock()
         wp.healthy_workers.return_value = ["http://w0:8766"]
         wp.dispatch_with_result.return_value = DispatchOutcome(
@@ -1378,10 +1378,13 @@ class TestRunEndpoint:
         try:
             client = TestClient(app)
             resp = client.post("/api/pipelines/my-manual/run")
-            assert resp.status_code == 200
+            # V18-09: the dispatched trigger path is 202 too, with the
+            # lifecycle-operation id on the receipt.
+            assert resp.status_code == 202
             data = resp.json()
             assert data["status"] == "triggered"
             assert data["run_id"]
+            assert data["operation_id"]
             assert db.get_active_queued_runs() == []
         finally:
             ctrl.stop()
@@ -1424,6 +1427,7 @@ class TestRunsMerge:
                 "run_id", "pipeline", "status", "started_at", "finished_at",
                 "records_in", "records_out", "records_skipped", "bytes_in",
                 "bytes_out", "dlq_count", "error", "errors", "node",
+                "outcome",
             }
             assert row["run_id"] == result.run_id
             assert row["pipeline"] == "my-manual"
@@ -1432,6 +1436,8 @@ class TestRunsMerge:
             assert row["records_in"] == 0
             assert row["error"] is None
             assert row["node"] is None
+            # V18-09: queued rows carry no outcome (no history row yet).
+            assert row["outcome"] is None
         finally:
             ctrl.stop()
 
