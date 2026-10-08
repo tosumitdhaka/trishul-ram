@@ -1984,7 +1984,16 @@ class PipelineController:
     def revert_queued_claim(self, run_id: str, result: str = "failed") -> bool:
         """dispatching → queued (drain dispatch_failed / no_capacity race).
         Log WARNING + MGR_QUEUE_DRAIN_RESULT{failed|no_capacity}. No run-history
-        churn: nothing was recorded at claim time."""
+        churn: nothing was recorded at claim time.
+
+        Stop-mid-drain retirement: when a lifecycle op (stop/delete/update/
+        restart) cancelled the queued row while this dispatch was in flight,
+        the revert fence misses and the row disappears from the active view.
+        The dispatch never reached a worker (revert is only called for
+        non-accepted outcomes), so the attempt can never complete — it is
+        retired here (terminal + guard released + intent resolved 'aborted')
+        so stop-mid-run leaves the ledger terminal instead of orphaning a
+        dispatching attempt that holds the guard."""
         with self._lock:
             if self._db is None:
                 return False
@@ -1993,6 +2002,7 @@ class PipelineController:
                 None,
             )
             if row is None:
+                self._retire_cancelled_claim_attempt(run_id)
                 return False
             if self._db.revert_queued_run_row(run_id) != 1:
                 return False
@@ -2018,6 +2028,52 @@ class PipelineController:
                 extra={"pipeline": row["pipeline_name"], "run_id": run_id, "result": result},
             )
             return True
+
+    def _retire_cancelled_claim_attempt(self, run_id: str) -> None:
+        """Retire a dispatching attempt whose queued row was cancelled mid-
+        dispatch (the revert_queued_claim fence missed — stop-mid-drain).
+
+        The row is 'cancelled' (a lifecycle op terminal-cancelled it while the
+        drain's dispatch was in flight) and the dispatch never reached a
+        worker, so the attempt can never complete: terminal + guard released
+        by identity + intent resolved 'aborted' — one transaction, reusing
+        ``_terminalize_attempt`` (idempotent: an already-terminal attempt or
+        an already-resolved intent fence out as 0-row no-ops).
+        """
+        if self._db is None:
+            return
+        if self._queued_run_status(run_id) != "cancelled":
+            return
+        attempt = self._active_attempt_for_run(run_id)
+        if attempt is None:
+            return
+        self._terminalize_attempt(
+            attempt_id=attempt["attempt_id"],
+            run_id=run_id,
+            pipeline_name=attempt["pipeline_name"],
+            generation=attempt["generation"],
+            resolve_outcome="aborted",
+            cancel_reason="dispatch_reverted_after_cancel",
+        )
+        logger.warning(
+            "Retired dispatching attempt — queued row cancelled mid-dispatch",
+            extra={
+                "pipeline": attempt["pipeline_name"],
+                "run_id": run_id,
+                "attempt_id": attempt["attempt_id"],
+            },
+        )
+
+    def _queued_run_status(self, run_id: str) -> str | None:
+        """The queued_runs status for a run_id in any state (None when the row
+        is gone) — the cancelled-row diagnostic for the revert fence miss."""
+        if self._db is None:
+            return None
+        with self._db._engine.connect() as conn:
+            return conn.execute(
+                text("SELECT status FROM queued_runs WHERE run_id = :run_id"),
+                {"run_id": run_id},
+            ).scalar()
 
     def expire_queued_run(self, run_id: str) -> bool:
         """queued → expired: db.expire_queued_run_row, then a FAILED RunResult
@@ -2807,6 +2863,40 @@ class PipelineController:
             lease_run_id = run_id or (lease.run_id if lease is not None else str(uuid.uuid4()))
             if self._worker_pool is not None:
                 self._worker_pool.on_run_complete(lease_run_id)
+
+            # Worker-loss reap (frozen §2): a FAILED history row is only
+            # written here when the ledger is terminalled in the same path —
+            # attempt → terminal (failed, worker_lost), guard released by
+            # identity, intent resolved. Same identity-checked pattern
+            # on_attempt_run_complete uses; never a second ledger-write
+            # pattern. The conditional fence pins the outbox-wins ordering:
+            # a resurrected worker whose journal completion already committed
+            # (attempt terminal, intent resolved, guard released, history
+            # recorded) makes this a 0-row no-op.
+            if self._db is not None:
+                attempt = self._active_attempt_for_run(lease_run_id)
+                if attempt is not None:
+                    self._terminalize_attempt(
+                        attempt_id=attempt["attempt_id"],
+                        run_id=lease_run_id,
+                        pipeline_name=attempt["pipeline_name"],
+                        generation=attempt["generation"],
+                        resolve_outcome="failed",
+                        cancel_reason="worker_lost",
+                    )
+
+            # Outbox-wins fence: when the completion callback already recorded
+            # the run (the reap raced a resurrected worker's journal
+            # completion), the reap must NOT write a second FAILED row nor
+            # clobber the pipeline status to 'error' — the success row and
+            # post-run transition are authoritative.
+            if self.manager.get_run(lease_run_id) is not None:
+                logger.info(
+                    "Reap skipped: run already recorded by a completion callback",
+                    extra={"pipeline": pipeline_name, "run_id": lease_run_id},
+                )
+                return True
+
             lease_started_at = lease.started_at if lease is not None else (
                 state.last_run or datetime.now(UTC)
             )
