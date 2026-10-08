@@ -16,6 +16,7 @@ import json
 import logging
 import os
 import random
+import secrets
 import socket
 import threading
 import time
@@ -28,7 +29,7 @@ from typing import TYPE_CHECKING
 import httpx
 from fastapi import FastAPI, HTTPException
 from fastapi.responses import JSONResponse
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 from tram.agent.journal import (
     AdmissionClosedError,
@@ -58,6 +59,43 @@ _RUN_COMPLETE_BACKOFF_BASE_S = 0.5
 # so an operator can tell a one-off blip from a persistent manager outage.
 _STATS_MISS_LOCK = threading.Lock()
 _CONSECUTIVE_STATS_MISSES: dict[str, int] = {}
+
+# V18-01 §5 (frozen): the manager↔worker protocol version and the capability
+# set this worker branch ACTUALLY implements (declared truthfully at
+# /agent/handshake — never claim a capability the branch does not honor):
+#   fencing            — worker_session-fenced admission, revocation
+#                        tombstones, clock watermark (V18-05, landed);
+#   commit_receipts    — sink commit barrier + latched_error + tier
+#                        declarations (V18-01 §6/§7, landed in this release);
+#   durable_completion — journal-first completions + outbox redelivery
+#                        (V18-05, completed by the drain lane);
+#   query_replay       — get_attempt / list_unacked_completions replay API
+#                        (V18-05, landed).
+# Deliberately NOT declared: admission_limits (worker-side slot limits not
+# implemented — slot capacity is only REPORTED), drain (POST /agent/drain is
+# a later lane), status_snapshot (the draining state machine does not exist
+# yet). A v1.8 manager reading these capabilities enters the compatibility
+# bridge for anything absent (frozen §5).
+TRAM_PROTOCOL_VERSION = "1.8"
+_WORKER_CAPABILITIES: tuple[str, ...] = (
+    "fencing",
+    "commit_receipts",
+    "durable_completion",
+    "query_replay",
+)
+
+# V18-01 §9 (frozen names): worker slot capacity REPORTED at handshake. The
+# defaults follow the config freeze (2 batch / 4 stream); there is no
+# enforcement lane yet — this is the manager's view of worker headroom.
+_WORKER_BATCH_SLOTS_DEFAULT = 2
+_WORKER_STREAM_SLOTS_DEFAULT = 4
+
+# Outbox drain loop: how often the background daemon thread polls due outbox
+# rows and how many it takes per pass. The drain is the durable backup for
+# the direct run-complete post — duplicate delivery is safe (the manager's
+# run-complete is identity-checked and idempotent).
+_OUTBOX_DRAIN_INTERVAL_S = 1.0
+_OUTBOX_DRAIN_BATCH = 10
 
 # GH #39/#54: the worker agent is a stateless executor with no per-worker DB,
 # so a ProcessedFileTracker cannot be constructed here from a local DB. With a
@@ -113,6 +151,50 @@ class StopRequest(BaseModel):
     run_id: str
 
 
+class HandshakeRequest(BaseModel):
+    """Manager → worker handshake initiation (V18-01 §5).
+
+    Carries the manager's view of the worker and its own protocol/capability
+    set so the exchange is symmetric. Every field is optional — a manager
+    that only needs the session secret may POST an empty body; the
+    authoritative registration (the worker's own session_id, capabilities,
+    slot capacity, journal health) and the freshly minted session secret
+    always come back in the response.
+    """
+
+    worker_id: str = ""
+    session_id: str = ""
+    protocol_version: str = ""
+    capabilities: list[str] = Field(default_factory=list)
+
+
+def _worker_slot_capacity() -> dict[str, int]:
+    """Slot capacity REPORTED at handshake (V18-01 §9 frozen names).
+
+    ``TRAM_WORKER_BATCH_SLOTS`` / ``TRAM_WORKER_STREAM_SLOTS``, defaults 2 / 4
+    per the config freeze. Reported only — the worker does not enforce slot
+    limits (that lane is later); an invalid value logs and falls back to the
+    default so a typo never fails the worker at boot.
+    """
+
+    def _slots(name: str, default: int) -> int:
+        raw = os.environ.get(name)
+        if raw is None:
+            return default
+        try:
+            return max(int(raw), 0)
+        except ValueError:
+            logger.warning(
+                "invalid %s=%r — using default %d", name, raw, default
+            )
+            return default
+
+    return {
+        "batch": _slots("TRAM_WORKER_BATCH_SLOTS", _WORKER_BATCH_SLOTS_DEFAULT),
+        "stream": _slots("TRAM_WORKER_STREAM_SLOTS", _WORKER_STREAM_SLOTS_DEFAULT),
+    }
+
+
 # ── In-memory run tracking ─────────────────────────────────────────────────
 
 
@@ -147,7 +229,17 @@ class ActiveRun:
 
 
 class WorkerState:
-    """Thread-safe store of currently-active pipeline runs."""
+    """Thread-safe store of currently-active pipeline runs.
+
+    V18-05: active-run tracking is ATTEMPT-AWARE — an ``ActiveRun`` is keyed
+    by ``attempt_id`` when it has one (authorized dispatch) and by ``run_id``
+    for legacy dispatches. Two distinct attempts of the same ``run_id``
+    (a superseded attempt still draining while the newer attempt runs) then
+    coexist in memory: the newer attempt's ``add`` never clobbers the older
+    one, and the older one's ``remove`` cannot evict the newer one. A
+    ``run_id`` → key index keeps the legacy lookups (duplicate guard, stop)
+    pointing at the NEWEST active attempt for that run_id.
+    """
 
     def __init__(
         self,
@@ -164,20 +256,56 @@ class WorkerState:
         # the manager can warn on a mixed-stack rolling upgrade.
         self.snmp_stack = snmp_stack
         self._runs: dict[str, ActiveRun] = {}
+        self._by_run: dict[str, str] = {}
         self._lock = threading.Lock()
         self.stats_stop = threading.Event()
+        # V18-05: outbox drain loop stop event (same pattern as stats_stop).
+        self.outbox_stop = threading.Event()
+
+    @staticmethod
+    def _key(run: ActiveRun) -> str:
+        return run.attempt_id or run.run_id
 
     def add(self, run: ActiveRun) -> None:
         with self._lock:
-            self._runs[run.run_id] = run
+            key = self._key(run)
+            self._runs[key] = run
+            # run_id index → newest attempt; a later attempt for the same
+            # run_id re-points the index without touching the older entry.
+            self._by_run[run.run_id] = key
 
-    def remove(self, run_id: str) -> None:
+    def remove(self, run_id: str, attempt_id: str = "") -> None:
         with self._lock:
-            self._runs.pop(run_id, None)
+            if attempt_id:
+                # Authorized attempt: remove only its own entry. If the
+                # run_id index points at this attempt, re-point it at the
+                # next active attempt for this run_id (or clear it); if a
+                # NEWER attempt owns the index, leave it alone — a
+                # superseded attempt must never evict the newer one.
+                self._runs.pop(attempt_id, None)
+                if self._by_run.get(run_id) == attempt_id:
+                    self._reindex_locked(run_id)
+            else:
+                # Legacy dispatch: keyed by run_id. Remove the run_id entry
+                # but only re-point the index when it still pointed at
+                # run_id — an authorized attempt may own it now.
+                self._runs.pop(run_id, None)
+                if self._by_run.get(run_id) == run_id:
+                    self._reindex_locked(run_id)
+
+    def _reindex_locked(self, run_id: str) -> None:
+        """Point the run_id index at the remaining active attempt for the
+        run_id, or clear it when none remains."""
+        for key, run in self._runs.items():
+            if run.run_id == run_id:
+                self._by_run[run_id] = key
+                return
+        self._by_run.pop(run_id, None)
 
     def get(self, run_id: str) -> ActiveRun | None:
         with self._lock:
-            return self._runs.get(run_id)
+            key = self._by_run.get(run_id) or run_id
+            return self._runs.get(key)
 
     def snapshot(self) -> list[ActiveRun]:
         with self._lock:
@@ -428,13 +556,16 @@ def _completion_result_json(
     started_at: str | None = None,
     finished_at: str | None = None,
     legacy: bool = False,
+    generation: int | None = None,
 ) -> str:
     """Build the journal ``completions.result_json`` payload (V18-01 §4).
 
     Journal-first ordering: the completion row commits BEFORE the run leaves
     ``WorkerState`` and before the run-complete callback, so a crash between
     the two never loses the outcome. The follow-up outbox lane reads this
-    payload when the direct callback cannot be delivered.
+    payload when the direct callback cannot be delivered — it carries the
+    full attempt identity (``attempt_id`` + ``generation``) the manager's
+    identity-checked run-complete path resolves on.
     """
     return json.dumps(
         {
@@ -442,6 +573,7 @@ def _completion_result_json(
             "pipeline_name": pipeline_name,
             "worker_id": worker_id,
             "attempt_id": attempt_id,
+            "generation": generation,
             "status": status,
             "records_in": records_in,
             "records_out": records_out,
@@ -460,6 +592,92 @@ def _completion_result_json(
 def _stats_loop(state: WorkerState, interval: int) -> None:
     while not state.stats_stop.wait(interval):
         _emit_stats_once(state)
+
+
+# ── Outbox drain (V18-01 §4/§5) ────────────────────────────────────────────
+
+
+def _run_complete_url(manager_url: str) -> str:
+    """The manager's run-complete route for this worker's manager URL."""
+    return f"{manager_url}/api/internal/run-complete" if manager_url else ""
+
+
+def _drain_outbox_once(
+    journal: WorkerJournal, manager_url: str, api_key: str = ""
+) -> int:
+    """One outbox drain pass: deliver every due row, ack on manager 200.
+
+    Each outbox row carries the attempt-identity completion payload (the
+    same ``result_json`` the journal committed first). On a manager 200 the
+    completion is durably acked (``mark_acked`` — the manager commits its
+    ledger before 200, so 200 IS the durable ack); any other outcome records
+    exponential backoff via ``record_outbox_failure`` and the row stays due
+    for a later pass. ``4xx``/network failures alike back off — the manager's
+    run-complete returns 200 even for an unknown/mismatched attempt
+    (``ignored`` diagnostics), so a non-200 genuinely means "not delivered".
+
+    Duplicate delivery vs. the direct post is safe: the manager's run-complete
+    is identity-checked and idempotent, so both may deliver.
+
+    Returns the number of rows processed.
+    """
+    url = _run_complete_url(manager_url)
+    if not url:
+        return 0
+    headers = {"X-API-Key": api_key} if api_key else None
+    processed = 0
+    for row in journal.fetch_due_outbox(limit=_OUTBOX_DRAIN_BATCH):
+        # mark_acked drains every outbox row for an attempt, so a row later
+        # in this pass may already be acked (and deleted) by an earlier
+        # duplicate — skip it rather than delivering a redundant copy.
+        rec = journal.get_attempt(row.attempt_id)
+        if rec is not None and rec.kind == "completion" and rec.acked:
+            continue
+        processed += 1
+        try:
+            payload = json.loads(row.payload_json)
+        except ValueError as exc:
+            logger.warning(
+                "outbox row %d has an unparseable payload — backing off",
+                row.seq,
+                extra={"attempt_id": row.attempt_id, "error": str(exc)},
+            )
+            journal.record_outbox_failure(row.seq, f"unparseable payload: {exc}")
+            continue
+        try:
+            with httpx.Client(timeout=10) as client:
+                resp = client.post(url, json=payload, headers=headers)
+                resp.raise_for_status()
+        except Exception as exc:
+            logger.warning(
+                "outbox delivery failed — backing off",
+                extra={
+                    "attempt_id": row.attempt_id,
+                    "seq": row.seq,
+                    "attempts": row.attempts + 1,
+                    "error": str(exc),
+                },
+            )
+            journal.record_outbox_failure(row.seq, str(exc))
+            continue
+        # 200 after the manager's ledger commit — durable ack.
+        journal.mark_acked(row.attempt_id)
+        logger.debug(
+            "outbox delivery acked",
+            extra={"attempt_id": row.attempt_id, "seq": row.seq},
+        )
+    return processed
+
+
+def _outbox_loop(
+    journal: WorkerJournal, state: WorkerState, manager_url: str, api_key: str = ""
+) -> None:
+    """Background daemon drain loop (same pattern as the stats loop)."""
+    while not state.outbox_stop.wait(_OUTBOX_DRAIN_INTERVAL_S):
+        try:
+            _drain_outbox_once(journal, manager_url, api_key)
+        except Exception:
+            logger.exception("outbox drain pass failed")
 
 
 # ── App factory ────────────────────────────────────────────────────────────
@@ -504,10 +722,14 @@ def create_worker_app(
     journal = journal if journal is not None else WorkerJournal(cfg.worker_journal_path())
 
     # V18-01 §4: the manager–worker session secret for start-authorization
-    # tokens. The /agent/handshake lane establishes this secret at runtime;
-    # until then the worker reads TRAM_AUTH_SESSION_SECRET so deployments can
-    # pre-share it. Empty secret = no manager can mint a valid token, so
-    # authorized dispatches are refused until the handshake lane lands.
+    # tokens. The /agent/handshake lane establishes this secret at runtime —
+    # each handshake mints a fresh secret, stored as the current secret with
+    # the previous one retained for the rotation overlap (max TTL + skew).
+    # TRAM_AUTH_SESSION_SECRET is the bootstrap/fallback: until the first
+    # handshake it IS the current secret (deployments pre-share it), and after
+    # a rotation it stays valid as the retained previous secret. Empty secret
+    # = no manager can mint a valid token, so authorized dispatches are
+    # refused until a handshake (or a pre-shared env secret) exists.
     auth_secret = os.environ.get("TRAM_AUTH_SESSION_SECRET", "")
 
     # V18-01 §4: session identity {worker_id}-{boot_uuid8}, minted once per
@@ -561,15 +783,32 @@ def create_worker_app(
         )
         stats_thread.start()
 
+        # V18-01 §4/§5: outbox drain — the durable backup for the direct
+        # run-complete post. Rows survive a crash (journal-first ordering);
+        # after a restart this loop redelivers unacked completions. Both the
+        # drain and the direct post may deliver — the manager's run-complete
+        # is identity-checked and idempotent, so duplicates are no-ops.
+        state.outbox_stop.clear()
+        outbox_thread = threading.Thread(
+            target=_outbox_loop,
+            args=(journal, state, manager_url, api_key),
+            daemon=True,
+            name="tram-agent-outbox",
+        )
+        outbox_thread.start()
+
         logger.info("Worker agent ready", extra={"worker_id": worker_id})
         yield
 
         # Signal all active streams to stop on shutdown
         state.stats_stop.set()
+        state.outbox_stop.set()
         for run in state.snapshot():
             run.stop_event.set()
         if stats_thread.is_alive():
             stats_thread.join(timeout=stats_interval + 1)
+        if outbox_thread.is_alive():
+            outbox_thread.join(timeout=_OUTBOX_DRAIN_INTERVAL_S + 1)
         logger.info("Worker agent stopped", extra={"worker_id": worker_id})
         journal.close()
 
@@ -581,6 +820,13 @@ def create_worker_app(
     app.state.worker = state
     app.state.journal = journal
     app.state.worker_session = worker_session
+    # V18-01 §4: session-secret state for token validation. ``auth_secret`` is
+    # the current secret (handshake-minted, or the env bootstrap before any
+    # handshake); ``auth_secret_previous`` is the retained pre-rotation
+    # secret accepted for the max-TTL + skew overlap. The /agent/handshake
+    # route rotates these.
+    app.state.auth_secret = auth_secret
+    app.state.auth_secret_previous = None
 
     # Internal agent API: same API-key middleware as the manager ingress, with
     # the /agent/* routes as the protected internal surface. /agent/health is
@@ -659,6 +905,116 @@ def create_worker_app(
             "watermark": watermark_payload,
         }
 
+    # ── POST /agent/handshake (V18-01 §5) ────────────────────────────────
+
+    @app.post("/agent/handshake")
+    def handshake(req: HandshakeRequest):
+        """Manager → worker registration exchange (frozen §5 protocol table).
+
+        The manager POSTs its protocol/capability view; the worker mints a
+        fresh session secret, rotates (the previous secret is retained for
+        the max-TTL + skew overlap), and replies with its registration:
+        ``session_id`` ({worker_id}-{boot_uuid8}), protocol version, the
+        capability set this branch implements, slot capacity, journal health,
+        and the ``session_secret`` the manager must mint start-authorization
+        tokens with. Machine-authenticated on the same APIKeyMiddleware
+        channel as every other /agent/* route.
+
+        Rotation on every call: a newer handshake supersedes the old secret
+        (frozen §5 — a new session_id for a worker_id supersedes the old).
+        The worker's own session identity rides in the response, so a manager
+        holding a stale session_id self-corrects on the next exchange.
+        """
+        new_secret = secrets.token_hex(32)
+        app.state.auth_secret_previous = app.state.auth_secret or None
+        app.state.auth_secret = new_secret
+        journal_health = journal.health()
+        logger.info(
+            "worker handshake — session secret rotated",
+            extra={
+                "worker_id": worker_id,
+                "session_id": worker_session,
+                "manager_worker_id": req.worker_id,
+                "manager_session_id": req.session_id,
+                "manager_protocol": req.protocol_version,
+                "protocol_version": TRAM_PROTOCOL_VERSION,
+            },
+        )
+        return {
+            "worker_id": worker_id,
+            "session_id": worker_session,
+            "protocol_version": TRAM_PROTOCOL_VERSION,
+            "capabilities": list(_WORKER_CAPABILITIES),
+            "slot_capacity": _worker_slot_capacity(),
+            "journal_health": {
+                "state": journal_health.state,
+                "detail": journal_health.detail,
+                "size_bytes": journal_health.size_bytes,
+                "quota_bytes": journal_health.quota_bytes,
+                "headroom_bytes": journal_health.headroom_bytes,
+            },
+            "session_secret": new_secret,
+        }
+
+    # ── GET /agent/attempts/{attempt_id} (V18-01 §5) ─────────────────────
+
+    @app.get("/agent/attempts/{attempt_id}")
+    def attempt(attempt_id: str):
+        """Replay query for one attempt (frozen §5 protocol table).
+
+        Serves the journal's ``get_attempt``: a completion record, an active
+        reservation, an ``interrupted`` reservation, or a revocation tombstone
+        — each as a distinguishable response carrying a ``kind``
+        discriminator. 404 means the attempt has NO journal row at all: that
+        is neither revocation nor quiescence — the manager must tell the
+        three apart (plan B). ``None`` rows occur for unknown attempt_ids and
+        for legacy dispatches (never journaled).
+        """
+        rec = journal.get_attempt(attempt_id)
+        if rec is None:
+            raise HTTPException(
+                status_code=404,
+                detail={"attempt_id": attempt_id, "reason": "unknown attempt"},
+            )
+        if rec.kind == "tombstone":
+            return {
+                "kind": "tombstone",
+                "attempt_id": rec.attempt_id,
+                "run_id": rec.run_id,
+                "reason": rec.reason,
+                "revoked_at": rec.revoked_at,
+                "session_epoch": rec.session_epoch,
+            }
+        if rec.kind == "completion":
+            result: dict[str, object] = {}
+            if rec.result_json:
+                try:
+                    result = json.loads(rec.result_json)
+                except ValueError:
+                    result = {"result_json": rec.result_json}
+            return {
+                "kind": "completion",
+                "attempt_id": rec.attempt_id,
+                "run_id": rec.run_id,
+                "result": result,
+                "completed_at": rec.completed_at,
+                "acked": rec.acked,
+                "acked_at": rec.acked_at,
+            }
+        # active | interrupted — same reservation shape, distinct kinds.
+        return {
+            "kind": rec.kind,
+            "attempt_id": rec.attempt_id,
+            "run_id": rec.run_id,
+            "state": rec.state,
+            "pipeline_name": rec.pipeline_name,
+            "generation": rec.generation,
+            "slot_id": rec.slot_id,
+            "worker_session": rec.worker_session,
+            "reserved_at": rec.reserved_at,
+            "thread_started": rec.thread_started,
+        }
+
     # ── POST /agent/run ────────────────────────────────────────────────────
 
     @app.post("/agent/run", status_code=202)
@@ -720,7 +1076,10 @@ def create_worker_app(
                     req.authorization,
                     req.pipeline_name,
                     worker_session=worker_session,
-                    current_secret=auth_secret,
+                    # V18-01 §4: the handshake-minted current secret, with the
+                    # retained pre-rotation secret accepted for the overlap.
+                    current_secret=app.state.auth_secret,
+                    previous_secret=app.state.auth_secret_previous,
                 )
             except AdmissionConflictError as exc:
                 raise HTTPException(
@@ -880,28 +1239,31 @@ def create_worker_app(
                     if attempt_id:
                         # V18-01 §4: journal-first completion — the row commits
                         # BEFORE the run leaves WorkerState and before the
-                        # run-complete callback (outbox-driven retry lands in
-                        # the follow-up lane; the direct post is retained).
-                        journal.record_completion(
-                            attempt_id,
-                            _completion_result_json(
-                                run_id=req.run_id,
-                                pipeline_name=req.pipeline_name,
-                                worker_id=state.worker_id,
-                                attempt_id=attempt_id,
-                                status="success",
-                                records_in=int(stats_snapshot["records_in"]),
-                                records_out=int(stats_snapshot["records_out"]),
-                                records_skipped=int(stats_snapshot["records_skipped"]),
-                                bytes_in=int(stats_snapshot["bytes_in"]),
-                                bytes_out=int(stats_snapshot["bytes_out"]),
-                                errors=list(stats_snapshot["errors_last_window"])
-                                + active_run.degradation_notes,
-                                started_at=active_run.started_at,
-                                finished_at=datetime.now(UTC).isoformat(),
-                                legacy=active_run.legacy,
-                            ),
+                        # run-complete callback. The same payload is enqueued
+                        # to the outbox: the drain loop is the durable backup
+                        # for the direct post (both may deliver — the
+                        # manager's run-complete is identity-checked and
+                        # idempotent).
+                        result_json = _completion_result_json(
+                            run_id=req.run_id,
+                            pipeline_name=req.pipeline_name,
+                            worker_id=state.worker_id,
+                            attempt_id=attempt_id,
+                            status="success",
+                            records_in=int(stats_snapshot["records_in"]),
+                            records_out=int(stats_snapshot["records_out"]),
+                            records_skipped=int(stats_snapshot["records_skipped"]),
+                            bytes_in=int(stats_snapshot["bytes_in"]),
+                            bytes_out=int(stats_snapshot["bytes_out"]),
+                            errors=list(stats_snapshot["errors_last_window"])
+                            + active_run.degradation_notes,
+                            started_at=active_run.started_at,
+                            finished_at=datetime.now(UTC).isoformat(),
+                            legacy=active_run.legacy,
+                            generation=active_run.generation,
                         )
+                        journal.record_completion(attempt_id, result_json)
+                        journal.enqueue_outbox(attempt_id, "run-complete", result_json)
                     _post_run_complete(
                         callback_url, req.run_id, req.pipeline_name, state.worker_id,
                         "success",
@@ -930,21 +1292,21 @@ def create_worker_app(
                     # buffered marks flushed.
                     _flush_file_tracker(file_tracker)
                     if attempt_id:
-                        journal.record_completion(
-                            attempt_id,
-                            _completion_result_json(
-                                run_id=req.run_id,
-                                pipeline_name=req.pipeline_name,
-                                worker_id=state.worker_id,
-                                attempt_id=attempt_id,
-                                status="error",
-                                error=str(exc),
-                                errors=[str(exc)],
-                                started_at=active_run.started_at,
-                                finished_at=datetime.now(UTC).isoformat(),
-                                legacy=active_run.legacy,
-                            ),
+                        result_json = _completion_result_json(
+                            run_id=req.run_id,
+                            pipeline_name=req.pipeline_name,
+                            worker_id=state.worker_id,
+                            attempt_id=attempt_id,
+                            status="error",
+                            error=str(exc),
+                            errors=[str(exc)],
+                            started_at=active_run.started_at,
+                            finished_at=datetime.now(UTC).isoformat(),
+                            legacy=active_run.legacy,
+                            generation=active_run.generation,
                         )
+                        journal.record_completion(attempt_id, result_json)
+                        journal.enqueue_outbox(attempt_id, "run-complete", result_json)
                     _post_run_complete(
                         callback_url, req.run_id, req.pipeline_name, state.worker_id,
                         "error", 0, 0, 0, 0, str(exc),
@@ -953,7 +1315,7 @@ def create_worker_app(
                         api_key=state.api_key,
                     )
                 finally:
-                    state.remove(req.run_id)
+                    state.remove(req.run_id, attempt_id=attempt_id)
 
             t = threading.Thread(
                 target=_stream_thread,
@@ -976,28 +1338,31 @@ def create_worker_app(
                     if attempt_id:
                         # V18-01 §4: journal-first completion — the row commits
                         # BEFORE the run leaves WorkerState and before the
-                        # run-complete callback (outbox-driven retry lands in
-                        # the follow-up lane; the direct post is retained).
-                        journal.record_completion(
-                            attempt_id,
-                            _completion_result_json(
-                                run_id=req.run_id,
-                                pipeline_name=req.pipeline_name,
-                                worker_id=state.worker_id,
-                                attempt_id=attempt_id,
-                                status=result.status.value,
-                                records_in=result.records_in,
-                                records_out=result.records_out,
-                                records_skipped=result.records_skipped,
-                                bytes_in=result.bytes_in,
-                                bytes_out=result.bytes_out,
-                                error=result.error,
-                                errors=list(result.errors or []),
-                                started_at=result.started_at.isoformat(),
-                                finished_at=result.finished_at.isoformat(),
-                                legacy=active_run.legacy,
-                            ),
+                        # run-complete callback. The same payload is enqueued
+                        # to the outbox: the drain loop is the durable backup
+                        # for the direct post (both may deliver — the
+                        # manager's run-complete is identity-checked and
+                        # idempotent).
+                        result_json = _completion_result_json(
+                            run_id=req.run_id,
+                            pipeline_name=req.pipeline_name,
+                            worker_id=state.worker_id,
+                            attempt_id=attempt_id,
+                            status=result.status.value,
+                            records_in=result.records_in,
+                            records_out=result.records_out,
+                            records_skipped=result.records_skipped,
+                            bytes_in=result.bytes_in,
+                            bytes_out=result.bytes_out,
+                            error=result.error,
+                            errors=list(result.errors or []),
+                            started_at=result.started_at.isoformat(),
+                            finished_at=result.finished_at.isoformat(),
+                            legacy=active_run.legacy,
+                            generation=active_run.generation,
                         )
+                        journal.record_completion(attempt_id, result_json)
+                        journal.enqueue_outbox(attempt_id, "run-complete", result_json)
                     if active_run.stats is not None:
                         payload = {
                             "worker_id": state.worker_id,
@@ -1044,21 +1409,21 @@ def create_worker_app(
                     # buffered marks flushed.
                     _flush_file_tracker(file_tracker)
                     if attempt_id:
-                        journal.record_completion(
-                            attempt_id,
-                            _completion_result_json(
-                                run_id=req.run_id,
-                                pipeline_name=req.pipeline_name,
-                                worker_id=state.worker_id,
-                                attempt_id=attempt_id,
-                                status="error",
-                                error=str(exc),
-                                errors=[str(exc)],
-                                started_at=active_run.started_at,
-                                finished_at=datetime.now(UTC).isoformat(),
-                                legacy=active_run.legacy,
-                            ),
+                        result_json = _completion_result_json(
+                            run_id=req.run_id,
+                            pipeline_name=req.pipeline_name,
+                            worker_id=state.worker_id,
+                            attempt_id=attempt_id,
+                            status="error",
+                            error=str(exc),
+                            errors=[str(exc)],
+                            started_at=active_run.started_at,
+                            finished_at=datetime.now(UTC).isoformat(),
+                            legacy=active_run.legacy,
+                            generation=active_run.generation,
                         )
+                        journal.record_completion(attempt_id, result_json)
+                        journal.enqueue_outbox(attempt_id, "run-complete", result_json)
                     _post_run_complete(
                         callback_url, req.run_id, req.pipeline_name, state.worker_id,
                         "error", 0, 0, 0, 0, str(exc),
@@ -1067,7 +1432,7 @@ def create_worker_app(
                         api_key=state.api_key,
                     )
                 finally:
-                    state.remove(req.run_id)
+                    state.remove(req.run_id, attempt_id=attempt_id)
 
             t = threading.Thread(
                 target=_batch_thread,
