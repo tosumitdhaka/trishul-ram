@@ -349,6 +349,25 @@ def worker_journal_replay_retention_s() -> int:
     return _env_int("TRAM_WORKER_JOURNAL_REPLAY_RETENTION_S", _WORKER_JOURNAL_REPLAY_RETENTION_S_DEFAULT)
 
 
+def worker_legacy_admit() -> str:
+    """``TRAM_WORKER_LEGACY_ADMIT`` (V18-01 §5) — rollback-bridge gate.
+
+    ``auto`` (default) accepts a dispatch carrying no ``authorization`` field
+    (v1.7-shaped) exactly as today — explicit ``legacy`` marker in logs and
+    status, no fencing claimed — keeping v1.7 managers and the existing
+    dispatch path working during rollout. ``off`` rejects such dispatches with
+    400. Any other value fails loud via ``ValueError`` (the strictest pattern
+    in this module) so a typo'd deployment never silently flips between
+    rollback modes.
+    """
+    raw = os.environ.get("TRAM_WORKER_LEGACY_ADMIT", "auto").lower()
+    if raw not in ("auto", "off"):
+        raise ValueError(
+            f"Environment variable TRAM_WORKER_LEGACY_ADMIT={raw!r} must be 'auto' or 'off'"
+        )
+    return raw
+
+
 @dataclass(frozen=True)
 class AppConfig:
     """Application-wide configuration loaded from environment variables."""
