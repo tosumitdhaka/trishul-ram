@@ -28,6 +28,8 @@ from tram.core.config import (
 )
 from tram.core.context import PipelineRunContext, RunResult, RunStatus
 from tram.core.exceptions import TramError
+from tram.interfaces.base_sink import SinkCommitReceipt
+from tram.interfaces.base_source import AckDisposition
 from tram.registry.registry import get_serializer, get_sink, get_source, get_transform
 from tram.transforms.stateful import StatefulTransform
 
@@ -277,13 +279,18 @@ def _write_dlq_envelope(
     error: str,
     record=None,
     raw: bytes | None = None,
-) -> None:
+) -> bool:
     """Write a DLQ envelope to the DLQ sink.
 
     A DLQ sink write failure never silently discards the record (review D1):
     the envelope is spooled to local disk as a durable fallback (replayable
     JSON file), or — when even the spool fails — surfaced via ERROR logs and
     the ``DLQ_WRITE_FAILED`` counter.
+
+    Returns True when the envelope is durably handled (DLQ write confirmed OR
+    spooled to disk), False when both failed — the caller then treats the
+    record as a failed-DLQ disposition (never a DLQ success, never an ack;
+    plan C).
     """
     envelope: dict = {
         "_error": error,
@@ -297,8 +304,10 @@ def _write_dlq_envelope(
         envelope["raw"] = base64.b64encode(raw).decode()
     try:
         dlq_sink.write(json.dumps(envelope).encode(), {})
+        return True
     except Exception as dlq_exc:
-        _spool_dlq_envelope(envelope, ctx, error=str(dlq_exc))
+        spooled = _spool_dlq_envelope(envelope, ctx, error=str(dlq_exc))
+        return spooled is not None
 
 
 def _try_trim_process_heap() -> bool:
@@ -442,6 +451,133 @@ class _StreamFlushBuffer:
             self._meta = None
             self._oldest_at = None
             return records, meta or {}
+
+
+class _DLQDeliveryError(TramError):
+    """A DLQ write AND its local spool fallback both failed.
+
+    Raised under ``on_error: dlq`` so the run pauses/stops and the affected
+    source unit stays undecided (never acknowledged) — a failed DLQ is never
+    a DLQ success (plan C).
+    """
+
+
+class _UnitOutcome:
+    """Per-source-unit delivery accounting for ack disposition (V18-01 §7).
+
+    ``records_in``/``delivered`` are accumulated per chunk by the batch sink
+    path; ``filtered`` (condition-routed out — successful intentional
+    non-delivery) is the residual after delivered + failed + DLQ'd are
+    accounted. The disposition decides whether ``source.ack()`` may run.
+    """
+
+    __slots__ = (
+        "meta", "records_in", "delivered", "filtered",
+        "records_failed", "dlq_succeeded", "dlq_failed",
+    )
+
+    def __init__(self, meta: dict) -> None:
+        self.meta = meta
+        self.records_in = 0
+        self.delivered = 0
+        self.filtered = 0
+        self.records_failed = 0
+        self.dlq_succeeded = 0
+        self.dlq_failed = 0
+
+    def finish(self) -> None:
+        """Compute the condition-filtered residual after the unit drains."""
+        accounted = (
+            self.delivered + self.records_failed
+            + self.dlq_succeeded + self.dlq_failed
+        )
+        self.filtered = max(0, self.records_in - accounted)
+
+    def disposition(self, on_error: str) -> AckDisposition | None:
+        """The unit's decided disposition, or None when undecided (never ack).
+
+        delivered = sinks committed; filtered = condition-routed out (successful
+        intentional non-delivery); dlq = durably in the DLQ/spool; dropped =
+        explicit loss under ``on_error: continue``. Abort, exhausted retry, and
+        failed DLQ leave the unit undecided.
+        """
+        if self.dlq_failed > 0:
+            return None                      # failed-DLQ: undecided
+        if self.dlq_succeeded > 0:
+            return AckDisposition.DLQ
+        if self.records_failed > 0:
+            if on_error == "continue":
+                return AckDisposition.DROPPED
+            return None                      # abort / exhausted retry: undecided
+        if self.delivered > 0:
+            return AckDisposition.DELIVERED
+        if self.records_in > 0:
+            return AckDisposition.FILTERED
+        return None                          # no records — nothing decided
+
+
+class _RunDeliveryAccounting:
+    """Run-scoped delivery loss accounting for the batch path (plan C).
+
+    Tracks per-source-unit outcomes (for ack disposition) AND run-level loss
+    counters that decide the terminal outcome (``partial`` under continue).
+    One instance per batch attempt; chunk processing mutates it from worker
+    threads (thread_workers > 1), so every mutation is lock-protected.
+    """
+
+    def __init__(self) -> None:
+        self._lock = threading.Lock()
+        self.units: dict[tuple[str, str], _UnitOutcome] = {}
+        self.records_failed = 0
+        self.dlq_succeeded = 0
+        self.dlq_failed = 0
+
+    def register_unit(self, key: tuple[str, str], meta: dict) -> _UnitOutcome:
+        with self._lock:
+            unit = self.units.get(key)
+            if unit is None:
+                unit = _UnitOutcome(meta)
+                self.units[key] = unit
+            return unit
+
+    def take_unit(self, key: tuple[str, str]) -> _UnitOutcome | None:
+        """Pop and finish a unit's outcome at its finalize point."""
+        with self._lock:
+            unit = self.units.pop(key, None)
+        if unit is not None:
+            unit.finish()
+        return unit
+
+    def record_chunk(self, key, records_in: int, delivered: int) -> None:
+        """Per-chunk delivery accounting (records delivered to >= 1 sink)."""
+        with self._lock:
+            unit = self.units.get(key) if key is not None else None
+            if unit is not None:
+                unit.records_in += records_in
+                unit.delivered += delivered
+
+    def record_loss(
+        self,
+        key,
+        *,
+        records_failed: int = 0,
+        dlq_succeeded: int = 0,
+        dlq_failed: int = 0,
+    ) -> None:
+        """Record record losses both run-level and on the unit (when keyed)."""
+        with self._lock:
+            self.records_failed += records_failed
+            self.dlq_succeeded += dlq_succeeded
+            self.dlq_failed += dlq_failed
+            unit = self.units.get(key) if key is not None else None
+            if unit is not None:
+                unit.records_failed += records_failed
+                unit.dlq_succeeded += dlq_succeeded
+                unit.dlq_failed += dlq_failed
+
+    def has_loss(self) -> bool:
+        with self._lock:
+            return self.records_failed > 0 or self.dlq_failed > 0
 
 
 class PipelineExecutor:
@@ -782,6 +918,184 @@ class PipelineExecutor:
                     ctx.note_skip(msg)
 
     @staticmethod
+    def _commit_failure(
+        sinks: list[tuple],
+        ctx: PipelineRunContext,
+        on_error: str,
+        msg: str,
+        cause: BaseException,
+    ) -> bool:
+        """Handle a sink commit/latched failure per the error policy (plan C).
+
+        abort/retry/dlq raise — a latched or commit failure must never produce
+        clean success (the retry loop or the FAILED result handles it).
+        continue records the failure and returns False so the run can finish
+        with a PARTIAL outcome and the affected unit stays undecided (never
+        acknowledged).
+        """
+        logger.error(
+            msg,
+            extra={
+                "pipeline": ctx.pipeline_name,
+                "run_id": ctx.run_id,
+                "on_error": on_error,
+            },
+        )
+        if on_error == "continue":
+            ctx.note_skip(msg)
+            return False
+        raise TramError(msg) from cause
+
+    @staticmethod
+    def _commit_sinks(
+        sinks: list[tuple],
+        ctx: PipelineRunContext,
+        *,
+        on_error: str,
+    ) -> bool:
+        """Delivery commit barrier for every matched sink (V18-01 §6/§7).
+
+        Calls ``commit(deadline=None)`` on each sink and collects the
+        ``SinkCommitReceipt``s, then checks every sink's ``latched_error()``
+        (buffered/background writers surface latched failures here). Returns
+        True when every sink confirmed; a commit or latched failure never
+        produces clean success (``_commit_failure`` raises or returns False
+        per the error policy). Deadline plumbing (one monotonic deadline) is
+        V18-07.
+        """
+        receipts: list[SinkCommitReceipt] = []
+        for sink_tuple in sinks:
+            sink_instance = sink_tuple[0]
+            commit = getattr(sink_instance, "commit", None)
+            if not callable(commit):
+                continue
+            try:
+                receipts.append(commit(deadline=None))
+            except Exception as exc:
+                return PipelineExecutor._commit_failure(
+                    sinks, ctx, on_error,
+                    f"Sink commit failed: {exc}",
+                    exc,
+                )
+        for sink_tuple in sinks:
+            sink_instance = sink_tuple[0]
+            latched_error = getattr(sink_instance, "latched_error", None)
+            if not callable(latched_error):
+                continue
+            try:
+                latched = latched_error()
+            except Exception as exc:
+                return PipelineExecutor._commit_failure(
+                    sinks, ctx, on_error,
+                    f"Sink latched_error check failed: {exc}",
+                    exc,
+                )
+            if isinstance(latched, BaseException):
+                return PipelineExecutor._commit_failure(
+                    sinks, ctx, on_error,
+                    f"Sink has a latched delivery failure: {latched}",
+                    latched,
+                )
+        if receipts:
+            logger.debug(
+                "Sink commit barrier confirmed",
+                extra={
+                    "pipeline": ctx.pipeline_name,
+                    "receipts": [
+                        {
+                            "sink_key": r.sink_key,
+                            "tier": str(r.tier),
+                            "confirmed": r.confirmed,
+                        }
+                        for r in receipts
+                    ],
+                },
+            )
+        return True
+
+    @staticmethod
+    def _ack_source_unit(source, meta: dict, disposition: AckDisposition) -> None:
+        """Transitional ack gate (V18-01 §6): ack() only for DECIDED units.
+
+        Abort, exhausted retry, and failed DLQ never ack (undecided units are
+        left for replay). An ack failure is logged, never raised: the sink
+        commit already confirmed the writes, so a failed ack only risks
+        duplicate delivery on replay (at-least-once), never loss.
+        """
+        ack = getattr(source, "ack", None)
+        if not callable(ack):
+            return
+        try:
+            ack(meta, disposition)
+        except Exception as exc:
+            logger.error(
+                "Source ack failed",
+                extra={
+                    "source_type": type(source).__name__,
+                    "disposition": disposition.value,
+                    "source_path": meta.get("source_path"),
+                    "source_filename": meta.get("source_filename"),
+                    "error": str(exc),
+                },
+            )
+
+    @staticmethod
+    def _finalize_batch_source_unit(
+        sinks: list[tuple],
+        source,
+        delivery: _RunDeliveryAccounting | None,
+        key: tuple[str, str],
+        meta: dict,
+        unit: _UnitOutcome | None,
+        ctx: PipelineRunContext,
+        on_error: str,
+        *,
+        finalize_source: bool,
+    ) -> None:
+        """Delivery barrier + ack + legacy finalize for one batch source unit.
+
+        Ordering (V18-01 §6/§7, plan C): commit every matched sink and check
+        latched errors BEFORE any source finalization; then the sink's
+        ``finalize_source`` hook; then ``source.ack(meta, disposition)`` for
+        decided units only; then the legacy ``source.finalize(success)`` on its
+        existing schedule. ``finalize_source`` is False for a batch_size
+        boundary stop — the incomplete file is never marked done and its unit
+        is never acknowledged.
+        """
+        commit_ok = PipelineExecutor._commit_sinks(sinks, ctx, on_error=on_error)
+        PipelineExecutor._finalize_source_for_sinks(
+            sinks, meta, success=commit_ok, ctx=ctx
+        )
+        if delivery is not None:
+            unit = delivery.take_unit(key) or unit
+        if commit_ok and finalize_source and unit is not None:
+            disposition = unit.disposition(on_error)
+            if disposition is not None:
+                PipelineExecutor._ack_source_unit(source, meta, disposition)
+        if finalize_source:
+            source.finalize(meta, success=commit_ok)
+
+    @staticmethod
+    def _batch_outcome(
+        on_error: str,
+        delivery: _RunDeliveryAccounting,
+        *,
+        commit_failed: bool,
+    ) -> RunStatus:
+        """Terminal batch outcome per plan C / V18-01 §8.
+
+        ``continue`` with lost records (or an unconfirmed commit barrier)
+        reports PARTIAL — never clean success for failed records. Filtering
+        stays success; abort/retry/dlq keep today's FAILED/SUCCESS semantics
+        (their failures already raise out of the run).
+        """
+        if commit_failed:
+            return RunStatus.PARTIAL
+        if on_error == "continue" and delivery.has_loss():
+            return RunStatus.PARTIAL
+        return RunStatus.SUCCESS
+
+    @staticmethod
     def _close_sinks(sinks: list[tuple], dlq_sink=None) -> None:
         """Best-effort, idempotent close of sink instances after a batch run.
 
@@ -833,6 +1147,7 @@ class PipelineExecutor:
         *,
         dlq_sink=None,
         stats: PipelineStats | None = None,
+        delivery: _RunDeliveryAccounting | None = None,
     ) -> list:
         """Run the top-level transform chain over the records, per record.
 
@@ -847,6 +1162,7 @@ class PipelineExecutor:
         from tram.metrics.registry import DLQ_RECORDS
 
         surviving_records = []
+        key = _source_unit_key(meta)
         for record in records:
             try:
                 processed = [record]
@@ -859,13 +1175,24 @@ class PipelineExecutor:
                     # GH #48 §2.9: abort must fail the run like the parse and
                     # sink-write abort paths, not silently DLQ+continue.
                     raise TramError(f"Transform error: {exc}") from exc
+                dlq_ok = True
                 if dlq_sink is not None:
-                    _write_dlq_envelope(
+                    dlq_ok = _write_dlq_envelope(
                         dlq_sink, ctx,
                         stage="transform", error=str(exc), record=record,
                     )
                     ctx.record_dlq()
                     DLQ_RECORDS.labels(pipeline=ctx.pipeline_name).inc()
+                    if delivery is not None:
+                        delivery.record_loss(
+                            key, dlq_succeeded=int(dlq_ok), dlq_failed=int(not dlq_ok)
+                        )
+                    if not dlq_ok and on_error == "dlq" and delivery is not None:
+                        raise _DLQDeliveryError(
+                            f"DLQ delivery failed for transform error: {exc}"
+                        ) from exc
+                elif delivery is not None:
+                    delivery.record_loss(key, records_failed=1)
                 ctx.record_error(str(exc))
                 if stats is not None:
                     stats.increment(
@@ -892,6 +1219,7 @@ class PipelineExecutor:
         *,
         count_records_in: bool = True,
         rate_limit_per_record: bool = False,
+        delivery: _RunDeliveryAccounting | None = None,
     ) -> bool:
         """Process one decoded record batch.
 
@@ -918,6 +1246,7 @@ class PipelineExecutor:
         )
 
         t_start = time.monotonic()
+        key = _source_unit_key(meta)
 
         try:
             if count_records_in:
@@ -973,13 +1302,24 @@ class PipelineExecutor:
                             # transform and sink-write abort paths — not
                             # silently DLQ and continue.
                             raise TramError(f"Transform error: {exc}") from exc
+                        dlq_ok = True
                         if dlq_sink is not None:
-                            _write_dlq_envelope(
+                            dlq_ok = _write_dlq_envelope(
                                 dlq_sink, ctx,
                                 stage="transform", error=str(exc), record=pre_transform,
                             )
                             ctx.record_dlq()
                             DLQ_RECORDS.labels(pipeline=ctx.pipeline_name).inc()
+                            if delivery is not None:
+                                delivery.record_loss(
+                                    key, dlq_succeeded=int(dlq_ok), dlq_failed=int(not dlq_ok)
+                                )
+                            if not dlq_ok and on_error == "dlq" and delivery is not None:
+                                raise _DLQDeliveryError(
+                                    f"DLQ delivery failed for sink transform error: {exc}"
+                                ) from exc
+                        elif delivery is not None:
+                            delivery.record_loss(key, records_failed=1)
                         ctx.record_error(str(exc))
                         if stats is not None:
                             stats.increment(
@@ -1026,6 +1366,8 @@ class PipelineExecutor:
                         # the records when no sink wrote them — record_error
                         # would double-count. note_skip records the reason only.
                         ctx.note_skip("Circuit breaker open")
+                        if delivery is not None:
+                            delivery.record_loss(key, records_failed=len(records_in))
                         if stats is not None:
                             stats.increment(errors=["Circuit breaker open"])
                         return 0
@@ -1109,12 +1451,26 @@ class PipelineExecutor:
                             self._cb_state[sink_key] = (failures, open_until)
 
                     if dlq_sink is not None:
-                        _write_dlq_envelope(
+                        dlq_ok = _write_dlq_envelope(
                             dlq_sink, ctx,
                             stage="sink", error=str(last_exc), record=partition_records,
                         )
                         ctx.record_dlq()
                         DLQ_RECORDS.labels(pipeline=ctx.pipeline_name).inc()
+                        if delivery is not None:
+                            delivery.record_loss(
+                                key,
+                                dlq_succeeded=int(dlq_ok),
+                                dlq_failed=int(not dlq_ok),
+                            )
+                        if not dlq_ok and on_error == "dlq" and delivery is not None:
+                            # Failed-DLQ: pause/stop and leave the input
+                            # unacknowledged (plan C) — never a DLQ success.
+                            raise _DLQDeliveryError(
+                                f"DLQ delivery failed for sink error: {last_exc}"
+                            ) from last_exc
+                    elif delivery is not None:
+                        delivery.record_loss(key, records_failed=len(partition_records))
                     if on_error == "abort":
                         raise TramError(f"Sink write error: {last_exc}") from last_exc
                     # Issue #84: the chunk-level skip accounting below
@@ -1168,6 +1524,8 @@ class PipelineExecutor:
             # otherwise. Condition-filtered or failed sinks no longer bump the
             # count for records they never wrote (review D4).
             records_written = max(written_counts) if written_counts else 0
+            if delivery is not None:
+                delivery.record_chunk(key, len(records), records_written)
             if records_written > 0:
                 ctx.inc_records_out(records_written)
                 RECORDS_OUT.labels(pipeline=ctx.pipeline_name).inc(records_written)
@@ -1198,11 +1556,11 @@ class PipelineExecutor:
             return True
 
         except TramError as exc:
+            if on_error == "abort" or isinstance(exc, _DLQDeliveryError):
+                raise
             msg = f"Processing error: {exc}"
             logger.error(msg, extra={"pipeline": ctx.pipeline_name, "run_id": ctx.run_id})
             ERRORS.labels(pipeline=ctx.pipeline_name).inc()
-            if on_error == "abort":
-                raise
             ctx.record_error(msg)
             if stats is not None:
                 stats.increment(skipped=1, errors=[msg])
@@ -1225,6 +1583,7 @@ class PipelineExecutor:
         stats: PipelineStats | None = None,
         flush_buffer: _StreamFlushBuffer | None = None,
         passthrough: bool = False,
+        delivery: _RunDeliveryAccounting | None = None,
     ) -> bool:
         """Process one (raw, meta) chunk. Returns True on success.
 
@@ -1247,6 +1606,7 @@ class PipelineExecutor:
         from tram.metrics.registry import DLQ_RECORDS, ERRORS, RECORDS_IN
 
         meta = _augment_chunk_meta(meta, ctx)
+        key = _source_unit_key(meta)
         if passthrough:
             from tram.pipeline.protobuf_passthrough import (
                 process_chunk as _protobuf_passthrough_chunk,
@@ -1268,13 +1628,25 @@ class PipelineExecutor:
             try:
                 records = serializer_in.parse(raw)
             except Exception as exc:
+                dlq_ok = True
                 if dlq_sink is not None:
-                    _write_dlq_envelope(
+                    dlq_ok = _write_dlq_envelope(
                         dlq_sink, ctx,
                         stage="parse", error=str(exc), record=None, raw=raw,
                     )
                     ctx.record_dlq()
                     DLQ_RECORDS.labels(pipeline=ctx.pipeline_name).inc()
+                if delivery is not None:
+                    if dlq_sink is not None:
+                        delivery.record_loss(
+                            key, dlq_succeeded=int(dlq_ok), dlq_failed=int(not dlq_ok)
+                        )
+                    else:
+                        delivery.record_loss(key, records_failed=1)
+                if not dlq_ok and on_error == "dlq" and delivery is not None:
+                    raise _DLQDeliveryError(
+                        f"DLQ delivery failed for unparseable chunk: {exc}"
+                    ) from exc
                 if stats is not None:
                     stats.increment(
                         dlq=1 if dlq_sink is not None else 0,
@@ -1293,7 +1665,7 @@ class PipelineExecutor:
                     stats.increment(records_in=len(records))
                 survivors = self._apply_global_transforms(
                     records, transforms, meta, ctx, on_error,
-                    dlq_sink=dlq_sink, stats=stats,
+                    dlq_sink=dlq_sink, stats=stats, delivery=delivery,
                 )
                 return flush_buffer.append(
                     survivors, meta, batch_end=bool(meta.get("source_batch_end"))
@@ -1301,14 +1673,15 @@ class PipelineExecutor:
             return self._process_records(
                 records, meta, transforms, serializer_out, sinks, ctx, on_error,
                 rate_limit_rps, dlq_sink, parallel_sinks, sink_cb_keys, stats,
+                delivery=delivery,
             )
 
         except TramError as exc:
+            if on_error == "abort" or isinstance(exc, _DLQDeliveryError):
+                raise
             msg = f"Processing error: {exc}"
             logger.error(msg, extra={"pipeline": ctx.pipeline_name, "run_id": ctx.run_id})
             ERRORS.labels(pipeline=ctx.pipeline_name).inc()
-            if on_error == "abort":
-                raise
             ctx.record_error(msg)
             if stats is not None:
                 stats.increment(skipped=1, errors=[msg])
@@ -1331,11 +1704,13 @@ class PipelineExecutor:
         parallel_sinks: bool = False,
         sink_cb_keys: list[str] | None = None,
         stats: PipelineStats | None = None,
+        delivery: _RunDeliveryAccounting | None = None,
     ) -> bool:
         """Process one raw chunk through serializer-provided record batches."""
         from tram.metrics.registry import DLQ_RECORDS, ERRORS
 
         meta = _augment_chunk_meta(meta, ctx)
+        key = _source_unit_key(meta)
 
         try:
             raw_size = _payload_size_bytes(raw)
@@ -1356,6 +1731,7 @@ class PipelineExecutor:
                     self._process_records(
                         records, meta, transforms, serializer_out, sinks, ctx, on_error,
                         rate_limit_rps, dlq_sink, parallel_sinks, sink_cb_keys, stats,
+                        delivery=delivery,
                     )
                     if batch_size and ctx.records_in >= batch_size:
                         return True
@@ -1363,13 +1739,25 @@ class PipelineExecutor:
             except TramError:
                 raise
             except Exception as exc:
+                dlq_ok = True
                 if dlq_sink is not None:
-                    _write_dlq_envelope(
+                    dlq_ok = _write_dlq_envelope(
                         dlq_sink, ctx,
                         stage="parse", error=str(exc), record=None, raw=raw,
                     )
                     ctx.record_dlq()
                     DLQ_RECORDS.labels(pipeline=ctx.pipeline_name).inc()
+                if delivery is not None:
+                    if dlq_sink is not None:
+                        delivery.record_loss(
+                            key, dlq_succeeded=int(dlq_ok), dlq_failed=int(not dlq_ok)
+                        )
+                    else:
+                        delivery.record_loss(key, records_failed=1)
+                if not dlq_ok and on_error == "dlq" and delivery is not None:
+                    raise _DLQDeliveryError(
+                        f"DLQ delivery failed for unparseable chunk: {exc}"
+                    ) from exc
                 if stats is not None:
                     stats.increment(
                         dlq=1 if dlq_sink is not None else 0,
@@ -1377,11 +1765,11 @@ class PipelineExecutor:
                     )
                 raise TramError(f"Parse error: {exc}") from exc
         except TramError as exc:
+            if on_error == "abort" or isinstance(exc, _DLQDeliveryError):
+                raise
             msg = f"Processing error: {exc}"
             logger.error(msg, extra={"pipeline": ctx.pipeline_name, "run_id": ctx.run_id})
             ERRORS.labels(pipeline=ctx.pipeline_name).inc()
-            if on_error == "abort":
-                raise
             ctx.record_error(msg)
             if stats is not None:
                 stats.increment(skipped=1, errors=[msg])
@@ -1508,10 +1896,15 @@ class PipelineExecutor:
         result = RunResult.from_context(ctx, RunStatus.FAILED, error="Max retries exceeded")
         try:
             for attempt in range(max(1, retry_count + 1)):
+                # One delivery-accounting instance per attempt (matches the
+                # rebuilt ctx): a failed attempt's losses never leak into the
+                # final attempt's outcome.
+                delivery = _RunDeliveryAccounting()
                 try:
                     self._run_batch_chunks(
                         config, source, sinks, serializer_in, serializer_out,
                         transforms, dlq_sink, ctx, sink_cb_keys=sink_cb_keys, stats=stats,
+                        delivery=delivery,
                     )
 
                     if flush:
@@ -1530,7 +1923,19 @@ class PipelineExecutor:
                                 ctx, dlq_sink=dlq_sink, sink_cb_keys=sink_cb_keys,
                             )
 
-                    result = RunResult.from_context(ctx, RunStatus.SUCCESS)
+                    # V18-01 §6/§7: the delivery barrier sits before run
+                    # success is constructed — a latched or commit failure must
+                    # never produce clean success (replaces the success-before-
+                    # close ordering). Under continue a barrier failure yields a
+                    # PARTIAL outcome instead of raising.
+                    commit_ok = self._commit_sinks(sinks, ctx, on_error=config.on_error)
+                    status = self._batch_outcome(
+                        config.on_error, delivery, commit_failed=not commit_ok
+                    )
+                    result = RunResult.from_context(ctx, status)
+                    result.records_failed = delivery.records_failed
+                    result.dlq_succeeded = delivery.dlq_succeeded
+                    result.dlq_failed = delivery.dlq_failed
                     # Persist transform state only on the success path: a failed
                     # run keeps the previous snapshot intact (counters are
                     # cumulative, so a lost update spans the gap correctly).
@@ -1542,9 +1947,13 @@ class PipelineExecutor:
                         extra={
                             "pipeline": config.name,
                             "run_id": ctx.run_id,
+                            "status": status.value,
                             "records_in": ctx.records_in,
                             "records_out": ctx.records_out,
                             "records_skipped": ctx.records_skipped,
+                            "records_failed": result.records_failed,
+                            "dlq_succeeded": result.dlq_succeeded,
+                            "dlq_failed": result.dlq_failed,
                         },
                     )
                     return result
@@ -1596,6 +2005,9 @@ class PipelineExecutor:
                         continue
 
                     result = RunResult.from_context(ctx, RunStatus.FAILED, error=str(exc))
+                    result.records_failed = delivery.records_failed
+                    result.dlq_succeeded = delivery.dlq_succeeded
+                    result.dlq_failed = delivery.dlq_failed
                     logger.error(
                         "Batch run failed",
                         extra={"pipeline": config.name, "run_id": ctx.run_id, "error": str(exc)},
@@ -1621,6 +2033,7 @@ class PipelineExecutor:
         ctx: PipelineRunContext,
         sink_cb_keys: list[str] | None = None,
         stats: PipelineStats | None = None,
+        delivery: _RunDeliveryAccounting | None = None,
     ) -> None:
         """Inner loop: read source chunks and process with optional thread pool."""
         passthrough = False
@@ -1650,13 +2063,13 @@ class PipelineExecutor:
             self._run_batch_chunks_threaded(
                 config, source, sinks, serializer_in, serializer_out,
                 transforms, dlq_sink, ctx, sink_cb_keys=sink_cb_keys, stats=stats,
-                passthrough=passthrough,
+                passthrough=passthrough, delivery=delivery,
             )
             return
         self._run_batch_chunks_sequential(
             config, source, sinks, serializer_in, serializer_out,
             transforms, dlq_sink, ctx, sink_cb_keys=sink_cb_keys, stats=stats,
-            passthrough=passthrough,
+            passthrough=passthrough, delivery=delivery,
         )
 
     def _run_batch_chunks_sequential(
@@ -1672,6 +2085,7 @@ class PipelineExecutor:
         sink_cb_keys: list[str] | None = None,
         stats: PipelineStats | None = None,
         passthrough: bool = False,
+        delivery: _RunDeliveryAccounting | None = None,
     ) -> None:
         """Single-threaded batch loop. Each chunk is fully processed before the
         next one is pulled, so source finalize runs strictly after the chunk
@@ -1684,6 +2098,7 @@ class PipelineExecutor:
 
         current_source_key: tuple[str, str] | None = None
         current_source_meta: dict | None = None
+        current_unit: _UnitOutcome | None = None
         stopped_early = False
         try:
             for raw, meta in source.read():
@@ -1692,14 +2107,18 @@ class PipelineExecutor:
                 if source_key is not None:
                     meta["enable_safe_finalize"] = True
                     if current_source_key is not None and source_key != current_source_key:
-                        self._finalize_source_for_sinks(
-                            sinks, current_source_meta, success=True, ctx=ctx
+                        self._finalize_batch_source_unit(
+                            sinks, source, delivery, current_source_key,
+                            current_source_meta, current_unit, ctx, on_error,
+                            finalize_source=True,
                         )
-                        source.finalize(current_source_meta, success=True)
                         current_source_key = None
                         current_source_meta = None
+                        current_unit = None
                     if current_source_key is None:
                         current_source_key = source_key
+                        if delivery is not None:
+                            current_unit = delivery.register_unit(source_key, dict(meta))
                     current_source_meta = dict(meta)
 
                 if record_chunk_size:
@@ -1708,6 +2127,7 @@ class PipelineExecutor:
                         serializer_out, sinks, ctx, on_error, record_chunk_size,
                         batch_size, rate_limit_rps, dlq_sink,
                         parallel_sinks, sink_cb_keys, stats,
+                        delivery=delivery,
                     )
                 else:
                     self._process_chunk(
@@ -1715,6 +2135,7 @@ class PipelineExecutor:
                         serializer_out, sinks, ctx, on_error,
                         rate_limit_rps, dlq_sink, parallel_sinks, sink_cb_keys, stats,
                         passthrough=passthrough,
+                        delivery=delivery,
                     )
                 if batch_size and ctx.records_in >= batch_size:
                     logger.info(
@@ -1732,14 +2153,11 @@ class PipelineExecutor:
             raise
         else:
             if current_source_meta is not None:
-                self._finalize_source_for_sinks(
-                    sinks, current_source_meta, success=True, ctx=ctx
+                self._finalize_batch_source_unit(
+                    sinks, source, delivery, current_source_key,
+                    current_source_meta, current_unit, ctx, on_error,
+                    finalize_source=not stopped_early,
                 )
-                if not stopped_early:
-                    # On a batch_size stop the source generator was abandoned
-                    # mid-file; the current file must stay unmarked so the next
-                    # run reprocesses it (matches the pre-hook behavior).
-                    source.finalize(current_source_meta, success=True)
 
     def _run_batch_chunks_threaded(
         self,
@@ -1754,6 +2172,7 @@ class PipelineExecutor:
         sink_cb_keys: list[str] | None = None,
         stats: PipelineStats | None = None,
         passthrough: bool = False,
+        delivery: _RunDeliveryAccounting | None = None,
     ) -> None:
         """Multi-threaded batch loop: bounded in-flight chunks + deferred finalize.
 
@@ -1781,6 +2200,19 @@ class PipelineExecutor:
         units: deque[list] = deque()
 
         def _submit(raw: bytes, meta: dict) -> None:
+            # Register the unit's outcome BEFORE the future can start on a
+            # worker thread — the worker's record_chunk/record_loss must find
+            # the tracker already in the dict (a submit-then-register order
+            # races the first `_process_records` of the unit).
+            key = _source_unit_key(meta)
+            if key is not None:
+                if units and units[-1][0] == key:
+                    units[-1][2] += 1
+                else:
+                    if units:
+                        units[-1][3] = True  # previous unit fully submitted
+                    unit = delivery.register_unit(key, dict(meta)) if delivery is not None else None
+                    units.append([key, dict(meta), 1, False, unit])
             if record_chunk_size:
                 # GH #48 §2.10: honor record_chunk_size on the threaded path
                 # too — parse_chunks bounds the fan-out per chunk instead of
@@ -1794,6 +2226,7 @@ class PipelineExecutor:
                     serializer_out, sinks, ctx, on_error,
                     record_chunk_size, batch_size, config.rate_limit_rps,
                     dlq_sink, parallel_sinks, sink_cb_keys, stats,
+                    delivery=delivery,
                 )
             else:
                 fut = pool.submit(
@@ -1802,15 +2235,8 @@ class PipelineExecutor:
                     serializer_out, sinks, ctx, on_error,
                     config.rate_limit_rps, dlq_sink, parallel_sinks, sink_cb_keys, stats,
                     passthrough=passthrough,
+                    delivery=delivery,
                 )
-            key = _source_unit_key(meta)
-            if key is not None:
-                if units and units[-1][0] == key:
-                    units[-1][2] += 1
-                else:
-                    if units:
-                        units[-1][3] = True  # previous unit fully submitted
-                    units.append([key, dict(meta), 1, False])
             in_flight.append((fut, key, meta))
 
         def _drain_one() -> None:
@@ -1827,7 +2253,10 @@ class PipelineExecutor:
                 units[0][2] -= 1
                 if units[0][2] == 0 and units[0][3]:
                     finished = units.popleft()
-                    source.finalize(finished[1], success=True)
+                    self._finalize_batch_source_unit(
+                        sinks, source, delivery, finished[0], finished[1],
+                        finished[4], ctx, on_error, finalize_source=True,
+                    )
 
         with ThreadPoolExecutor(max_workers=config.thread_workers) as pool:
             try:

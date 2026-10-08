@@ -10,6 +10,7 @@ from unittest.mock import MagicMock, patch
 import pytest
 
 from tram.core.context import RunStatus
+from tram.interfaces.base_source import AckDisposition
 from tram.pipeline.executor import PipelineExecutor, _filter_by_condition
 from tram.pipeline.loader import load_pipeline_from_yaml
 
@@ -292,7 +293,9 @@ class TestPipelineExecutorBatchRun:
         mock_sink.write.assert_not_called()
 
     def test_batch_run_continue_on_error(self):
-        """on_error=continue should skip bad chunks and continue."""
+        """on_error=continue should skip bad chunks and continue — and the run
+        must NOT report clean success for the failed records: it finishes
+        PARTIAL with the loss accounted (V18-01 §7 / plan C)."""
         config = _make_pipeline()
         executor = PipelineExecutor()
 
@@ -319,8 +322,9 @@ class TestPipelineExecutorBatchRun:
         ):
             result = executor.batch_run(config)
 
-        assert result.status == RunStatus.SUCCESS
+        assert result.status == RunStatus.PARTIAL
         assert result.records_skipped > 0
+        assert result.records_failed == 1  # the unparseable chunk is lost
 
     def test_batch_run_invokes_post_batch_cleanup_by_default(self):
         config = _make_pipeline()
@@ -928,6 +932,338 @@ class TestPipelineExecutorBatchRun:
         assert result.records_out == 1
         assert any("Sink finalize failed" in e for e in result.errors)
         mock_sink.write.assert_called_once()
+
+
+class TestBatchDeliveryIntegrity:
+    """V18-02 / plan C — batch-path delivery integrity in the executor:
+
+    commit barrier + latched_error gate before success, error-policy
+    disposition (abort/retry/continue/dlq), source ack gating (decided units
+    only) alongside the legacy finalize() call, and partial outcomes.
+    """
+
+    def _run(self, config, mock_source, mock_sink, mock_ser_in, mock_ser_out,
+             dlq_sink=None, run_id=None):
+        executor = PipelineExecutor()
+        with (
+            patch.object(executor, "_build_source", return_value=mock_source),
+            patch.object(executor, "_build_sinks", return_value=[(mock_sink, None, [])]),
+            patch.object(executor, "_build_serializer_in", return_value=mock_ser_in),
+            patch.object(executor, "_build_serializer_out", return_value=mock_ser_out),
+            patch.object(executor, "_build_transforms", return_value=[]),
+            patch.object(executor, "_build_dlq_sink", return_value=dlq_sink),
+        ):
+            return executor.batch_run(config, run_id=run_id)
+
+    def _one_chunk_run(self, config, sink, *, records=None, source_meta=None,
+                       dlq_sink=None):
+        records = records if records is not None else [{"id": "1"}]
+        mock_source = MagicMock()
+        mock_source.read.return_value = iter([
+            (json.dumps(records).encode(), source_meta or {"source_filename": "f.json"}),
+        ])
+        mock_ser_in = MagicMock()
+        mock_ser_in.parse.return_value = records
+        mock_ser_out = MagicMock()
+        mock_ser_out.serialize.return_value = json.dumps(records).encode()
+        return self._run(config, mock_source, sink, mock_ser_in, mock_ser_out,
+                         dlq_sink=dlq_sink), mock_source
+
+    # ── (a) commit or latched failure → no clean success ───────────────────
+
+    def test_commit_failure_abort_never_clean_success(self):
+        """A sink commit() failure under abort fails the run — the delivery
+        barrier must not be swallowed."""
+        config = _make_pipeline("on_error: abort")
+        mock_sink = MagicMock()
+        mock_sink.commit.side_effect = RuntimeError("commit boom")
+
+        result, mock_source = self._one_chunk_run(config, mock_sink)
+
+        assert result.status == RunStatus.FAILED
+        assert "commit boom" in (result.error or "")
+        # The unit is undecided: never acked, never finalized as success —
+        # the input stays for replay.
+        mock_source.ack.assert_not_called()
+        assert mock_source.finalize.call_count == 0
+
+    def test_commit_failure_continue_partial(self):
+        """Under continue a commit failure records the failure and finishes
+        PARTIAL — never clean success, and the unit stays undecided."""
+        config = _make_pipeline()  # on_error defaults to continue
+        mock_sink = MagicMock()
+        mock_sink.commit.side_effect = RuntimeError("commit boom")
+
+        result, mock_source = self._one_chunk_run(config, mock_sink)
+
+        assert result.status == RunStatus.PARTIAL
+        assert any("commit boom" in e for e in result.errors)
+        mock_source.ack.assert_not_called()
+
+    def test_latched_error_never_clean_success(self):
+        """A buffered sink's latched_error() (background flush failure) must
+        fail the barrier — no clean success."""
+        config = _make_pipeline()
+        mock_sink = MagicMock()
+        mock_sink.latched_error.return_value = RuntimeError("latched flush failed")
+
+        result, mock_source = self._one_chunk_run(config, mock_sink)
+
+        assert result.status == RunStatus.PARTIAL
+        assert any("latched" in e for e in result.errors)
+        mock_source.ack.assert_not_called()
+
+    # ── (b) abort retains partial writes and signals the supervisor ────────
+
+    def test_abort_retains_partial_writes_and_fails(self):
+        """on_error=abort: records already written stay (no rollback), the run
+        reports FAILED to the supervisor, and the in-flight unit is never
+        acked and not finalized as success."""
+        config = _make_pipeline("on_error: abort")
+        executor = PipelineExecutor()
+        mock_source = MagicMock()
+        mock_source.read.return_value = iter([
+            (json.dumps([{"id": "1"}]).encode(), {"source_filename": "a.json"}),
+            (json.dumps([{"id": "2"}]).encode(), {"source_filename": "a.json"}),
+        ])
+        mock_sink = MagicMock()
+        mock_sink.write.side_effect = [None, OSError("disk full")]
+        mock_ser_in = MagicMock()
+        mock_ser_in.parse.side_effect = lambda raw: json.loads(raw)
+        mock_ser_out = MagicMock()
+        mock_ser_out.serialize.return_value = b"[]"
+
+        with (
+            patch.object(executor, "_build_source", return_value=mock_source),
+            patch.object(executor, "_build_sinks", return_value=[(mock_sink, None, [])]),
+            patch.object(executor, "_build_serializer_in", return_value=mock_ser_in),
+            patch.object(executor, "_build_serializer_out", return_value=mock_ser_out),
+            patch.object(executor, "_build_transforms", return_value=[]),
+        ):
+            result = executor.batch_run(config)
+
+        assert result.status == RunStatus.FAILED
+        assert "disk full" in (result.error or "")
+        # Partial writes are retained: the first chunk's write succeeded and
+        # is not rolled back; the second chunk's write failed and stopped the
+        # run (one attempt per chunk, no retry under abort).
+        assert mock_sink.write.call_count == 2
+        # Abort never acks; the failed unit is finalized with success=False so
+        # the input stays for replay.
+        mock_source.ack.assert_not_called()
+        assert mock_source.finalize.call_args.kwargs["success"] is False
+
+    # ── (c) continue → partial outcome with loss accounting ────────────────
+
+    def test_continue_partial_outcome_with_loss_accounting(self):
+        """on_error=continue with a failing sink: PARTIAL terminal outcome,
+        per-run loss counters populated, and the failed unit acked with the
+        DROPPED disposition (explicit continue policy)."""
+        config = _make_pipeline()  # continue
+        mock_sink = MagicMock()
+        mock_sink.write.side_effect = OSError("sink down")
+
+        result, mock_source = self._one_chunk_run(
+            config, mock_sink, records=[{"id": "1"}, {"id": "2"}]
+        )
+
+        assert result.status == RunStatus.PARTIAL
+        assert result.records_failed == 2
+        assert result.records_out == 0
+        assert result.dlq_failed == 0
+        mock_source.ack.assert_called_once()
+        assert mock_source.ack.call_args[0][1] == AckDisposition.DROPPED
+
+    # ── (d) dlq: failed DLQ never acks; success acks DLQ disposition ───────
+
+    def test_dlq_failure_never_acks_and_fails_run(self):
+        """A failed DLQ (sink write AND spool both fail) is a failed
+        disposition: the run stops, and the unit is never acknowledged."""
+        config = _make_pipeline(
+            "on_error: dlq\n"
+            "          dlq:\n"
+            "            type: local\n"
+            "            path: /tmp/dlq"
+        )
+        mock_sink = MagicMock()
+        mock_sink.write.side_effect = OSError("sink down")
+        mock_dlq = MagicMock()
+        mock_dlq.write.side_effect = OSError("dlq down")
+
+        with patch("tram.pipeline.executor._spool_dlq_envelope", return_value=None):
+            result, mock_source = self._one_chunk_run(
+                config, mock_sink, dlq_sink=mock_dlq
+            )
+
+        assert result.status == RunStatus.FAILED
+        assert result.dlq_failed == 1
+        assert mock_dlq.write.call_count == 1  # attempted, failed
+        mock_source.ack.assert_not_called()
+
+    def test_dlq_success_acks_dlq_disposition(self):
+        """A durably DLQ'd unit is decided: ack(DLQ) fires and the run (all
+        obligations satisfied) reports SUCCESS."""
+        config = _make_pipeline(
+            "on_error: dlq\n"
+            "          dlq:\n"
+            "            type: local\n"
+            "            path: /tmp/dlq"
+        )
+        mock_sink = MagicMock()
+        mock_sink.write.side_effect = OSError("sink down")
+        mock_dlq = MagicMock()
+
+        result, mock_source = self._one_chunk_run(
+            config, mock_sink, dlq_sink=mock_dlq
+        )
+
+        assert result.status == RunStatus.SUCCESS
+        assert result.dlq_succeeded == 1
+        mock_dlq.write.assert_called_once()
+        mock_source.ack.assert_called_once()
+        assert mock_source.ack.call_args[0][1] == AckDisposition.DLQ
+
+    # ── (e) ack only on decided units, with the right disposition ──────────
+
+    def test_delivered_unit_acked_delivered_and_finalized(self):
+        """A fully delivered unit is acked DELIVERED and the legacy
+        finalize(success=True) still runs (transitional contract: both calls
+        happen, finalize on its existing schedule)."""
+        config = _make_pipeline()
+        mock_sink = MagicMock()
+
+        result, mock_source = self._one_chunk_run(
+            config, mock_sink, records=[{"id": "1"}, {"id": "2"}]
+        )
+
+        assert result.status == RunStatus.SUCCESS
+        assert result.records_out == 2
+        mock_source.ack.assert_called_once()
+        assert mock_source.ack.call_args[0][1] == AckDisposition.DELIVERED
+        # Legacy compat: finalize() still invoked with success=True.
+        mock_source.finalize.assert_called_once()
+        assert mock_source.finalize.call_args.kwargs["success"] is True
+
+    # ── (g) filtered units count as success ────────────────────────────────
+
+    def test_filtered_unit_acked_filtered_and_success(self):
+        """A unit whose records are condition-routed out of every sink is
+        successful intentional non-delivery: ack(FILTERED), run SUCCESS."""
+        config = _make_pipeline()
+        executor = PipelineExecutor()
+        records = [{"id": "1", "val": "a"}, {"id": "2", "val": "b"}]
+        mock_source = MagicMock()
+        mock_source.read.return_value = iter([
+            (json.dumps(records).encode(), {"source_filename": "f.json"}),
+        ])
+        mock_sink = MagicMock()
+        mock_ser_in = MagicMock()
+        mock_ser_in.parse.return_value = records
+        mock_ser_out = MagicMock()
+        mock_ser_out.serialize.return_value = b"[]"
+
+        with (
+            patch.object(executor, "_build_source", return_value=mock_source),
+            patch.object(executor, "_build_sinks", return_value=[(mock_sink, "val == 'zzz'", [])]),
+            patch.object(executor, "_build_serializer_in", return_value=mock_ser_in),
+            patch.object(executor, "_build_serializer_out", return_value=mock_ser_out),
+            patch.object(executor, "_build_transforms", return_value=[]),
+        ):
+            result = executor.batch_run(config)
+
+        assert result.status == RunStatus.SUCCESS  # filtering stays success
+        assert result.records_skipped == 2
+        mock_sink.write.assert_not_called()
+        mock_source.ack.assert_called_once()
+        assert mock_source.ack.call_args[0][1] == AckDisposition.FILTERED
+
+    # ── (f) finalize still invoked (legacy compat) ─────────────────────────
+
+    def test_finalize_invoked_on_undecided_units_with_success_false(self):
+        """Under continue with a commit failure the unit stays undecided (no
+        ack) and finalize(success=False) keeps the input for replay."""
+        config = _make_pipeline()
+        mock_sink = MagicMock()
+        mock_sink.commit.side_effect = RuntimeError("commit boom")
+
+        result, mock_source = self._one_chunk_run(config, mock_sink)
+
+        assert result.status == RunStatus.PARTIAL
+        mock_source.ack.assert_not_called()
+        mock_source.finalize.assert_called_once()
+        assert mock_source.finalize.call_args.kwargs["success"] is False
+
+    # ── (5) batch_size boundary: incomplete file never marked done ─────────
+
+    def test_batch_size_boundary_unit_never_acked_nor_finalized(self):
+        """Preserve: an incomplete file at a batch_size boundary is never
+        marked done — and under the transitional ack gate its unit is never
+        acknowledged either (the next run reprocesses it)."""
+        config = _make_pipeline("batch_size: 1")
+        executor = PipelineExecutor()
+        mock_source = MagicMock()
+        mock_source.read.return_value = iter([
+            (json.dumps([{"id": "1"}]).encode(), {"source_filename": "a.json", "source_path": "/in/a.json"}),
+            (json.dumps([{"id": "2"}]).encode(), {"source_filename": "b.json", "source_path": "/in/b.json"}),
+        ])
+        mock_sink = MagicMock()
+        mock_ser_in = MagicMock()
+        mock_ser_in.parse.side_effect = lambda raw: json.loads(raw)
+        mock_ser_out = MagicMock()
+        mock_ser_out.serialize.return_value = b"[]"
+
+        with (
+            patch.object(executor, "_build_source", return_value=mock_source),
+            patch.object(executor, "_build_sinks", return_value=[(mock_sink, None, [])]),
+            patch.object(executor, "_build_serializer_in", return_value=mock_ser_in),
+            patch.object(executor, "_build_serializer_out", return_value=mock_ser_out),
+            patch.object(executor, "_build_transforms", return_value=[]),
+        ):
+            result = executor.batch_run(config)
+
+        assert result.status == RunStatus.SUCCESS
+        assert result.records_in == 1
+        # a.json is the boundary file: fully written but the run stopped at
+        # the cap — never marked done (finalize skipped) and never acked.
+        assert mock_source.finalize.call_count == 0
+        mock_source.ack.assert_not_called()
+
+    def test_threaded_path_acks_decided_units_per_file(self):
+        """thread_workers > 1: every fully processed file is a decided unit —
+        ack(DELIVERED) fires per file after its chunks drain, and the legacy
+        finalize(success=True) still runs (transitional contract)."""
+        config = _make_pipeline("thread_workers: 2")
+        executor = PipelineExecutor()
+        mock_source = MagicMock()
+        mock_source.read.return_value = iter([
+            (json.dumps([{"id": "1"}]).encode(), {"source_filename": "a.json", "source_path": "/in/a.json"}),
+            (json.dumps([{"id": "2"}]).encode(), {"source_filename": "b.json", "source_path": "/in/b.json"}),
+        ])
+        mock_sink = MagicMock()
+        mock_ser_in = MagicMock()
+        mock_ser_in.parse.side_effect = lambda raw: json.loads(raw)
+        mock_ser_out = MagicMock()
+        mock_ser_out.serialize.return_value = b"[]"
+
+        with (
+            patch.object(executor, "_build_source", return_value=mock_source),
+            patch.object(executor, "_build_sinks", return_value=[(mock_sink, None, [])]),
+            patch.object(executor, "_build_serializer_in", return_value=mock_ser_in),
+            patch.object(executor, "_build_serializer_out", return_value=mock_ser_out),
+            patch.object(executor, "_build_transforms", return_value=[]),
+        ):
+            result = executor.batch_run(config)
+
+        assert result.status == RunStatus.SUCCESS
+        assert result.records_out == 2
+        # One ack per file, in read order, both DELIVERED.
+        assert mock_source.ack.call_count == 2
+        dispositions = [c.args[1] for c in mock_source.ack.call_args_list]
+        assert dispositions == [AckDisposition.DELIVERED, AckDisposition.DELIVERED]
+        # Legacy compat: finalize still runs for every decided file.
+        assert mock_source.finalize.call_count == 2
+        for call in mock_source.finalize.call_args_list:
+            assert call.kwargs["success"] is True
 
 
 class TestPipelineExecutorStreamRun:
