@@ -15,6 +15,7 @@ from tram.agent.server import (
     ActiveRun,
     WorkerState,
     _active_run_status,
+    _drain_outbox_once,
     _emit_stats_once,
     _post_run_complete,
     _post_stats,
@@ -77,6 +78,83 @@ class TestWorkerState:
     def test_stats_stop_event_present(self):
         s = WorkerState(worker_id="w0", manager_url="")
         assert s.stats_stop.is_set() is False
+
+
+# ── Worker RPC client pooling (V18-08, plan F) ──────────────────────────────
+
+
+class TestWorkerRpcClient:
+    def test_rpc_client_is_lazily_created_once_per_state(self):
+        """The pooled manager-RPC client is created once per WorkerState and
+        reused across calls — no per-post httpx.Client construction."""
+        s = WorkerState(worker_id="w0", manager_url="http://manager")
+        assert s._rpc_client is None  # lazy
+
+        with patch("tram.agent.server.httpx.Client") as mock_cls:
+            client1 = s.rpc_client
+            client2 = s.rpc_client
+
+        assert client1 is client2          # cached
+        assert mock_cls.call_count == 1    # constructed exactly once
+
+    def test_rpc_client_uses_frozen_rpc_timeouts(self):
+        import httpx as _httpx
+
+        s = WorkerState(worker_id="w0", manager_url="http://manager")
+        real_client = _httpx.Client
+        with patch("tram.agent.server.httpx.Client", side_effect=real_client) as mock_cls:
+            client = s.rpc_client
+        assert isinstance(client, _httpx.Client)
+        kwargs = mock_cls.call_args.kwargs
+        timeout = kwargs["timeout"]
+        assert timeout.connect == 5    # TRAM_RPC_CONNECT_TIMEOUT_S default
+        assert timeout.read == 10      # TRAM_RPC_READ_TIMEOUT_S default
+
+    def test_post_stats_uses_pooled_client_when_provided(self):
+        """The stats loop hands the pooled client to _post_stats — the post
+        rides the shared keep-alive connection instead of a per-call client."""
+        captured = {}
+
+        def _fake_post(url, **kwargs):
+            captured["json"] = kwargs.get("json")
+            resp = MagicMock()
+            resp.raise_for_status = MagicMock()
+            return resp
+
+        client = MagicMock()
+        client.post.side_effect = _fake_post
+
+        with patch("httpx.Client") as mock_cls:
+            _post_stats(
+                "http://manager/api/internal/pipeline-stats",
+                {"worker_id": "w0", "run_id": "r1"},
+                api_key="secret",
+                client=client,
+            )
+
+        assert captured["json"]["run_id"] == "r1"
+        # The per-call httpx.Client fallback was NOT constructed.
+        mock_cls.assert_not_called()
+
+    def test_drain_outbox_uses_pooled_client_when_provided(self):
+        """The outbox loop hands the pooled client to _drain_outbox_once —
+        all due rows in a pass share one connection."""
+        import tempfile
+
+        from tram.agent.journal import WorkerJournal
+
+        journal = WorkerJournal(tempfile.mkdtemp() + "/j.db")
+        try:
+            journal.enqueue_outbox("x1", "run-complete", '{"run_id": "r1"}')
+            client = MagicMock()
+            client.post.return_value = MagicMock(status_code=200, raise_for_status=MagicMock())
+
+            n = _drain_outbox_once(journal, "http://manager", api_key="k", client=client)
+
+            assert n == 1
+            client.post.assert_called_once()
+        finally:
+            journal.close()
 
 
 # ── _post_run_complete unit tests ──────────────────────────────────────────
@@ -696,7 +774,7 @@ class TestRunEndpoint:
 
 
 class TestStatsHelpers:
-    def test_emit_stats_once_posts_snapshot(self):
+    def test_emit_stats_once_posts_batched_snapshot(self):
         state = WorkerState(worker_id="w0", manager_url="http://manager")
         run = ActiveRun(
             run_id="run-1",
@@ -730,10 +808,91 @@ class TestStatsHelpers:
             _emit_stats_once(state)
 
         assert captured["url"] == "http://manager/api/internal/pipeline-stats"
-        assert captured["json"]["run_id"] == "run-1"
-        assert captured["json"]["records_in"] == 5
-        assert captured["json"]["error_count"] == 1
+        # V18-08: the periodic post is ONE batched snapshot per worker — the
+        # run's stats ride in the ``runs`` array, not as a separate post.
+        assert captured["json"]["worker_id"] == "w0"
+        assert captured["json"]["timestamp"]
+        assert len(captured["json"]["runs"]) == 1
+        run_snapshot = captured["json"]["runs"][0]
+        assert run_snapshot["run_id"] == "run-1"
+        assert run_snapshot["records_in"] == 5
+        assert run_snapshot["error_count"] == 1
         assert run.stats.errors_last_window == deque()
+
+    def test_emit_stats_once_batches_all_runs_into_one_post(self):
+        """V18-08: two active runs sharing a stats URL produce ONE post per
+        interval carrying BOTH runs' snapshots — not per-run chatter."""
+        state = WorkerState(worker_id="w0", manager_url="http://manager")
+        from tram.agent.metrics import PipelineStats
+        for run_id, pipe in [("run-1", "pipe-a"), ("run-2", "pipe-b")]:
+            run = ActiveRun(
+                run_id=run_id,
+                pipeline_name=pipe,
+                schedule_type="batch",
+                started_at="2026-04-17T12:00:00+00:00",
+                stats_url="http://manager/api/internal/pipeline-stats",
+            )
+            run.stats = PipelineStats(run_id=run_id, pipeline_name=pipe, schedule_type="batch")
+            run.stats.increment(records_in=7)
+            state.add(run)
+
+        posts = []
+
+        def _fake_post(url, **kwargs):
+            posts.append(kwargs.get("json"))
+            resp = MagicMock()
+            resp.raise_for_status = MagicMock()
+            return resp
+
+        with patch("httpx.Client") as mock_client_cls:
+            mock_client = MagicMock()
+            mock_client.__enter__ = lambda s: mock_client
+            mock_client.__exit__ = MagicMock(return_value=False)
+            mock_client.post.side_effect = _fake_post
+            mock_client_cls.return_value = mock_client
+
+            _emit_stats_once(state)
+
+        assert len(posts) == 1  # one batched snapshot per worker per interval
+        assert [r["run_id"] for r in posts[0]["runs"]] == ["run-1", "run-2"]
+        assert all(r["records_in"] == 7 for r in posts[0]["runs"])
+
+    def test_emit_stats_once_splits_batches_by_stats_url(self):
+        """Runs on different stats URLs (custom callback hosts) each get their
+        own batch post — destinations cannot be merged."""
+        state = WorkerState(worker_id="w0", manager_url="http://manager")
+        from tram.agent.metrics import PipelineStats
+        for run_id, url in [
+            ("run-1", "http://manager/api/internal/pipeline-stats"),
+            ("run-2", "http://custom-host/pipeline-stats"),
+        ]:
+            run = ActiveRun(
+                run_id=run_id,
+                pipeline_name="pipe-a",
+                schedule_type="batch",
+                started_at="2026-04-17T12:00:00+00:00",
+                stats_url=url,
+            )
+            run.stats = PipelineStats(run_id=run_id, pipeline_name="pipe-a", schedule_type="batch")
+            run.stats.increment(records_in=1)
+            state.add(run)
+
+        urls = []
+        with patch("httpx.Client") as mock_client_cls:
+            mock_client = MagicMock()
+            mock_client.__enter__ = lambda s: mock_client
+            mock_client.__exit__ = MagicMock(return_value=False)
+            mock_client.post.side_effect = lambda url, **kw: (
+                urls.append(url), MagicMock(raise_for_status=MagicMock())
+            )[1]
+            mock_client_cls.return_value = mock_client
+
+            _emit_stats_once(state)
+
+        assert sorted(urls) == [
+            "http://custom-host/pipeline-stats",
+            "http://manager/api/internal/pipeline-stats",
+        ]
 
     def test_emit_stats_once_sends_api_key_header(self):
         state = WorkerState(worker_id="w0", manager_url="http://manager", api_key="secret")

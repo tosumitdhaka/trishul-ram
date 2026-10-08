@@ -284,6 +284,37 @@ class WorkerState:
         self.drain_event = threading.Event()
         self.drain_deadline: float | None = None
         self.drain_started_at: str | None = None
+        # V18-08: pooled manager-RPC client (stats/outbox/legacy posts) — one
+        # per worker process, lazily created (see ``rpc_client``).
+        self._rpc_client: httpx.Client | None = None
+        self._rpc_client_lock = threading.Lock()
+
+    @property
+    def rpc_client(self) -> httpx.Client:
+        """The worker's pooled manager-RPC ``httpx.Client`` (V18-08, plan F).
+
+        One shared client per worker process, lazily created on first use with
+        the frozen ``TRAM_RPC_CONNECT_TIMEOUT_S`` / ``TRAM_RPC_READ_TIMEOUT_S``
+        base deadlines (V18-01 §9). All worker→manager posts (periodic stats,
+        outbox drain deliveries, the legacy run-complete fallback) reuse it —
+        keep-alive connections survive across runs and loops instead of one
+        TCP+TLS handshake per POST. Safe to share: every post is a synchronous
+        request/response with no run-scoped state, and the client is never
+        closed mid-process (nothing flushes or buffers on close). The
+        per-run ``is_final`` stats and the outbox rows carry their own retry
+        semantics on top of this transport.
+        """
+        with self._rpc_client_lock:
+            if self._rpc_client is None:
+                self._rpc_client = httpx.Client(
+                    timeout=httpx.Timeout(
+                        connect=cfg.rpc_connect_timeout_s(),
+                        read=cfg.rpc_read_timeout_s(),
+                        write=cfg.rpc_read_timeout_s(),
+                        pool=cfg.rpc_read_timeout_s(),
+                    )
+                )
+        return self._rpc_client
 
     @property
     def admission_state(self) -> str:
@@ -414,6 +445,7 @@ def _post_run_complete(
     started_at: str | None = None,
     finished_at: str | None = None,
     api_key: str = "",
+    client: httpx.Client | None = None,
 ) -> None:
     """POST run-complete to the manager with bounded retry (review D2).
 
@@ -427,6 +459,10 @@ def _post_run_complete(
     raise — so the reconciler's lost/adopted-run path remains the degraded
     fallback. The manager's duplicate-callback guard (existing-run check)
     makes retries idempotent.
+
+    V18-08: ``client`` is the worker's pooled RPC client; when omitted the
+    function falls back to a per-attempt client (unchanged legacy behavior for
+    direct callers).
     """
     if not callback_url:
         return
@@ -449,24 +485,27 @@ def _post_run_complete(
     last_exc: Exception | None = None
     for attempt in range(_RUN_COMPLETE_RETRIES):
         try:
-            with httpx.Client(timeout=10) as client:
+            if client is None:
+                with httpx.Client(timeout=10) as _client:
+                    resp = _client.post(callback_url, json=payload, headers=headers)
+            else:
                 resp = client.post(callback_url, json=payload, headers=headers)
-                status_code = resp.status_code
-                if isinstance(status_code, int) and 400 <= status_code < 500:
-                    # Review N4: a 4xx is a permanent rejection (malformed
-                    # payload, auth, unknown route) — retrying cannot succeed,
-                    # so stop at the first attempt instead of burning the
-                    # bounded retries on a pointless loop.
-                    logger.warning(
-                        "run-complete callback rejected — not retrying (4xx)",
-                        extra={
-                            "callback_url": callback_url,
-                            "run_id": run_id,
-                            "status_code": status_code,
-                        },
-                    )
-                    return
-                resp.raise_for_status()
+            status_code = resp.status_code
+            if isinstance(status_code, int) and 400 <= status_code < 500:
+                # Review N4: a 4xx is a permanent rejection (malformed
+                # payload, auth, unknown route) — retrying cannot succeed,
+                # so stop at the first attempt instead of burning the
+                # bounded retries on a pointless loop.
+                logger.warning(
+                    "run-complete callback rejected — not retrying (4xx)",
+                    extra={
+                        "callback_url": callback_url,
+                        "run_id": run_id,
+                        "status_code": status_code,
+                    },
+                )
+                return
+            resp.raise_for_status()
             logger.debug(
                 "run-complete callback sent",
                 extra={"run_id": run_id, "status": status},
@@ -558,6 +597,7 @@ def _commit_completion(
     started_at: str | None = None,
     finished_at: str | None = None,
     api_key: str = "",
+    client: httpx.Client | None = None,
 ) -> None:
     """V18-08: the ONE thread-side completion commit — journal-first, outbox-only.
 
@@ -576,6 +616,9 @@ def _commit_completion(
     post (:func:`_post_run_complete`) fire — that corner cannot be journaled
     at all, and the pre-V18-08 path is kept so the legacy outcome is not
     silently lost.
+
+    V18-08: ``client`` is the worker's pooled RPC client, forwarded to the
+    legacy fallback post when the journal cannot spool.
     """
     if attempt_id:
         journal.record_completion(attempt_id, result_json or "")
@@ -605,17 +648,54 @@ def _commit_completion(
         callback_url, run_id, pipeline_name, worker_id, status,
         records_in, records_out, bytes_in, bytes_out, error, records_skipped,
         errors, started_at=started_at, finished_at=finished_at, api_key=api_key,
+        client=client,
     )
 
 
-def _post_stats(stats_url: str, payload: dict, api_key: str = "") -> None:
+def _stats_log_context(payload: dict) -> tuple[str, str]:
+    """Best-effort (pipeline_name, run_id) for the stats-miss WARNING.
+
+    V18-08: the periodic payload is a per-worker batch (``runs`` array) — the
+    log context falls back to the first run's identity; single-run payloads
+    (the completion-time ``is_final`` post) keep their top-level fields.
+    """
+    runs = payload.get("runs")
+    if isinstance(runs, list) and runs and isinstance(runs[0], dict):
+        return (
+            str(runs[0].get("pipeline_name", "") or ""),
+            str(runs[0].get("run_id", "") or ""),
+        )
+    return (
+        str(payload.get("pipeline_name", "") or ""),
+        str(payload.get("run_id", "") or ""),
+    )
+
+
+def _post_stats(
+    stats_url: str,
+    payload: dict,
+    api_key: str = "",
+    client: httpx.Client | None = None,
+) -> None:
+    """POST one stats payload to the manager.
+
+    V18-08: ``client`` is the worker's pooled RPC client (passed by the stats
+    loop and the run threads); when omitted the function falls back to a
+    per-call client (unchanged behavior for direct callers). The payload may
+    be a single-run snapshot (the completion-time ``is_final`` post) or a
+    per-worker batch (``runs`` array) from the periodic loop.
+    """
     if not stats_url:
         return
     headers = {"X-API-Key": api_key} if api_key else None
+    pipeline_name, run_id = _stats_log_context(payload)
     try:
-        with httpx.Client(timeout=10) as client:
+        if client is None:
+            with httpx.Client(timeout=10) as _client:
+                resp = _client.post(stats_url, json=payload, headers=headers)
+        else:
             resp = client.post(stats_url, json=payload, headers=headers)
-            resp.raise_for_status()
+        resp.raise_for_status()
     except Exception as exc:
         from tram.metrics.registry import MGR_STATS_MISSED_TOTAL
         worker_id = str(payload.get("worker_id", "") or "")
@@ -627,8 +707,8 @@ def _post_stats(stats_url: str, payload: dict, api_key: str = "") -> None:
             "pipeline-stats callback failed",
             extra={
                 "stats_url": stats_url,
-                "pipeline": payload.get("pipeline_name"),
-                "run_id": payload.get("run_id"),
+                "pipeline": pipeline_name,
+                "run_id": run_id,
                 "worker_id": worker_id,
                 "consecutive_misses": consecutive,
                 "error": str(exc),
@@ -668,24 +748,45 @@ def _derive_stats_url(callback_url: str, manager_url: str) -> str:
 
 
 def _emit_stats_once(state: WorkerState) -> None:
+    """One periodic stats pass — ONE batched snapshot per worker (V18-08).
+
+    All active runs' stats coalesce into a single payload (``runs`` array)
+    posted once per stats URL (in practice all runs share the manager URL, so
+    this is one HTTP POST per interval per worker — not per-run chatter). The
+    window reset happens once per run per pass, exactly like the per-run
+    posting it replaces; runs with no stats accumulator or no stats URL are
+    skipped as before. ``is_final`` stays False — final per-run snapshots are
+    the completion-time posts, not the periodic loop.
+
+    The batch rides the worker's pooled RPC client (keep-alive across passes).
+    """
     now = datetime.now(UTC)
+    batches: dict[str, list[dict]] = {}
     for run in state.snapshot():
         if run.stats is None or not run.stats_url or run.started_at_dt is None:
             continue
-        payload = {
-            "worker_id": state.worker_id,
+        snapshot = {
             "pipeline_name": run.pipeline_name,
             "run_id": run.run_id,
             "schedule_type": run.schedule_type,
             "uptime_seconds": max((now - run.started_at_dt).total_seconds(), 0.0),
-            "timestamp": now.isoformat(),
             "is_final": False,
+            **run.stats.snapshot_and_reset_window(),
+        }
+        batches.setdefault(run.stats_url, []).append(snapshot)
+    if not batches:
+        return
+    client = state.rpc_client
+    for stats_url, run_snapshots in batches.items():
+        payload = {
+            "worker_id": state.worker_id,
+            "timestamp": now.isoformat(),
             # v1.5.0 (GH #72): the manager's rolling-upgrade mismatch guard
             # compares this against its own TRAM_SNMP_STACK.
             "snmp_stack": state.snmp_stack,
-            **run.stats.snapshot_and_reset_window(),
+            "runs": run_snapshots,
         }
-        _post_stats(run.stats_url, payload, api_key=state.api_key)
+        _post_stats(stats_url, payload, api_key=state.api_key, client=client)
 
 
 def _final_stats_snapshot(run: ActiveRun) -> dict[str, int | list[str]]:
@@ -818,7 +919,8 @@ def _run_complete_url(manager_url: str) -> str:
 
 
 def _drain_outbox_once(
-    journal: WorkerJournal, manager_url: str, api_key: str = ""
+    journal: WorkerJournal, manager_url: str, api_key: str = "",
+    client: httpx.Client | None = None,
 ) -> int:
     """One outbox drain pass: deliver every due row, ack on manager 200.
 
@@ -836,8 +938,9 @@ def _drain_outbox_once(
     poster — the dispatch thread never posts directly, so a crash between the
     journal commit and delivery redelivers here on restart (at-least-once;
     the manager's identity check makes duplicates idempotent no-ops).
-
-    Returns the number of rows processed.
+    V18-08: ``client`` is the worker's pooled RPC client (deliveries reuse one
+    keep-alive connection per pass); when omitted each row constructs its own
+    client (unchanged behavior for direct callers).
     """
     url = _run_complete_url(manager_url)
     if not url:
@@ -863,9 +966,12 @@ def _drain_outbox_once(
             journal.record_outbox_failure(row.seq, f"unparseable payload: {exc}")
             continue
         try:
-            with httpx.Client(timeout=10) as client:
+            if client is None:
+                with httpx.Client(timeout=10) as _client:
+                    resp = _client.post(url, json=payload, headers=headers)
+            else:
                 resp = client.post(url, json=payload, headers=headers)
-                resp.raise_for_status()
+            resp.raise_for_status()
         except Exception as exc:
             logger.warning(
                 "outbox delivery failed — backing off",
@@ -905,9 +1011,10 @@ def _outbox_loop(
     """
     backoff = _OUTBOX_DRAIN_INTERVAL_S
     consecutive_failures = 0
+    client = state.rpc_client
     while True:
         try:
-            _drain_outbox_once(journal, manager_url, api_key)
+            _drain_outbox_once(journal, manager_url, api_key, client=client)
         except Exception as exc:
             consecutive_failures += 1
             logger.error(
@@ -1086,7 +1193,9 @@ def create_worker_app(
         # closes — the background loop has stopped, this is the last chance.
         if _drain_remaining() > 0:
             try:
-                _drain_outbox_once(journal, manager_url, api_key)
+                _drain_outbox_once(
+                    journal, manager_url, api_key, client=state.rpc_client
+                )
             except Exception:
                 logger.warning(
                     "final outbox drain pass failed",
@@ -1661,6 +1770,7 @@ def create_worker_app(
                         started_at=active_run.started_at,
                         finished_at=datetime.now(UTC).isoformat(),
                         api_key=state.api_key,
+                        client=state.rpc_client,
                     )
                 except Exception as exc:
                     logger.error(
@@ -1702,6 +1812,7 @@ def create_worker_app(
                         started_at=active_run.started_at,
                         finished_at=datetime.now(UTC).isoformat(),
                         api_key=state.api_key,
+                        client=state.rpc_client,
                     )
                 finally:
                     state.remove(req.run_id, attempt_id=attempt_id)
@@ -1794,7 +1905,10 @@ def create_worker_app(
                         # If stats_url is empty, the completion still commits
                         # below and manager-side on_worker_run_complete removes
                         # the store entry.
-                        _post_stats(active_run.stats_url, payload, api_key=state.api_key)
+                        _post_stats(
+                            active_run.stats_url, payload, api_key=state.api_key,
+                            client=state.rpc_client,
+                        )
                     _commit_completion(
                         journal,
                         attempt_id=attempt_id,
@@ -1814,6 +1928,7 @@ def create_worker_app(
                         started_at=result.started_at.isoformat(),
                         finished_at=result.finished_at.isoformat(),
                         api_key=state.api_key,
+                        client=state.rpc_client,
                     )
                 except Exception as exc:
                     logger.error(
@@ -1855,6 +1970,7 @@ def create_worker_app(
                         started_at=active_run.started_at,
                         finished_at=datetime.now(UTC).isoformat(),
                         api_key=state.api_key,
+                        client=state.rpc_client,
                     )
                 finally:
                     state.remove(req.run_id, attempt_id=attempt_id)
