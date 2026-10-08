@@ -896,11 +896,16 @@ def _outbox_loop(
     journal) backs off exponentially — the wait IS the backoff, so the
     ERROR fires once per backoff period, never per second — capped at
     ``_OUTBOX_DRAIN_BACKOFF_MAX_S``, and the base cadence resumes after the
-    first successful pass (recovery is logged once).
+    first successful pass (recovery is logged once). The FIRST pass runs
+    immediately at loop start (no initial sleep): a pre-existing unacked
+    completion is delivered as soon as the thread starts — the
+    crash-recovery path — instead of after a starvation-prone initial
+    interval (this also removes the load-induced flake in the lifespan
+    delivery test).
     """
     backoff = _OUTBOX_DRAIN_INTERVAL_S
     consecutive_failures = 0
-    while not state.outbox_stop.wait(backoff):
+    while True:
         try:
             _drain_outbox_once(journal, manager_url, api_key)
         except Exception as exc:
@@ -917,14 +922,16 @@ def _outbox_loop(
                 max(backoff * 2, _OUTBOX_DRAIN_INTERVAL_S),
                 _OUTBOX_DRAIN_BACKOFF_MAX_S,
             )
-            continue
-        if consecutive_failures:
-            logger.info(
-                "outbox drain recovered",
-                extra={"missed_passes": consecutive_failures},
-            )
-            consecutive_failures = 0
-        backoff = _OUTBOX_DRAIN_INTERVAL_S
+        else:
+            if consecutive_failures:
+                logger.info(
+                    "outbox drain recovered",
+                    extra={"missed_passes": consecutive_failures},
+                )
+                consecutive_failures = 0
+            backoff = _OUTBOX_DRAIN_INTERVAL_S
+        if state.outbox_stop.wait(backoff):
+            return
 
 
 # ── App factory ────────────────────────────────────────────────────────────
