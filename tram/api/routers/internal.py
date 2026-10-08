@@ -32,6 +32,10 @@ class RunCompletePayload(BaseModel):
     errors: list[str] = Field(default_factory=list)
     started_at: datetime | None = None
     finished_at: datetime | None = None
+    # V18-04: ledger attempt identity. Present ⇒ the identity-checked
+    # run-complete path (frozen §5 protocol table); absent ⇒ legacy path.
+    attempt_id: str | None = None
+    generation: int | None = None
 
 
 class PipelineStatsPayload(BaseModel):
@@ -116,8 +120,11 @@ def _warn_snmp_stack_mismatch(payload: PipelineStatsPayload, request: Request) -
 async def run_complete(payload: RunCompletePayload, request: Request) -> dict:
     """Worker callback: a dispatched pipeline run has finished.
 
-    The controller updates in-memory state and DB, then applies the normal
-    post-run state machine (scheduled → running → scheduled/stopped/error).
+    V18-04: a request carrying the ledger ``attempt_id``/``generation`` goes
+    through the identity-checked path — the controller commits the ledger
+    (attempt → terminal fenced, intent resolved, guard released by identity)
+    and 200 is returned only after that commit (the outbox's durable ack).
+    Legacy requests (no attempt_id) keep today's path unchanged.
     """
     controller = request.app.state.controller
 
@@ -127,6 +134,7 @@ async def run_complete(payload: RunCompletePayload, request: Request) -> dict:
             "run_id": payload.run_id,
             "pipeline": payload.pipeline_name,
             "status": payload.status,
+            "attempt_id": payload.attempt_id,
         },
     )
 
@@ -134,6 +142,25 @@ async def run_complete(payload: RunCompletePayload, request: Request) -> dict:
     MGR_RUN_COMPLETE_RECEIVED_TOTAL.labels(
         pipeline=payload.pipeline_name, status=payload.status
     ).inc()
+
+    if payload.attempt_id is not None:
+        return controller.on_attempt_run_complete(
+            attempt_id=payload.attempt_id,
+            generation=payload.generation,
+            run_id=payload.run_id,
+            pipeline_name=payload.pipeline_name,
+            worker_id=payload.worker_id,
+            status=payload.status,
+            records_in=payload.records_in,
+            records_out=payload.records_out,
+            records_skipped=payload.records_skipped,
+            bytes_in=payload.bytes_in,
+            bytes_out=payload.bytes_out,
+            error=payload.error,
+            errors=payload.errors,
+            started_at=payload.started_at,
+            finished_at=payload.finished_at,
+        )
 
     controller.on_worker_run_complete(
         run_id=payload.run_id,

@@ -20,6 +20,7 @@ from __future__ import annotations
 import logging
 import os
 import threading
+import time
 from collections.abc import Callable
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass
@@ -50,6 +51,10 @@ class BroadcastResult:
 DISPATCH_ACCEPTED = "accepted"
 DISPATCH_NO_CAPACITY = "no_capacity"
 DISPATCH_FAILED = "dispatch_failed"
+
+# V18-01 §9 frozen start-authorization TTL (the handshake lane wires the full
+# config surface; the manager mints with this default until then).
+_AUTH_TOKEN_TTL_S = 300
 
 
 @dataclass
@@ -111,6 +116,16 @@ class WorkerPool:
         self._worker_ids: dict[str, str] = {}
         # {worker_url: worker_id}
         self._url_to_worker_id: dict[str, str] = {}
+        # V18-04 §2: {run_id: {"attempt_id", "generation", "slot_id"}} — the
+        # ledger claim identity the controller registers so dispatches that
+        # carry only a run_id (the E.2 queued drain path) still attach the
+        # attempt fields to /agent/run. Popped by on_run_complete (D8 bound).
+        self._attempts_by_run: dict[str, dict] = {}
+        # V18-04 §2: {worker_url: {"session_id", "secret"}} — manager↔worker
+        # session secrets established at /agent/handshake. Empty until the
+        # handshake lane lands, so dispatches stay legacy-shaped with no
+        # authorization field.
+        self._worker_sessions: dict[str, dict] = {}
         # Round-robin counter for tie-breaking equally-loaded workers
         self._rr_counter: int = 0
         self._last_healthy_count: int = -1
@@ -607,6 +622,62 @@ class WorkerPool:
 
     # ── Dispatch ───────────────────────────────────────────────────────────
 
+    def register_attempt(self, run_id: str, attempt_id: str, generation: int, slot_id: str = "") -> None:
+        """Record the ledger attempt identity for a run.
+
+        The controller registers the claim outcome so dispatches that carry
+        only a run_id (the E.2 queued drain path) still attach
+        attempt_id/generation to the /agent/run request. Cleared by
+        :meth:`on_run_complete`.
+        """
+        with self._lock:
+            self._attempts_by_run[run_id] = {
+                "attempt_id": attempt_id,
+                "generation": generation,
+                "slot_id": slot_id,
+            }
+
+    def register_worker_session(self, worker_url: str, *, session_id: str, secret: str) -> None:
+        """Register the manager↔worker session secret (handshake lane).
+
+        Until a session exists for a worker, dispatches carry no
+        ``authorization`` field (legacy-shaped). A newer session for the same
+        worker supersedes the old secret (frozen §5: proof of process
+        termination for release decisions).
+        """
+        with self._lock:
+            self._worker_sessions[worker_url] = {"session_id": session_id, "secret": secret}
+
+    def _mint_authorization(
+        self,
+        worker_url: str,
+        *,
+        attempt_id: str,
+        run_id: str,
+        generation: int,
+        slot_id: str,
+    ) -> str | None:
+        """Mint a start-authorization token when a session secret exists.
+
+        Returns None when no manager↔worker session has been established for
+        the worker (the handshake lane lands later) — the dispatch then stays
+        legacy-shaped with no ``authorization`` field (frozen §5).
+        """
+        session = self._worker_sessions.get(worker_url)
+        if session is None:
+            return None
+        from tram.agent.auth_tokens import mint_start_authorization
+        return mint_start_authorization(
+            attempt_id=attempt_id,
+            run_id=run_id,
+            generation=generation,
+            slot_id=slot_id,
+            worker_session=session["session_id"],
+            ttl_s=_AUTH_TOKEN_TTL_S,
+            secret=session["secret"],
+            issued_at_unix=int(time.time()),
+        )
+
     def _dispatch_to_worker(
         self,
         worker_url: str,
@@ -616,14 +687,34 @@ class WorkerPool:
         schedule_type: str,
         callback_url: str = "",
         flush: bool = False,
+        attempt_id: str | None = None,
+        generation: int | None = None,
+        slot_id: str = "",
     ) -> str | None:
         """POST a run to a specific worker.
 
         Returns ``None`` on success, or the failure detail string when the
         HTTP dispatch attempt raised or returned a non-2xx status.
+
+        V18-04 §2: when ``attempt_id`` is not supplied, the ledger attempt
+        registered for ``run_id`` (via :meth:`register_attempt`, the queued
+        drain path) is resolved so the request still carries the attempt
+        identity. The request carries ``attempt_id``/``generation``/``slot_id``
+        when known, plus an ``authorization`` start token minted via
+        ``auth_tokens`` only when a session secret exists for the worker
+        (none exist yet, so the default dispatch stays legacy-shaped with no
+        authorization field). v1.7 workers ignore the unknown fields
+        (Pydantic ignores extras).
         """
         if not callback_url and self._manager_url:
             callback_url = f"{self._manager_url}/api/internal/run-complete"
+
+        if attempt_id is None:
+            registered = self._attempts_by_run.get(run_id)
+            if registered is not None:
+                attempt_id = registered["attempt_id"]
+                generation = registered["generation"]
+                slot_id = registered.get("slot_id", "")
 
         payload = {
             "pipeline_name": pipeline_name,
@@ -633,6 +724,21 @@ class WorkerPool:
             "callback_url": callback_url,
             "flush": flush,  # F.1 §5: manual flush run flag
         }
+        if attempt_id is not None:
+            payload["attempt_id"] = attempt_id
+            if generation is not None:
+                payload["generation"] = generation
+            if slot_id:
+                payload["slot_id"] = slot_id
+            authorization = self._mint_authorization(
+                worker_url,
+                attempt_id=attempt_id,
+                run_id=run_id,
+                generation=generation if generation is not None else 1,
+                slot_id=slot_id,
+            )
+            if authorization is not None:
+                payload["authorization"] = authorization
         try:
             with self._agent_client(10) as client:
                 resp = client.post(f"{worker_url}/agent/run", json=payload)
@@ -673,6 +779,9 @@ class WorkerPool:
         schedule_type: str,
         callback_url: str = "",
         flush: bool = False,
+        attempt_id: str | None = None,
+        generation: int | None = None,
+        slot_id: str = "",
     ) -> BroadcastResult:
         """POST a run to one or more selected workers."""
         worker_urls = self.resolve(workers_cfg)
@@ -724,6 +833,9 @@ class WorkerPool:
                     schedule_type=schedule_type,
                     callback_url=callback_url,
                     flush=flush,
+                    attempt_id=attempt_id,
+                    generation=generation,
+                    slot_id=slot_id,
                 )
                 if dispatch_error is None:
                     accepted.append(worker_url)
@@ -766,6 +878,9 @@ class WorkerPool:
         yaml_text: str,
         schedule_type: str,
         callback_url: str = "",
+        attempt_id: str | None = None,
+        generation: int | None = None,
+        slot_id: str = "",
     ) -> str | None:
         """POST a run to the least-loaded healthy worker.
 
@@ -780,6 +895,9 @@ class WorkerPool:
             yaml_text=yaml_text,
             schedule_type=schedule_type,
             callback_url=callback_url,
+            attempt_id=attempt_id,
+            generation=generation,
+            slot_id=slot_id,
         ).worker_url
 
     def dispatch_with_result(
@@ -790,6 +908,9 @@ class WorkerPool:
         schedule_type: str,
         callback_url: str = "",
         flush: bool = False,
+        attempt_id: str | None = None,
+        generation: int | None = None,
+        slot_id: str = "",
     ) -> DispatchOutcome:
         """POST a run to the least-loaded healthy worker, labeling the outcome.
 
@@ -797,6 +918,10 @@ class WorkerPool:
         workers" (``DISPATCH_NO_CAPACITY``, a capacity condition) from "a
         healthy worker was selected but the dispatch attempt failed"
         (``DISPATCH_FAILED``, an error) so the real cause can reach run history.
+
+        ``attempt_id``/``generation``/``slot_id`` are the V18-04 ledger attempt
+        identity (``slot_id`` is empty for batches); when omitted, the attempt
+        registered for ``run_id`` (the queued drain path) is attached instead.
         """
         from tram.models.pipeline import WorkersConfig
 
@@ -808,6 +933,9 @@ class WorkerPool:
             schedule_type=schedule_type,
             callback_url=callback_url,
             flush=flush,
+            attempt_id=attempt_id,
+            generation=generation,
+            slot_id=slot_id,
         )
         if result.accepted:
             return DispatchOutcome(worker_url=result.accepted[0], outcome=DISPATCH_ACCEPTED)
@@ -831,6 +959,9 @@ class WorkerPool:
         yaml_text: str,
         schedule_type: str,
         callback_url: str = "",
+        attempt_id: str | None = None,
+        generation: int | None = None,
+        slot_id: str = "",
     ) -> bool:
         if not self.is_worker_healthy(worker_url):
             return False
@@ -841,6 +972,9 @@ class WorkerPool:
             yaml_text=yaml_text,
             schedule_type=schedule_type,
             callback_url=callback_url,
+            attempt_id=attempt_id,
+            generation=generation,
+            slot_id=slot_id,
         ) is None
 
     def stop_run(self, run_id: str, pipeline_name: str) -> bool:
@@ -928,6 +1062,7 @@ class WorkerPool:
         with self._lock:
             worker_url = self._assignments.pop(run_id, None)
             pipeline_name = self._run_pipelines.pop(run_id, None)
+            self._attempts_by_run.pop(run_id, None)  # V18-04: attempt identity cleared with the run
             if worker_url and worker_url in self._health:
                 self._health[worker_url]["active_runs"] = max(
                     0, self._health[worker_url]["active_runs"] - 1
@@ -958,6 +1093,7 @@ class WorkerPool:
         ]
         for run_id in reaped:
             self._assignments.pop(run_id, None)
+            self._attempts_by_run.pop(run_id, None)  # V18-04: down worker's attempts are reaped too
             pipeline_name = self._run_pipelines.pop(run_id, None)
             if pipeline_name is None:
                 continue

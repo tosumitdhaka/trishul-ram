@@ -29,7 +29,10 @@ from datetime import UTC, datetime, timedelta
 from functools import partial
 from typing import TYPE_CHECKING, Literal
 
+from sqlalchemy import text
+
 from tram.core.context import RunResult, RunStatus
+from tram.persistence import ledger
 from tram.pipeline.executor import PipelineExecutor
 from tram.pipeline.manager import PipelineManager, PipelineState
 
@@ -74,6 +77,10 @@ class _ActiveBatchRun:
     worker_url: str
     schedule_type: str
     started_at: datetime
+    # V18-04: the ledger attempt this lease tracks (None for adopted/legacy
+    # leases). Used by the identity-checked lease cleanup on run-complete.
+    attempt_id: str | None = None
+    generation: int | None = None
 
 
 @dataclass
@@ -391,6 +398,12 @@ class PipelineController:
 
             if self._db is not None:
                 self._db.save_pipeline(config.name, yaml_text, source=source)
+                # V18-04: the ledger's desired-state row (generation lives
+                # here, frozen §1).
+                self._ensure_desired_state(
+                    config.name,
+                    desired_status="running" if config.enabled else "stopped",
+                )
 
             if config.enabled:
                 self._do_schedule(config.name)
@@ -428,6 +441,9 @@ class PipelineController:
 
             if self._db is not None:
                 self._db.save_pipeline(name, yaml_text, source="api")
+                # V18-04: the generation bumps on every config update (frozen
+                # §1) — the next claim fences against the new generation.
+                self._bump_pipeline_generation(name)
                 # E.2 (Decision 5): a queued manual run must dispatch the
                 # updated config — refresh its yaml_snapshot so the auditable
                 # snapshot column stays the dispatch source.
@@ -464,6 +480,9 @@ class PipelineController:
             self.manager.deregister(name)
             if self._db is not None:
                 self._db.delete_pipeline(name)
+                # V18-04: the generation bumps on the delete tombstone (frozen
+                # §1); the desired-state row keeps the tombstone.
+                self._bump_pipeline_generation(name, deleted=True)
                 # F.1 (§3.2d): a deleted pipeline's state row is garbage.
                 self._db.delete_transform_state(name)
             logger.info("Deleted pipeline", extra={"pipeline": name})
@@ -628,6 +647,20 @@ class PipelineController:
             now = datetime.now(UTC)
             expires_at = now + timedelta(seconds=self._queue_ttl_seconds)
             self._db.save_queued_run(run_id, pipeline_name, yaml_text, now, expires_at)
+            # V18-04 §1: the queue reservation row — the run_intents row the
+            # drain claim converts into the guard (frozen §2: a queued request
+            # holds a reservation, not the guard; it acquires the guard only
+            # at claim).
+            schedule_type = "manual"
+            state = self.manager.get(pipeline_name) if self.manager.exists(pipeline_name) else None
+            if state is not None:
+                schedule_type = state.config.schedule.type
+            self._ensure_run_intent(
+                run_id=run_id, pipeline_name=pipeline_name, origin="queued",
+                flush=False, requested_at=now, expires_at=expires_at,
+                requested_generation=self._pipeline_generation(pipeline_name),
+                yaml_snapshot=yaml_text, schedule_type=schedule_type,
+            )
             if self.manager.exists(pipeline_name):
                 self.manager.set_status(pipeline_name, "queued")
             from tram.metrics.registry import (
@@ -646,6 +679,317 @@ class PipelineController:
                 },
             )
             return True
+
+    # ── Execution ledger wiring (V18-04 / frozen V18-01 §1–3) ─────────────
+
+    def _pipeline_generation(self, pipeline_name: str) -> int:
+        """Current ledger generation for a pipeline (1 when no desired-state row)."""
+        if self._db is None:
+            return 1
+        with self._db._engine.connect() as conn:  # noqa: SLF001 — db._engine is the repo convention
+            row = conn.execute(
+                text(
+                    "SELECT generation FROM pipeline_desired_state "
+                    "WHERE pipeline_name = :name"
+                ),
+                {"name": pipeline_name},
+            ).mappings().fetchone()
+        if row is None or row["generation"] is None:
+            return 1
+        return int(row["generation"])
+
+    def _ensure_desired_state(self, pipeline_name: str, *, desired_status: str = "running") -> None:
+        """Create the pipeline_desired_state row at generation 1 when absent."""
+        if self._db is None:
+            return
+        with self._db._engine.begin() as conn:
+            conn.execute(text("""
+                INSERT INTO pipeline_desired_state
+                    (pipeline_name, desired_status, generation, schedule_type,
+                     misfire_policy, deleted, updated_at)
+                VALUES (:name, :desired_status, 1, 'manual', 'coalesced_skip', 0, :now)
+                ON CONFLICT (pipeline_name) DO NOTHING
+            """), {
+                "name": pipeline_name,
+                "desired_status": desired_status,
+                "now": datetime.now(UTC).isoformat(),
+            })
+
+    def _bump_pipeline_generation(self, pipeline_name: str, *, deleted: bool = False) -> int:
+        """Increment the ledger generation (frozen §1: config update / delete
+        tombstone). Returns the new generation."""
+        generation = self._pipeline_generation(pipeline_name) + 1
+        if self._db is None:
+            return generation
+        with self._db._engine.begin() as conn:
+            conn.execute(text("""
+                INSERT INTO pipeline_desired_state
+                    (pipeline_name, desired_status, generation, schedule_type,
+                     misfire_policy, deleted, updated_at)
+                VALUES (:name, 'running', :gen, 'manual', 'coalesced_skip', :deleted, :now)
+                ON CONFLICT (pipeline_name) DO UPDATE
+                    SET generation = :gen, deleted = :deleted, updated_at = :now
+            """), {
+                "name": pipeline_name,
+                "gen": generation,
+                "deleted": 1 if deleted else 0,
+                "now": datetime.now(UTC).isoformat(),
+            })
+        return generation
+
+    def _ensure_run_intent(
+        self,
+        *,
+        run_id: str,
+        pipeline_name: str,
+        origin: str,
+        flush: bool,
+        requested_at: datetime,
+        requested_generation: int,
+        yaml_snapshot: str | None,
+        schedule_type: str,
+        expires_at: datetime | None = None,
+    ) -> None:
+        """Idempotently insert the run_intents row (frozen §3) — the queue
+        reservation the claim converts into the guard."""
+        if self._db is None:
+            return
+        with self._db._engine.begin() as conn:
+            conn.execute(text("""
+                INSERT INTO run_intents
+                    (run_id, pipeline_name, origin, flush, requested_at, expires_at,
+                     requested_generation, yaml_snapshot, schedule_type)
+                VALUES
+                    (:run_id, :pipeline_name, :origin, :flush, :requested_at, :expires_at,
+                     :requested_generation, :yaml_snapshot, :schedule_type)
+                ON CONFLICT (run_id) DO NOTHING
+            """), {
+                "run_id": run_id,
+                "pipeline_name": pipeline_name,
+                "origin": origin,
+                "flush": 1 if flush else 0,
+                "requested_at": requested_at.isoformat(),
+                "expires_at": expires_at.isoformat() if expires_at else None,
+                "requested_generation": requested_generation,
+                "yaml_snapshot": yaml_snapshot,
+                "schedule_type": schedule_type,
+            })
+
+    def _next_attempt_ordinal(self, run_id: str) -> int:
+        """Next 1-based attempt ordinal for a run (1 when no attempt rows exist).
+
+        A ledger-authorized replacement (e.g. queue re-entry after a
+        no-capacity terminal) mints N+1 under the same run_id (frozen §1).
+        """
+        if self._db is None:
+            return 1
+        with self._db._engine.connect() as conn:
+            row = conn.execute(
+                text(
+                    "SELECT COALESCE(MAX(ordinal), 0) AS m FROM execution_attempts "
+                    "WHERE run_id = :run_id"
+                ),
+                {"run_id": run_id},
+            ).mappings().fetchone()
+        return int(row["m"]) + 1 if row else 1
+
+    def _active_attempt_for_run(self, run_id: str) -> dict | None:
+        """The newest non-terminal ledger attempt for a run, or None."""
+        if self._db is None:
+            return None
+        with self._db._engine.connect() as conn:
+            row = conn.execute(
+                text("""
+                    SELECT attempt_id, run_id, pipeline_name, generation, state, slot_id
+                      FROM execution_attempts
+                     WHERE run_id = :run_id AND state != 'terminal'
+                     ORDER BY ordinal DESC LIMIT 1
+                """),
+                {"run_id": run_id},
+            ).mappings().fetchone()
+        return dict(row) if row is not None else None
+
+    def _mark_attempt_dispatching(self, *, attempt_id: str, run_id: str, generation: int) -> None:
+        """claimed → dispatching + dispatch_sent_at (the manager sends /agent/run).
+
+        ``dispatch_sent_at`` is the frozen §2 boot-adoption discriminator (a
+        claimed-but-unsent attempt is resolved locally at boot, never
+        ``unknown``).
+        """
+        if self._db is None:
+            return
+        with self._db._engine.begin() as conn:
+            conn.execute(text("""
+                UPDATE execution_attempts
+                   SET state = 'dispatching', dispatch_sent_at = :now
+                 WHERE attempt_id = :attempt_id AND run_id = :run_id
+                   AND state = 'claimed' AND generation = :generation
+            """), {
+                "attempt_id": attempt_id,
+                "run_id": run_id,
+                "generation": generation,
+                "now": datetime.now(UTC).isoformat(),
+            })
+
+    def _mark_attempt_running(self, *, attempt_id: str, run_id: str, generation: int) -> None:
+        """dispatching → running + accepted_at (the 202 acceptance advances the
+        ledger attempt; the worker never writes the ledger, frozen §2)."""
+        if self._db is None:
+            return
+        with self._db._engine.begin() as conn:
+            conn.execute(text("""
+                UPDATE execution_attempts
+                   SET state = 'running', accepted_at = :now
+                 WHERE attempt_id = :attempt_id AND run_id = :run_id
+                   AND state = 'dispatching' AND generation = :generation
+            """), {
+                "attempt_id": attempt_id,
+                "run_id": run_id,
+                "generation": generation,
+                "now": datetime.now(UTC).isoformat(),
+            })
+
+    def _terminalize_attempt(
+        self,
+        *,
+        attempt_id: str,
+        run_id: str,
+        pipeline_name: str,
+        generation: int,
+        resolve_outcome: str | None = None,
+    ) -> None:
+        """Fenced attempt → terminal, guard released by identity, and optional
+        intent resolution — one transaction (frozen §3 statements, rowcount-
+        fenced). Idempotent: an already-terminal attempt, a resolved intent, or
+        a guard held by a newer attempt all fence out as 0-row no-ops.
+
+        The frozen completion transition is running → terminal; the state
+        IN ('claimed','dispatching','running') fence additionally tolerates
+        the fast-run race (a completion arriving before the dispatch commit
+        advances the attempt). The identity/generation fence is unchanged.
+        """
+        if self._db is None:
+            return
+        now = datetime.now(UTC).isoformat()
+        with self._db._engine.begin() as conn:
+            conn.execute(text("""
+                UPDATE execution_attempts
+                   SET state = 'terminal', finished_at = :now
+                 WHERE attempt_id = :attempt_id AND run_id = :run_id
+                   AND generation = :generation
+                   AND state IN ('claimed', 'dispatching', 'running')
+            """), {
+                "attempt_id": attempt_id,
+                "run_id": run_id,
+                "generation": generation,
+                "now": now,
+            })
+            if resolve_outcome is not None:
+                conn.execute(text("""
+                    UPDATE run_intents
+                       SET final_outcome = :outcome, final_attempt_id = :attempt_id,
+                           resolved_at = :now
+                     WHERE run_id = :run_id AND final_outcome IS NULL
+                """), {
+                    "outcome": resolve_outcome,
+                    "attempt_id": attempt_id,
+                    "run_id": run_id,
+                    "now": now,
+                })
+            conn.execute(text("""
+                UPDATE execution_guards
+                   SET run_id = NULL, attempt_id = NULL, generation = NULL,
+                       acquired_at = NULL
+                 WHERE guard_key = :guard_key AND attempt_id = :attempt_id
+                   AND run_id = :run_id
+            """), {"guard_key": pipeline_name, "attempt_id": attempt_id, "run_id": run_id})
+
+    def _claim_for_dispatch(
+        self,
+        pipeline_name: str,
+        run_id: str,
+        *,
+        origin: str,
+        flush: bool,
+        yaml_text: str,
+        schedule_type: str,
+        ordinal: int = 1,
+    ) -> dict | None:
+        """Insert the run intent and acquire the ledger guard before dispatch.
+
+        Returns the claim as a dict (attempt_id/generation/pipeline_name) on
+        CLAIMED or ALREADY_HELD (an idempotent re-claim — the guard already
+        holds this exact attempt), or None when the guard is held by a
+        different attempt (LOST) or the intent is absent/resolved (NO_INTENT)
+        — the caller surfaces today's already-running behavior.
+        """
+        generation = self._pipeline_generation(pipeline_name)
+        now = datetime.now(UTC)
+        self._ensure_run_intent(
+            run_id=run_id, pipeline_name=pipeline_name, origin=origin, flush=flush,
+            requested_at=now, expires_at=None, requested_generation=generation,
+            yaml_snapshot=yaml_text, schedule_type=schedule_type,
+        )
+        claim = ledger.claim_run(
+            self._db._engine,
+            guard_key=pipeline_name,
+            guard_kind="batch",
+            pipeline_name=pipeline_name,
+            run_id=run_id,
+            generation=generation,
+            ordinal=ordinal,
+            yaml_snapshot=yaml_text,
+        )
+        if claim.status == ledger.LOST or claim.status == ledger.NO_INTENT:
+            logger.warning(
+                "Batch claim refused — another attempt holds the run guard",
+                extra={
+                    "pipeline": pipeline_name,
+                    "run_id": run_id,
+                    "status": claim.status,
+                },
+            )
+            return None
+        self._mark_attempt_dispatching(
+            attempt_id=claim.attempt_id, run_id=run_id, generation=generation,
+        )
+        return {
+            "attempt_id": claim.attempt_id,
+            "run_id": run_id,
+            "pipeline_name": pipeline_name,
+            "generation": generation,
+            "slot_id": "",
+        }
+
+    @staticmethod
+    def _intent_outcome(status: RunStatus) -> str:
+        """Map a run status to the frozen run_intents.final_outcome domain."""
+        if status == RunStatus.SUCCESS:
+            return "success"
+        if status == RunStatus.PARTIAL:
+            return "partial"
+        if status == RunStatus.ABORTED:
+            return "aborted"
+        return "failed"
+
+    def _record_skipped_manual_run(self, pipeline_name: str, run_id: str, reason: str) -> None:
+        """FAILED run-history row for a manual run that lost the claim (GH #47):
+        the client's run_id must resolve instead of 404ing forever. The winning
+        run's status is not clobbered to 'error'."""
+        now = datetime.now(UTC)
+        result = RunResult(
+            run_id=run_id,
+            pipeline_name=pipeline_name,
+            status=RunStatus.FAILED,
+            started_at=now,
+            finished_at=now,
+            records_in=0,
+            records_out=0,
+            records_skipped=0,
+            error=reason,
+            node_id=self._node_id,
+        )
+        self.manager.record_run(pipeline_name, result)
 
     def drainable_queued_runs(self) -> list[dict]:
         """[{"run_id", "pipeline_name", "yaml_snapshot", "schedule_type",
@@ -684,7 +1028,15 @@ class PipelineController:
         """queued → dispatching. RLock + conditional UPDATE (rowcount fence):
         re-reads the row, verifies pipeline exists / not running / no lease,
         runs db.claim_queued_run_row(run_id), returns the claim payload or None
-        when the row was claimed, purged, or expired elsewhere."""
+        when the row was claimed, purged, or expired elsewhere.
+
+        V18-04 §1: the queue reservation then converts into the ledger guard —
+        the run_intents row is ensured and ``ledger.claim_run`` acquires it
+        (frozen §2: a queued request holds a reservation, not the guard). A
+        lost claim (another attempt holds the guard) reverts the queued fence
+        and returns None; an ALREADY_HELD re-claim (queue re-entry after a
+        no-capacity terminal) proceeds with the existing attempt.
+        """
         with self._lock:
             if self._db is None or self._worker_pool is None:
                 return None
@@ -704,6 +1056,27 @@ class PipelineController:
                 return None
             if self._db.claim_queued_run_row(run_id) != 1:
                 return None
+            attempt = self._claim_for_dispatch(
+                name,
+                run_id,
+                origin="queued",
+                flush=bool(row.get("flush", 0)),
+                yaml_text=row["yaml_snapshot"],
+                schedule_type=state.config.schedule.type,
+                ordinal=self._next_attempt_ordinal(run_id),
+            )
+            if attempt is None:
+                # Lost the ledger guard (another attempt holds it) — undo the
+                # queued fence so the row stays drainable for a later pass.
+                self._db.revert_queued_run_row(run_id)
+                return None
+            if self._worker_pool is not None:
+                self._worker_pool.register_attempt(
+                    run_id,
+                    attempt["attempt_id"],
+                    attempt["generation"],
+                    attempt.get("slot_id", ""),
+                )
             callback_url = (
                 f"{self._manager_url}/api/internal/run-complete"
                 if self._manager_url else ""
@@ -716,6 +1089,8 @@ class PipelineController:
                 "callback_url": callback_url,
                 "requested_at": row["requested_at"],
                 "expires_at": row["expires_at"],
+                "attempt_id": attempt["attempt_id"],
+                "generation": attempt["generation"],
             }
 
     def commit_queued_dispatch(self, run_id: str, worker_url: str) -> bool:
@@ -758,6 +1133,17 @@ class PipelineController:
                 )
                 self.manager.set_status(name, "running")
             self._db.mark_queued_run_dispatched(run_id, datetime.now(UTC))
+            # V18-04: the ledger attempt advances dispatching → running on the
+            # acceptance (frozen §2 note: the manager advances the row when it
+            # receives the 202 acceptance). Idempotent — a fast-run completion
+            # already terminalled the attempt, so the fence finds nothing.
+            attempt = self._active_attempt_for_run(run_id)
+            if attempt is not None:
+                self._mark_attempt_running(
+                    attempt_id=attempt["attempt_id"],
+                    run_id=run_id,
+                    generation=attempt["generation"],
+                )
             wait = (datetime.now(UTC) - row["requested_at"]).total_seconds()
             from tram.metrics.registry import (
                 MGR_DISPATCH_TOTAL,
@@ -797,6 +1183,19 @@ class PipelineController:
                 return False
             if self._db.revert_queued_run_row(run_id) != 1:
                 return False
+            # V18-04: the dispatch attempt is retired — terminal the attempt
+            # (capacity/rejection reason) and release the guard; the run intent
+            # is left unresolved so the next drain re-enters as a new attempt
+            # (frozen §2 503 rule / queue re-entry policy).
+            attempt = self._active_attempt_for_run(run_id)
+            if attempt is not None:
+                self._terminalize_attempt(
+                    attempt_id=attempt["attempt_id"],
+                    run_id=run_id,
+                    pipeline_name=attempt["pipeline_name"],
+                    generation=attempt["generation"],
+                    resolve_outcome=None,
+                )
             from tram.metrics.registry import MGR_QUEUE_DRAIN_RESULT_TOTAL
             MGR_QUEUE_DRAIN_RESULT_TOTAL.labels(
                 pipeline=row["pipeline_name"], result=result
@@ -825,6 +1224,14 @@ class PipelineController:
                 return False
             if self._db.expire_queued_run_row(run_id) != 1:
                 return False
+            # V18-04: the expired run's intent is terminal ('expired').
+            attempt = self._active_attempt_for_run(run_id)
+            ledger.resolve_intent(
+                self._db._engine,
+                run_id=run_id,
+                outcome="expired",
+                attempt_id=attempt["attempt_id"] if attempt is not None else "",
+            )
             name = row["pipeline_name"]
             from tram.metrics.registry import MGR_QUEUE_EXPIRED_TOTAL
             MGR_QUEUE_EXPIRED_TOTAL.labels(pipeline=name).inc()
@@ -1045,23 +1452,12 @@ class PipelineController:
                 # without the status transition: the winning run is genuinely
                 # active, so flipping the pipeline to "error" would be wrong.
                 if origin == "manual" and run_id is not None:
-                    now = datetime.now(UTC)
-                    result = RunResult(
-                        run_id=run_id,
-                        pipeline_name=pipeline_name,
-                        status=RunStatus.FAILED,
-                        started_at=now,
-                        finished_at=now,
-                        records_in=0,
-                        records_out=0,
-                        records_skipped=0,
-                        error=(
-                            "Manual run skipped: previous run still active or "
-                            f"queued (status={state.status})"
-                        ),
-                        node_id=self._node_id,
+                    self._record_skipped_manual_run(
+                        pipeline_name,
+                        run_id,
+                        f"Manual run skipped: previous run still active or "
+                        f"queued (status={state.status})",
                     )
-                    self.manager.record_run(pipeline_name, result)
                 return
 
             self.manager.set_status(pipeline_name, "running")
@@ -1073,6 +1469,30 @@ class PipelineController:
             config = state.config
             yaml_text = state.yaml_text
             schedule_type = config.schedule.type
+
+            # V18-04 §1: durable claim before dispatch (worker mode only —
+            # standalone keeps today's path). The run_intents row is ensured,
+            # then the ledger guard is acquired. A LOST claim (the guard is
+            # held by another attempt — a run the in-memory status missed)
+            # surfaces today's already-running behavior, never a crash.
+            attempt = None
+            if self._worker_pool is not None and self._db is not None:
+                attempt = self._claim_for_dispatch(
+                    pipeline_name,
+                    run_id,
+                    origin=origin,
+                    flush=flush,
+                    yaml_text=yaml_text,
+                    schedule_type=schedule_type,
+                )
+                if attempt is None:
+                    if origin == "manual" and run_id is not None:
+                        self._record_skipped_manual_run(
+                            pipeline_name,
+                            run_id,
+                            "Manual run skipped: another attempt holds the run guard",
+                        )
+                    return
 
         # ── Manager+worker dispatch path ───────────────────────────────────
         if self._worker_pool is not None:
@@ -1089,6 +1509,8 @@ class PipelineController:
                 schedule_type=schedule_type,
                 callback_url=callback_url,
                 flush=flush,
+                attempt_id=attempt["attempt_id"] if attempt is not None else None,
+                generation=attempt["generation"] if attempt is not None else None,
             )
             if outcome.outcome == DISPATCH_NO_CAPACITY:
                 # E.2 (§4.2): the fallback enqueue site — capacity vanished
@@ -1098,6 +1520,17 @@ class PipelineController:
                 # keeps today's fail-fast with its truthful error label
                 # (bug-inheritance guard #1).
                 if origin == "manual" and self._queue_manual_runs and self._db is not None:
+                    if attempt is not None:
+                        # Frozen 503 rule: the attempt is terminal with a
+                        # capacity reason and the intent stays unresolved — the
+                        # queued re-entry dispatches as a new attempt (N+1).
+                        self._terminalize_attempt(
+                            attempt_id=attempt["attempt_id"],
+                            run_id=run_id,
+                            pipeline_name=pipeline_name,
+                            generation=attempt["generation"],
+                            resolve_outcome=None,
+                        )
                     if self._enqueue_manual_run(pipeline_name, run_id, yaml_text):
                         return  # queued — no FAILED row, no finalize
                     # Dedupe hit: the synchronous trigger_run site already queued
@@ -1105,6 +1538,14 @@ class PipelineController:
                     # check-then-insert under the RLock, so no row was created for
                     # this run_id — nothing to clean up.
                     return
+                if attempt is not None:
+                    self._terminalize_attempt(
+                        attempt_id=attempt["attempt_id"],
+                        run_id=run_id,
+                        pipeline_name=pipeline_name,
+                        generation=attempt["generation"],
+                        resolve_outcome="failed",
+                    )
                 failure_time = datetime.now(UTC)
                 error = "No healthy workers available for dispatch"
                 logger.error("Batch dispatch failed: no healthy workers",
@@ -1126,6 +1567,17 @@ class PipelineController:
                 from tram.metrics.registry import MGR_DISPATCH_TOTAL
                 MGR_DISPATCH_TOTAL.labels(pipeline=pipeline_name, result=metric_result).inc()
             elif outcome.outcome == DISPATCH_FAILED:
+                if attempt is not None:
+                    # Authoritative rejection (4xx/5xx non-410/503): the attempt
+                    # is terminal with reason dispatch_rejected, the guard is
+                    # released, and the intent resolves 'failed' (frozen §2).
+                    self._terminalize_attempt(
+                        attempt_id=attempt["attempt_id"],
+                        run_id=run_id,
+                        pipeline_name=pipeline_name,
+                        generation=attempt["generation"],
+                        resolve_outcome="failed",
+                    )
                 failure_time = datetime.now(UTC)
                 error = f"Worker dispatch failed: {outcome.error or 'unknown error'}"
                 logger.error("Worker dispatch attempt failed",
@@ -1163,12 +1615,32 @@ class PipelineController:
                             "Batch dispatch completed for deleted pipeline — not tracked",
                             extra={"pipeline": pipeline_name, "run_id": run_id},
                         )
+                        if attempt is not None:
+                            self._terminalize_attempt(
+                                attempt_id=attempt["attempt_id"],
+                                run_id=run_id,
+                                pipeline_name=pipeline_name,
+                                generation=attempt["generation"],
+                                resolve_outcome="aborted",
+                            )
                         return
                     if self.manager.get(pipeline_name).config is not config:
                         logger.warning(
                             "Batch dispatch completed for replaced pipeline — not tracked",
                             extra={"pipeline": pipeline_name, "run_id": run_id},
                         )
+                        if attempt is not None:
+                            # The manager retired the run's tracking; retire
+                            # the attempt and free the guard so a newer run can
+                            # claim. The eventual completion resolves the intent
+                            # idempotently and cannot touch a newer guard.
+                            self._terminalize_attempt(
+                                attempt_id=attempt["attempt_id"],
+                                run_id=run_id,
+                                pipeline_name=pipeline_name,
+                                generation=attempt["generation"],
+                                resolve_outcome=None,
+                            )
                         return
                     if self.manager.get_run(run_id) is not None:
                         logger.info(
@@ -1178,16 +1650,26 @@ class PipelineController:
                         # C7: the dispatch WAS accepted (a fast worker ran the
                         # run) — count it like the normal path and the queued
                         # drain path, which kept its accepted increment even
-                        # when the lease was skipped.
+                        # when the lease was skipped. The completion path already
+                        # committed the ledger for this attempt.
                         from tram.metrics.registry import MGR_DISPATCH_TOTAL
                         MGR_DISPATCH_TOTAL.labels(pipeline=pipeline_name, result="accepted").inc()
                         return
+                    if attempt is not None:
+                        # 202 acceptance advances the ledger attempt to running.
+                        self._mark_attempt_running(
+                            attempt_id=attempt["attempt_id"],
+                            run_id=run_id,
+                            generation=attempt["generation"],
+                        )
                     self._active_batch_runs[pipeline_name] = _ActiveBatchRun(
                         run_id=run_id,
                         pipeline_name=pipeline_name,
                         worker_url=outcome.worker_url,
                         schedule_type=schedule_type,
                         started_at=datetime.now(UTC),
+                        attempt_id=attempt["attempt_id"] if attempt is not None else None,
+                        generation=attempt["generation"] if attempt is not None else None,
                     )
                 from tram.metrics.registry import MGR_DISPATCH_TOTAL
                 MGR_DISPATCH_TOTAL.labels(pipeline=pipeline_name, result="accepted").inc()
@@ -1414,7 +1896,11 @@ class PipelineController:
                     "Ignoring duplicate worker run-complete callback",
                     extra={"pipeline": pipeline_name, "run_id": run_id},
                 )
-                self._active_batch_runs.pop(pipeline_name, None)
+                # V18-04: identity-checked cleanup — a duplicate callback for a
+                # retired run must not pop a newer run's lease (frozen §2:
+                # late/duplicate callbacks record their own diagnostics only
+                # and cannot touch a newer guard, status, or generation).
+                self._pop_batch_lease_for_run(pipeline_name, run_id)
                 self._remove_stream_run_id(pipeline_name, run_id)
                 return
 
@@ -1437,12 +1923,28 @@ class PipelineController:
             )
 
             if self._worker_pool is not None:
-                self._active_batch_runs.pop(pipeline_name, None)
+                self._pop_batch_lease_for_run(pipeline_name, run_id)
                 self._remove_stream_run_id(pipeline_name, run_id)
                 if self._stream_run_ids.get(pipeline_name):
                     return
                 if self._stats_store is not None:
                     self._stats_store.remove(run_id)
+
+            # V18-04: legacy-shaped completions (no attempt_id on the wire —
+            # a v1.7 worker) still resolve the ledger best-effort by run
+            # identity: attempt → terminal, intent resolved, guard released.
+            # Idempotent — the fenced statements are 0-row no-ops for an
+            # already-terminal attempt, a resolved intent, or a newer guard.
+            if self._db is not None:
+                attempt = self._active_attempt_for_run(run_id)
+                if attempt is not None:
+                    self._terminalize_attempt(
+                        attempt_id=attempt["attempt_id"],
+                        run_id=run_id,
+                        pipeline_name=attempt["pipeline_name"],
+                        generation=attempt["generation"],
+                        resolve_outcome=self._intent_outcome(run_status),
+                    )
 
             if self.manager.exists(pipeline_name):
                 self._finalize_batch_result(pipeline_name, result)
@@ -1451,6 +1953,106 @@ class PipelineController:
                     "on_worker_run_complete: pipeline not found",
                     extra={"pipeline": pipeline_name, "run_id": run_id},
                 )
+
+    def _pop_batch_lease_for_run(self, pipeline_name: str, run_id: str) -> None:
+        """Pop the active batch lease only when it belongs to *run_id* (R5:
+        never name-keyed — a late callback for a retired run must not clear a
+        newer run's lease)."""
+        lease = self._active_batch_runs.get(pipeline_name)
+        if lease is not None and lease.run_id == run_id:
+            self._active_batch_runs.pop(pipeline_name, None)
+
+    def on_attempt_run_complete(
+        self,
+        *,
+        attempt_id: str,
+        generation: int,
+        run_id: str,
+        pipeline_name: str,
+        worker_id: str | None,
+        status: str,
+        records_in: int,
+        records_out: int,
+        records_skipped: int = 0,
+        bytes_in: int = 0,
+        bytes_out: int = 0,
+        error: str | None = None,
+        errors: list[str] | None = None,
+        started_at: datetime | str | None = None,
+        finished_at: datetime | str | None = None,
+    ) -> dict:
+        """Identity-checked run-complete (frozen §2: running → terminal).
+
+        Resolves conditionally on the exact attempt_id + generation: intent
+        resolution is idempotent for the winner, the attempt → terminal
+        transition is fenced, and the guard is released by identity — one
+        transaction, and 200 is returned only after that commit. The
+        run-history/status path reuses the legacy completion body, which is
+        itself identity-safe (never name-keyed).
+
+        Returns ``{"ok": True}`` after the commit, or
+        ``{"ok": True, "ignored": <reason>}`` with diagnostics for an
+        unknown/mismatched attempt (nothing is committed; the worker stops
+        retrying). With no ledger (``db is None``) the handler degrades to
+        today's path.
+        """
+        if self._db is None:
+            self.on_worker_run_complete(
+                run_id=run_id, pipeline_name=pipeline_name, worker_id=worker_id,
+                status=status, records_in=records_in, records_out=records_out,
+                records_skipped=records_skipped, bytes_in=bytes_in, bytes_out=bytes_out,
+                error=error, errors=errors, started_at=started_at, finished_at=finished_at,
+            )
+            return {"ok": True}
+
+        attempt = ledger.get_attempt(self._db._engine, attempt_id)
+        if attempt is None:
+            logger.warning(
+                "Ignoring run-complete for unknown attempt",
+                extra={"attempt_id": attempt_id, "run_id": run_id, "pipeline": pipeline_name},
+            )
+            return {"ok": True, "ignored": "unknown_attempt"}
+        if (
+            attempt["run_id"] != run_id
+            or attempt["pipeline_name"] != pipeline_name
+            or attempt["generation"] != generation
+        ):
+            logger.warning(
+                "Ignoring run-complete with mismatched attempt identity",
+                extra={
+                    "attempt_id": attempt_id,
+                    "run_id": run_id,
+                    "pipeline": pipeline_name,
+                    "generation": generation,
+                    "ledger_run_id": attempt["run_id"],
+                    "ledger_pipeline": attempt["pipeline_name"],
+                    "ledger_generation": attempt["generation"],
+                },
+            )
+            return {"ok": True, "ignored": "identity_mismatch"}
+
+        try:
+            run_status = RunStatus(status)
+        except ValueError:
+            run_status = RunStatus.FAILED
+
+        # Ledger commit: attempt → terminal (fenced), intent resolved
+        # (idempotent for the winner), guard released by identity.
+        self._terminalize_attempt(
+            attempt_id=attempt_id,
+            run_id=run_id,
+            pipeline_name=pipeline_name,
+            generation=generation,
+            resolve_outcome=self._intent_outcome(run_status),
+        )
+
+        self.on_worker_run_complete(
+            run_id=run_id, pipeline_name=pipeline_name, worker_id=worker_id,
+            status=status, records_in=records_in, records_out=records_out,
+            records_skipped=records_skipped, bytes_in=bytes_in, bytes_out=bytes_out,
+            error=error, errors=errors, started_at=started_at, finished_at=finished_at,
+        )
+        return {"ok": True}
 
     # ── Stream execution ───────────────────────────────────────────────────
 

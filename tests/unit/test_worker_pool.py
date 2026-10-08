@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import threading
+import time
 from unittest.mock import MagicMock, patch
 
 from tram.agent.worker_pool import (
@@ -16,6 +17,22 @@ from tram.agent.worker_pool import (
 
 def _pool(*urls, manager_url="http://manager"):
     return WorkerPool(workers=list(urls), manager_url=manager_url, poll_interval=60)
+
+
+def _capturing_client(captured: dict):
+    """Return a mock httpx client whose POST records kwargs['json'] into *captured*."""
+    mock_client = MagicMock()
+    mock_client.__enter__ = lambda s: mock_client
+    mock_client.__exit__ = MagicMock(return_value=False)
+
+    def _post(url, **kwargs):
+        captured["json"] = kwargs.get("json", {})
+        resp = MagicMock()
+        resp.raise_for_status = MagicMock()
+        return resp
+
+    mock_client.post.side_effect = _post
+    return mock_client
 
 
 def _gated_fanout_client(urls: list[str], gate: threading.Event):
@@ -1347,3 +1364,117 @@ class TestReapOnWorkerDown:
             )
         assert pool._assignments["r2"] == "http://w0:8766"
         assert pool.workers_for_pipeline("pipe-a") == ["http://w0:8766"]
+
+
+# ── V18-04: dispatch payload (attempt identity + authorization) ──────────────
+
+
+class TestDispatchPayload:
+    """V18-04 §2: the /agent/run dispatch request carries the ledger attempt
+    identity, plus a minted start authorization only when a manager↔worker
+    session secret exists for that worker (none exist yet, so the default
+    dispatch stays legacy-shaped with no authorization field)."""
+
+    def test_payload_carries_attempt_id_and_generation(self):
+        pool = _pool("http://w0:8766")
+        captured = {}
+        with patch("httpx.Client", return_value=_capturing_client(captured)):
+            pool.dispatch_with_result(
+                "r1", "p", "yaml", "batch",
+                attempt_id="r1-a1", generation=3,
+            )
+        assert captured["json"]["attempt_id"] == "r1-a1"
+        assert captured["json"]["generation"] == 3
+        assert "slot_id" not in captured["json"]  # batches carry no slot
+        assert "authorization" not in captured["json"]  # no session secret yet
+        assert captured["json"]["run_id"] == "r1"
+
+    def test_payload_stays_legacy_shaped_when_attempt_unknown(self):
+        pool = _pool("http://w0:8766")
+        captured = {}
+        with patch("httpx.Client", return_value=_capturing_client(captured)):
+            pool.dispatch_with_result("r2", "p", "yaml", "batch")
+        assert "attempt_id" not in captured["json"]
+        assert "generation" not in captured["json"]
+        assert "authorization" not in captured["json"]
+        assert captured["json"]["run_id"] == "r2"
+
+    def test_registered_attempt_resolved_by_run_id(self):
+        """The queued drain dispatches with only a run_id; the registry fills
+        in the attempt identity."""
+        pool = _pool("http://w0:8766")
+        pool.register_attempt("r3", "r3-a1", 2)
+        captured = {}
+        with patch("httpx.Client", return_value=_capturing_client(captured)):
+            pool.dispatch_with_result("r3", "p", "yaml", "batch")
+        assert captured["json"]["attempt_id"] == "r3-a1"
+        assert captured["json"]["generation"] == 2
+
+    def test_authorization_minted_only_with_injected_session_secret(self):
+        pool = _pool("http://w0:8766")
+        pool.register_worker_session(
+            "http://w0:8766", session_id="w0-boot1234abcd", secret="s3cret!",
+        )
+        captured = {}
+        with patch("httpx.Client", return_value=_capturing_client(captured)):
+            pool.dispatch_with_result(
+                "r4", "p", "yaml", "batch",
+                attempt_id="r4-a1", generation=1,
+            )
+        token = captured["json"].get("authorization")
+        assert token is not None
+        from tram.agent.auth_tokens import validate_start_authorization
+        result = validate_start_authorization(
+            token,
+            worker_session="w0-boot1234abcd",
+            current_secret="s3cret!",
+            max_ttl_s=600,
+            clock_skew_s=5,
+            now_unix=int(time.time()),
+        )
+        assert result.valid
+        assert result.attempt_id == "r4-a1"
+        assert result.run_id == "r4"
+        assert result.generation == 1
+        assert result.slot_id == ""
+
+    def test_no_authorization_without_secret_even_with_attempt(self):
+        pool = _pool("http://w0:8766")
+        captured = {}
+        with patch("httpx.Client", return_value=_capturing_client(captured)):
+            pool.dispatch_with_result(
+                "r5", "p", "yaml", "batch",
+                attempt_id="r5-a1", generation=1,
+            )
+        assert "authorization" not in captured["json"]
+        assert captured["json"]["attempt_id"] == "r5-a1"
+
+    def test_authorization_scoped_to_the_secreted_worker(self):
+        pool = _pool("http://w0:8766", "http://w1:8766")
+        pool.register_worker_session(
+            "http://w1:8766", session_id="w1-session", secret="w1-secret",
+        )
+        captured = {}
+        with patch("httpx.Client", return_value=_capturing_client(captured)):
+            pool.dispatch_with_result(
+                "r7", "p", "yaml", "batch",
+                attempt_id="r7-a1", generation=1,
+            )
+        # least-loaded dispatch targets w0, which has no session secret
+        assert captured["json"]["attempt_id"] == "r7-a1"
+        assert "authorization" not in captured["json"]
+
+    def test_on_run_complete_clears_attempt_registry(self):
+        pool = _pool("http://w0:8766")
+        pool.register_attempt("r6", "r6-a1", 1)
+        assert pool._attempts_by_run["r6"]["attempt_id"] == "r6-a1"
+        pool.on_run_complete("r6")
+        assert "r6" not in pool._attempts_by_run
+
+    def test_register_worker_session_supersedes_old_secret(self):
+        pool = _pool("http://w0:8766")
+        pool.register_worker_session("http://w0:8766", session_id="s1", secret="old")
+        pool.register_worker_session("http://w0:8766", session_id="s2", secret="new")
+        assert pool._worker_sessions["http://w0:8766"] == {
+            "session_id": "s2", "secret": "new",
+        }

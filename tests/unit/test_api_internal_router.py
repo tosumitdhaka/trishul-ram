@@ -122,6 +122,83 @@ class TestRunCompleteEndpoint:
         assert "/api/internal/run-complete" not in paths
         assert "/api/internal/pipeline-stats" not in paths
 
+    def test_attempt_payload_uses_identity_checked_path(self):
+        """V18-04 §3: a payload carrying attempt_id/generation goes through
+        the identity-checked controller path (the ledger commit precedes the
+        200)."""
+        app, ctrl, _ = _make_app()
+        ctrl.on_attempt_run_complete.return_value = {"ok": True}
+        client = TestClient(app)
+
+        resp = client.post("/api/internal/run-complete", json={
+            "run_id": "r1",
+            "pipeline_name": "p",
+            "worker_id": "w0",
+            "status": "success",
+            "records_in": 1,
+            "records_out": 1,
+            "attempt_id": "r1-a1",
+            "generation": 3,
+        })
+
+        assert resp.status_code == 200
+        assert resp.json() == {"ok": True}
+        ctrl.on_attempt_run_complete.assert_called_once_with(
+            attempt_id="r1-a1",
+            generation=3,
+            run_id="r1",
+            pipeline_name="p",
+            worker_id="w0",
+            status="success",
+            records_in=1,
+            records_out=1,
+            records_skipped=0,
+            bytes_in=0,
+            bytes_out=0,
+            error=None,
+            errors=[],
+            started_at=None,
+            finished_at=None,
+        )
+        ctrl.on_worker_run_complete.assert_not_called()
+
+    def test_legacy_payload_keeps_legacy_path(self):
+        """A payload without attempt_id keeps today's path — the controller's
+        legacy completion method is the only call."""
+        app, ctrl, _ = _make_app()
+        client = TestClient(app)
+
+        client.post("/api/internal/run-complete", json={
+            "run_id": "r2",
+            "pipeline_name": "p",
+            "worker_id": "w0",
+            "status": "success",
+        })
+
+        ctrl.on_worker_run_complete.assert_called_once()
+        ctrl.on_attempt_run_complete.assert_not_called()
+
+    def test_attempt_payload_propagates_ignored_ack(self):
+        """A mismatched/unknown attempt is acked with an 'ignored' marker (the
+        worker stops retrying) without any ledger commit."""
+        app, ctrl, _ = _make_app()
+        ctrl.on_attempt_run_complete.return_value = {
+            "ok": True, "ignored": "identity_mismatch",
+        }
+        client = TestClient(app)
+
+        resp = client.post("/api/internal/run-complete", json={
+            "run_id": "r3",
+            "pipeline_name": "p",
+            "status": "success",
+            "attempt_id": "other-a1",
+            "generation": 1,
+        })
+
+        assert resp.status_code == 200
+        assert resp.json() == {"ok": True, "ignored": "identity_mismatch"}
+        ctrl.on_worker_run_complete.assert_not_called()
+
 
 class TestPipelineStatsEndpoint:
     def test_updates_stats_store_for_periodic_report(self):
