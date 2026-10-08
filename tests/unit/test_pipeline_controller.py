@@ -2396,3 +2396,520 @@ class TestAttemptRunComplete:
             assert attempts[0]["state"] == "terminal"
         finally:
             ctrl.stop()
+
+
+# ── V18-04: boot adoption ───────────────────────────────────────────────────
+
+
+class TestBootAdoption:
+    """V18-04 §2 (frozen §2–3): at controller boot, before any scheduler fires,
+    every non-terminal ledger attempt is resolved — claimed-unsent aborts
+    locally (never unknown), dispatching/running resolve against the owning
+    worker's journal, and unreachable/no-evidence attempts go 'unknown' with
+    the guard RETAINED (operator force-release is a later lane)."""
+
+    def _fetch(self, db, sql, params=None):
+        with db._engine.connect() as conn:
+            rows = conn.execute(text(sql), params or {}).mappings().fetchall()
+        return [dict(r) for r in rows]
+
+    def _db(self, tmp_path, name="adopt.db"):
+        from tram.persistence.db import TramDB
+        return TramDB(url=f"sqlite:///{tmp_path}/{name}")
+
+    def _seed(
+        self,
+        db,
+        *,
+        run_id,
+        pipeline_name="my-interval",
+        state="dispatching",
+        generation=1,
+        ordinal=1,
+        worker_id="w0",
+        dispatch_sent_at=None,
+    ):
+        """Seed run_intents + execution_guards + execution_attempts (claimed)."""
+        attempt_id = f"{run_id}-a{ordinal}"
+        now = datetime.now(UTC).isoformat()
+        with db._engine.begin() as conn:
+            conn.execute(text("""
+                INSERT INTO run_intents
+                    (run_id, pipeline_name, origin, flush, requested_at, expires_at,
+                     requested_generation, yaml_snapshot, schedule_type)
+                VALUES (:r, :p, 'scheduled', 0, :now, NULL, :gen, 'yaml', 'interval')
+            """), {"r": run_id, "p": pipeline_name, "now": now, "gen": generation})
+            conn.execute(text("""
+                INSERT INTO execution_guards (guard_key, guard_kind, run_id, attempt_id, generation, acquired_at)
+                VALUES (:p, 'batch', :r, :a, :gen, :now)
+            """), {"p": pipeline_name, "r": run_id, "a": attempt_id, "gen": generation, "now": now})
+            conn.execute(text("""
+                INSERT INTO execution_attempts
+                    (attempt_id, run_id, pipeline_name, ordinal, generation, slot_id,
+                     fence_token, state, dispatch_sent_at, worker_id)
+                VALUES (:a, :r, :p, :ordinal, :gen, '', 'ft', :state, :dsp, :wid)
+            """), {
+                "a": attempt_id, "r": run_id, "p": pipeline_name, "ordinal": ordinal,
+                "gen": generation, "state": state, "dsp": dispatch_sent_at, "wid": worker_id,
+            })
+        return attempt_id
+
+    def _boot_controller(self, tmp_path, wp, name="adopt.db"):
+        db = self._db(tmp_path, name)
+        ctrl = _make_controller(db=db, worker_pool=wp, manager_url="http://manager:8765")
+        return db, ctrl
+
+    def test_claimed_unsent_aborts_locally_never_unknown(self, tmp_path):
+        wp = MagicMock()
+        db, ctrl = self._boot_controller(tmp_path, wp)
+        self._seed(db, run_id="r-claim", state="claimed", dispatch_sent_at=None)
+        try:
+            ctrl.start()
+            attempts = self._fetch(
+                db, "SELECT state, cancel_reason FROM execution_attempts WHERE run_id = 'r-claim'"
+            )
+            assert attempts[0]["state"] == "terminal"
+            assert attempts[0]["cancel_reason"] == "manager_lost_before_dispatch"
+            intents = self._fetch(db, "SELECT final_outcome FROM run_intents WHERE run_id = 'r-claim'")
+            assert intents[0]["final_outcome"] == "aborted"
+            guards = self._fetch(db, "SELECT attempt_id FROM execution_guards WHERE guard_key = 'my-interval'")
+            assert guards[0]["attempt_id"] is None  # guard released
+            # local resolution — never a worker query, never unknown
+            wp.query_attempt.assert_not_called()
+        finally:
+            ctrl.stop()
+
+    def test_dispatching_journal_completed_resolves(self, tmp_path):
+        wp = MagicMock()
+        wp.url_for_worker_id.return_value = "http://worker-0:8766"
+        wp.worker_urls.return_value = ["http://worker-0:8766"]
+        wp.query_attempt.return_value = {
+            "kind": "completion",
+            "result_json": {"status": "success", "records_in": 5},
+        }
+        db, ctrl = self._boot_controller(tmp_path, wp)
+        self._seed(db, run_id="r-done", state="dispatching", worker_id="w0")
+        try:
+            ctrl.start()
+            wp.query_attempt.assert_called_once_with("http://worker-0:8766", "r-done-a1")
+            attempts = self._fetch(db, "SELECT state FROM execution_attempts WHERE run_id = 'r-done'")
+            assert attempts[0]["state"] == "terminal"
+            intents = self._fetch(
+                db, "SELECT final_outcome, final_attempt_id FROM run_intents WHERE run_id = 'r-done'"
+            )
+            assert intents == [{"final_outcome": "success", "final_attempt_id": "r-done-a1"}]
+            guards = self._fetch(db, "SELECT attempt_id FROM execution_guards WHERE guard_key = 'my-interval'")
+            assert guards[0]["attempt_id"] is None
+        finally:
+            ctrl.stop()
+
+    def test_dispatching_journal_interrupted_terminates(self, tmp_path):
+        wp = MagicMock()
+        wp.url_for_worker_id.return_value = "http://worker-0:8766"
+        wp.worker_urls.return_value = ["http://worker-0:8766"]
+        wp.query_attempt.return_value = {"kind": "interrupted", "run_id": "r-int"}
+        db, ctrl = self._boot_controller(tmp_path, wp)
+        self._seed(db, run_id="r-int", state="dispatching", worker_id="w0")
+        try:
+            ctrl.start()
+            attempts = self._fetch(
+                db, "SELECT state, cancel_reason FROM execution_attempts WHERE run_id = 'r-int'"
+            )
+            assert attempts[0]["state"] == "terminal"
+            assert attempts[0]["cancel_reason"] == "boot_adoption_interrupted"
+            intents = self._fetch(db, "SELECT final_outcome FROM run_intents WHERE run_id = 'r-int'")
+            assert intents[0]["final_outcome"] == "aborted"
+            guards = self._fetch(db, "SELECT attempt_id FROM execution_guards WHERE guard_key = 'my-interval'")
+            assert guards[0]["attempt_id"] is None
+        finally:
+            ctrl.stop()
+
+    def test_dispatching_tombstone_terminates(self, tmp_path):
+        wp = MagicMock()
+        wp.url_for_worker_id.return_value = "http://worker-0:8766"
+        wp.worker_urls.return_value = ["http://worker-0:8766"]
+        wp.query_attempt.return_value = {"kind": "tombstone", "reason": "revoked"}
+        db, ctrl = self._boot_controller(tmp_path, wp)
+        self._seed(db, run_id="r-tomb", state="running", worker_id="w0")
+        try:
+            ctrl.start()
+            attempts = self._fetch(
+                db, "SELECT state, cancel_reason FROM execution_attempts WHERE run_id = 'r-tomb'"
+            )
+            assert attempts[0]["state"] == "terminal"
+            assert attempts[0]["cancel_reason"] == "boot_adoption_tombstone"
+            intents = self._fetch(db, "SELECT final_outcome FROM run_intents WHERE run_id = 'r-tomb'")
+            assert intents[0]["final_outcome"] == "aborted"
+        finally:
+            ctrl.stop()
+
+    def test_unreachable_worker_no_row_or_v17_endpoint_unknown_guard_retained(self, tmp_path):
+        """Unreachable worker / no journal row / v1.7 worker without the query
+        endpoint → 'unknown'; the guard is RETAINED (never auto-cleared — the
+        operator force-release lane is later)."""
+        wp = MagicMock()
+        wp.url_for_worker_id.return_value = "http://worker-0:8766"
+        wp.worker_urls.return_value = ["http://worker-0:8766"]
+        wp.query_attempt.return_value = None  # 404 / transport error / no endpoint
+        db, ctrl = self._boot_controller(tmp_path, wp)
+        self._seed(db, run_id="r-unk", state="dispatching", worker_id="w0")
+        try:
+            ctrl.start()
+            attempts = self._fetch(
+                db, "SELECT state, uncertainty_reason FROM execution_attempts WHERE run_id = 'r-unk'"
+            )
+            assert attempts[0]["state"] == "unknown"
+            assert attempts[0]["uncertainty_reason"] == "boot_adoption_no_journal_evidence"
+            guards = self._fetch(db, "SELECT attempt_id FROM execution_guards WHERE guard_key = 'my-interval'")
+            assert guards[0]["attempt_id"] == "r-unk-a1"  # guard retained
+            intents = self._fetch(db, "SELECT final_outcome FROM run_intents WHERE run_id = 'r-unk'")
+            assert intents[0]["final_outcome"] is None  # unresolved
+        finally:
+            ctrl.stop()
+
+    def test_missing_worker_id_falls_back_to_probing_all_workers(self, tmp_path):
+        """Pre-upgrade rows carry no worker_id — adoption fans out to every
+        configured worker; no evidence → unknown."""
+        wp = MagicMock()
+        wp.url_for_worker_id.return_value = None
+        wp.worker_urls.return_value = ["http://w0:8766", "http://w1:8766"]
+        wp.query_attempt.return_value = None
+        db, ctrl = self._boot_controller(tmp_path, wp)
+        self._seed(db, run_id="r-orphan", state="running", worker_id=None)
+        try:
+            ctrl.start()
+            assert wp.query_attempt.call_count == 2  # both workers probed
+            attempts = self._fetch(db, "SELECT state FROM execution_attempts WHERE run_id = 'r-orphan'")
+            assert attempts[0]["state"] == "unknown"
+        finally:
+            ctrl.stop()
+
+    def test_active_journal_row_adopts_lease(self, tmp_path):
+        """Journal reports the attempt still active on a reachable worker — the
+        lease is adopted (reconciler probes it), the guard stays held, and the
+        intent stays unresolved until the run-complete lands."""
+        wp = MagicMock()
+        wp.url_for_worker_id.return_value = "http://worker-0:8766"
+        wp.worker_urls.return_value = ["http://worker-0:8766"]
+        wp.query_attempt.return_value = {"kind": "active"}
+        db, ctrl = self._boot_controller(tmp_path, wp)
+        self._seed(db, run_id="r-live", state="running", worker_id="w0")
+        try:
+            ctrl.start()
+            attempts = self._fetch(db, "SELECT state FROM execution_attempts WHERE run_id = 'r-live'")
+            assert attempts[0]["state"] == "running"  # untouched — still live
+            lease = ctrl._active_batch_runs.get("my-interval")
+            assert lease is not None and lease.run_id == "r-live"
+            assert lease.attempt_id == "r-live-a1"
+            guards = self._fetch(db, "SELECT attempt_id FROM execution_guards WHERE guard_key = 'my-interval'")
+            assert guards[0]["attempt_id"] == "r-live-a1"  # still held
+        finally:
+            ctrl.stop()
+
+    def test_adoption_terminates_stuck_dispatching_queued_row(self, tmp_path):
+        """A queued_runs row stuck at 'dispatching' for a run whose ledger
+        attempt adoption resolves is terminal-cancelled with the reason."""
+        wp = MagicMock()
+        wp.url_for_worker_id.return_value = "http://worker-0:8766"
+        wp.worker_urls.return_value = ["http://worker-0:8766"]
+        wp.query_attempt.return_value = {
+            "kind": "completion", "result_json": {"status": "success"},
+        }
+        db, ctrl = self._boot_controller(tmp_path, wp)
+        self._seed(db, run_id="r-q", state="dispatching", worker_id="w0")
+        with db._engine.begin() as conn:
+            conn.execute(text("""
+                INSERT INTO queued_runs (run_id, pipeline_name, yaml_snapshot, status,
+                                         requested_at, expires_at)
+                VALUES ('r-q', 'my-interval', 'yaml', 'dispatching', :now, :now)
+            """), {"now": datetime.now(UTC).isoformat()})
+        try:
+            ctrl.start()
+            rows = self._fetch(
+                db, "SELECT status, terminal_reason FROM queued_runs WHERE run_id = 'r-q'"
+            )
+            assert rows[0]["status"] == "cancelled"
+            assert rows[0]["terminal_reason"] == "boot_adoption_completed"
+        finally:
+            ctrl.stop()
+
+    def test_adoption_completes_before_schedulers_fire(self, tmp_path, monkeypatch):
+        """Order pin: boot adoption resolves before APScheduler starts — the
+        'before any scheduler fires' requirement is structural (_boot_load runs
+        adoption under the lock, then the scheduler starts)."""
+        from apscheduler.schedulers.background import BackgroundScheduler
+
+        wp = MagicMock()
+        wp.url_for_worker_id.return_value = "http://worker-0:8766"
+        wp.worker_urls.return_value = ["http://worker-0:8766"]
+        wp.query_attempt.return_value = {
+            "kind": "completion", "result_json": {"status": "success"},
+        }
+        db, ctrl = self._boot_controller(tmp_path, wp)
+        self._seed(db, run_id="r-pin", state="dispatching", worker_id="w0")
+        order: list[str] = []
+        orig_resolve = PipelineController._resolve_non_terminal_attempts_at_boot
+
+        def _resolve(self):
+            order.append("adoption")
+            return orig_resolve(self)
+
+        orig_sched_start = BackgroundScheduler.start
+
+        def _sched_start(self, *args, **kwargs):
+            order.append("scheduler_start")
+            return orig_sched_start(self, *args, **kwargs)
+
+        monkeypatch.setattr(
+            PipelineController, "_resolve_non_terminal_attempts_at_boot", _resolve
+        )
+        monkeypatch.setattr(BackgroundScheduler, "start", _sched_start)
+        try:
+            ctrl.start()
+            assert order == ["adoption", "scheduler_start"]
+        finally:
+            ctrl.stop()
+
+
+# ── V18-04: queue terminal cancellation (R16) ───────────────────────────────
+
+
+class TestQueueTerminalCancellation:
+    """R16: stop/restart/update/delete terminal-cancel a pipeline's queued
+    (pending) run rows at action time with the recorded reason — instead of
+    waiting for TTL expiry — and the E.2 drain skips them."""
+
+    def _fetch(self, db, sql, params=None):
+        with db._engine.connect() as conn:
+            rows = conn.execute(text(sql), params or {}).mappings().fetchall()
+        return [dict(r) for r in rows]
+
+    def _started(self, tmp_path, name="queue-cancel.db"):
+        from tram.persistence.db import TramDB
+        db = TramDB(url=f"sqlite:///{tmp_path}/{name}")
+        wp = MagicMock()
+        wp.healthy_workers.return_value = []
+        ctrl = _make_controller(db=db, worker_pool=wp, manager_url="http://manager:8765")
+        ctrl.manager.register(load_pipeline_from_yaml(_MANUAL_YAML), yaml_text=_MANUAL_YAML)
+        return db, ctrl
+
+    def test_stop_terminal_cancels_queued_with_reason(self, tmp_path):
+        db, ctrl = self._started(tmp_path)
+        try:
+            triggered = ctrl.trigger_run("my-manual")
+            assert triggered.disposition == "queued"
+            ctrl.stop_pipeline("my-manual")
+            rows = self._fetch(
+                db, "SELECT status, terminal_reason FROM queued_runs WHERE run_id = :r",
+                {"r": triggered.run_id},
+            )
+            assert rows[0]["status"] == "cancelled"
+            assert rows[0]["terminal_reason"] == "pipeline_stopped"
+            assert ctrl.drainable_queued_runs() == []  # drain skips cancelled rows
+            intents = self._fetch(
+                db, "SELECT final_outcome FROM run_intents WHERE run_id = :r",
+                {"r": triggered.run_id},
+            )
+            assert intents[0]["final_outcome"] == "aborted"
+        finally:
+            ctrl.stop()
+
+    def test_delete_terminal_cancels_queued_with_reason(self, tmp_path):
+        db, ctrl = self._started(tmp_path)
+        try:
+            triggered = ctrl.trigger_run("my-manual")
+            assert triggered.disposition == "queued"
+            ctrl.delete("my-manual")
+            rows = self._fetch(
+                db, "SELECT status, terminal_reason FROM queued_runs WHERE run_id = :r",
+                {"r": triggered.run_id},
+            )
+            assert rows[0]["status"] == "cancelled"
+            assert rows[0]["terminal_reason"] == "pipeline_deleted"
+            assert ctrl.drainable_queued_runs() == []
+        finally:
+            ctrl.stop()
+
+    def test_update_terminal_cancels_queued_with_reason(self, tmp_path):
+        db, ctrl = self._started(tmp_path)
+        try:
+            triggered = ctrl.trigger_run("my-manual")
+            assert triggered.disposition == "queued"
+            v2 = _MANUAL_YAML + "description: updated-v2\n"
+            ctrl.update("my-manual", v2)
+            rows = self._fetch(
+                db, "SELECT status, terminal_reason FROM queued_runs WHERE run_id = :r",
+                {"r": triggered.run_id},
+            )
+            assert rows[0]["status"] == "cancelled"
+            assert rows[0]["terminal_reason"] == "pipeline_updated"
+            assert ctrl.drainable_queued_runs() == []
+        finally:
+            ctrl.stop()
+
+    def test_restart_terminal_cancels_queued_with_reason(self, tmp_path):
+        db, ctrl = self._started(tmp_path)
+        try:
+            triggered = ctrl.trigger_run("my-manual")
+            assert triggered.disposition == "queued"
+            ctrl.restart_pipeline("my-manual")
+            rows = self._fetch(
+                db, "SELECT status, terminal_reason FROM queued_runs WHERE run_id = :r",
+                {"r": triggered.run_id},
+            )
+            assert rows[0]["status"] == "cancelled"
+            assert rows[0]["terminal_reason"] == "pipeline_restarted"
+            assert ctrl.drainable_queued_runs() == []
+        finally:
+            ctrl.stop()
+
+    def test_delete_prunes_orphaned_unresolved_intents(self, tmp_path):
+        """Task 5: an unresolved intent whose run has only a terminal attempt
+        (no queued row) is resolved at delete — no orphaned rows linger."""
+        from tram.persistence.db import TramDB
+        db = TramDB(url=f"sqlite:///{tmp_path}/prune.db")
+        wp = MagicMock()
+        wp.healthy_workers.return_value = []
+        ctrl = _make_controller(db=db, worker_pool=wp, manager_url="http://manager:8765")
+        ctrl.manager.register(load_pipeline_from_yaml(_MANUAL_YAML), yaml_text=_MANUAL_YAML)
+        try:
+            now = datetime.now(UTC).isoformat()
+            with db._engine.begin() as conn:
+                conn.execute(text("""
+                    INSERT INTO run_intents
+                        (run_id, pipeline_name, origin, flush, requested_at, expires_at,
+                         requested_generation, yaml_snapshot, schedule_type)
+                    VALUES ('r-orphan', 'my-manual', 'manual', 0, :now, NULL, 1, 'yaml', 'manual')
+                """), {"now": now})
+                conn.execute(text("""
+                    INSERT INTO execution_attempts
+                        (attempt_id, run_id, pipeline_name, ordinal, generation, slot_id,
+                         fence_token, state)
+                    VALUES ('r-orphan-a1', 'r-orphan', 'my-manual', 1, 1, '', 'ft', 'terminal')
+                """))
+            ctrl.delete("my-manual")
+            intents = self._fetch(db, "SELECT final_outcome FROM run_intents WHERE run_id = 'r-orphan'")
+            assert intents[0]["final_outcome"] == "aborted"
+        finally:
+            ctrl.stop()
+
+
+# ── V18-04: lifecycle_operations wiring ─────────────────────────────────────
+
+
+class TestLifecycleOperationsWiring:
+    """V18-04: stop/restart/update/delete and the boot-adoption resolution
+    record rows in the frozen lifecycle_operations table (pending → complete
+    with detail). The 202+operation_id API shape is V18-09 — only the table
+    writes + internal queries live here."""
+
+    def _fetch(self, db, sql, params=None):
+        with db._engine.connect() as conn:
+            rows = conn.execute(text(sql), params or {}).mappings().fetchall()
+        return [dict(r) for r in rows]
+
+    def _started(self, tmp_path, name="lifecycle.db"):
+        from tram.persistence.db import TramDB
+        db = TramDB(url=f"sqlite:///{tmp_path}/{name}")
+        wp = MagicMock()
+        wp.healthy_workers.return_value = []
+        ctrl = _make_controller(db=db, worker_pool=wp, manager_url="http://manager:8765")
+        ctrl.manager.register(load_pipeline_from_yaml(_MANUAL_YAML), yaml_text=_MANUAL_YAML)
+        return db, ctrl
+
+    def _assert_single_complete(self, db, pipeline_name, op_kind):
+        rows = self._fetch(
+            db,
+            "SELECT op_kind, state, detail, attempt_id FROM lifecycle_operations "
+            "WHERE pipeline_name = :p",
+            {"p": pipeline_name},
+        )
+        assert len(rows) == 1
+        assert rows[0]["op_kind"] == op_kind
+        assert rows[0]["state"] == "complete"
+        assert rows[0]["detail"]
+        return rows[0]
+
+    def test_stop_records_lifecycle_operation(self, tmp_path):
+        db, ctrl = self._started(tmp_path)
+        try:
+            ctrl.stop_pipeline("my-manual")
+            self._assert_single_complete(db, "my-manual", "stop")
+        finally:
+            ctrl.stop()
+
+    def test_delete_records_lifecycle_operation(self, tmp_path):
+        db, ctrl = self._started(tmp_path)
+        try:
+            ctrl.delete("my-manual")
+            self._assert_single_complete(db, "my-manual", "delete")
+        finally:
+            ctrl.stop()
+
+    def test_update_records_lifecycle_operation(self, tmp_path):
+        db, ctrl = self._started(tmp_path)
+        try:
+            v2 = _MANUAL_YAML + "description: updated-v2\n"
+            ctrl.update("my-manual", v2)
+            self._assert_single_complete(db, "my-manual", "update")
+        finally:
+            ctrl.stop()
+
+    def test_restart_records_lifecycle_operation(self, tmp_path):
+        db, ctrl = self._started(tmp_path)
+        try:
+            ctrl.restart_pipeline("my-manual")
+            self._assert_single_complete(db, "my-manual", "restart")
+        finally:
+            ctrl.stop()
+
+    def test_boot_adoption_records_lifecycle_operation(self, tmp_path):
+        from tram.persistence.db import TramDB
+        db = TramDB(url=f"sqlite:///{tmp_path}/adopt-lifecycle.db")
+        wp = MagicMock()
+        wp.url_for_worker_id.return_value = "http://worker-0:8766"
+        wp.worker_urls.return_value = ["http://worker-0:8766"]
+        wp.query_attempt.return_value = None
+        ctrl = _make_controller(db=db, worker_pool=wp, manager_url="http://manager:8765")
+        now = datetime.now(UTC).isoformat()
+        with db._engine.begin() as conn:
+            conn.execute(text("""
+                INSERT INTO run_intents
+                    (run_id, pipeline_name, origin, flush, requested_at, expires_at,
+                     requested_generation, yaml_snapshot, schedule_type)
+                VALUES ('r-a', 'my-manual', 'manual', 0, :now, NULL, 1, 'yaml', 'manual')
+            """), {"now": now})
+            conn.execute(text("""
+                INSERT INTO execution_guards (guard_key, guard_kind, run_id, attempt_id, generation, acquired_at)
+                VALUES ('my-manual', 'batch', 'r-a', 'r-a-a1', 1, :now)
+            """), {"now": now})
+            conn.execute(text("""
+                INSERT INTO execution_attempts
+                    (attempt_id, run_id, pipeline_name, ordinal, generation, slot_id,
+                     fence_token, state, dispatch_sent_at, worker_id)
+                VALUES ('r-a-a1', 'r-a', 'my-manual', 1, 1, '', 'ft', 'dispatching', :now, 'w0')
+            """), {"now": now})
+        try:
+            ctrl.start()
+            rows = self._fetch(
+                db,
+                "SELECT op_kind, state, detail, attempt_id FROM lifecycle_operations "
+                "WHERE pipeline_name = 'my-manual'",
+            )
+            assert len(rows) == 1
+            assert rows[0]["op_kind"] == "stop"
+            assert rows[0]["state"] == "complete"
+            assert "boot adoption" in rows[0]["detail"]
+            assert rows[0]["attempt_id"] == "r-a-a1"
+        finally:
+            ctrl.stop()
+
+    def test_get_lifecycle_operations_filters_by_pipeline(self, tmp_path):
+        db, ctrl = self._started(tmp_path)
+        try:
+            ctrl.stop_pipeline("my-manual")
+            ops = ctrl.get_lifecycle_operations(pipeline_name="my-manual")
+            assert len(ops) == 1 and ops[0]["op_kind"] == "stop"
+            assert ctrl.get_lifecycle_operations(pipeline_name="nope") == []
+        finally:
+            ctrl.stop()

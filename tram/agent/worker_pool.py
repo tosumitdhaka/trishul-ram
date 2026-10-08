@@ -19,6 +19,7 @@ from __future__ import annotations
 
 import logging
 import os
+import secrets
 import threading
 import time
 from collections.abc import Callable
@@ -52,9 +53,20 @@ DISPATCH_ACCEPTED = "accepted"
 DISPATCH_NO_CAPACITY = "no_capacity"
 DISPATCH_FAILED = "dispatch_failed"
 
-# V18-01 §9 frozen start-authorization TTL (the handshake lane wires the full
-# config surface; the manager mints with this default until then).
-_AUTH_TOKEN_TTL_S = 300
+# V18-01 §5: the manager-side protocol version and capability set reported at
+# /agent/handshake. The capability list is the frozen protocol set the manager
+# offers; a v1.7 worker without the endpoint simply never replies.
+_PROTOCOL_VERSION = "1.8"
+_MANAGER_CAPABILITIES = [
+    "fencing",
+    "commit_receipts",
+    "admission_limits",
+    "durable_completion",
+    "query_replay",
+    "drain",
+    "status_snapshot",
+]
+_HANDSHAKE_TIMEOUT_S = 5
 
 
 @dataclass
@@ -208,6 +220,12 @@ class WorkerPool:
         """Probe all workers once, then launch background health-poll thread."""
         self._poll_stop.clear()
         self._poll_all(initial_scan=True)  # boot scan: first-probe failures mark workers down
+        # V18-01 §5: establish manager↔worker session secrets at worker
+        # registration (POST /agent/handshake). Workers without the endpoint
+        # (v1.7) or a failing handshake record no session — dispatches to them
+        # stay legacy-shaped with no authorization field (frozen compatibility
+        # bridge). Recovered workers are re-handshaken by the poll loop.
+        self._handshake_healthy_workers()
         self._poll_thread = threading.Thread(
             target=self._poll_loop,
             name="tram-worker-health",
@@ -324,6 +342,9 @@ class WorkerPool:
 
             if ok and not prev_ok:
                 logger.info("Worker came back up", extra={"worker": url})
+                # V18-01 §5: a recovered worker re-registers — re-establish the
+                # session secret (a process restart mints a new session_id).
+                self._handshake_worker(url)
                 if self.on_health_restored is not None:
                     try:
                         self.on_health_restored()
@@ -358,6 +379,66 @@ class WorkerPool:
                 total,
                 extra={"healthy": healthy, "total": total},
             )
+
+    # ── Manager↔worker handshake (V18-01 §5) ───────────────────────────────
+
+    def _handshake_worker(self, worker_url: str) -> bool:
+        """POST /agent/handshake and register the manager↔worker session secret.
+
+        The manager mints the session secret and sends it in the request body
+        (the frozen §5 exchange: the manager's side of the handshake carries
+        its protocol/caps and the secret); the worker replies with its session
+        identity. The secret is stored via :meth:`register_worker_session`,
+        which makes :meth:`_mint_authorization` live for that worker.
+
+        A worker without the endpoint (v1.7) or a failing handshake records no
+        session — dispatches to it stay legacy-shaped with no ``authorization``
+        field (frozen compatibility bridge; strict dispatch does not exist yet,
+        so no drain-only strictness is needed).
+        """
+        secret = secrets.token_urlsafe(32)
+        try:
+            with self._agent_client(_HANDSHAKE_TIMEOUT_S) as client:
+                resp = client.post(
+                    f"{worker_url}/agent/handshake",
+                    json={
+                        "protocol_version": _PROTOCOL_VERSION,
+                        "capabilities": _MANAGER_CAPABILITIES,
+                        "secret": secret,
+                    },
+                )
+                resp.raise_for_status()
+                data = resp.json()
+        except Exception as exc:
+            logger.warning(
+                "Worker handshake failed",
+                extra={"worker": worker_url, "error": str(exc)},
+            )
+            return False
+        data = data or {}
+        session_id = str(data.get("session_id", "")).strip()
+        if not session_id:
+            logger.warning(
+                "Worker handshake reply missing session_id",
+                extra={"worker": worker_url},
+            )
+            return False
+        # Prefer a secret echoed by the worker; fall back to the minted one.
+        echoed = data.get("secret")
+        registered_secret = str(echoed) if echoed else secret
+        self.register_worker_session(
+            worker_url, session_id=session_id, secret=registered_secret,
+        )
+        logger.info(
+            "Worker handshake established",
+            extra={"worker": worker_url, "session_id": session_id},
+        )
+        return True
+
+    def _handshake_healthy_workers(self) -> None:
+        """Establish sessions for every currently-healthy worker (boot path)."""
+        for worker_url in self.healthy_workers():
+            self._handshake_worker(worker_url)
 
     # ── Queries ────────────────────────────────────────────────────────────
 
@@ -638,15 +719,65 @@ class WorkerPool:
             }
 
     def register_worker_session(self, worker_url: str, *, session_id: str, secret: str) -> None:
-        """Register the manager↔worker session secret (handshake lane).
+        """Register the manager↔worker session secret (established at handshake).
 
-        Until a session exists for a worker, dispatches carry no
-        ``authorization`` field (legacy-shaped). A newer session for the same
-        worker supersedes the old secret (frozen §5: proof of process
-        termination for release decisions).
+        A newer session for the same worker supersedes the old secret (frozen
+        §5: proof of process termination for release decisions). The previous
+        secret is retained for the rotation overlap (max TTL + clock skew,
+        605 s at the frozen defaults) so tokens minted under it keep validating
+        worker-side during the window; it is dropped lazily once the overlap
+        elapses.
         """
         with self._lock:
-            self._worker_sessions[worker_url] = {"session_id": session_id, "secret": secret}
+            existing = self._worker_sessions.get(worker_url)
+            now = time.time()
+            previous_secret: str | None = None
+            previous_secret_until: float | None = None
+            if existing is not None and existing.get("secret") != secret:
+                from tram.core.config import auth_clock_skew_s, auth_max_ttl_s
+                overlap = auth_max_ttl_s() + auth_clock_skew_s()
+                previous_secret = existing["secret"]
+                previous_secret_until = now + overlap
+                # A still-valid older secret survives a second rotation inside
+                # the overlap window (keep the longest-lived previous secret).
+                older = existing.get("previous_secret")
+                if older and (existing.get("previous_secret_until") or 0) > now:
+                    previous_secret = older
+                    previous_secret_until = existing["previous_secret_until"]
+            self._worker_sessions[worker_url] = {
+                "session_id": session_id,
+                "secret": secret,
+                "previous_secret": previous_secret,
+                "previous_secret_until": previous_secret_until,
+            }
+
+    def query_attempt(self, worker_url: str, attempt_id: str) -> dict | None:
+        """GET /agent/attempts/{attempt_id} — worker-journal replay query.
+
+        V18-01 §5: returns the completion record, active reservation state,
+        interrupted marker, or revocation tombstone. Returns None when the
+        worker is unreachable or has no journal row for the attempt (transport
+        error, non-200, or HTTP 404 — frozen §5: 404 is neither revocation nor
+        quiescence; the manager classifies it as insufficient evidence). A v1.7
+        worker without the endpoint also returns None.
+        """
+        try:
+            with self._agent_client(10) as client:
+                resp = client.get(f"{worker_url}/agent/attempts/{attempt_id}")
+                if resp.status_code != 200:
+                    return None
+                return resp.json()
+        except Exception as exc:
+            logger.warning(
+                "Attempt query failed",
+                extra={"worker": worker_url, "attempt_id": attempt_id, "error": str(exc)},
+            )
+            return None
+
+    def worker_urls(self) -> list[str]:
+        """All configured worker URLs (boot adoption's owner-resolution fallback)."""
+        with self._lock:
+            return list(self._workers)
 
     def _mint_authorization(
         self,
@@ -660,20 +791,22 @@ class WorkerPool:
         """Mint a start-authorization token when a session secret exists.
 
         Returns None when no manager↔worker session has been established for
-        the worker (the handshake lane lands later) — the dispatch then stays
-        legacy-shaped with no ``authorization`` field (frozen §5).
+        the worker (no handshake / v1.7 worker / failed handshake) — the
+        dispatch then stays legacy-shaped with no ``authorization`` field
+        (frozen §5 compatibility bridge).
         """
         session = self._worker_sessions.get(worker_url)
         if session is None:
             return None
         from tram.agent.auth_tokens import mint_start_authorization
+        from tram.core.config import auth_token_ttl_s
         return mint_start_authorization(
             attempt_id=attempt_id,
             run_id=run_id,
             generation=generation,
             slot_id=slot_id,
             worker_session=session["session_id"],
-            ttl_s=_AUTH_TOKEN_TTL_S,
+            ttl_s=auth_token_ttl_s(),
             secret=session["secret"],
             issued_at_unix=int(time.time()),
         )
@@ -701,8 +834,9 @@ class WorkerPool:
         drain path) is resolved so the request still carries the attempt
         identity. The request carries ``attempt_id``/``generation``/``slot_id``
         when known, plus an ``authorization`` start token minted via
-        ``auth_tokens`` only when a session secret exists for the worker
-        (none exist yet, so the default dispatch stays legacy-shaped with no
+        ``auth_tokens`` when a manager↔worker session secret exists for the
+        worker (established at /agent/handshake; absent for v1.7 workers or a
+        failed handshake — the dispatch then stays legacy-shaped with no
         authorization field). v1.7 workers ignore the unknown fields
         (Pydantic ignores extras).
         """

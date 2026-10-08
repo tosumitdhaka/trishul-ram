@@ -1177,7 +1177,10 @@ class TestDrain:
 
 
 class TestLifecycleHooks:
-    def test_delete_purges_queued_runs(self, db):
+    def test_delete_terminal_cancels_queued_runs(self, db):
+        """R16: delete terminal-cancels queued rows with the recorded reason
+        instead of purging them — the returned run_id keeps resolving as a
+        terminal record, and the drain skips cancelled rows."""
         wp = MagicMock()
         wp.healthy_workers.return_value = ["http://w0:8766"]
         ctrl = _make_controller(db, wp)
@@ -1186,14 +1189,24 @@ class TestLifecycleHooks:
             _enqueue(ctrl, db)
             ctrl.delete("my-manual")
             with db._engine.connect() as conn:
-                remaining = conn.execute(text(
-                    "SELECT run_id FROM queued_runs WHERE pipeline_name = 'my-manual'"
-                )).scalars().all()
-            assert remaining == []
-            # drain never dispatches a purged run, and no expiry FAILED row appears
+                rows = conn.execute(text(
+                    "SELECT run_id, status, terminal_reason FROM queued_runs "
+                    "WHERE pipeline_name = 'my-manual'"
+                )).mappings().fetchall()
+            assert [dict(r) for r in rows] == [{
+                "run_id": "r1", "status": "cancelled",
+                "terminal_reason": "pipeline_deleted",
+            }]
+            # drain never dispatches a cancelled run, and no expiry FAILED row appears
             BatchReconciler(ctrl, wp, interval=10).run_once()
             wp.dispatch_with_result.assert_not_called()
             assert db.get_runs(pipeline_name="my-manual") == []
+            # the orphaned intent is pruned (task 5)
+            with db._engine.connect() as conn:
+                outcome = conn.execute(text(
+                    "SELECT final_outcome FROM run_intents WHERE run_id = 'r1'"
+                )).scalar()
+            assert outcome == "aborted"
         finally:
             ctrl.stop()
 
@@ -1207,10 +1220,19 @@ class TestLifecycleHooks:
             ctrl.stop_pipeline("my-manual")
             assert db.get_active_queued_runs() == []
             assert ctrl.manager.get("my-manual").status == "stopped"
+            # R16: the terminal record is retained with the recorded reason
+            with db._engine.connect() as conn:
+                row = conn.execute(text(
+                    "SELECT status, terminal_reason FROM queued_runs WHERE run_id = 'r1'"
+                )).mappings().fetchone()
+            assert dict(row) == {"status": "cancelled", "terminal_reason": "pipeline_stopped"}
         finally:
             ctrl.stop()
 
-    def test_update_refreshes_yaml_snapshot(self, db):
+    def test_update_terminal_cancels_queued_runs(self, db):
+        """R16: the restart-update terminal-cancels queued rows with the
+        recorded reason (supersedes the Decision 5 snapshot refresh) — the
+        drain never dispatches the stale snapshot."""
         wp = MagicMock()
         wp.healthy_workers.return_value = ["http://w0:8766"]
         wp.dispatch_with_result.return_value = DispatchOutcome(
@@ -1222,13 +1244,15 @@ class TestLifecycleHooks:
             _enqueue(ctrl, db)
             v2 = _MANUAL_YAML + "description: updated-v2\n"
             ctrl.update("my-manual", v2)
-            rows = db.get_active_queued_runs()
-            assert len(rows) == 1
-            assert rows[0]["yaml_snapshot"] == v2  # Decision 5
-            # the drain dispatches the refreshed snapshot
+            assert db.get_active_queued_runs() == []  # cancelled, not drainable
+            with db._engine.connect() as conn:
+                row = conn.execute(text(
+                    "SELECT status, terminal_reason FROM queued_runs WHERE run_id = 'r1'"
+                )).mappings().fetchone()
+            assert dict(row) == {"status": "cancelled", "terminal_reason": "pipeline_updated"}
+            # the drain skips the cancelled row entirely
             BatchReconciler(ctrl, wp, interval=10).run_once()
-            kwargs = wp.dispatch_with_result.call_args.kwargs
-            assert kwargs["yaml_text"] == v2
+            wp.dispatch_with_result.assert_not_called()
         finally:
             ctrl.stop()
 

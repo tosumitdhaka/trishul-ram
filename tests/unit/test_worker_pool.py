@@ -5,6 +5,9 @@ import threading
 import time
 from unittest.mock import MagicMock, patch
 
+import httpx
+import pytest
+
 from tram.agent.worker_pool import (
     DISPATCH_ACCEPTED,
     DISPATCH_FAILED,
@@ -1475,6 +1478,221 @@ class TestDispatchPayload:
         pool = _pool("http://w0:8766")
         pool.register_worker_session("http://w0:8766", session_id="s1", secret="old")
         pool.register_worker_session("http://w0:8766", session_id="s2", secret="new")
-        assert pool._worker_sessions["http://w0:8766"] == {
-            "session_id": "s2", "secret": "new",
+        record = pool._worker_sessions["http://w0:8766"]
+        assert record["session_id"] == "s2"
+        assert record["secret"] == "new"
+        # rotation overlap: the previous secret is retained for max TTL + skew
+        assert record["previous_secret"] == "old"
+        assert record["previous_secret_until"] > time.time() + 600
+        assert record["previous_secret_until"] < time.time() + 610
+
+
+def _handshake_client(
+    captured: dict,
+    *,
+    session_id: str = "w0-boot1234abcd",
+    handshake_error: Exception | None = None,
+    attempt_status: int = 200,
+    attempt_reply: dict | None = None,
+):
+    """Mock httpx client for the handshake/query tests.
+
+    GET /agent/health → healthy; GET /agent/attempts/{id} → attempt_status /
+    attempt_reply; POST /agent/handshake → session_id (or handshake_error when
+    set); other POSTs (dispatch) → 200. Every POST's (url, body) is recorded
+    into ``captured["posts"]``.
+    """
+    mock_client = MagicMock()
+    mock_client.__enter__ = lambda s: mock_client
+    mock_client.__exit__ = MagicMock(return_value=False)
+
+    def _get(url, **kwargs):
+        if "/agent/attempts/" in url:
+            resp = MagicMock()
+            resp.status_code = attempt_status
+            if attempt_status == 200:
+                resp.json.return_value = attempt_reply or {"kind": "active"}
+            return resp
+        resp = MagicMock()
+        resp.status_code = 200
+        resp.json.return_value = {
+            "ok": True,
+            "active_runs": 0,
+            "worker_id": url.rsplit("/", 1)[-1],
+            "running_pipelines": [],
         }
+        return resp
+
+    def _post(url, **kwargs):
+        captured.setdefault("posts", []).append((url, kwargs.get("json", {})))
+        resp = MagicMock()
+        if handshake_error is not None and url.endswith("/agent/handshake"):
+            resp.raise_for_status.side_effect = handshake_error
+        else:
+            resp.status_code = 200
+            resp.raise_for_status = MagicMock()
+            resp.json.return_value = {"session_id": session_id}
+        return resp
+
+    mock_client.get.side_effect = _get
+    mock_client.post.side_effect = _post
+    return mock_client
+
+
+# ── V18-04: manager↔worker handshake client ─────────────────────────────────
+
+
+class TestHandshakeClient:
+    """V18-01 §5: the manager establishes the session secret at worker
+    registration (POST /agent/handshake), making _mint_authorization live. A
+    worker without the endpoint (v1.7) or a failing handshake records no
+    session — dispatches to it stay legacy-shaped. Rotation retains the
+    previous secret for the overlap window."""
+
+    def test_start_handshakes_healthy_workers_and_stores_secret(self):
+        captured = {}
+        pool = _pool("http://w0:8766")
+        with patch("httpx.Client", return_value=_handshake_client(captured)):
+            pool.start()
+        try:
+            record = pool._worker_sessions["http://w0:8766"]
+            assert record["session_id"] == "w0-boot1234abcd"
+            assert record["secret"]
+            handshake_posts = [
+                p for p in captured["posts"] if p[0].endswith("/agent/handshake")
+            ]
+            assert len(handshake_posts) == 1
+            body = handshake_posts[0][1]
+            assert body["protocol_version"] == "1.8"
+            assert "fencing" in body["capabilities"]
+            assert body["secret"] == record["secret"]
+        finally:
+            pool.stop()
+
+    def test_handshake_enables_authorized_dispatch(self):
+        captured = {}
+        pool = _pool("http://w0:8766")
+        with patch("httpx.Client", return_value=_handshake_client(captured)):
+            pool.start()
+            try:
+                pool.dispatch_with_result(
+                    "r1", "p", "yaml", "batch", attempt_id="r1-a1", generation=1,
+                )
+                body = captured["posts"][-1][1]
+                token = body.get("authorization")
+                assert token is not None
+                from tram.agent.auth_tokens import validate_start_authorization
+                result = validate_start_authorization(
+                    token,
+                    worker_session="w0-boot1234abcd",
+                    current_secret=pool._worker_sessions["http://w0:8766"]["secret"],
+                    max_ttl_s=600,
+                    clock_skew_s=5,
+                    now_unix=int(time.time()),
+                )
+                assert result.valid
+                assert result.attempt_id == "r1-a1"
+                assert result.run_id == "r1"
+            finally:
+                pool.stop()
+
+    def test_v17_worker_without_handshake_endpoint_stays_legacy_shaped(self):
+        captured = {}
+        pool = _pool("http://w0:8766")
+        error = httpx.ConnectError("no /agent/handshake on v1.7 worker")
+        with patch("httpx.Client", return_value=_handshake_client(captured, handshake_error=error)):
+            pool.start()
+            try:
+                assert "http://w0:8766" not in pool._worker_sessions
+                pool.dispatch_with_result(
+                    "r1", "p", "yaml", "batch", attempt_id="r1-a1", generation=1,
+                )
+                body = captured["posts"][-1][1]
+                assert body["attempt_id"] == "r1-a1"
+                assert "authorization" not in body  # legacy-shaped
+            finally:
+                pool.stop()
+
+    def test_failing_handshake_records_no_session(self):
+        captured = {}
+        pool = _pool("http://w0:8766")
+        request = httpx.Request("POST", "http://w0:8766/agent/handshake")
+        error = httpx.HTTPStatusError(
+            "Internal Server Error",
+            request=request,
+            response=httpx.Response(500, request=request),
+        )
+        with patch("httpx.Client", return_value=_handshake_client(captured, handshake_error=error)):
+            pool.start()
+            try:
+                assert "http://w0:8766" not in pool._worker_sessions
+                pool.dispatch_with_result(
+                    "r1", "p", "yaml", "batch", attempt_id="r1-a1", generation=1,
+                )
+                assert "authorization" not in captured["posts"][-1][1]
+            finally:
+                pool.stop()
+
+    def test_recovered_worker_rehandshakes(self):
+        pool = _pool("http://w0:8766")
+        captured = {}
+        client = _handshake_client(captured)
+        healthy_get = client.get.side_effect
+        state = {"down": True}
+
+        def _get(url, **kwargs):
+            if "/agent/health" in url and state["down"]:
+                resp = MagicMock()
+                resp.status_code = 503
+                return resp
+            return healthy_get(url, **kwargs)
+
+        client.get.side_effect = _get
+        with patch("httpx.Client", return_value=client):
+            pool._poll_all(initial_scan=True)
+            assert "http://w0:8766" not in pool._worker_sessions
+            state["down"] = False
+            pool._poll_all()
+            assert "http://w0:8766" in pool._worker_sessions
+        pool.stop()
+
+    def test_rotation_retains_previous_secret_for_overlap(self):
+        pool = _pool("http://w0:8766")
+        pool.register_worker_session("http://w0:8766", session_id="s1", secret="old")
+        pool.register_worker_session("http://w0:8766", session_id="s2", secret="new")
+        record = pool._worker_sessions["http://w0:8766"]
+        assert record["previous_secret"] == "old"
+        assert record["previous_secret_until"] - time.time() == pytest.approx(605, abs=5)
+
+
+class TestQueryAttempt:
+    """V18-01 §5 GET /agent/attempts/{attempt_id} manager-side client."""
+
+    def test_query_attempt_returns_parsed_journal_reply(self):
+        pool = _pool("http://w0:8766")
+        captured = {}
+        client = _handshake_client(captured, attempt_reply={"kind": "completion", "result_json": "{}"})
+        with patch("httpx.Client", return_value=client):
+            reply = pool.query_attempt("http://w0:8766", "r1-a1")
+        assert reply == {"kind": "completion", "result_json": "{}"}
+        get_urls = [call.args[0] for call in client.get.call_args_list]
+        assert "http://w0:8766/agent/attempts/r1-a1" in get_urls
+
+    def test_query_attempt_none_on_404(self):
+        pool = _pool("http://w0:8766")
+        captured = {}
+        with patch("httpx.Client", return_value=_handshake_client(captured, attempt_status=404)):
+            assert pool.query_attempt("http://w0:8766", "r1-a1") is None
+
+    def test_query_attempt_none_on_transport_error(self):
+        pool = _pool("http://w0:8766")
+
+        def _get(url, **kwargs):
+            raise httpx.ConnectError("worker unreachable")
+
+        client = MagicMock()
+        client.__enter__ = lambda s: client
+        client.__exit__ = MagicMock(return_value=False)
+        client.get.side_effect = _get
+        with patch("httpx.Client", return_value=client):
+            assert pool.query_attempt("http://w0:8766", "r1-a1") is None
