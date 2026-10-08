@@ -7,6 +7,8 @@ import queue
 import threading
 from collections.abc import Iterator
 
+from tram.connectors.bridge import BoundedBridgeQueue
+from tram.core.config import source_bridge_max_bytes, source_bridge_max_count
 from tram.core.exceptions import SourceError
 from tram.interfaces.base_source import BaseSource
 from tram.registry.registry import register_source
@@ -25,6 +27,11 @@ class NatsSource(BaseSource):
         subject             (str, required)
         queue_group         (str, default pipeline name)  Set to "" to broadcast to all consumers.
         credentials_file    (str, optional)
+
+    The internal producer→reader bridge is bounded by count and bytes
+    (``TRAM_SOURCE_BRIDGE_MAX_COUNT`` / ``TRAM_SOURCE_BRIDGE_MAX_BYTES``).
+    Overflow backpressures the NATS event loop cooperatively (the loop stays
+    responsive to heartbeats) and never drops a payload (V18-01 §9).
     """
     def __init__(self, config: dict) -> None:
         super().__init__(config)
@@ -39,7 +46,10 @@ class NatsSource(BaseSource):
         self.max_reconnect_attempts: int = int(config.get("max_reconnect_attempts", -1))
         self.reconnect_time_wait: float = float(config.get("reconnect_time_wait", 2.0))
         self._stop_event = threading.Event()
-        self._msg_queue: queue.SimpleQueue = queue.SimpleQueue()
+        self._msg_queue: BoundedBridgeQueue = BoundedBridgeQueue(
+            max_count=source_bridge_max_count(),
+            max_bytes=source_bridge_max_bytes(),
+        )
 
     def read(self) -> Iterator[tuple[bytes, dict]]:
         try:
@@ -69,7 +79,9 @@ class NatsSource(BaseSource):
             nc = await nats.connect(**kwargs)
 
             async def message_handler(msg):
-                msg_queue.put((msg.data, {"nats_subject": msg.subject}))
+                await msg_queue.put_cooperative_async(
+                    (msg.data, {"nats_subject": msg.subject})
+                )
 
             if queue_group:
                 await nc.subscribe(subject, queue=queue_group, cb=message_handler)

@@ -11,6 +11,7 @@ import pytest
 from tram.connectors.kafka.sink import KafkaSink
 from tram.connectors.kafka.source import KafkaSource
 from tram.core.exceptions import SourceError
+from tram.interfaces.base_source import AckDisposition
 from tram.serializers.json_serializer import JsonSerializer
 
 
@@ -465,6 +466,171 @@ class TestKafkaSourceStop:
         # re-polled on restart, preserving at-least-once). The mock here only
         # pins the loop structure, not the closed-consumer failure mode.
         assert mock_consumer.poll.call_count == 1
+
+
+class TestKafkaSourceEpochFrontier:
+    """V18-01 §7: per-partition completed frontiers + assignment-epoch fencing.
+
+    Uses the real ``kafka`` structs (installed in the venv) for the commit
+    offsets so the explicit frontier values are asserted directly; the
+    consumer itself stays a MagicMock.
+    """
+
+    @staticmethod
+    def _make_source(extra: dict | None = None) -> KafkaSource:
+        cfg = {"brokers": ["kafka:9092"], "topic": "events"}
+        if extra:
+            cfg.update(extra)
+        return KafkaSource(cfg)
+
+    def test_ack_commits_completed_partition_frontier(self):
+        src = self._make_source()
+        mock_consumer = MagicMock()
+        src._consumer = mock_consumer
+        src._assignment_epoch = 3
+
+        src.ack(
+            {"kafka_topic": "events", "kafka_partition": 0, "kafka_offset": 5,
+             "kafka_epoch": 3},
+            AckDisposition.DELIVERED,
+        )
+
+        offsets = mock_consumer.commit.call_args[0][0]
+        assert len(offsets) == 1
+        tp = next(iter(offsets))
+        assert tp.topic == "events"
+        assert tp.partition == 0
+        assert offsets[tp].offset == 6  # frontier + 1 = next resume offset
+        assert src._completed == {("events", 0): 5}
+
+    def test_stale_epoch_ack_cannot_commit(self):
+        """A completion read under an old assignment epoch never advances a
+        new assignment's frontier and never commits."""
+        src = self._make_source()
+        mock_consumer = MagicMock()
+        src._consumer = mock_consumer
+        src._assignment_epoch = 4
+
+        src.ack(
+            {"kafka_topic": "events", "kafka_partition": 0, "kafka_offset": 5,
+             "kafka_epoch": 3},
+            AckDisposition.DELIVERED,
+        )
+
+        mock_consumer.commit.assert_not_called()
+        assert src._completed == {}
+
+    def test_ack_without_active_consumer_skips(self):
+        src = self._make_source()
+        src._consumer = None
+        src._assignment_epoch = 0
+
+        src.ack(
+            {"kafka_topic": "events", "kafka_partition": 0, "kafka_offset": 5,
+             "kafka_epoch": 0},
+            AckDisposition.DELIVERED,
+        )
+
+        assert src._completed == {}
+
+    def test_ack_commits_only_completed_partitions(self):
+        """Each completion commits exactly its own partition's explicit offset."""
+        src = self._make_source()
+        mock_consumer = MagicMock()
+        src._consumer = mock_consumer
+        src._assignment_epoch = 1
+
+        src.ack(
+            {"kafka_topic": "events", "kafka_partition": 0, "kafka_offset": 9,
+             "kafka_epoch": 1},
+            AckDisposition.FILTERED,
+        )
+        offsets = mock_consumer.commit.call_args[0][0]
+        assert len(offsets) == 1
+        assert next(iter(offsets)).partition == 0
+        assert next(iter(offsets.values())).offset == 10
+
+        # A different partition commits only its own frontier.
+        src.ack(
+            {"kafka_topic": "events", "kafka_partition": 2, "kafka_offset": 4,
+             "kafka_epoch": 1},
+            AckDisposition.DLQ,
+        )
+        offsets2 = mock_consumer.commit.call_args[0][0]
+        assert len(offsets2) == 1
+        assert next(iter(offsets2)).partition == 2
+        assert next(iter(offsets2.values())).offset == 5
+
+    def test_assignment_change_bumps_epoch_and_drops_revoked_frontier(self):
+        from kafka import TopicPartition
+
+        src = self._make_source()
+        mock_consumer = MagicMock()
+        mock_consumer.assignment.return_value = [TopicPartition("events", 1)]
+        src._assigned = {TopicPartition("events", 0)}
+        src._completed = {("events", 0): 5, ("events", 1): 3}
+
+        src._sync_assignment(mock_consumer)
+
+        assert src._assignment_epoch == 1
+        assert src._assigned == {TopicPartition("events", 1)}
+        # Revoked partition's frontier is dropped; the still-owned one is kept.
+        assert src._completed == {("events", 1): 3}
+
+    def test_stale_epoch_batch_commit_skipped(self):
+        """A batch consumed across a rebalance is not committed by the legacy
+        path — the new owner re-polls from the last committed offsets."""
+        src = self._make_source()
+        mock_consumer = MagicMock()
+        src._consumer = mock_consumer
+        src._assignment_epoch = 2
+
+        src._commit_batch(mock_consumer, {"tp": 9}, epoch=1)  # stale
+        mock_consumer.commit.assert_not_called()
+
+        src._commit_batch(mock_consumer, {"tp": 9}, epoch=2)  # current
+        mock_consumer.commit.assert_called_once()
+
+    def test_read_meta_carries_epoch_and_ack_commits(self):
+        """End-to-end: the read loop tags metas with the assignment epoch and
+        acking that meta commits the partition frontier on the consumer."""
+        msg = TestKafkaSourceRead._make_msg(offset=42)
+        mock_consumer = MagicMock()
+        mock_consumer.assignment.return_value = []
+        mock_consumer.end_offsets.return_value = {}
+        mock_consumer.poll.side_effect = [
+            {_TopicPartition("events", 0): [msg]},
+            {_TopicPartition("events", 0): [
+                TestKafkaSourceRead._make_msg(value=b"SENTINEL", offset=43)]},
+        ]
+        mock_kafka = MagicMock()
+        mock_kafka.KafkaConsumer.return_value = mock_consumer
+
+        with patch.dict(sys.modules, {"kafka": mock_kafka}):
+            src = self._make_source()
+            it = src.read()
+            _payload, meta = next(it)
+            assert "kafka_epoch" in meta
+            src.ack(meta, AckDisposition.DELIVERED)
+            offsets = mock_consumer.commit.call_args[0][0]
+            assert len(offsets) == 1
+            assert mock_consumer.commit.call_count == 1
+            it.close()
+
+    def test_ack_noop_when_auto_commit_enabled(self):
+        src = self._make_source({"enable_auto_commit": True})
+        mock_consumer = MagicMock()
+        src._consumer = mock_consumer
+        src._assignment_epoch = 0
+
+        src.ack(
+            {"kafka_topic": "events", "kafka_partition": 0, "kafka_offset": 1,
+             "kafka_epoch": 0},
+            AckDisposition.DELIVERED,
+        )
+
+        mock_consumer.commit.assert_not_called()
+        assert src._completed == {}
 
 
 class TestKafkaSinkFastPath:

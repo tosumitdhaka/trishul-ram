@@ -200,6 +200,55 @@ def stream_flush_interval_seconds() -> float:
         return _STREAM_FLUSH_INTERVAL_DEFAULT
 
 
+# V18-01 §9 (frozen): bridge/buffer budgets for the internal source→executor
+# queues. Defaults frozen at 16 MiB / 10000; overflow pauses intake (blocking
+# put) or is rejected explicitly (webhook router 503) — never a silent drop
+# and never an early acknowledgement (plan F).
+_SOURCE_BRIDGE_MAX_BYTES_DEFAULT = 16 * 1024 * 1024
+_SOURCE_BRIDGE_MAX_COUNT_DEFAULT = 10000
+
+
+def source_bridge_max_bytes() -> int:
+    """``TRAM_SOURCE_BRIDGE_MAX_BYTES`` (V18-01 §9) — byte budget of the
+    internal source bridge queues (mqtt, websocket, nats, prometheus_rw,
+    syslog TCP; AMQP is bounded by broker prefetch instead).
+
+    ``0`` disables the byte bound. Invalid values are logged at WARNING and
+    fall back to the default (the webhook body-cap convention).
+    """
+    raw = os.environ.get("TRAM_SOURCE_BRIDGE_MAX_BYTES")
+    if raw is None:
+        return _SOURCE_BRIDGE_MAX_BYTES_DEFAULT
+    try:
+        return max(int(raw), 0)
+    except ValueError:
+        logger.warning(
+            "Invalid TRAM_SOURCE_BRIDGE_MAX_BYTES=%r — using default",
+            raw,
+        )
+        return _SOURCE_BRIDGE_MAX_BYTES_DEFAULT
+
+
+def source_bridge_max_count() -> int:
+    """``TRAM_SOURCE_BRIDGE_MAX_COUNT`` (V18-01 §9) — item-count budget of the
+    internal source bridge queues (same connectors as ``source_bridge_max_bytes``).
+
+    ``0`` disables the count bound. Invalid values are logged at WARNING and
+    fall back to the default (the webhook body-cap convention).
+    """
+    raw = os.environ.get("TRAM_SOURCE_BRIDGE_MAX_COUNT")
+    if raw is None:
+        return _SOURCE_BRIDGE_MAX_COUNT_DEFAULT
+    try:
+        return max(int(raw), 0)
+    except ValueError:
+        logger.warning(
+            "Invalid TRAM_SOURCE_BRIDGE_MAX_COUNT=%r — using default",
+            raw,
+        )
+        return _SOURCE_BRIDGE_MAX_COUNT_DEFAULT
+
+
 @dataclass(frozen=True)
 class AppConfig:
     """Application-wide configuration loaded from environment variables."""

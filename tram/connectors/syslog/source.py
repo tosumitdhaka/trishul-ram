@@ -9,6 +9,8 @@ import socket
 import threading
 from collections.abc import Iterator
 
+from tram.connectors.bridge import BoundedBridgeQueue
+from tram.core.config import source_bridge_max_bytes, source_bridge_max_count
 from tram.core.exceptions import SourceError
 from tram.interfaces.base_source import BaseSource
 from tram.registry.registry import register_source
@@ -289,6 +291,13 @@ class SyslogSource(BaseSource):
                                                 connections are refused and
                                                 closed.
         encoding    (str, default "utf-8")      Message decoding charset.
+
+    The TCP producer→reader bridge is bounded by count and bytes
+    (``TRAM_SOURCE_BRIDGE_MAX_COUNT`` / ``TRAM_SOURCE_BRIDGE_MAX_BYTES``);
+    overflow blocks the per-connection handler threads (socket-level flow
+    control) and never drops a record (V18-01 §9). UDP has no internal
+    bridge — the OS socket buffer is the only bound and the kernel drops
+    datagrams when it overflows (documented UDP behavior, plan F).
     """
 
     def __init__(self, config: dict) -> None:
@@ -392,7 +401,10 @@ class SyslogSource(BaseSource):
             "Syslog TCP source listening",
             extra={"host": self.host, "port": self.port},
         )
-        records_q: queue.Queue = queue.Queue()
+        records_q: BoundedBridgeQueue = BoundedBridgeQueue(
+            max_count=source_bridge_max_count(),
+            max_bytes=source_bridge_max_bytes(),
+        )
         with self._conns_lock:
             self._conns.clear()
         try:
@@ -437,10 +449,13 @@ class SyslogSource(BaseSource):
                 self._listener_sock = None
             self._close_all_conns()
 
-    def _serve_connection(self, conn, addr, records_q: queue.Queue) -> None:
+    def _serve_connection(self, conn, addr, records_q) -> None:
         """Serve one accepted connection until it closes, on its own thread."""
         try:
             for record in self._read_tcp_conn(conn, addr):
+                # Blocking put on the bounded bridge: backpressure that stalls
+                # this connection's socket reads (TCP flow control) — the
+                # record is never dropped (V18-01 §9).
                 records_q.put(record)
         finally:
             with self._conns_lock:

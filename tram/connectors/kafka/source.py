@@ -39,23 +39,29 @@ class KafkaSource(BaseSource):
 
     Commit semantics (at-least-once default):
     With ``enable_auto_commit: false`` (the default) offsets are committed
-    explicitly, once per poll batch, only after every message in that batch
-    has been consumed by the caller. In the default single-threaded path
-    (``thread_workers: 1``) a message is consumed only after its sink write
-    (or retry / skip / DLQ resolution under ``on_error``) has completed, so a
-    crash at any point leaves the uncommitted batch to be re-polled on restart
-    instead of losing it. Under stream micro-batching (GH #78) the last
-    message of each poll batch carries ``source_batch_end: true`` in its meta;
-    the executor flushes its micro-batch buffer when it sees that marker and
-    only then resumes the generator past it, so the per-batch commit can never
-    precede the flush of the batch's records (commit-after-flush). With
-    ``thread_workers > 1`` the executor submits up to ``2 * thread_workers``
-    messages ahead of the sink writes, so the batch commit can fire while some
-    of its messages are still queued — a crash in that window loses those
-    messages, so use ``thread_workers: 1`` for strict at-least-once. Setting
-    ``enable_auto_commit: true`` restores the legacy at-most-once behavior:
-    the consumer commits on its own ~5s timer regardless of sink progress, and
-    the explicit batch commit is disabled.
+    explicitly as per-partition completed frontiers (V18-01 §7 / plan C). In
+    the legacy pre-ack path each poll batch is committed once the caller has
+    consumed every message in it (the at-least-once contract of the current
+    single-threaded executor: a crash at any point leaves the uncommitted
+    batch to be re-polled on restart). Once the executor calls
+    ``ack(meta, disposition)`` for a unit, its partition frontier advances
+    and the explicit offset (frontier + 1) is committed for that partition on
+    the owning consumer. Completion is bound to the consumer session and
+    partition-assignment epoch: any assignment change (rebalance/revoke)
+    bumps the epoch and in-flight completions from the old epoch are ignored
+    — they can never advance a new assignment's frontier. ``thread_workers >
+    1`` under ``delivery.contract: strict`` remains rejected at validation
+    until the gap-aware threaded frontier implementation passes broker tests
+    (plan C); this connector is single-consumer epoch+frontier only.
+
+    Under stream micro-batching (GH #78) the last message of each poll batch
+    carries ``source_batch_end: true`` in its meta; the executor flushes its
+    micro-batch buffer when it sees that marker and only then resumes the
+    generator past it, so the per-batch commit can never precede the flush of
+    the batch's records (commit-after-flush). Setting ``enable_auto_commit:
+    true`` restores the legacy at-most-once behavior: the consumer commits on
+    its own ~5s timer regardless of sink progress, and the explicit commits
+    are disabled.
     """
 
     def __init__(self, config: dict) -> None:
@@ -78,6 +84,15 @@ class KafkaSource(BaseSource):
         self.max_reconnect_attempts: int = int(config.get("max_reconnect_attempts", 0))
         self._stop_event: threading.Event = threading.Event()
         self._consumer = None
+        # V18-01 §7: consumer-session / partition-assignment epoch fencing.
+        # ``_assignment_epoch`` increments on every assignment change and on
+        # every new consumer session; metas carry the epoch they were read
+        # under and ``ack()`` ignores completions whose epoch is stale.
+        self._lock = threading.Lock()
+        self._assignment_epoch: int = 0
+        self._assigned: set = set()
+        # Per-partition completed frontier: {(topic, partition): offset}.
+        self._completed: dict[tuple[str, int], int] = {}
 
     # ── Lifecycle ──────────────────────────────────────────────────────────
 
@@ -132,6 +147,114 @@ class KafkaSource(BaseSource):
             kwargs["ssl_cafile"] = self.ssl_cafile
 
         return KafkaConsumer(*self.topics, **kwargs)
+
+    # ── V18-01 §7: session/assignment-epoch fencing and frontiers ─────────
+
+    def _sync_assignment(self, consumer) -> None:
+        """Detect partition-assignment changes by diffing ``consumer.assignment()``.
+
+        kafka-python exposes no rebalance callbacks, so the assignment set is
+        compared across polls. Any change bumps ``_assignment_epoch``: metas
+        yielded after the bump carry the new epoch, and completions read under
+        the old epoch can no longer advance the frontier or commit (plan C —
+        "old-epoch completions cannot advance a new assignment"). Frontier
+        state for revoked partitions is dropped; the new owner re-polls from
+        the last committed offsets (at-least-once, never loss).
+        """
+        current_set = set(consumer.assignment())
+        with self._lock:
+            previous = self._assigned
+            if current_set == previous:
+                return
+            self._assignment_epoch += 1
+            for tp in previous - current_set:
+                self._completed.pop((tp.topic, tp.partition), None)
+            self._assigned = current_set
+
+    def _commit_offsets(self, consumer, offsets: dict, *, raise_on_error: bool) -> None:
+        """Explicit per-partition commit: each mapping TopicPartition → frontier
+        offset commits ``frontier + 1`` (the next offset the group resumes at)."""
+        if not offsets:
+            return
+        try:
+            from kafka import OffsetAndMetadata
+
+            consumer.commit(
+                {tp: OffsetAndMetadata(offset + 1, "", -1) for tp, offset in offsets.items()}
+            )
+        except Exception:
+            if raise_on_error:
+                raise
+            logger.warning(
+                "Kafka ack offset commit failed",
+                extra={"partitions": sorted(str(tp) for tp in offsets)},
+            )
+
+    def _commit_batch(self, consumer, batch_tps: dict, epoch: int) -> None:
+        """Legacy per-batch explicit commit (single-consumer path, plan C).
+
+        Commits the batch-observed frontier (the highest offset per partition)
+        for each partition the poll returned — the at-least-once contract of
+        the current pre-ack executor, reached only after the caller resumed
+        the generator past the batch's last message. Epoch-guarded: if a
+        rebalance fired while the batch was being consumed, the commit is
+        skipped and the new owner re-polls from the last committed offsets.
+        """
+        if not batch_tps or consumer is None:
+            return
+        with self._lock:
+            if epoch != self._assignment_epoch:
+                return
+        self._commit_offsets(consumer, batch_tps, raise_on_error=True)
+
+    def ack(self, meta: dict, disposition) -> None:
+        """Advance the per-partition completed frontier and commit it.
+
+        Called by the executor for a decided unit (delivered/filtered/dlq/
+        dropped). Fenced by the assignment epoch captured at yield time: a
+        completion whose epoch no longer matches (rebalance/revoke, or a new
+        consumer session since the message was read) is ignored and never
+        commits. The explicit offset (frontier + 1) is committed on the owning
+        consumer; commit failures are logged, never raised into the executor.
+        """
+        if self.enable_auto_commit:
+            return
+        topic = meta.get("kafka_topic")
+        partition = meta.get("kafka_partition")
+        offset = meta.get("kafka_offset")
+        if topic is None or partition is None or offset is None:
+            return
+        with self._lock:
+            if meta.get("kafka_epoch", -1) != self._assignment_epoch:
+                logger.warning(
+                    "Kafka stale-epoch completion ignored",
+                    extra={"topic": topic, "partition": partition, "offset": offset},
+                )
+                return
+            consumer = self._consumer
+            if consumer is None:
+                logger.warning(
+                    "Kafka ack skipped: no active consumer",
+                    extra={"topic": topic, "partition": partition, "offset": offset},
+                )
+                return
+            key = (topic, partition)
+            self._completed[key] = max(self._completed.get(key, -1), offset)
+            frontier = self._completed[key]
+        try:
+            from kafka import TopicPartition
+
+            self._commit_offsets(
+                consumer,
+                {TopicPartition(topic, partition): frontier},
+                raise_on_error=False,
+            )
+        except Exception as exc:
+            logger.warning(
+                "Kafka ack commit failed",
+                extra={"topic": topic, "partition": partition, "offset": offset,
+                       "error": str(exc)},
+            )
 
     def test_connection(self) -> dict:
         t0 = time.monotonic()
@@ -200,13 +323,23 @@ class KafkaSource(BaseSource):
                     raise SourceError(f"Kafka consumer init failed: {exc}") from exc
 
                 attempt = 0  # Reset on successful connect
+                with self._lock:
+                    # New consumer session: bump the epoch so in-flight
+                    # completions from the previous session can never commit
+                    # on this consumer, and reset assignment/frontier state.
+                    self._assignment_epoch += 1
+                    self._assigned = set()
+                    self._completed.clear()
                 self._consumer = consumer
                 while True:
                     if self._stop_event.is_set():
                         return
                     batch = consumer.poll(timeout_ms=1000)
+                    self._sync_assignment(consumer)
                     if not batch:
                         continue
+                    with self._lock:
+                        batch_epoch = self._assignment_epoch
                     self._update_lag(consumer)
                     # Materialize the poll batch in yield order so the
                     # batch-end marker can be pinned to the final message the
@@ -221,6 +354,11 @@ class KafkaSource(BaseSource):
                         for _tp, msgs in batch.items()
                         for msg in msgs
                     ]
+                    # Highest offset per partition in this batch — the
+                    # batch-observed frontier committed by the legacy path.
+                    batch_tps = {
+                        tp: max(m.offset for m in msgs) for tp, msgs in batch.items()
+                    }
                     live_count = sum(1 for _t, _p, m in ordered if m.value is not None)
                     yielded = 0
                     for topic, partition, msg in ordered:
@@ -233,15 +371,16 @@ class KafkaSource(BaseSource):
                             "kafka_partition": partition,
                             "kafka_offset": msg.offset,
                             "kafka_key": msg.key.decode("utf-8") if msg.key else None,
+                            "kafka_epoch": batch_epoch,
                             "source_batch_end": yielded == live_count,
                         }
                     if not self.enable_auto_commit:
-                        # Explicit per-batch commit. Reached only when the
+                        # Explicit per-partition commit. Reached only when the
                         # caller has resumed the generator past the last message
                         # of this poll batch (i.e. it fully consumed the batch),
                         # so a mid-batch abort never commits. With auto-commit
                         # enabled the consumer handles commits on its own timer.
-                        consumer.commit()
+                        self._commit_batch(consumer, batch_tps, batch_epoch)
 
             except SourceError:
                 raise
