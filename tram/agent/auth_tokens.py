@@ -133,6 +133,10 @@ def validate_start_authorization(
         return _invalid("malformed token fields")
 
     expected = _sign(payload, current_secret)
+    if not current_secret and not previous_secret:
+        # Defense-in-depth: HMAC with an empty key is well-defined, so refuse
+        # explicitly when no session secret is configured at all.
+        return _invalid("no session secret configured")
     if not hmac.compare_digest(mac, expected):
         if previous_secret is None or not hmac.compare_digest(mac, _sign(payload, previous_secret)):
             return _invalid("bad signature")

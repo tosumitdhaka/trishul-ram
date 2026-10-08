@@ -757,6 +757,14 @@ class WorkerJournal:
         past the token's validity window — replaying a retired token is
         rejected even if the local clock was rolled back inside the token's
         validity.
+
+        Boundary (D4, accepted): that rejection is same-epoch. A token GC'd
+        in an OLD epoch and replayed after a trusted-time recovery, at a
+        clock still inside its validity window, is not covered by the new
+        epoch's watermark (old-epoch watermarks are not consulted — they
+        would over-reject fresh tokens after a legitimate recovery); the
+        reservation idempotency makes such a replay a no-op while
+        reservation rows survive.
         """
         with self._lock:
             now_dt = self._normalize_dt(now if now is not None else self._now())

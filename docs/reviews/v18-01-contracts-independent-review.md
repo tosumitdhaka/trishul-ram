@@ -85,42 +85,71 @@ requires tier-declared sinks, not a minimum tier.
 ## Disposition D2 — handshake direction and secret minting
 
 **Disposition D2 (2026-10-08, release/v1.8.0): section 5 handshake row
-amended.** The frozen row specified worker→manager registration with the
-manager replying with the session secret. The implementation (both sides
-landed and integration-tested green) instead has the manager POST to the
-worker's `/agent/handshake`, and the worker mints and returns the secret. The
+amended; corrected after independent re-review.** The frozen row specified
+worker→manager registration with the manager replying with the session
+secret. The implementation instead has the manager POST to the worker's
+`/agent/handshake`, and the worker mints and returns the secret. The
 amendment adopts the implemented shape: the worker controls its own admission
 keys (it is the party that must validate them), the manager holds no
 pre-shared secret, and rotation keeps the previous secret valid for max TTL +
-skew (605 s) on both sides. The manager registers the returned secret and
-mints authorizations with it; the worker validates against its stored
-current/previous pair. No security property is weakened: the endpoint is
-machine-authenticated on the existing internal API-key channel, and the
-session secret never travels outside that channel.
+skew (605 s) on both sides.
+
+**Re-review correction.** The initial implementation had a response-key
+mismatch: the manager read `data.get("secret")` while the worker replies
+under `session_secret`, so the manager registered its own ignored mint and
+every authorized dispatch would have failed signature validation end-to-end
+(the original "integration-tested green" claim was false — no test exercised
+both sides together). Fixed: the manager registers the worker's returned
+`session_secret`, requires it (a reply without one is not the amended
+handshake), no longer mints or sends its own secret, and the fix is pinned by
+a manager-mint → worker-validate round-trip test. Validation also refuses
+explicitly when no session secret is configured (empty-key HMAC is
+well-defined — defense-in-depth).
+
+**Caveats recorded (re-review).** (1) `TRAM_INTERNAL_AUTH_MODE=enforce` is
+load-bearing for admission authority: under the default `warn` mode, any
+network-reachable caller can POST `/agent/handshake` to a real worker and
+receive its current session secret. (2) The worker retains a single previous
+secret generation (no longest-lived logic, unlike the manager side), so two
+rapid re-handshakes can kill a still-valid in-flight token — bounded by the
+rotation timing and benign under normal cadence.
 
 ## Disposition D3 — lifecycle_operations op_kind boot_adopt
 
 **Disposition D3 (2026-10-08, release/v1.8.0): section 3
-`lifecycle_operations` domain extended with `boot_adopt`.** The frozen comment
-domain (stop|restart|update|delete|drain|force_release) had no kind for
+`lifecycle_operations` domain extended with `boot_adopt`; completed after
+independent re-review.** The frozen comment domain
+(stop|restart|update|delete|drain|force_release) had no kind for
 boot-adoption resolutions, so the implementation initially recorded them as
 `stop` with a detail marker. The domain is a schema comment (no CHECK
 constraint) and the table is new in v1.8 — nothing is deployed to migrate —
-so the domain gains `boot_adopt`, the five boot-adoption recording sites use
-it, and real stop operations keep `stop`.
+so the domain gains `boot_adopt` and real stop operations keep `stop`.
+**Re-review correction:** the initial edit missed the fifth adoption site
+(unrecognized journal reply — it recorded `stop` at a different indentation
+than the other four); all five sites now use `boot_adopt` and the
+unrecognized-reply path is pinned by a test.
 
 ## Disposition D4 — cross-epoch retired-token replay boundary (accepted)
 
 **Disposition D4 (2026-10-08, release/v1.8.0): known accepted boundary in
-section 4's watermark rules.** A token GC'd in an OLD epoch and replayed in a
-NEW epoch (after a trusted-time recovery) at a clock still inside the token's
-validity window is not covered by the new epoch's watermark. Surviving
-old-epoch rows are refused by the epoch check, and GC only deletes rows whose
-authorizations expired plus skew, so the window requires: trusted-time
-recovery + GC of the old row + replay inside the residual validity. Retaining
-and consulting old-epoch watermarks was considered and rejected: it would
-over-reject fresh tokens after a legitimate recovery. Accepted as documented;
-the worker server carries the boundary note at the validation seam.
+section 4's watermark rules; conforming edit made after independent
+re-review.** A token GC'd in an OLD epoch and replayed in a NEW epoch (after
+a trusted-time recovery) at a clock still inside the token's validity window
+is not covered by the new epoch's watermark. Surviving old-epoch rows are
+refused by the epoch check, and GC only deletes rows whose authorizations
+expired plus skew, so the window requires: trusted-time recovery + GC of the
+old row + replay inside the residual validity. Retaining and consulting
+old-epoch watermarks was considered and rejected: it would over-reject fresh
+tokens after a legitimate recovery. Accepted as documented; the boundary
+note lives at the `validate_and_admit` docstring seam.
+
+**Re-review findings (both applied).** (1) The section 4 watermark paragraph
+now carries the boundary sentence (the original disposition claimed a
+conforming edit that had not been made). (2) The practical exposure is even
+smaller than first stated: `admission_reservations` rows are never deleted by
+GC or retention, so the replayed attempt hits the reservation idempotency
+(`already_admitted` → 200 echo, no second thread) — the boundary is inert
+while reservation rows survive and only matters if a later lane prunes them.
 
 ## Verification boundary
 

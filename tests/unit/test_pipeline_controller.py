@@ -3243,6 +3243,54 @@ class TestLifecycleOperationsWiring:
         finally:
             ctrl.stop()
 
+    def test_boot_adoption_unrecognized_reply_records_boot_adopt(self, tmp_path):
+        from tram.persistence.db import TramDB
+        db = TramDB(url=f"sqlite:///{tmp_path}/adopt-unrecognized.db")
+        wp = MagicMock()
+        wp.url_for_worker_id.return_value = "http://worker-0:8766"
+        wp.worker_urls.return_value = ["http://worker-0:8766"]
+        wp.query_attempt.return_value = {"kind": "not-a-known-kind"}
+        ctrl = _make_controller(db=db, worker_pool=wp, manager_url="http://manager:8765")
+        now = datetime.now(UTC).isoformat()
+        with db._engine.begin() as conn:
+            conn.execute(text("""
+                INSERT INTO run_intents
+                    (run_id, pipeline_name, origin, flush, requested_at, expires_at,
+                     requested_generation, yaml_snapshot, schedule_type)
+                VALUES ('r-u', 'my-manual', 'manual', 0, :now, NULL, 1, 'yaml', 'manual')
+            """), {"now": now})
+            conn.execute(text("""
+                INSERT INTO execution_guards (guard_key, guard_kind, run_id, attempt_id, generation, acquired_at)
+                VALUES ('my-manual', 'batch', 'r-u', 'r-u-a1', 1, :now)
+            """), {"now": now})
+            conn.execute(text("""
+                INSERT INTO execution_attempts
+                    (attempt_id, run_id, pipeline_name, ordinal, generation, slot_id,
+                     fence_token, state, dispatch_sent_at, worker_id)
+                VALUES ('r-u-a1', 'r-u', 'my-manual', 1, 1, '', 'ft', 'dispatching', :now, 'w0')
+            """), {"now": now})
+        try:
+            ctrl.start()
+            rows = self._fetch(
+                db,
+                "SELECT op_kind, state, detail, attempt_id FROM lifecycle_operations "
+                "WHERE pipeline_name = 'my-manual'",
+            )
+            assert len(rows) == 1
+            assert rows[0]["op_kind"] == "boot_adopt"
+            assert rows[0]["state"] == "complete"
+            assert "unrecognized journal reply" in rows[0]["detail"]
+            guards = self._fetch(
+                db, "SELECT guard_key FROM execution_guards WHERE attempt_id = 'r-u-a1'",
+            )
+            assert guards  # guard retained on unknown
+            attempts = self._fetch(
+                db, "SELECT state FROM execution_attempts WHERE attempt_id = 'r-u-a1'",
+            )
+            assert attempts[0]["state"] == "unknown"
+        finally:
+            ctrl.stop()
+
     def test_get_lifecycle_operations_filters_by_pipeline(self, tmp_path):
         db, ctrl = self._started(tmp_path)
         try:

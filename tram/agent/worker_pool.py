@@ -19,7 +19,6 @@ from __future__ import annotations
 
 import logging
 import os
-import secrets
 import threading
 import time
 from collections.abc import Callable
@@ -385,18 +384,18 @@ class WorkerPool:
     def _handshake_worker(self, worker_url: str) -> bool:
         """POST /agent/handshake and register the manager↔worker session secret.
 
-        The manager mints the session secret and sends it in the request body
-        (the frozen §5 exchange: the manager's side of the handshake carries
-        its protocol/caps and the secret); the worker replies with its session
-        identity. The secret is stored via :meth:`register_worker_session`,
-        which makes :meth:`_mint_authorization` live for that worker.
+        Amended §5 exchange (disposition D2): the worker serves the endpoint
+        and mints the session secret; the manager posts its protocol/caps and
+        registers the returned ``session_secret`` via
+        :meth:`register_worker_session` (which retains the previous secret for
+        the 605 s rotation overlap), making :meth:`_mint_authorization` live
+        for that worker.
 
         A worker without the endpoint (v1.7) or a failing handshake records no
         session — dispatches to it stay legacy-shaped with no ``authorization``
         field (frozen compatibility bridge; strict dispatch does not exist yet,
         so no drain-only strictness is needed).
         """
-        secret = secrets.token_urlsafe(32)
         try:
             with self._agent_client(_HANDSHAKE_TIMEOUT_S) as client:
                 resp = client.post(
@@ -404,7 +403,6 @@ class WorkerPool:
                     json={
                         "protocol_version": _PROTOCOL_VERSION,
                         "capabilities": _MANAGER_CAPABILITIES,
-                        "secret": secret,
                     },
                 )
                 resp.raise_for_status()
@@ -423,11 +421,17 @@ class WorkerPool:
                 extra={"worker": worker_url},
             )
             return False
-        # Prefer a secret echoed by the worker; fall back to the minted one.
-        echoed = data.get("secret")
-        registered_secret = str(echoed) if echoed else secret
+        # The worker mints and returns the session secret (D2) — a reply
+        # without one is not implementing the amended handshake.
+        session_secret = str(data.get("session_secret", "")).strip()
+        if not session_secret:
+            logger.warning(
+                "Worker handshake reply missing session_secret",
+                extra={"worker": worker_url},
+            )
+            return False
         self.register_worker_session(
-            worker_url, session_id=session_id, secret=registered_secret,
+            worker_url, session_id=session_id, secret=session_secret,
         )
         logger.info(
             "Worker handshake established",

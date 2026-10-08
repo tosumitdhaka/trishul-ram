@@ -122,6 +122,13 @@ def test_wrong_secret_rejected():
     assert result.reason == "bad signature"
 
 
+def test_empty_secret_refuses_validation():
+    token = _mint(secret=SECRET)
+    result = _validate(token, current_secret="")
+    assert not result.valid
+    assert result.reason == "no session secret configured"
+
+
 def test_previous_secret_accepted():
     token = _mint(secret=OLD_SECRET, ttl_s=MAX_TTL)
     result = _validate(token, current_secret=SECRET, previous_secret=OLD_SECRET)

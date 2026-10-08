@@ -1491,6 +1491,7 @@ def _handshake_client(
     captured: dict,
     *,
     session_id: str = "w0-boot1234abcd",
+    session_secret: str | None = "w0-session-secret-1",
     handshake_error: Exception | None = None,
     attempt_status: int = 200,
     attempt_reply: dict | None = None,
@@ -1498,9 +1499,10 @@ def _handshake_client(
     """Mock httpx client for the handshake/query tests.
 
     GET /agent/health → healthy; GET /agent/attempts/{id} → attempt_status /
-    attempt_reply; POST /agent/handshake → session_id (or handshake_error when
-    set); other POSTs (dispatch) → 200. Every POST's (url, body) is recorded
-    into ``captured["posts"]``.
+    attempt_reply; POST /agent/handshake → session_id + session_secret (D2:
+    the worker mints and returns the secret; ``session_secret=None`` omits
+    it, or handshake_error when set); other POSTs (dispatch) → 200. Every
+    POST's (url, body) is recorded into ``captured["posts"]``.
     """
     mock_client = MagicMock()
     mock_client.__enter__ = lambda s: mock_client
@@ -1528,6 +1530,13 @@ def _handshake_client(
         resp = MagicMock()
         if handshake_error is not None and url.endswith("/agent/handshake"):
             resp.raise_for_status.side_effect = handshake_error
+        elif url.endswith("/agent/handshake"):
+            resp.status_code = 200
+            resp.raise_for_status = MagicMock()
+            reply: dict = {"session_id": session_id}
+            if session_secret is not None:
+                reply["session_secret"] = session_secret
+            resp.json.return_value = reply
         else:
             resp.status_code = 200
             resp.raise_for_status = MagicMock()
@@ -1557,7 +1566,7 @@ class TestHandshakeClient:
         try:
             record = pool._worker_sessions["http://w0:8766"]
             assert record["session_id"] == "w0-boot1234abcd"
-            assert record["secret"]
+            assert record["secret"] == "w0-session-secret-1"
             handshake_posts = [
                 p for p in captured["posts"] if p[0].endswith("/agent/handshake")
             ]
@@ -1565,9 +1574,25 @@ class TestHandshakeClient:
             body = handshake_posts[0][1]
             assert body["protocol_version"] == "1.8"
             assert "fencing" in body["capabilities"]
-            assert body["secret"] == record["secret"]
+            assert "secret" not in body  # D2: the worker mints; the manager never sends one
         finally:
             pool.stop()
+
+    def test_handshake_reply_without_secret_records_no_session(self):
+        captured = {}
+        pool = _pool("http://w0:8766")
+        with patch("httpx.Client", return_value=_handshake_client(captured, session_secret=None)):
+            pool.start()
+            try:
+                assert "http://w0:8766" not in pool._worker_sessions
+                pool.dispatch_with_result(
+                    "r1", "p", "yaml", "batch", attempt_id="r1-a1", generation=1,
+                )
+                body = captured["posts"][-1][1]
+                assert body["attempt_id"] == "r1-a1"
+                assert "authorization" not in body  # legacy-shaped: no session
+            finally:
+                pool.stop()
 
     def test_handshake_enables_authorized_dispatch(self):
         captured = {}

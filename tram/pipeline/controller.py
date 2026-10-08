@@ -676,10 +676,10 @@ class PipelineController:
         )
         self._record_completed_lifecycle_operation(
             pipeline_name,
-            "stop",
-            attempt_id=attempt_id,
-            detail="boot adoption: attempt unresolved (unknown) — "
-                   "unrecognized journal reply, guard retained",
+                "boot_adopt",
+                attempt_id=attempt_id,
+                detail="boot adoption: attempt unresolved (unknown) — "
+                       "unrecognized journal reply, guard retained",
         )
 
     def _query_attempt_from_worker(self, attempt: dict) -> tuple[dict | None, str | None]:
