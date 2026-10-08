@@ -821,7 +821,7 @@ class TestStatefulTransformWiring:
 
         captured = {}
 
-        def _fake_init(self, file_tracker=None, state_store=None):
+        def _fake_init(self, file_tracker=None, state_store=None, checkpoint_client=None):
             captured["state_store"] = state_store
 
         mock_result = RunResult(
@@ -876,7 +876,7 @@ class TestStatefulTransformWiring:
 
         captured = {}
 
-        def _fake_init(self, file_tracker=None, state_store=None):
+        def _fake_init(self, file_tracker=None, state_store=None, checkpoint_client=None):
             captured["state_store"] = state_store
 
         mock_result = RunResult(
@@ -1166,7 +1166,7 @@ class TestWorkerSkipProcessedFailLoud:
         fail-loud guard keys on."""
         captured = {}
 
-        def _fake_init(self, file_tracker=None, state_store=None):
+        def _fake_init(self, file_tracker=None, state_store=None, checkpoint_client=None):
             captured["file_tracker"] = file_tracker
 
         with patch("tram.pipeline.executor.PipelineExecutor.__init__", _fake_init), \

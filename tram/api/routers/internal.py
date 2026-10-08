@@ -570,6 +570,11 @@ async def get_transform_state(pipeline: str, request: Request) -> dict:
 
     Auth rides the existing internal middleware (same as run-complete /
     pipeline-stats). Flag-gated 404 when ``TRAM_STATEFUL_TRANSFORMS`` is off.
+
+    The response carries the frozen §7 CAS identity additively: ``revision``
+    (the checkpoint CAS's revision base — a run hydrating this state must
+    send it back as ``state_base_revision`` or the fence rejects the writer)
+    and ``generation`` (the row's generation fence, NULL for M5 legacy rows).
     """
     if not _stateful_transforms_enabled(request):
         raise HTTPException(
@@ -586,6 +591,8 @@ async def get_transform_state(pipeline: str, request: Request) -> dict:
         "pipeline": pipeline,
         "state": row["state"],
         "config_sha256": row["config_sha256"],
+        "revision": row.get("revision") or 0,
+        "generation": row.get("generation"),
     }
 
 

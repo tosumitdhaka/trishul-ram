@@ -125,6 +125,12 @@ class RunResult:
     records_failed: int = 0    # records lost (not delivered, filtered, or DLQ'd)
     dlq_succeeded: int = 0     # records durably delivered to the DLQ/spool
     dlq_failed: int = 0        # records whose DLQ delivery failed
+    # V18-06: per-sink delivery disposition ({sink_key: {delivered, failed,
+    # dlq}}) and DLQ disk-spool outcome ({spooled, failed}) — the maps the
+    # worker's completion payload carries so the manager's run-history decode
+    # records them. Empty when the run did not deliver/fail/DLQ anything.
+    disposition: dict = field(default_factory=dict)
+    spool: dict = field(default_factory=dict)
 
     @classmethod
     def from_context(
@@ -168,4 +174,6 @@ class RunResult:
             "records_failed": self.records_failed,
             "dlq_succeeded": self.dlq_succeeded,
             "dlq_failed": self.dlq_failed,
+            "disposition": self.disposition,
+            "spool": self.spool,
         }

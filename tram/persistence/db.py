@@ -1644,12 +1644,17 @@ class TramDB:
 
         The ``state`` value is the decoded JSON blob (``{state_key: blob}``);
         ``config_sha256`` lets the executor discard state on config change
-        (D.2 §6.1 convention, design §3.2d).
+        (D.2 §6.1 convention, design §3.2d). ``generation``/``revision`` are
+        the frozen §7 CAS identity of the row (the checkpoint CAS advances
+        ``revision`` and fences on it; ``generation`` is NULL for M5 legacy
+        rows), exposed so a run hydrating state adopts the stored revision as
+        its checkpoint CAS base instead of assuming 0.
         """
         with self._engine.connect() as conn:
             row = conn.execute(
                 text(
-                    "SELECT state_json, config_sha256, updated_at, updated_by "
+                    "SELECT state_json, config_sha256, updated_at, updated_by, "
+                    "generation, revision "
                     "FROM transform_state WHERE pipeline_name = :pn"
                 ),
                 {"pn": pipeline_name},
@@ -1661,6 +1666,8 @@ class TramDB:
             "config_sha256": row["config_sha256"],
             "updated_at": row["updated_at"],
             "updated_by": row["updated_by"],
+            "generation": row["generation"],
+            "revision": row["revision"],
         }
 
     def save_transform_state(

@@ -273,8 +273,38 @@ class TestTransformStateEndpoints:
         body = resp.json()
         assert body["state"] == {"counter_delta:0": {"k": {"v": 42}}}
         assert body["config_sha256"] == "abc123"
+        # V18-06: the GET exposes the frozen §7 CAS identity additively — a
+        # plain PUT row sits at revision 0 with a NULL generation.
+        assert body["revision"] == 0
+        assert body["generation"] is None
         # run_id lands in the audit column
         assert client.app.state.db.load_transform_state("pipe-a")["updated_by"] == "r1"
+
+    def test_get_exposes_revision_advanced_by_checkpoint(self, tmp_path):
+        """A row advanced by the checkpoint CAS is read back with the stored
+        revision/generation — a worker hydrating it sends the advanced base
+        instead of 0, so the fence no longer rejects a legitimate writer."""
+        client = self._make_app(tmp_path)
+        cp = client.post("/api/internal/checkpoint", json={
+            "pipeline_name": "pipe-a",
+            "generation": 3,
+            "attempt_id": "run-1-a1",
+            "run_id": "run-1",
+            "source_unit": "local:/in/f.json:<fp>:0",
+            "frontier": {"offset": 5},
+            "frontier_seq": 5,
+            "sink_receipts": [],
+            "state": {"counter_delta:0": {"k": {"v": 1}}},
+            "config_sha256": "abc123",
+            "state_base_revision": 0,
+        })
+        assert cp.status_code == 200
+        assert cp.json()["state_revision"] == 1
+
+        body = client.get("/api/internal/transform-state/pipe-a").json()
+        assert body["revision"] == 1
+        assert body["generation"] == 3
+        assert body["state"] == {"counter_delta:0": {"k": {"v": 1}}}
 
     def test_get_missing_returns_404(self, tmp_path):
         client = self._make_app(tmp_path)

@@ -465,6 +465,123 @@ class TestLegacyAdmit:
         assert "already active" in resp.json()["detail"]
 
 
+# ── V18-06: worker-mode CheckpointClient wiring ─────────────────────────────
+
+
+class TestCheckpointClientWiring:
+    """An AUTHORIZED run mints a manager-authoritative CheckpointClient bound
+    to the admitted attempt identity (attempt_id + generation, manager URL
+    from the same source run-complete uses); legacy runs get None — the
+    executor's gate then keeps the legacy best-effort / strict fail-closed
+    behavior unchanged. Clients are never minted without attempt identity.
+
+    These tests run a real (authorized) dispatch, so the run thread posts
+    run-complete and the lifespan's outbox drain posts the completion to the
+    manager URL in the background. ``_http_200`` makes every background POST
+    complete instantly (a leftover daemon thread must never leak into the
+    next test's patched client), and the tests wait for the run to leave
+    WorkerState before exiting — the direct post is then done.
+    """
+
+    @staticmethod
+    def _http_200():
+        """Route every httpx.Client in tram.agent.server to an instant 200."""
+        real_client = httpx.Client
+
+        def _factory(*args, **kwargs):
+            return real_client(
+                transport=httpx.MockTransport(lambda req: httpx.Response(200, json={"ok": True}))
+            )
+
+        return patch("tram.agent.server.httpx.Client", side_effect=_factory)
+
+    def _wait_run_done(self, state, deadline_s=5):
+        deadline = time.time() + deadline_s
+        while time.time() < deadline and state.snapshot():
+            time.sleep(0.02)
+
+    def test_authorized_run_mints_checkpoint_client(self, journal, auth_env):
+        from tram.pipeline.executor import CheckpointClient
+
+        captured = {}
+
+        def _fake_init(self, file_tracker=None, state_store=None, checkpoint_client=None):
+            captured["checkpoint_client"] = checkpoint_client
+
+        app, client = _make_client(journal=journal, manager_url="http://mgr:8765")
+        token = _mint(app, attempt_id="a1", run_id="r1", generation=2, slot_id="s1")
+        with self._http_200(), \
+             patch("tram.pipeline.executor.PipelineExecutor.__init__", _fake_init), \
+             patch(
+                 "tram.pipeline.executor.PipelineExecutor.batch_run",
+                 return_value=_mock_result(run_id="r1"),
+             ):
+            resp = _dispatch(
+                client, run_id="r1", authorization=token,
+                attempt_id="a1", generation=2, slot_id="s1",
+            )
+            assert resp.status_code == 202
+            deadline = time.time() + 5
+            while time.time() < deadline and "checkpoint_client" not in captured:
+                time.sleep(0.02)
+            self._wait_run_done(app.state.worker)
+
+        cc = captured.get("checkpoint_client")
+        assert cc is not None
+        assert isinstance(cc, CheckpointClient)
+        # Bound to the admitted reservation identity + the run-complete source.
+        assert cc.attempt_id == "a1"
+        assert cc.generation == 2
+        assert cc.manager_url == "http://mgr:8765"
+
+    def test_authorized_run_without_manager_url_gets_no_client(self, journal, auth_env):
+        captured = {}
+
+        def _fake_init(self, file_tracker=None, state_store=None, checkpoint_client=None):
+            captured["checkpoint_client"] = checkpoint_client
+
+        app, client = _make_client(journal=journal)  # manager_url=""
+        token = _mint(app, attempt_id="a1", run_id="r1")
+        with patch("tram.pipeline.executor.PipelineExecutor.__init__", _fake_init), \
+             patch(
+                 "tram.pipeline.executor.PipelineExecutor.batch_run",
+                 return_value=_mock_result(run_id="r1"),
+             ):
+            resp = _dispatch(client, run_id="r1", authorization=token)
+            assert resp.status_code == 202
+            deadline = time.time() + 5
+            while time.time() < deadline and "checkpoint_client" not in captured:
+                time.sleep(0.02)
+            self._wait_run_done(app.state.worker)
+
+        assert captured.get("checkpoint_client") is None
+
+    def test_legacy_run_gets_no_checkpoint_client(self, journal, auth_env):
+        """A legacy-admitted run (no attempt identity) never gets a client —
+        the executor's gate keeps the best-effort / fail-closed behavior."""
+        captured = {}
+
+        def _fake_init(self, file_tracker=None, state_store=None, checkpoint_client=None):
+            captured["checkpoint_client"] = checkpoint_client
+
+        app, client = _make_client(journal=journal, manager_url="http://mgr:8765")
+        with self._http_200(), \
+             patch("tram.pipeline.executor.PipelineExecutor.__init__", _fake_init), \
+             patch(
+                 "tram.pipeline.executor.PipelineExecutor.batch_run",
+                 return_value=_mock_result(run_id="r1"),
+             ):
+            resp = _dispatch(client, run_id="r1")  # no authorization
+            assert resp.status_code == 202
+            assert resp.json()["legacy"] is True
+            deadline = time.time() + 5
+            while time.time() < deadline and "checkpoint_client" not in captured:
+                time.sleep(0.02)
+            self._wait_run_done(app.state.worker)
+
+        assert captured.get("checkpoint_client") is None
+
+
 # ── Config reader ───────────────────────────────────────────────────────────
 
 
@@ -524,6 +641,52 @@ class TestCompletionRecording:
         assert payload["records_in"] == 3
         assert payload["legacy"] is False
         assert state.get("r1") is None
+
+    def test_completion_payload_carries_disposition_and_spool(self, journal, auth_env):
+        """The batch completion JSON carries the executor's per-sink
+        disposition and spool maps (plus the delivery counters) in the exact
+        shape the manager's run-history decode reads — activating the
+        per-sink/spool recording on the adoption path."""
+        from tram.pipeline.controller import PipelineController
+
+        mock_result = _mock_result(run_id="r1", records_in=3, records_out=2)
+        mock_result.dlq_count = 1
+        mock_result.records_failed = 0
+        mock_result.dlq_succeeded = 1
+        mock_result.dlq_failed = 0
+        mock_result.disposition = {"sftp": {"delivered": 2, "dlq": 1}}
+        mock_result.spool = {"spooled": 1}
+
+        app, client = _make_client(journal=journal)
+        token = _mint(app, attempt_id="a1", run_id="r1")
+        with patch(
+            "tram.pipeline.executor.PipelineExecutor.batch_run",
+            return_value=mock_result,
+        ):
+            resp = _dispatch(client, run_id="r1", authorization=token)
+            assert resp.status_code == 202
+            deadline = time.time() + 5
+            while time.time() < deadline and (
+                journal.get_attempt("a1") is None
+                or journal.get_attempt("a1").kind != "completion"
+            ):
+                time.sleep(0.02)
+
+        rec = journal.get_attempt("a1")
+        assert rec is not None and rec.kind == "completion"
+        payload = json.loads(rec.result_json)
+        # The payload shape the manager's _decode_disposition consumes.
+        assert payload["disposition"] == {"sftp": {"delivered": 2, "dlq": 1}}
+        assert payload["spool"] == {"spooled": 1}
+        assert payload["dlq_count"] == 1
+        assert payload["records_failed"] == 0
+        assert payload["dlq_succeeded"] == 1
+        assert payload["dlq_failed"] == 0
+        # The manager's own decode picks the maps up into the recorded shape.
+        decoded = PipelineController._decode_disposition(payload)
+        assert decoded["per_sink"] == {"sftp": {"delivered": 2, "dlq": 1}}
+        assert decoded["spool"] == {"spooled": 1}
+        assert decoded["dlq_succeeded"] == 1
 
 
 # ── Boot / status surface ───────────────────────────────────────────────────
