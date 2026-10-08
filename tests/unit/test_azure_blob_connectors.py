@@ -9,6 +9,7 @@ import pytest
 from tram.connectors.azure_blob.sink import AzureBlobSink
 from tram.connectors.azure_blob.source import AzureBlobSource
 from tram.core.exceptions import SinkError, SourceError
+from tram.interfaces.base_sink import DeliveryTier
 
 
 class TestAzureBlobSource:
@@ -160,3 +161,36 @@ class TestAzureBlobSink:
             })
             sink.write(b"data", {"source_filename": "input.csv"})
         mock_service.get_blob_client.assert_called_with(container="c", blob="input.csv")
+
+    def test_delivery_capability_declared_remote_durable(self):
+        """V18-01 §6 / disposition D1: per-write server-confirmed upload."""
+        cap = AzureBlobSink.delivery_capability
+        assert cap is not None
+        assert cap.tier == DeliveryTier.REMOTE_DURABLE
+        assert cap.replay_safe is False
+
+    def test_commit_confirms_remote_durable(self):
+        sink = AzureBlobSink({"connection_string": "cs", "container": "c"})
+        receipt = sink.commit()
+        assert receipt.sink_key == "azure_blob"
+        assert receipt.tier == DeliveryTier.REMOTE_DURABLE
+        assert receipt.confirmed is True
+        assert "upload_blob" in receipt.notes
+        assert "nothing buffered" in receipt.notes
+
+    def test_commit_stateless_before_and_after_writes(self):
+        """The barrier carries no state: confirmed before any write and again
+        after a write, with no latched error."""
+        mock_azure, mock_module, _, mock_blob_client = self._make_sink_mock()
+
+        sink = AzureBlobSink({"connection_string": "cs", "container": "c", "blob_template": "out.json"})
+        assert sink.commit().confirmed is True
+        assert sink.latched_error() is None
+        with patch.dict(sys.modules, {
+            "azure": mock_azure, "azure.storage": mock_azure.storage, "azure.storage.blob": mock_module,
+        }):
+            sink.write(b"data", {"pipeline_name": "test"})
+        receipt = sink.commit()
+        assert receipt.confirmed is True
+        assert receipt.tier == DeliveryTier.REMOTE_DURABLE
+        assert sink.latched_error() is None

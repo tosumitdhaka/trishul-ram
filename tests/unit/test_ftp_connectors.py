@@ -9,6 +9,7 @@ import pytest
 from tram.connectors.ftp.sink import FTPSink
 from tram.connectors.ftp.source import FTPSource
 from tram.core.exceptions import SinkError, SourceError
+from tram.interfaces.base_sink import DeliveryTier
 
 # ── FTPSource ──────────────────────────────────────────────────────────────
 
@@ -250,3 +251,50 @@ class TestFTPSink:
         stale_ftp.quit.assert_called_once()  # stale connection dropped
         sink.close()
         fresh_ftp.quit.assert_called_once()
+
+    def test_delivery_capability_declared_remote_accepted(self):
+        """V18-01 §6 / disposition D1: synchronous STOR acceptance, durability
+        not asserted, publication not atomic."""
+        cap = FTPSink.delivery_capability
+        assert cap is not None
+        assert cap.tier == DeliveryTier.REMOTE_ACCEPTED
+        assert cap.replay_safe is False
+
+    def test_commit_confirms_remote_accepted_with_declared_limits(self):
+        sink = FTPSink({
+            "host": "ftp.example.com",
+            "username": "user",
+            "password": "pass",
+            "remote_path": "/out",
+        })
+        receipt = sink.commit()
+        assert receipt.sink_key == "ftp"
+        assert receipt.tier == DeliveryTier.REMOTE_ACCEPTED
+        assert receipt.confirmed is True
+        # The receipt states all three declared limits.
+        assert "STOR" in receipt.notes
+        assert "no durability assertion" in receipt.notes
+        assert "fsync" in receipt.notes
+        assert "partial file" in receipt.notes
+
+    def test_commit_stateless_before_and_after_writes(self):
+        """The barrier carries no state: confirmed before any write and again
+        after a write, with no latched error."""
+        mock_ftp = MagicMock()
+
+        sink = FTPSink({
+            "host": "ftp.example.com",
+            "username": "user",
+            "password": "pass",
+            "remote_path": "/out",
+            "filename_template": "out.bin",
+        })
+        assert sink.commit().confirmed is True
+        assert sink.latched_error() is None
+        with patch("ftplib.FTP", return_value=mock_ftp):
+            sink.write(b"data", {"pipeline_name": "test"})
+        receipt = sink.commit()
+        assert receipt.confirmed is True
+        assert receipt.tier == DeliveryTier.REMOTE_ACCEPTED
+        assert sink.latched_error() is None
+        sink.close()

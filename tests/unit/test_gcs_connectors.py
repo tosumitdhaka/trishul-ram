@@ -9,6 +9,7 @@ import pytest
 from tram.connectors.gcs.sink import GcsSink
 from tram.connectors.gcs.source import GcsSource
 from tram.core.exceptions import SinkError, SourceError
+from tram.interfaces.base_sink import DeliveryTier
 
 
 class TestGcsSource:
@@ -117,3 +118,42 @@ class TestGcsSink:
             sink = GcsSink({"bucket": "my-bucket", "blob_template": "{source_stem}{source_suffix}"})
             sink.write(b"data", {"source_filename": "input.csv"})
         mock_bucket.blob.assert_called_once_with("input.csv")
+
+    def test_delivery_capability_declared_remote_durable(self):
+        """V18-01 §6 / disposition D1: per-write server-confirmed upload."""
+        cap = GcsSink.delivery_capability
+        assert cap is not None
+        assert cap.tier == DeliveryTier.REMOTE_DURABLE
+        assert cap.replay_safe is False
+
+    def test_commit_confirms_remote_durable(self):
+        sink = GcsSink({"bucket": "my-bucket"})
+        receipt = sink.commit()
+        assert receipt.sink_key == "gcs"
+        assert receipt.tier == DeliveryTier.REMOTE_DURABLE
+        assert receipt.confirmed is True
+        assert "upload_from_string" in receipt.notes
+        assert "nothing buffered" in receipt.notes
+
+    def test_commit_stateless_before_and_after_writes(self):
+        """The barrier carries no state: confirmed before any write and again
+        after a write, with no latched error."""
+        mock_blob = MagicMock()
+        mock_bucket = MagicMock()
+        mock_bucket.blob.return_value = mock_blob
+        mock_client = MagicMock()
+        mock_client.bucket.return_value = mock_bucket
+        mock_storage = MagicMock()
+        mock_storage.Client.return_value = mock_client
+        mock_gcs = MagicMock()
+        mock_gcs.storage = mock_storage
+
+        sink = GcsSink({"bucket": "my-bucket", "blob_template": "out.json"})
+        assert sink.commit().confirmed is True
+        assert sink.latched_error() is None
+        with patch.dict(sys.modules, {"google.cloud": mock_gcs, "google.cloud.storage": mock_gcs.storage}):
+            sink.write(b"data", {"pipeline_name": "test"})
+        receipt = sink.commit()
+        assert receipt.confirmed is True
+        assert receipt.tier == DeliveryTier.REMOTE_DURABLE
+        assert sink.latched_error() is None

@@ -373,6 +373,7 @@ class TestDeliveryContract:
         "        username: u\n        password: p\n        remote_path: /out\n"
     )
     _SINK_REST = "      sink:\n        type: rest\n        url: http://example.com\n"
+    _SINK_S3 = "      sink:\n        type: s3\n        bucket: my-bucket\n        key_template: out.json\n"
 
     def test_default_contract_is_legacy(self):
         cfg = _load(_BASE.format(name="legacy-default"))
@@ -442,6 +443,13 @@ class TestDeliveryContract:
         cfg = _load(_strict_pipeline_yaml(self._SOURCE_KAFKA + self._SER + self._SINK_LOCAL))
         assert cfg.source.type == "kafka"
         assert cfg.thread_workers == 1
+
+    def test_strict_accepts_object_store_sink(self):
+        """s3 declares remote_durable (disposition D1) — strict accepts it
+        alongside the local source's fingerprint identity."""
+        cfg = _load(_strict_pipeline_yaml(self._SOURCE_LOCAL + self._SER + self._SINK_S3))
+        assert cfg.delivery.contract == "strict"
+        assert cfg.sinks[0].type == "s3"
 
     def test_strict_rejects_source_without_replay_identity(self):
         """rest source has no source_unit_id-style identity — rejected."""
