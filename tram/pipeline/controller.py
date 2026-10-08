@@ -53,6 +53,31 @@ logger = logging.getLogger(__name__)
 # visibility channel and the final lifecycle row still lands at stop.
 _STREAM_ROLLUP_ROWS_MAX = 500
 
+# V18-01 §9 (frozen): audit retention for terminal manager-ledger rows.
+_AUDIT_RETENTION_DAYS_DEFAULT = 30
+# Ledger audit retention sweep interval (plan F: incremental retention jobs).
+_LEDGER_RETENTION_INTERVAL_S = 3600
+
+
+def _audit_retention_days() -> int:
+    """``TRAM_AUDIT_RETENTION_DAYS`` (V18-01 §9, frozen default 30) — audit
+    retention for terminal manager-ledger rows (execution_attempts,
+    run_intents, lifecycle_operations).
+
+    Follows the strictest env-reader convention (``tram/core/config.py``
+    ``_env_int``): a typo'd value fails loud at startup instead of silently
+    changing retention. A floor of 1 day guards against a destructive
+    ``0``/negative setting.
+    """
+    raw = os.environ.get("TRAM_AUDIT_RETENTION_DAYS", str(_AUDIT_RETENTION_DAYS_DEFAULT))
+    try:
+        value = int(raw)
+    except ValueError:
+        raise ValueError(
+            f"Environment variable TRAM_AUDIT_RETENTION_DAYS={raw!r} is not a valid integer"
+        ) from None
+    return max(1, value)
+
 
 @dataclass
 class _LocalRun:
@@ -209,6 +234,14 @@ class PipelineController:
 
         self._running = False
 
+        # Plan D boot order: the ledger's desired-state rows are loaded before
+        # boot adoption (V18-06), so adoption and the stopped/running decisions
+        # read the same durable generation/desired_status source.
+        self._desired_state: dict[str, dict] = {}
+        # Frozen §9 audit retention for the periodic ledger cleanup (plan F).
+        self._audit_retention_days: int = _audit_retention_days()
+        self._ledger_retention_stop = threading.Event()
+
         # Standalone live stats — only used when _worker_pool is None
         self._local_active_stats: dict[str, _LocalRun] = {}
         self._local_stats_lock = threading.Lock()
@@ -228,6 +261,18 @@ class PipelineController:
             self._boot_load()
 
         self._scheduler.start()
+
+        # Plan F: the ledger audit-retention sweep runs as a boot+interval
+        # daemon thread (same pattern as _local_stats_loop) — the first pass
+        # runs immediately, then hourly. DB-less standalone is unaffected.
+        if self._db is not None:
+            self._ledger_retention_stop.clear()
+            t = threading.Thread(
+                target=self._ledger_retention_loop,
+                name="tram-ledger-retention",
+                daemon=True,
+            )
+            t.start()
 
         if self._worker_pool is None:
             stats_interval = int(getattr(self._stats_store, "_interval", 30)) if self._stats_store else 30
@@ -255,6 +300,7 @@ class PipelineController:
         """
         self._running = False
         self._local_stats_stop.set()
+        self._ledger_retention_stop.set()
         logger.info("PipelineController stopping",
                     extra={"drain_timeout_seconds": timeout})
 
@@ -287,6 +333,11 @@ class PipelineController:
         from tram.pipeline.loader import load_pipeline_from_yaml
 
         with self._lock:
+            # Plan D boot order (V18-06): desired-state load/backfill → boot
+            # adoption → scheduler start. The desired-state rows (M3 backfill
+            # at schema init, kept current by lifecycle ops) are loaded BEFORE
+            # adoption so both adoption and the stopped/running decisions read
+            # the same durable generation/desired_status source.
             # V18-04 §2 (R4): boot adoption replaces the "nothing is in flight"
             # reset. Every non-terminal ledger attempt is resolved before any
             # scheduler fires: claimed-unsent attempts abort locally (never
@@ -295,8 +346,16 @@ class PipelineController:
             # the guard retained. Queued_runs rows stuck at 'dispatching'
             # without a ledger attempt are re-queued for the drain.
             if self._db is not None:
+                self._load_desired_state()
                 self._resolve_non_terminal_attempts_at_boot()
             stopped_names = set(self._db.get_stopped_pipeline_names())
+            # Desired-state rows are authoritative when present (M3 backfill +
+            # lifecycle ops keep them current); the legacy stopped flag covers
+            # rows that predate the desired-state table (conservative union —
+            # an operator stop is never resurrected at boot).
+            for name, row in self._desired_state.items():
+                if row.get("deleted") == 1 or row.get("desired_status") == "stopped":
+                    stopped_names.add(name)
             placements_by_pipeline = {
                 placement["pipeline_name"]: placement
                 for placement in self._db.get_active_broadcast_placements()
@@ -388,6 +447,28 @@ class PipelineController:
         return True
 
     # ── Boot adoption (V18-04 §2 / frozen §2–3) ─────────────────────────────
+
+    def _load_desired_state(self) -> None:
+        """Plan D boot order step 1: load ``pipeline_desired_state`` into memory.
+
+        Runs under the lifecycle lock at the very start of ``_boot_load`` —
+        before boot adoption (step 2) and before any scheduler fires (step 3).
+        The M3 migration backfills these rows from ``registered_pipelines`` at
+        schema init; lifecycle ops (stop/start/update/delete) keep
+        ``desired_status``/``generation`` current. Adoption and the
+        stopped/running decisions both read this map so they agree on the
+        durable generation.
+        """
+        self._desired_state = {}
+        if self._db is None:
+            return
+        with self._db._engine.connect() as conn:  # noqa: SLF001 — repo convention
+            rows = conn.execute(text("""
+                SELECT pipeline_name, desired_status, generation, deleted,
+                       stopped_reason
+                  FROM pipeline_desired_state
+            """)).mappings().fetchall()
+        self._desired_state = {str(r["pipeline_name"]): dict(r) for r in rows}
 
     def _resolve_non_terminal_attempts_at_boot(self) -> None:
         """Resolve every non-terminal ledger attempt before any scheduler fires.
@@ -524,13 +605,19 @@ class PipelineController:
         if kind == "completed":
             # Journal completion record: resolve the intent + terminal
             # transition (the frozen §2 unknown → terminal resolution).
+            outcome = self._completion_outcome(result_json)
             self._terminalize_attempt(
                 attempt_id=attempt_id,
                 run_id=run_id,
                 pipeline_name=pipeline_name,
                 generation=generation,
-                resolve_outcome=self._completion_outcome(result_json),
+                resolve_outcome=outcome,
             )
+            # V18-06: the adoption-resolved completion is queryable in history
+            # like a normal completion — write the run_history row from the
+            # decoded journal payload (the pipeline is not registered yet at
+            # boot; manager.register hydrates last_run from the row).
+            self._record_adoption_completion_history(attempt, result_json, outcome=outcome)
             self._terminal_cancel_queued_run(run_id, "boot_adoption_completed")
             self._record_completed_lifecycle_operation(
                 pipeline_name,
@@ -665,6 +752,106 @@ class PipelineController:
         # No decodable result → the terminal outcome is 'aborted' (the run's
         # post-crash resolution is never invented as a success).
         return "aborted"
+
+    @staticmethod
+    def _status_from_intent_outcome(outcome: str) -> RunStatus:
+        """Map the intent-outcome domain back to a RunStatus (history row)."""
+        if outcome == "success":
+            return RunStatus.SUCCESS
+        if outcome == "partial":
+            return RunStatus.PARTIAL
+        if outcome == "aborted":
+            return RunStatus.ABORTED
+        return RunStatus.FAILED
+
+    @staticmethod
+    def _decode_disposition(payload: dict) -> dict | None:
+        """Per-sink/dlq/spool/failed counters recorded in a completion payload.
+
+        The worker's journal ``result_json`` carries run-scoped counters; a
+        per-sink ``disposition`` map and ``spool`` accounting are included
+        when the executor recorded them (V18-02). None when nothing beyond the
+        base RunResult counters is recorded.
+        """
+        recorded: dict = {}
+        for key in ("dlq_count", "records_failed", "dlq_succeeded", "dlq_failed"):
+            if key in payload:
+                recorded[key] = int(payload[key] or 0)
+        per_sink = payload.get("disposition")
+        if isinstance(per_sink, dict) and per_sink:
+            recorded["per_sink"] = per_sink
+        spool = payload.get("spool")
+        if isinstance(spool, dict) and spool:
+            recorded["spool"] = spool
+        return recorded or None
+
+    def _record_adoption_completion_history(
+        self, attempt: dict, result_json, *, outcome: str
+    ) -> None:
+        """Write the run_history row for an adoption-resolved completion.
+
+        V18-06 task 1: boot adoption decodes the journal completion and
+        resolves the intent, but previously wrote no history row — the run was
+        invisible in ``/api/runs``. The pipeline is not registered yet at boot
+        (``manager.record_run`` would raise), so the row goes straight to the
+        DB; the V18 M2 columns (attempt_id/generation/outcome/disposition_json)
+        are populated for the extended GET /runs/{run_id}.
+        """
+        if self._db is None:
+            return
+        payload = result_json
+        if isinstance(payload, str):
+            try:
+                payload = json.loads(payload)
+            except ValueError:
+                payload = None
+        payload = payload if isinstance(payload, dict) else {}
+        now = datetime.now(UTC)
+
+        def _ts(key: str, default: datetime) -> datetime:
+            value = payload.get(key)
+            if isinstance(value, str):
+                try:
+                    return datetime.fromisoformat(value)
+                except ValueError:
+                    pass
+            return default
+
+        worker_id = str(payload.get("worker_id") or attempt.get("worker_id") or "") or self._node_id
+        result = RunResult(
+            run_id=attempt["run_id"],
+            pipeline_name=attempt["pipeline_name"],
+            status=self._status_from_intent_outcome(outcome),
+            started_at=_ts("started_at", now),
+            finished_at=_ts("finished_at", now),
+            records_in=int(payload.get("records_in") or 0),
+            records_out=int(payload.get("records_out") or 0),
+            records_skipped=int(payload.get("records_skipped") or 0),
+            bytes_in=int(payload.get("bytes_in") or 0),
+            bytes_out=int(payload.get("bytes_out") or 0),
+            error=payload.get("error"),
+            errors=list(payload.get("errors") or []),
+            node_id=worker_id,
+            dlq_count=int(payload.get("dlq_count") or 0),
+            records_failed=int(payload.get("records_failed") or 0),
+            dlq_succeeded=int(payload.get("dlq_succeeded") or 0),
+            dlq_failed=int(payload.get("dlq_failed") or 0),
+        )
+        self._db.save_run(result)
+        disposition = self._decode_disposition(payload)
+        with self._db._engine.begin() as conn:
+            conn.execute(text("""
+                UPDATE run_history
+                   SET attempt_id = :attempt_id, generation = :generation,
+                       outcome = :outcome, disposition_json = :disposition
+                 WHERE run_id = :run_id
+            """), {
+                "attempt_id": attempt["attempt_id"],
+                "generation": attempt["generation"],
+                "outcome": outcome,
+                "disposition": json.dumps(disposition) if disposition else None,
+                "run_id": attempt["run_id"],
+            })
 
     def _mark_attempt_unknown(self, attempt: dict, *, uncertainty_reason: str) -> None:
         """dispatching/running → unknown (insufficient evidence, plan D).
@@ -859,6 +1046,8 @@ class PipelineController:
 
             if self._db is not None:
                 self._db.start_pipeline_flag(name)
+                # Plan D: desired-state row mirrors the legacy flag flip.
+                self._set_desired_status(name, "running")
 
             if not state.config.enabled:
                 self.manager.set_status(name, "stopped")
@@ -882,6 +1071,9 @@ class PipelineController:
                 self._stop_execution(name)
                 if self._db is not None:
                     self._db.stop_pipeline(name)
+                    # Plan D: keep the desired-state row current so boot reads
+                    # the same stopped decision from the ledger.
+                    self._set_desired_status(name, "stopped")
                     # R16: terminal-cancel queued (pending) rows with the
                     # recorded reason instead of purging them — the returned
                     # run_id keeps resolving as a terminal record. The active
@@ -1102,6 +1294,27 @@ class PipelineController:
                 "now": datetime.now(UTC).isoformat(),
             })
 
+    def _set_desired_status(self, pipeline_name: str, desired_status: str) -> None:
+        """Keep ``pipeline_desired_state.desired_status`` current (plan D).
+
+        stop/start write both the legacy stopped flag and the desired-state
+        row so the boot-time desired-state load (V18-06) never resurrects an
+        operator stop or keeps a started pipeline stopped. A missing row
+        (pre-M3 edge) is a no-op — the legacy flag governs there.
+        """
+        if self._db is None:
+            return
+        with self._db._engine.begin() as conn:
+            conn.execute(text("""
+                UPDATE pipeline_desired_state
+                   SET desired_status = :status, updated_at = :now
+                 WHERE pipeline_name = :name
+            """), {
+                "name": pipeline_name,
+                "status": desired_status,
+                "now": datetime.now(UTC).isoformat(),
+            })
+
     def _bump_pipeline_generation(self, pipeline_name: str, *, deleted: bool = False) -> int:
         """Increment the ledger generation (frozen §1: config update / delete
         tombstone). Returns the new generation."""
@@ -1138,7 +1351,15 @@ class PipelineController:
         expires_at: datetime | None = None,
     ) -> None:
         """Idempotently insert the run_intents row (frozen §3) — the queue
-        reservation the claim converts into the guard."""
+        reservation the claim converts into the guard.
+
+        V18-06 (M4 reconciliation): an existing intent whose
+        ``requested_generation`` is the M4 backfill artifact (1, written for
+        legacy in-flight queued rows) is refreshed to the caller's generation
+        at claim time — the attempt's generation is the fence authority, never
+        a stale backfilled value. The refresh applies only while the intent is
+        still unresolved; a resolved row is immutable audit.
+        """
         if self._db is None:
             return
         with self._db._engine.begin() as conn:
@@ -1149,7 +1370,9 @@ class PipelineController:
                 VALUES
                     (:run_id, :pipeline_name, :origin, :flush, :requested_at, :expires_at,
                      :requested_generation, :yaml_snapshot, :schedule_type)
-                ON CONFLICT (run_id) DO NOTHING
+                ON CONFLICT (run_id) DO UPDATE
+                    SET requested_generation = :requested_generation
+                 WHERE run_intents.final_outcome IS NULL
             """), {
                 "run_id": run_id,
                 "pipeline_name": pipeline_name,
@@ -1874,6 +2097,160 @@ class PipelineController:
     def get_run(self, run_id: str):
         with self._lock:
             return self.manager.get_run(run_id)
+
+    def get_run_attempts(self, run_id: str) -> list[dict]:
+        """Ledger attempts for a run in the frozen §8 API shape:
+        ``[{attempt_id, state, worker_id, started_at, finished_at}]``."""
+        if self._db is None:
+            return []
+        with self._db._engine.connect() as conn:
+            rows = conn.execute(text("""
+                SELECT attempt_id, state, worker_id, started_at, finished_at,
+                       generation, ordinal
+                  FROM execution_attempts
+                 WHERE run_id = :run_id
+                 ORDER BY ordinal
+            """), {"run_id": run_id}).mappings().fetchall()
+        return [dict(r) for r in rows]
+
+    def get_run_ledger_context(self, run_id: str) -> dict:
+        """Ledger context for the extended ``GET /runs/{run_id}``:
+        ``{attempts, generation, outcome}``.
+
+        The attempt's generation is the fence authority (never an intent's
+        backfilled ``requested_generation`` — M4 rows carry the artifact
+        value 1). ``outcome`` is the resolved intent outcome when present.
+        ``attempts`` carries the frozen §8 shape (attempt_id, state,
+        worker_id, started_at, finished_at).
+        """
+        attempts = self.get_run_attempts(run_id)
+        intent = self._intent_for_run(run_id)
+        generation = None
+        if attempts:
+            # The newest attempt (last by ordinal) carries the authoritative
+            # generation — never an intent's backfilled requested_generation.
+            generation = attempts[-1]["generation"]
+        elif intent is not None:
+            generation = intent.get("requested_generation")
+        outcome = None
+        if intent is not None and intent.get("final_outcome"):
+            outcome = intent["final_outcome"]
+        return {
+            "attempts": [
+                {
+                    "attempt_id": a["attempt_id"],
+                    "state": a["state"],
+                    "worker_id": a.get("worker_id"),
+                    "started_at": a.get("started_at"),
+                    "finished_at": a.get("finished_at"),
+                }
+                for a in attempts
+            ],
+            "generation": generation,
+            "outcome": outcome,
+        }
+
+    def _intent_for_run(self, run_id: str) -> dict | None:
+        """The run_intents row for a run (outcome/generation context)."""
+        if self._db is None:
+            return None
+        with self._db._engine.connect() as conn:
+            row = conn.execute(text("""
+                SELECT run_id, requested_generation, final_outcome,
+                       final_attempt_id, resolved_at
+                  FROM run_intents
+                 WHERE run_id = :run_id
+            """), {"run_id": run_id}).mappings().fetchone()
+        return dict(row) if row is not None else None
+
+    def _run_history_v18_columns(self, run_id: str) -> dict:
+        """The M2 V18 columns on the run_history row, when present."""
+        if self._db is None:
+            return {}
+        with self._db._engine.connect() as conn:
+            row = conn.execute(text("""
+                SELECT attempt_id, generation, outcome, disposition_json
+                  FROM run_history
+                 WHERE run_id = :run_id
+            """), {"run_id": run_id}).mappings().fetchone()
+        return dict(row) if row is not None else {}
+
+    @staticmethod
+    def _run_ledger_state(attempts: list[dict]) -> str:
+        """Run-level state from the newest ledger attempt.
+
+        The newest non-terminal attempt's state is authoritative
+        (claimed/dispatching/running/stopping/unknown); a run whose newest
+        attempt is terminal (or that has no attempts) is ``terminal`` — the
+        history row records its outcome.
+        """
+        for attempt in reversed(attempts):
+            if attempt.get("state") != "terminal":
+                return str(attempt["state"])
+        return "terminal"
+
+    def get_run_detail(self, run_id: str) -> dict | None:
+        """V18-06 §8: extended ``GET /api/runs/{run_id}`` — additive over the
+        legacy ``RunResult.to_dict()`` shape (old keys unchanged).
+
+        Adds ``state``, ``generation``, ``attempts[]`` (attempt_id, state,
+        worker_id, started/finished) from the ledger, plus ``outcome`` and the
+        per-sink/dlq/spool/failed counters where recorded (run_history V18
+        columns; the full API reshape is V18-09). Returns None when neither a
+        history row nor a queued row exists.
+        """
+        if self._db is None:
+            result = self.get_run(run_id)
+            return result.to_dict() if result is not None else None
+        result = self.get_run(run_id)
+        if result is None:
+            return None
+        attempts = self.get_run_attempts(run_id)
+        intent = self._intent_for_run(run_id)
+        history_cols = self._run_history_v18_columns(run_id)
+
+        payload = result.to_dict()
+        payload["state"] = self._run_ledger_state(attempts)
+        if attempts:
+            # The newest attempt (last by ordinal) carries the authoritative
+            # generation — never an intent's backfilled requested_generation.
+            payload["generation"] = attempts[-1]["generation"]
+        elif history_cols.get("generation") is not None:
+            payload["generation"] = history_cols["generation"]
+        elif intent is not None:
+            payload["generation"] = intent.get("requested_generation")
+        else:
+            payload["generation"] = None
+
+        if history_cols.get("outcome"):
+            payload["outcome"] = history_cols["outcome"]
+        elif intent is not None and intent.get("final_outcome"):
+            payload["outcome"] = intent["final_outcome"]
+        elif payload.get("status") in ("success", "partial", "failed", "aborted"):
+            payload["outcome"] = payload["status"]
+        else:
+            payload["outcome"] = None
+
+        disposition = history_cols.get("disposition_json")
+        if disposition:
+            try:
+                decoded = json.loads(disposition)
+            except (TypeError, ValueError):
+                decoded = None
+            if isinstance(decoded, dict) and decoded:
+                payload["disposition"] = decoded
+
+        payload["attempts"] = [
+            {
+                "attempt_id": a["attempt_id"],
+                "state": a["state"],
+                "worker_id": a.get("worker_id"),
+                "started_at": a.get("started_at"),
+                "finished_at": a.get("finished_at"),
+            }
+            for a in attempts
+        ]
+        return payload
 
     def get_versions(self, name: str) -> list[dict]:
         with self._lock:
@@ -3604,6 +3981,61 @@ class PipelineController:
                 self._stats_store.update(payload)
                 if local_run.schedule_type == "stream":
                     self._maybe_record_stream_rollup(local_run, now, snapshot)
+
+    def _ledger_retention_loop(self) -> None:
+        """Plan F: periodic ledger audit retention (frozen §9).
+
+        Boot+interval daemon thread (same pattern as ``_local_stats_loop``):
+        the first sweep runs immediately, then hourly. A failed pass is logged
+        and retried on the next interval — retention must never take down the
+        manager.
+        """
+        while not self._ledger_retention_stop.is_set():
+            try:
+                self._prune_ledger_audit()
+            except Exception as exc:
+                logger.error("Ledger audit retention pass failed",
+                             extra={"error": str(exc)})
+            if self._ledger_retention_stop.wait(_LEDGER_RETENTION_INTERVAL_S):
+                break
+
+    def _prune_ledger_audit(self) -> dict[str, int]:
+        """Prune terminal ledger audit rows older than TRAM_AUDIT_RETENTION_DAYS.
+
+        Plan F: incremental retention jobs prune only eligible terminal
+        history. NEVER touched: non-terminal attempts, unknown-state attempts
+        (the guard is retained until an operator force-release — a later
+        lane), and unresolved run intents. Queued-run audit rows follow their
+        existing TTL expiry path. Returns the per-table deleted counts.
+        """
+        if self._db is None:
+            return {"attempts": 0, "intents": 0, "operations": 0}
+        cutoff = (datetime.now(UTC) - timedelta(days=self._audit_retention_days)).isoformat()
+        counts: dict[str, int] = {}
+        with self._db._engine.begin() as conn:
+            for key, sql in (
+                ("attempts", """
+                    DELETE FROM execution_attempts
+                     WHERE state = 'terminal' AND finished_at IS NOT NULL
+                       AND finished_at < :cutoff
+                """),
+                ("intents", """
+                    DELETE FROM run_intents
+                     WHERE final_outcome IS NOT NULL AND resolved_at IS NOT NULL
+                       AND resolved_at < :cutoff
+                """),
+                ("operations", """
+                    DELETE FROM lifecycle_operations
+                     WHERE state IN ('complete', 'failed')
+                       AND updated_at < :cutoff
+                """),
+            ):
+                counts[key] = conn.execute(text(sql), {"cutoff": cutoff}).rowcount
+        logger.info(
+            "Ledger audit retention sweep complete",
+            extra={"cutoff": cutoff, **counts},
+        )
+        return counts
 
     def _local_stats_loop(self, interval: int) -> None:
         while not self._local_stats_stop.wait(interval):

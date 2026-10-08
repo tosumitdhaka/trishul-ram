@@ -14,7 +14,7 @@ from __future__ import annotations
 import threading
 import time
 import uuid
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from unittest.mock import MagicMock
 
 import pytest
@@ -2503,6 +2503,68 @@ class TestBootAdoption:
         finally:
             ctrl.stop()
 
+    def test_adoption_completion_writes_run_history_row(self, tmp_path):
+        """V18-06 task 1: an adoption-resolved journal completion is queryable
+        in run history like a normal completion — decoded outcome, counters,
+        and the V18 columns (attempt_id/generation/outcome/disposition_json)."""
+        import json as _json
+
+        wp = MagicMock()
+        wp.url_for_worker_id.return_value = "http://worker-0:8766"
+        wp.worker_urls.return_value = ["http://worker-0:8766"]
+        wp.query_attempt.return_value = {
+            "kind": "completion",
+            "result_json": {
+                "status": "success",
+                "records_in": 12,
+                "records_out": 12,
+                "records_skipped": 1,
+                "bytes_in": 100,
+                "bytes_out": 90,
+                "started_at": "2026-09-01T10:00:00+00:00",
+                "finished_at": "2026-09-01T10:00:05+00:00",
+                "worker_id": "w0",
+                "dlq_count": 2,
+                "records_failed": 0,
+                "dlq_succeeded": 2,
+                "dlq_failed": 0,
+            },
+        }
+        db, ctrl = self._boot_controller(tmp_path, wp)
+        self._seed(db, run_id="r-hist", state="dispatching", worker_id="w0")
+        try:
+            ctrl.start()
+            rows = self._fetch(
+                db,
+                "SELECT run_id, pipeline_name, status, records_in, records_out,"
+                " records_skipped, bytes_in, bytes_out, attempt_id, generation,"
+                " outcome, disposition_json"
+                " FROM run_history WHERE run_id = 'r-hist'",
+            )
+            assert len(rows) == 1
+            row = rows[0]
+            assert row["run_id"] == "r-hist"
+            assert row["pipeline_name"] == "my-interval"
+            assert row["status"] == "success"
+            assert row["records_in"] == 12
+            assert row["records_out"] == 12
+            assert row["records_skipped"] == 1
+            assert row["bytes_in"] == 100
+            assert row["bytes_out"] == 90
+            assert row["attempt_id"] == "r-hist-a1"
+            assert row["generation"] == 1
+            assert row["outcome"] == "success"
+            assert _json.loads(row["disposition_json"]) == {
+                "dlq_count": 2,
+                "records_failed": 0,
+                "dlq_succeeded": 2,
+                "dlq_failed": 0,
+            }
+            # The run resolves through the normal history lookup.
+            assert ctrl.get_run("r-hist") is not None
+        finally:
+            ctrl.stop()
+
     def test_dispatching_journal_interrupted_terminates(self, tmp_path):
         wp = MagicMock()
         wp.url_for_worker_id.return_value = "http://worker-0:8766"
@@ -2634,9 +2696,11 @@ class TestBootAdoption:
             ctrl.stop()
 
     def test_adoption_completes_before_schedulers_fire(self, tmp_path, monkeypatch):
-        """Order pin: boot adoption resolves before APScheduler starts — the
-        'before any scheduler fires' requirement is structural (_boot_load runs
-        adoption under the lock, then the scheduler starts)."""
+        """Order pin (plan D / V18-06): desired-state load/backfill → boot
+        adoption → scheduler start. Adoption resolves every non-terminal
+        attempt before APScheduler fires, and the desired-state rows (M3
+        backfill) are loaded before adoption so both read the same durable
+        generation/desired_status source."""
         from apscheduler.schedulers.background import BackgroundScheduler
 
         wp = MagicMock()
@@ -2648,7 +2712,12 @@ class TestBootAdoption:
         db, ctrl = self._boot_controller(tmp_path, wp)
         self._seed(db, run_id="r-pin", state="dispatching", worker_id="w0")
         order: list[str] = []
+        orig_load = PipelineController._load_desired_state
         orig_resolve = PipelineController._resolve_non_terminal_attempts_at_boot
+
+        def _load(self):
+            order.append("desired_state")
+            return orig_load(self)
 
         def _resolve(self):
             order.append("adoption")
@@ -2660,15 +2729,285 @@ class TestBootAdoption:
             order.append("scheduler_start")
             return orig_sched_start(self, *args, **kwargs)
 
+        monkeypatch.setattr(PipelineController, "_load_desired_state", _load)
         monkeypatch.setattr(
             PipelineController, "_resolve_non_terminal_attempts_at_boot", _resolve
         )
         monkeypatch.setattr(BackgroundScheduler, "start", _sched_start)
         try:
             ctrl.start()
-            assert order == ["adoption", "scheduler_start"]
+            assert order == ["desired_state", "adoption", "scheduler_start"]
         finally:
             ctrl.stop()
+
+
+# ── V18-06: desired-state boot (plan D) ─────────────────────────────────────
+
+
+class TestDesiredStateBoot:
+    """V18-06 task 4 (plan D): boot reads pipeline_desired_state (M3 backfill
+    at schema init, kept current by lifecycle ops) for the stopped/running
+    decision, and stop/start keep the desired-status row current so a boot
+    never resurrects an operator stop or keeps a started pipeline stopped."""
+
+    def _fetch(self, db, sql, params=None):
+        with db._engine.connect() as conn:
+            rows = conn.execute(text(sql), params or {}).mappings().fetchall()
+        return [dict(r) for r in rows]
+
+    def test_desired_state_row_marks_pipeline_stopped_at_boot(self, tmp_path):
+        """A desired-state row with desired_status='stopped' (no legacy stopped
+        flag) is not scheduled at boot — the plan D load is authoritative."""
+        from tram.persistence.db import TramDB
+        db = TramDB(url=f"sqlite:///{tmp_path}/desired-boot.db")
+        db.save_pipeline("my-interval", _INTERVAL_YAML, source="api")
+        with db._engine.begin() as conn:
+            conn.execute(text("""
+                INSERT INTO pipeline_desired_state
+                    (pipeline_name, desired_status, generation, schedule_type,
+                     misfire_policy, deleted, updated_at)
+                VALUES ('my-interval', 'stopped', 1, 'interval',
+                        'coalesced_skip', 0, :now)
+            """), {"now": datetime.now(UTC).isoformat()})
+        ctrl = _make_controller(db=db)
+        try:
+            ctrl.start()
+            assert ctrl.manager.exists("my-interval")
+            assert ctrl.manager.get("my-interval").status == "stopped"
+            assert ctrl._scheduler.get_job("batch-my-interval") is None
+            assert ctrl._desired_state["my-interval"]["desired_status"] == "stopped"
+        finally:
+            ctrl.stop()
+
+    def test_stop_and_start_keep_desired_state_current(self, tmp_path):
+        """stop_pipeline/start_pipeline write both the legacy flag and the
+        desired-state row (plan D) — the next boot reads the same decision."""
+        from tram.persistence.db import TramDB
+        db = TramDB(url=f"sqlite:///{tmp_path}/desired-lifecycle.db")
+        config = load_pipeline_from_yaml(_MANUAL_YAML)
+        ctrl = _make_controller(db=db)
+        try:
+            ctrl.register(config, yaml_text=_MANUAL_YAML)
+            rows = self._fetch(
+                db, "SELECT desired_status FROM pipeline_desired_state WHERE pipeline_name = 'my-manual'"
+            )
+            assert rows[0]["desired_status"] == "running"
+            ctrl.stop_pipeline("my-manual")
+            rows = self._fetch(
+                db, "SELECT desired_status FROM pipeline_desired_state WHERE pipeline_name = 'my-manual'"
+            )
+            assert rows[0]["desired_status"] == "stopped"
+            flags = self._fetch(
+                db, "SELECT stopped FROM registered_pipelines WHERE name = 'my-manual'"
+            )
+            assert flags[0]["stopped"] == 1
+            ctrl.start_pipeline("my-manual")
+            rows = self._fetch(
+                db, "SELECT desired_status FROM pipeline_desired_state WHERE pipeline_name = 'my-manual'"
+            )
+            assert rows[0]["desired_status"] == "running"
+        finally:
+            ctrl.stop()
+
+
+# ── V18-06: M4 backfill generation reconciliation ───────────────────────────
+
+
+class TestM4BackfillGenerationReconciliation:
+    """V18-06 task 6: M4-backfilled run_intents carry requested_generation=1
+    (the migration artifact for legacy in-flight queued rows). At claim the
+    intent's generation is reconciled to the pipeline's current desired state;
+    resolution fences on the ATTEMPT's generation — never a stale backfilled
+    value — so a legitimate callback for the current generation is accepted."""
+
+    def _fetch(self, db, sql, params=None):
+        with db._engine.connect() as conn:
+            rows = conn.execute(text(sql), params or {}).mappings().fetchall()
+        return [dict(r) for r in rows]
+
+    def test_claim_reconciles_backfill_and_callback_resolves(self, tmp_path):
+        from tram.persistence.db import TramDB
+        db = TramDB(url=f"sqlite:///{tmp_path}/m4-reconcile.db")
+        wp = MagicMock()
+        ctrl = _make_controller(db=db, worker_pool=wp, manager_url="http://manager:8765")
+        config = load_pipeline_from_yaml(_INTERVAL_YAML)
+        ctrl.manager.register(config, yaml_text=_INTERVAL_YAML)
+        try:
+            # Desired state at generation 3 (two config updates).
+            ctrl._bump_pipeline_generation("my-interval")
+            ctrl._bump_pipeline_generation("my-interval")
+            assert ctrl._pipeline_generation("my-interval") == 3
+            run_id = "r-m4"
+            # M4 backfill artifact: legacy in-flight intent at generation 1.
+            with db._engine.begin() as conn:
+                conn.execute(text("""
+                    INSERT INTO run_intents
+                        (run_id, pipeline_name, origin, flush, requested_at,
+                         requested_generation, yaml_snapshot, schedule_type)
+                    VALUES (:r, 'my-interval', 'queued', 0, :now, 1, 'yaml', 'interval')
+                """), {"r": run_id, "now": datetime.now(UTC).isoformat()})
+            attempt = ctrl._claim_for_dispatch(
+                "my-interval", run_id, origin="queued", flush=False,
+                yaml_text="yaml", schedule_type="interval",
+            )
+            assert attempt is not None
+            assert attempt["generation"] == 3  # current generation, not the backfill
+            intents = self._fetch(
+                db, "SELECT requested_generation FROM run_intents WHERE run_id = :r",
+                {"r": run_id},
+            )
+            assert intents[0]["requested_generation"] == 3  # reconciled at claim
+            # The completion for the attempt (generation 3) resolves — the
+            # backfilled value never fences the callback.
+            resp = ctrl.on_attempt_run_complete(
+                attempt_id=attempt["attempt_id"], generation=3, run_id=run_id,
+                pipeline_name="my-interval", worker_id="w0", status="success",
+                records_in=1, records_out=1,
+            )
+            assert resp == {"ok": True}
+            intents = self._fetch(
+                db, "SELECT final_outcome FROM run_intents WHERE run_id = :r",
+                {"r": run_id},
+            )
+            assert intents[0]["final_outcome"] == "success"
+        finally:
+            ctrl.stop()
+
+    def test_resolved_backfill_intent_is_immutable_audit(self, tmp_path):
+        """A resolved intent's requested_generation is never refreshed by a
+        later claim attempt (immutable audit, frozen §3)."""
+        from tram.persistence.db import TramDB
+        db = TramDB(url=f"sqlite:///{tmp_path}/m4-immutable.db")
+        wp = MagicMock()
+        ctrl = _make_controller(db=db, worker_pool=wp, manager_url="http://manager:8765")
+        config = load_pipeline_from_yaml(_INTERVAL_YAML)
+        ctrl.manager.register(config, yaml_text=_INTERVAL_YAML)
+        try:
+            now = datetime.now(UTC).isoformat()
+            with db._engine.begin() as conn:
+                conn.execute(text("""
+                    INSERT INTO run_intents
+                        (run_id, pipeline_name, origin, flush, requested_at,
+                         requested_generation, yaml_snapshot, schedule_type,
+                         final_outcome, resolved_at)
+                    VALUES ('r-res', 'my-interval', 'queued', 0, :now, 1, 'yaml',
+                            'interval', 'success', :now)
+                """), {"now": now})
+            # Re-ensure the intent with the current generation — the resolved
+            # row must keep its recorded (backfilled) generation.
+            ctrl._ensure_run_intent(
+                run_id="r-res", pipeline_name="my-interval", origin="queued",
+                flush=False, requested_at=datetime.now(UTC),
+                requested_generation=7, yaml_snapshot="yaml", schedule_type="interval",
+            )
+            intents = self._fetch(
+                db, "SELECT requested_generation, final_outcome FROM run_intents WHERE run_id = 'r-res'"
+            )
+            assert intents[0]["requested_generation"] == 1
+            assert intents[0]["final_outcome"] == "success"
+        finally:
+            ctrl.stop()
+
+
+# ── V18-06: ledger audit retention (plan F) ─────────────────────────────────
+
+
+class TestLedgerAuditRetention:
+    """V18-06 task 5 (plan F): the periodic cleanup prunes terminal ledger
+    audit rows older than TRAM_AUDIT_RETENTION_DAYS — never non-terminal
+    attempts, unknown-state guards (retained until force-release), or
+    unresolved run intents. Queued-run audit rows follow their existing TTL
+    expiry path."""
+
+    def _fetch(self, db, sql, params=None):
+        with db._engine.connect() as conn:
+            rows = conn.execute(text(sql), params or {}).mappings().fetchall()
+        return [dict(r) for r in rows]
+
+    def _insert(self, db, sql, params):
+        with db._engine.begin() as conn:
+            conn.execute(text(sql), params)
+
+    def test_prunes_old_terminal_keeps_guards_and_live_rows(self, tmp_path, monkeypatch):
+        monkeypatch.setenv("TRAM_AUDIT_RETENTION_DAYS", "30")
+        from tram.persistence.db import TramDB
+        db = TramDB(url=f"sqlite:///{tmp_path}/retention.db")
+        ctrl = _make_controller(db=db)
+        old = (datetime.now(UTC) - timedelta(days=60)).isoformat()
+        fresh = datetime.now(UTC).isoformat()
+        now = datetime.now(UTC).isoformat()
+        # Old terminal attempt → pruned.
+        self._insert(db, """
+            INSERT INTO execution_attempts
+                (attempt_id, run_id, pipeline_name, ordinal, generation, slot_id,
+                 fence_token, state, finished_at)
+            VALUES ('a-old', 'r-old', 'p1', 1, 1, '', 'ft', 'terminal', :t)
+        """, {"t": old})
+        # Fresh terminal attempt → kept.
+        self._insert(db, """
+            INSERT INTO execution_attempts
+                (attempt_id, run_id, pipeline_name, ordinal, generation, slot_id,
+                 fence_token, state, finished_at)
+            VALUES ('a-fresh', 'r-fresh', 'p1', 1, 1, '', 'ft', 'terminal', :t)
+        """, {"t": fresh})
+        # Unknown-state attempt → NEVER pruned (guard retained until force-release).
+        self._insert(db, """
+            INSERT INTO execution_attempts
+                (attempt_id, run_id, pipeline_name, ordinal, generation, slot_id,
+                 fence_token, state, finished_at)
+            VALUES ('a-unk', 'r-unk', 'p1', 1, 1, '', 'ft', 'unknown', :t)
+        """, {"t": old})
+        # Non-terminal (running) attempt → kept.
+        self._insert(db, """
+            INSERT INTO execution_attempts
+                (attempt_id, run_id, pipeline_name, ordinal, generation, slot_id,
+                 fence_token, state)
+            VALUES ('a-run', 'r-run', 'p1', 1, 1, '', 'ft', 'running')
+        """, {})
+        # Old resolved intent → pruned.
+        self._insert(db, """
+            INSERT INTO run_intents
+                (run_id, pipeline_name, origin, flush, requested_at,
+                 requested_generation, final_outcome, resolved_at)
+            VALUES ('i-old', 'p1', 'manual', 0, :now, 1, 'success', :t)
+        """, {"now": now, "t": old})
+        # Unresolved intent → kept.
+        self._insert(db, """
+            INSERT INTO run_intents
+                (run_id, pipeline_name, origin, flush, requested_at,
+                 requested_generation)
+            VALUES ('i-open', 'p1', 'manual', 0, :now, 1)
+        """, {"now": now})
+        # Old complete lifecycle operation → pruned.
+        self._insert(db, """
+            INSERT INTO lifecycle_operations
+                (operation_id, pipeline_name, op_kind, state, created_at, updated_at)
+            VALUES ('op-old', 'p1', 'stop', 'complete', :t, :t)
+        """, {"t": old})
+        # Pending lifecycle operation → kept.
+        self._insert(db, """
+            INSERT INTO lifecycle_operations
+                (operation_id, pipeline_name, op_kind, state, created_at, updated_at)
+            VALUES ('op-pending', 'p1', 'stop', 'pending', :t, :t)
+        """, {"t": old})
+
+        counts = ctrl._prune_ledger_audit()
+
+        assert counts == {"attempts": 1, "intents": 1, "operations": 1}
+        remaining_attempts = self._fetch(db, "SELECT attempt_id FROM execution_attempts")
+        assert {r["attempt_id"] for r in remaining_attempts} == {"a-fresh", "a-unk", "a-run"}
+        remaining_intents = self._fetch(db, "SELECT run_id FROM run_intents")
+        assert {r["run_id"] for r in remaining_intents} == {"i-open"}
+        remaining_ops = self._fetch(db, "SELECT operation_id FROM lifecycle_operations")
+        assert {r["operation_id"] for r in remaining_ops} == {"op-pending"}
+
+    def test_retention_reader_fails_loud_on_bad_env(self, monkeypatch):
+        """The strictest env-reader convention: a typo'd TRAM_AUDIT_RETENTION_DAYS
+        fails at construction instead of silently changing retention."""
+        monkeypatch.setenv("TRAM_AUDIT_RETENTION_DAYS", "thirty")
+        from tram.pipeline.controller import _audit_retention_days
+        with pytest.raises(ValueError):
+            _audit_retention_days()
 
 
 # ── V18-04: queue terminal cancellation (R16) ───────────────────────────────

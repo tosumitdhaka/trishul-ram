@@ -193,11 +193,17 @@ async def get_run(run_id: str, request: Request) -> dict:
 
     E.2 (§8.1): falls back to the queued-run view when run history misses, so a
     queued (or dispatching) run is retrievable before it ever lands in history.
+
+    V18-06 (§8): the history shape is extended additively with ``state``,
+    ``generation``, ``attempts[]`` (attempt_id, state, worker_id,
+    started/finished) from the ledger, plus ``outcome`` and the
+    per-sink/dlq/spool/failed counters where recorded. Old keys are unchanged;
+    the full API reshape is V18-09.
     """
     controller = request.app.state.controller
-    result = controller.get_run(run_id)
-    if result is not None:
-        return result.to_dict()
+    detail = controller.get_run_detail(run_id)
+    if detail is not None:
+        return detail
     db = getattr(request.app.state, "db", None)
     if db is not None:
         row = next(
@@ -205,7 +211,13 @@ async def get_run(run_id: str, request: Request) -> dict:
             None,
         )
         if row is not None:
-            return _queued_run_to_dict(row)
+            payload = _queued_run_to_dict(row)
+            context = controller.get_run_ledger_context(run_id)
+            payload["state"] = "queued"
+            payload["generation"] = context["generation"]
+            payload["outcome"] = context["outcome"]
+            payload["attempts"] = context["attempts"]
+            return payload
     raise HTTPException(status_code=404, detail=f"Run '{run_id}' not found")
 
 
