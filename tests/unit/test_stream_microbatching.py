@@ -1342,3 +1342,202 @@ class TestStreamDeliveryIntegrity:
 
         assert source.acks == []
         assert [ok for _, ok in source.finalize_calls] == [False, False]
+
+
+class _BrokerIdentitySource(_AckCaptureSource):
+    """Ack-capturing broker source that declares ``source_unit_id()``.
+
+    Mirrors the AMQP connector contract: ``{queue}/{message id}`` when a
+    producer message id is present, None otherwise (the delivery tag then
+    drives the broker-field fallback).
+    """
+
+    def source_unit_id(self, meta: dict) -> str | None:
+        message_id = meta.get("amqp_message_id")
+        if not message_id:
+            return None
+        return f"{meta.get('amqp_queue', 'q')}/{message_id}"
+
+
+def _kafka_meta(
+    offset: int, partition: int = 0, topic: str = "events", epoch: int = 1
+) -> dict:
+    return {
+        "kafka_topic": topic,
+        "kafka_partition": partition,
+        "kafka_offset": offset,
+        "kafka_epoch": epoch,
+    }
+
+
+class TestStreamBrokerUnitAcks:
+    """V18-02: broker-identity metas register stream units in both runtimes.
+
+    Metas with a usable broker identity (Kafka partition/offset/epoch; AMQP
+    delivery tag / source_unit_id) get the same delivery protocol as files:
+    decided units are committed and ``source.ack(meta, disposition)`` runs at
+    the unit boundary; undecided units never ack. Identity-driven only — no
+    connector-name checks in the executor.
+    """
+
+    def test_single_threaded_kafka_units_ack_delivered(self):
+        """Each Kafka record is its own unit: committed barrier + DELIVERED
+        ack at its boundary."""
+        config = _stream_config(
+            "stream_flush_records: 100\n"
+            "          stream_flush_interval_s: 60"
+        )
+        source = _AckCaptureSource([
+            (_chunk([{"seq": 0}]), _kafka_meta(0)),
+            (_chunk([{"seq": 1}]), _kafka_meta(1)),
+        ])
+        sink = _CommitSink()
+        _stats, _ = _run_finite_stream(config, chunks=[], source=source, sink=sink)
+
+        assert sink.commits == 2  # one commit barrier per decided unit
+        assert [d for _, d in source.acks] == [
+            AckDisposition.DELIVERED, AckDisposition.DELIVERED,
+        ]
+
+    def test_single_threaded_kafka_unit_filtered_acks_filtered(self):
+        """A condition-routed-out broker unit is a successful intentional
+        non-delivery: acked FILTERED, never DELIVERED."""
+        config = _stream_config(
+            "stream_flush_records: 100\n"
+            "          stream_flush_interval_s: 60"
+        )
+        source = _AckCaptureSource([(_chunk([{"seq": 0}]), _kafka_meta(0))])
+        sink = _CommitSink()
+        executor = PipelineExecutor()
+        stats = PipelineStats(run_id="r-kfilt", pipeline_name=config.name,
+                              schedule_type="stream")
+        with (
+            patch.object(executor, "_build_source", return_value=source),
+            patch.object(executor, "_build_sinks", return_value=[(sink, "seq > 100", [])]),
+        ):
+            executor.stream_run(config, threading.Event(), stats=stats)
+
+        assert [d for _, d in source.acks] == [AckDisposition.FILTERED]
+        assert stats.snapshot()["records_out"] == 0
+        assert stats.snapshot()["records_skipped"] == 1
+
+    def test_single_threaded_kafka_unit_loss_under_continue_acks_dropped(self):
+        """A broker unit that lost records under continue is a decided DROPPED
+        — acked explicitly, never clean DELIVERED."""
+        config = _stream_config(
+            "stream_flush_records: 100\n"
+            "          stream_flush_interval_s: 60"
+        )
+        source = _AckCaptureSource([(_chunk([{"seq": 0}]), _kafka_meta(0))])
+        sink = _RecordingSink(fail=True)
+        stats, _ = _run_finite_stream(config, chunks=[], source=source, sink=sink)
+
+        assert [d for _, d in source.acks] == [AckDisposition.DROPPED]
+        assert stats.snapshot()["records_out"] == 0
+        assert stats.snapshot()["records_skipped"] == 1
+
+    def test_single_threaded_kafka_unit_abort_never_acks(self):
+        """A sink failure under abort leaves the broker unit undecided —
+        never acked, never finalized as success."""
+        config = _stream_config(
+            "on_error: abort\n"
+            "          stream_flush_records: 100\n"
+            "          stream_flush_interval_s: 60"
+        )
+        source = _AckCaptureSource([(_chunk([{"seq": 0}]), _kafka_meta(0))])
+        sink = _RecordingSink(fail=True)
+        executor = PipelineExecutor()
+        with (
+            patch.object(executor, "_build_source", return_value=source),
+            patch.object(executor, "_build_sinks", return_value=[(sink, None, [])]),
+        ):
+            with pytest.raises(TramError, match="sink boom"):
+                executor.stream_run(config, threading.Event())
+
+        assert source.acks == []
+        assert source.finalize_calls == []
+
+    def test_single_threaded_amqp_source_unit_id_units_ack_delivered(self):
+        """source_unit_id()-driven identities (AMQP message-id contract)
+        register units the same way — decided units ack DELIVERED."""
+        config = _stream_config(
+            "stream_flush_records: 100\n"
+            "          stream_flush_interval_s: 60"
+        )
+        source = _BrokerIdentitySource([
+            (_chunk([{"seq": 0}]), {"amqp_queue": "q", "amqp_message_id": "m1",
+                                    "amqp_delivery_tag": 1}),
+            (_chunk([{"seq": 1}]), {"amqp_queue": "q", "amqp_message_id": "m2",
+                                    "amqp_delivery_tag": 2}),
+        ])
+        sink = _CommitSink()
+        _stats, _ = _run_finite_stream(config, chunks=[], source=source, sink=sink)
+
+        assert [d for _, d in source.acks] == [
+            AckDisposition.DELIVERED, AckDisposition.DELIVERED,
+        ]
+        assert sink.commits == 2
+
+    def test_single_threaded_amqp_delivery_tag_fallback_acks_delivered(self):
+        """Without a source_unit_id, the meta's delivery-tag family still
+        registers the unit (broker-field fallback) and the decided unit acks."""
+        config = _stream_config(
+            "stream_flush_records: 100\n"
+            "          stream_flush_interval_s: 60"
+        )
+        source = _AckCaptureSource([
+            (_chunk([{"seq": 0}]), {"amqp_queue": "q", "amqp_delivery_tag": 10}),
+            (_chunk([{"seq": 1}]), {"amqp_queue": "q", "amqp_delivery_tag": 11}),
+        ])
+        sink = _CommitSink()
+        _stats, _ = _run_finite_stream(config, chunks=[], source=source, sink=sink)
+
+        assert [d for _, d in source.acks] == [
+            AckDisposition.DELIVERED, AckDisposition.DELIVERED,
+        ]
+
+    def test_threaded_kafka_units_ack_delivered(self):
+        """The threaded micro-batch path runs the same protocol for broker
+        units: each decided unit committed + acked DELIVERED after its records
+        flush."""
+        config = _stream_config(
+            "stream_flush_records: 100\n"
+            "          stream_flush_interval_s: 60\n"
+            "          thread_workers: 2"
+        )
+        source = _AckCaptureSource([
+            (_chunk([{"seq": 0}]), _kafka_meta(0)),
+            (_chunk([{"seq": 1}]), _kafka_meta(1)),
+            (_chunk([{"seq": 2}]), _kafka_meta(2, partition=1)),
+        ])
+        sink = _CommitSink()
+        stats, _ = _run_finite_stream(config, chunks=[], source=source, sink=sink)
+
+        assert sink.commits == 3
+        assert [d for _, d in source.acks] == [
+            AckDisposition.DELIVERED, AckDisposition.DELIVERED,
+            AckDisposition.DELIVERED,
+        ]
+        assert stats.snapshot()["records_out"] == 3
+
+    def test_threaded_kafka_unit_abort_never_acks(self):
+        """Threaded path: an undecided broker unit (sink failure under abort)
+        is never acked."""
+        config = _stream_config(
+            "on_error: abort\n"
+            "          stream_flush_records: 100\n"
+            "          stream_flush_interval_s: 60\n"
+            "          thread_workers: 2"
+        )
+        source = _AckCaptureSource([(_chunk([{"seq": 0}]), _kafka_meta(0))])
+        sink = _RecordingSink(fail=True)
+        executor = PipelineExecutor()
+        with (
+            patch.object(executor, "_build_source", return_value=source),
+            patch.object(executor, "_build_sinks", return_value=[(sink, None, [])]),
+        ):
+            with pytest.raises(TramError, match="sink boom"):
+                executor.stream_run(config, threading.Event())
+
+        assert source.acks == []
+        assert source.finalize_calls == []

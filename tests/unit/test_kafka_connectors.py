@@ -495,6 +495,10 @@ class TestKafkaSourceEpochFrontier:
              "kafka_epoch": 3},
             AckDisposition.DELIVERED,
         )
+        # ack() only records the advance — the reader thread's drain commits.
+        mock_consumer.commit.assert_not_called()
+        assert src._pending_commits == {("events", 0): 5}
+        src._drain_pending_commits(mock_consumer)
 
         offsets = mock_consumer.commit.call_args[0][0]
         assert len(offsets) == 1
@@ -503,6 +507,7 @@ class TestKafkaSourceEpochFrontier:
         assert tp.partition == 0
         assert offsets[tp].offset == 6  # frontier + 1 = next resume offset
         assert src._completed == {("events", 0): 5}
+        assert src._pending_commits == {}
 
     def test_stale_epoch_ack_cannot_commit(self):
         """A completion read under an old assignment epoch never advances a
@@ -520,6 +525,7 @@ class TestKafkaSourceEpochFrontier:
 
         mock_consumer.commit.assert_not_called()
         assert src._completed == {}
+        assert src._pending_commits == {}
 
     def test_ack_without_active_consumer_skips(self):
         src = self._make_source()
@@ -535,7 +541,8 @@ class TestKafkaSourceEpochFrontier:
         assert src._completed == {}
 
     def test_ack_commits_only_completed_partitions(self):
-        """Each completion commits exactly its own partition's explicit offset."""
+        """Each completion commits exactly its own partition's explicit offset
+        — once the reader thread drains the pending set."""
         src = self._make_source()
         mock_consumer = MagicMock()
         src._consumer = mock_consumer
@@ -546,6 +553,7 @@ class TestKafkaSourceEpochFrontier:
              "kafka_epoch": 1},
             AckDisposition.FILTERED,
         )
+        src._drain_pending_commits(mock_consumer)
         offsets = mock_consumer.commit.call_args[0][0]
         assert len(offsets) == 1
         assert next(iter(offsets)).partition == 0
@@ -557,6 +565,7 @@ class TestKafkaSourceEpochFrontier:
              "kafka_epoch": 1},
             AckDisposition.DLQ,
         )
+        src._drain_pending_commits(mock_consumer)
         offsets2 = mock_consumer.commit.call_args[0][0]
         assert len(offsets2) == 1
         assert next(iter(offsets2)).partition == 2
@@ -594,7 +603,8 @@ class TestKafkaSourceEpochFrontier:
 
     def test_read_meta_carries_epoch_and_ack_commits(self):
         """End-to-end: the read loop tags metas with the assignment epoch and
-        acking that meta commits the partition frontier on the consumer."""
+        acking that meta records the frontier commit, which the reader thread
+        drains on the next poll iteration."""
         msg = TestKafkaSourceRead._make_msg(offset=42)
         mock_consumer = MagicMock()
         mock_consumer.assignment.return_value = []
@@ -613,9 +623,17 @@ class TestKafkaSourceEpochFrontier:
             _payload, meta = next(it)
             assert "kafka_epoch" in meta
             src.ack(meta, AckDisposition.DELIVERED)
+            mock_consumer.commit.assert_not_called()  # ack never commits directly
+            assert src._pending_commits == {("events", 0): 42}
+            # Resuming the generator past the batch polls again: the legacy
+            # batch commit fires when the generator resumes past batch 1, then
+            # the reader thread drains the pending ack commit before the next
+            # batch is yielded — both on the reader thread, never racing.
+            assert next(it)[0] == b"SENTINEL"
+            assert mock_consumer.commit.call_count == 2
             offsets = mock_consumer.commit.call_args[0][0]
             assert len(offsets) == 1
-            assert mock_consumer.commit.call_count == 1
+            assert src._pending_commits == {}
             it.close()
 
     def test_ack_noop_when_auto_commit_enabled(self):
@@ -654,11 +672,14 @@ class TestKafkaSourceGapFrontier:
 
     @staticmethod
     def _ack(src: KafkaSource, partition: int, offset: int, epoch: int = 1) -> None:
+        """Ack one record, then drain the pending commits like the reader
+        thread's poll loop does (V18-02: ack() itself never commits)."""
         src.ack(
             {"kafka_topic": "events", "kafka_partition": partition,
              "kafka_offset": offset, "kafka_epoch": epoch},
             AckDisposition.DELIVERED,
         )
+        src._drain_pending_commits(src._consumer)
 
     @staticmethod
     def _committed_offsets(consumer) -> dict[int, int]:
@@ -898,8 +919,10 @@ class TestKafkaSourceGapFrontier:
 
             # Out-of-order completion (3 before 1): the sweep bridges tombstone
             # 0 only — record 1 is still queued/in-flight, so the frontier stops
-            # at 0 and the commit (resume 1) never passes it.
+            # at 0 and the commit (resume 1) never passes it. The reader thread
+            # drains the recorded pending commit.
             src.ack(meta3, AckDisposition.DELIVERED)
+            src._drain_pending_commits(mock_consumer)
             assert self._committed_offsets(mock_consumer) == {0: 1}
             assert src._completed == {("events", 0): 0}
             assert src._completed_ooo == {("events", 0): {3}}
@@ -908,11 +931,191 @@ class TestKafkaSourceGapFrontier:
             # Closing the gap (1) sweeps record 1, tombstone 2, and the
             # already-completed 3 → frontier 3, commit resume 4.
             src.ack(meta1, AckDisposition.DELIVERED)
+            src._drain_pending_commits(mock_consumer)
             assert self._committed_offsets(mock_consumer) == {0: 4}
             assert src._completed == {("events", 0): 3}
             assert src._completed_ooo == {}
             assert src._tombstone_offsets == {}
             it.close()
+
+
+class TestKafkaCommitSerialization:
+    """V18-02: reader-thread-owned commit dispatch.
+
+    ``ack()`` records a frontier advance in a pending-commit set under the lock
+    and NEVER calls ``consumer.commit`` — kafka-python consumers are not
+    thread-safe for concurrent commits, and racing worker-thread commits could
+    land oldest-last (re-processing on restart). The poll loop (reader thread)
+    drains the pending set and issues at most one consolidated commit per
+    partition per drain, epoch-fenced (revoke/session reset clears pending).
+    """
+
+    @staticmethod
+    def _make_source(extra: dict | None = None) -> KafkaSource:
+        cfg = {"brokers": ["kafka:9092"], "topic": "events"}
+        if extra:
+            cfg.update(extra)
+        return KafkaSource(cfg)
+
+    @staticmethod
+    def _ack(src: KafkaSource, partition: int, offset: int, epoch: int = 1) -> None:
+        src.ack(
+            {"kafka_topic": "events", "kafka_partition": partition,
+             "kafka_offset": offset, "kafka_epoch": epoch},
+            AckDisposition.DELIVERED,
+        )
+
+    @staticmethod
+    def _committed_offsets(consumer) -> dict[int, int]:
+        offsets = consumer.commit.call_args[0][0]
+        return {tp.partition: om.offset for tp, om in offsets.items()}
+
+    def test_worker_thread_acks_never_commit_directly(self):
+        """Concurrent acks from worker threads only record completion under the
+        lock; the reader thread's drain issues exactly one consolidated commit
+        for the partition."""
+        src = self._make_source()
+        mock_consumer = MagicMock()
+        src._consumer = mock_consumer
+        src._assignment_epoch = 1
+        src._read_min = {("events", 0): 0}
+
+        errors: list[BaseException] = []
+
+        def _worker(offset: int) -> None:
+            try:
+                self._ack(src, 0, offset)
+            except Exception as exc:  # pragma: no cover - failure surface
+                errors.append(exc)
+
+        threads = [
+            threading.Thread(target=_worker, args=(i,)) for i in range(5)
+        ]
+        for t in threads:
+            t.start()
+        for t in threads:
+            t.join()
+
+        assert errors == []
+        # All five offsets completed contiguously → frontier 4 recorded, but
+        # no thread ever touched the consumer.
+        mock_consumer.commit.assert_not_called()
+        assert src._completed == {("events", 0): 4}
+        assert src._pending_commits == {("events", 0): 4}
+
+        # The reader thread drains: one consolidated commit, resume offset 5.
+        src._drain_pending_commits(mock_consumer)
+        assert mock_consumer.commit.call_count == 1
+        assert self._committed_offsets(mock_consumer) == {0: 5}
+        assert src._pending_commits == {}
+
+    def test_concurrent_ack_race_one_commit_per_advance(self):
+        """Concurrent acks with an in-flight gap: a drain issues one commit
+        only when the frontier actually advances; the gap never commits past
+        the queued/in-flight record."""
+        src = self._make_source()
+        mock_consumer = MagicMock()
+        src._consumer = mock_consumer
+        src._assignment_epoch = 1
+        src._read_min = {("events", 0): 0}
+
+        # Offset 2 completes while 0/1 are queued/in-flight: no advance.
+        self._ack(src, 0, 2)
+        assert src._completed == {}
+        assert src._pending_commits == {}
+        src._drain_pending_commits(mock_consumer)
+        mock_consumer.commit.assert_not_called()
+
+        # 0 and 1 complete concurrently → the frontier sweeps 0→1→2; the drain
+        # issues exactly one consolidated commit for the partition.
+        def _worker(offset: int) -> None:
+            self._ack(src, 0, offset)
+
+        threads = [
+            threading.Thread(target=_worker, args=(i,)) for i in (0, 1)
+        ]
+        for t in threads:
+            t.start()
+        for t in threads:
+            t.join()
+
+        assert src._completed == {("events", 0): 2}
+        assert src._pending_commits == {("events", 0): 2}
+        src._drain_pending_commits(mock_consumer)
+        assert mock_consumer.commit.call_count == 1
+        assert self._committed_offsets(mock_consumer) == {0: 3}
+
+    def test_revoke_clears_pending_commits(self):
+        """A revoked partition's pending commits are dropped with its frontier
+        — the new owner re-polls from the last committed offsets."""
+        from kafka import TopicPartition
+
+        src = self._make_source()
+        mock_consumer = MagicMock()
+        src._consumer = mock_consumer
+        src._assignment_epoch = 1
+        src._read_min = {("events", 0): 5}
+        self._ack(src, 0, 5)
+        assert src._pending_commits == {("events", 0): 5}
+
+        mock_consumer.assignment.return_value = [TopicPartition("events", 1)]
+        src._assigned = {TopicPartition("events", 0)}
+        src._sync_assignment(mock_consumer)
+
+        assert src._assignment_epoch == 2
+        assert src._pending_commits == {}  # revoked: never drained, never committed
+        src._drain_pending_commits(mock_consumer)
+        mock_consumer.commit.assert_not_called()
+
+    def test_session_reset_clears_pending_commits(self):
+        """A new consumer session drops every pending commit — in-flight
+        completions from the old session can never commit on the new consumer."""
+        src = self._make_source()
+        mock_consumer = MagicMock()
+        src._consumer = mock_consumer
+        src._assignment_epoch = 1
+        src._read_min = {("events", 0): 5}
+        self._ack(src, 0, 5)
+        assert src._pending_commits == {("events", 0): 5}
+
+        src._reset_session_state()
+
+        assert src._assignment_epoch == 2
+        assert src._pending_commits == {}
+        assert src._completed == {}
+        src._drain_pending_commits(mock_consumer)
+        mock_consumer.commit.assert_not_called()
+
+    def test_stale_epoch_ack_records_no_pending_commit(self):
+        """A stale-epoch completion never records a pending commit, so a drain
+        can never commit it for a new assignment."""
+        src = self._make_source()
+        mock_consumer = MagicMock()
+        src._consumer = mock_consumer
+        src._assignment_epoch = 4
+        src._read_min = {("events", 0): 0}
+
+        self._ack(src, 0, 5, epoch=3)  # stale
+
+        assert src._pending_commits == {}
+        src._drain_pending_commits(mock_consumer)
+        mock_consumer.commit.assert_not_called()
+
+    def test_drain_captures_pending_whole_and_clears(self):
+        """The drain captures the pending set atomically under the lock; a
+        second drain with no new advances commits nothing."""
+        src = self._make_source()
+        mock_consumer = MagicMock()
+        src._consumer = mock_consumer
+        src._assignment_epoch = 1
+        src._read_min = {("events", 0): 5}
+        self._ack(src, 0, 5)
+
+        src._drain_pending_commits(mock_consumer)
+        assert mock_consumer.commit.call_count == 1
+        src._drain_pending_commits(mock_consumer)
+        assert mock_consumer.commit.call_count == 1  # nothing pending
+        assert src._pending_commits == {}
 
 
 class TestKafkaSinkFastPath:

@@ -164,12 +164,111 @@ def _sink_filename_template(sink_cfg, sink_instance) -> str | None:
     return None
 
 
+# V18-02: registration-time stash key for broker-unit identities. The stream
+# runtimes resolve a broker unit's identity (``source_unit_id(meta)`` when the
+# connector declares one, else the meta's broker coordinate fields) exactly
+# once, at registration, and stash the resolved key into the meta so the shared
+# processing paths (``_process_chunk`` / ``_process_records`` /
+# ``_apply_global_transforms``) attribute delivery accounting to the same
+# registered unit without carrying the source instance through every call.
+_UNIT_KEY_META = "_tram_unit_key"
+
+
 def _source_unit_key(meta: dict) -> tuple[str, str] | None:
+    """Unit identity for delivery accounting / ack disposition.
+
+    A broker unit's key stashed at stream registration (V18-02) is
+    authoritative when present; otherwise the file identity
+    (``source_path`` / ``source_filename``) decides — unchanged. Metas with
+    neither identity register no unit and are never acked.
+    """
+    stashed = meta.get(_UNIT_KEY_META)
+    if stashed is not None:
+        return str(stashed[0]), str(stashed[1])
     source_path = str(meta.get("source_path", "") or "").strip()
     source_filename = str(meta.get("source_filename", "") or "").strip()
     if not source_path and not source_filename:
         return None
     return source_path, source_filename
+
+
+def _broker_meta_unit_key(meta: dict) -> tuple[str, str] | None:
+    """Generic broker-record identity from the meta's broker coordinate fields.
+
+    Identity-driven — never by connector name. A meta carries a usable broker
+    identity when it has either a record-coordinate family (``{ns}_topic`` +
+    ``{ns}_partition`` + ``{ns}_offset`` — the Kafka family: partition/offset/
+    epoch) or a delivery handle (``{ns}_delivery_tag`` — the AMQP family). The
+    namespace ``ns`` is the shared prefix of the coordinate keys; the identity
+    value joins the coordinates so the key is unique per broker record (the
+    epoch is included when present so a re-polled record under a new session
+    is its own unit).
+    """
+    for key in meta:
+        if not isinstance(key, str) or not key.endswith("_partition"):
+            continue
+        ns = key[: -len("_partition")]
+        if not ns:
+            continue
+        topic = meta.get(f"{ns}_topic")
+        partition = meta.get(key)
+        offset = meta.get(f"{ns}_offset")
+        if topic is None or partition is None or offset is None:
+            continue
+        identity = f"{topic}/{partition}/{offset}"
+        epoch = meta.get(f"{ns}_epoch")
+        if epoch is not None:
+            identity = f"{identity}@{epoch}"
+        return ns, identity
+    for key in meta:
+        if not isinstance(key, str) or not key.endswith("_delivery_tag"):
+            continue
+        ns = key[: -len("_delivery_tag")]
+        if not ns:
+            continue
+        tag = meta.get(key)
+        if tag is None:
+            continue
+        queue = meta.get(f"{ns}_queue")
+        identity = f"{queue}/{tag}" if queue is not None else str(tag)
+        return ns, identity
+    return None
+
+
+def _stream_source_unit_key(source, meta: dict) -> tuple[str, str] | None:
+    """Unit identity for stream unit registration (V18-02).
+
+    File identity is unchanged. A connector-declared ``source_unit_id(meta)``
+    is preferred for broker units when it yields a value (identity-driven,
+    never by connector name); otherwise the meta's broker coordinate fields
+    decide (Kafka: partition/offset/epoch; AMQP: delivery tag). The resolved
+    broker key is stashed into the meta so the shared processing paths
+    attribute delivery accounting to the same registered unit.
+    """
+    key = _source_unit_key(meta)
+    if key is not None:
+        return key
+    unit_id_fn = getattr(source, "source_unit_id", None)
+    if callable(unit_id_fn):
+        try:
+            unit_id = unit_id_fn(meta)
+        except Exception as exc:
+            logger.warning(
+                "Source unit identity lookup failed",
+                extra={"source_type": type(source).__name__, "error": str(exc)},
+            )
+            unit_id = None
+        # The interface contract is ``str | None``; a non-str (e.g. a mock
+        # default) is not a usable identity.
+        if isinstance(unit_id, str) and unit_id:
+            key = ("unit", unit_id)
+            meta[_UNIT_KEY_META] = key
+            return key
+    key = _broker_meta_unit_key(meta)
+    if key is not None:
+        meta[_UNIT_KEY_META] = key
+        return key
+    return None
 
 
 def _augment_chunk_meta(meta: dict, ctx: PipelineRunContext) -> dict:
@@ -2484,7 +2583,7 @@ class PipelineExecutor:
                         logger.info("Stream stop requested", extra={"pipeline": config.name})
                         stopped = True
                         break
-                    source_key = _source_unit_key(meta)
+                    source_key = _stream_source_unit_key(source, meta)
                     if source_key is not None:
                         if current_source_key is not None and source_key != current_source_key:
                             # Drain the micro-batch buffer at source-unit
@@ -2645,10 +2744,13 @@ class PipelineExecutor:
         thread's drain-before-finalize must not interleave sink writes with the
         interval timer thread. The final drain of whatever is left in the
         buffer happens in ``stream_run`` after the workers have joined.
-        Strict at-least-once for replayable sources (kafka poll-batch commits)
-        holds on the single-threaded path; with ``thread_workers > 1`` the
-        pre-existing poll-batch commit race applies (see the kafka source
-        docstring).
+        Broker-identity metas (Kafka partition/offset/epoch, AMQP delivery
+        tag/message id) register per-record units (V18-02): each decided unit
+        is committed and ``source.ack(meta, disposition)`` runs at its boundary
+        — never from the workers — so a kafka ``ack()`` only records completion
+        and the poll loop (reader thread) issues the consolidated per-partition
+        commit (the legacy poll-batch commit path is unchanged for legacy
+        pipelines).
         """
         # Bounded queue gives backpressure: producer blocks if workers are slow
         chunk_q: _queue.Queue = _queue.Queue(maxsize=config.thread_workers * 2)
@@ -2725,7 +2827,7 @@ class PipelineExecutor:
                     logger.info("Stream stop requested", extra={"pipeline": config.name})
                     stopped = True
                     break
-                source_key = _source_unit_key(meta)
+                source_key = _stream_source_unit_key(source, meta)
                 if source_key is not None:
                     if current_source_key is not None and source_key != current_source_key:
                         _drain_before_finalize()
