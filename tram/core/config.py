@@ -285,6 +285,42 @@ def worker_journal_headroom_mb() -> int:
     return _env_int("TRAM_WORKER_JOURNAL_HEADROOM_MB", 64)
 
 
+# V18-01 §4 (frozen): start-authorization token lifetimes for the
+# manager→worker /agent/run channel. Defaults frozen at 300 / 600 / 5;
+# the key-rotation overlap window is max TTL + skew (605 s at defaults).
+_AUTH_TOKEN_TTL_S_DEFAULT = 300
+_AUTH_MAX_TTL_S_DEFAULT = 600
+_AUTH_CLOCK_SKEW_S_DEFAULT = 5
+
+
+def auth_token_ttl_s() -> int:
+    """``TRAM_AUTH_TOKEN_TTL_S`` (V18-01 §4) — minted start-authorization TTL.
+
+    The manager stamps every start-authorization token with this lifetime.
+    Invalid values fail loud via ``_env_int`` (the strictest pattern in this
+    module).
+    """
+    return _env_int("TRAM_AUTH_TOKEN_TTL_S", _AUTH_TOKEN_TTL_S_DEFAULT)
+
+
+def auth_max_ttl_s() -> int:
+    """``TRAM_AUTH_MAX_TTL_S`` (V18-01 §4) — worker-side TTL acceptance cap.
+
+    The worker rejects any token whose TTL exceeds this, and keeps the
+    previous session secret valid for ``max_ttl + clock_skew`` after rotation.
+    """
+    return _env_int("TRAM_AUTH_MAX_TTL_S", _AUTH_MAX_TTL_S_DEFAULT)
+
+
+def auth_clock_skew_s() -> int:
+    """``TRAM_AUTH_CLOCK_SKEW_S`` (V18-01 §4) — manager/worker clock skew budget.
+
+    ``issued_at`` up to this many seconds in the future is accepted; beyond it
+    the token is rejected as future-issued.
+    """
+    return _env_int("TRAM_AUTH_CLOCK_SKEW_S", _AUTH_CLOCK_SKEW_S_DEFAULT)
+
+
 @dataclass(frozen=True)
 class AppConfig:
     """Application-wide configuration loaded from environment variables."""
