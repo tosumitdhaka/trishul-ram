@@ -2897,7 +2897,7 @@ class TestLifecycleOperationsWiring:
                 "WHERE pipeline_name = 'my-manual'",
             )
             assert len(rows) == 1
-            assert rows[0]["op_kind"] == "stop"
+            assert rows[0]["op_kind"] == "boot_adopt"
             assert rows[0]["state"] == "complete"
             assert "boot adoption" in rows[0]["detail"]
             assert rows[0]["attempt_id"] == "r-a-a1"

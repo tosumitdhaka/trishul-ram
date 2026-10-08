@@ -82,6 +82,46 @@ limitation note, and the Kafka/AMQP cells move from pending to confirmed per
 the completed V18-02 audit. No strict-validation change is required — strict
 requires tier-declared sinks, not a minimum tier.
 
+## Disposition D2 — handshake direction and secret minting
+
+**Disposition D2 (2026-10-08, release/v1.8.0): section 5 handshake row
+amended.** The frozen row specified worker→manager registration with the
+manager replying with the session secret. The implementation (both sides
+landed and integration-tested green) instead has the manager POST to the
+worker's `/agent/handshake`, and the worker mints and returns the secret. The
+amendment adopts the implemented shape: the worker controls its own admission
+keys (it is the party that must validate them), the manager holds no
+pre-shared secret, and rotation keeps the previous secret valid for max TTL +
+skew (605 s) on both sides. The manager registers the returned secret and
+mints authorizations with it; the worker validates against its stored
+current/previous pair. No security property is weakened: the endpoint is
+machine-authenticated on the existing internal API-key channel, and the
+session secret never travels outside that channel.
+
+## Disposition D3 — lifecycle_operations op_kind boot_adopt
+
+**Disposition D3 (2026-10-08, release/v1.8.0): section 3
+`lifecycle_operations` domain extended with `boot_adopt`.** The frozen comment
+domain (stop|restart|update|delete|drain|force_release) had no kind for
+boot-adoption resolutions, so the implementation initially recorded them as
+`stop` with a detail marker. The domain is a schema comment (no CHECK
+constraint) and the table is new in v1.8 — nothing is deployed to migrate —
+so the domain gains `boot_adopt`, the five boot-adoption recording sites use
+it, and real stop operations keep `stop`.
+
+## Disposition D4 — cross-epoch retired-token replay boundary (accepted)
+
+**Disposition D4 (2026-10-08, release/v1.8.0): known accepted boundary in
+section 4's watermark rules.** A token GC'd in an OLD epoch and replayed in a
+NEW epoch (after a trusted-time recovery) at a clock still inside the token's
+validity window is not covered by the new epoch's watermark. Surviving
+old-epoch rows are refused by the epoch check, and GC only deletes rows whose
+authorizations expired plus skew, so the window requires: trusted-time
+recovery + GC of the old row + replay inside the residual validity. Retaining
+and consulting old-epoch watermarks was considered and rejected: it would
+over-reject fresh tokens after a legitimate recovery. Accepted as documented;
+the worker server carries the boundary note at the validation seam.
+
 ## Verification boundary
 
 Documentation inspection and code citation verification only. No application

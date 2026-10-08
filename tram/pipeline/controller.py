@@ -476,7 +476,7 @@ class PipelineController:
             self._terminal_cancel_queued_run(run_id, "manager_lost_before_dispatch")
             self._record_completed_lifecycle_operation(
                 pipeline_name,
-                "stop",
+                "boot_adopt",
                 attempt_id=attempt_id,
                 detail="boot adoption: claimed attempt aborted "
                        "(manager_lost_before_dispatch)",
@@ -504,7 +504,7 @@ class PipelineController:
             )
             self._record_completed_lifecycle_operation(
                 pipeline_name,
-                "stop",
+                "boot_adopt",
                 attempt_id=attempt_id,
                 detail="boot adoption: attempt unresolved (unknown) — no "
                        "journal evidence, guard retained",
@@ -534,7 +534,7 @@ class PipelineController:
             self._terminal_cancel_queued_run(run_id, "boot_adoption_completed")
             self._record_completed_lifecycle_operation(
                 pipeline_name,
-                "stop",
+                "boot_adopt",
                 attempt_id=attempt_id,
                 detail="boot adoption: attempt resolved from journal "
                        "completion record",
@@ -562,7 +562,7 @@ class PipelineController:
             self._terminal_cancel_queued_run(run_id, f"boot_adoption_{kind}")
             self._record_completed_lifecycle_operation(
                 pipeline_name,
-                "stop",
+                "boot_adopt",
                 attempt_id=attempt_id,
                 detail=f"boot adoption: attempt terminal ({kind}) — revoked/aborted",
             )
