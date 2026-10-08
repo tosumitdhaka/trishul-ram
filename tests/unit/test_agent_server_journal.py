@@ -1389,6 +1389,111 @@ class TestRunCompleteOffload:
         finally:
             j.close()
 
+    def test_legacy_fatal_journal_direct_post_carries_disposition_and_spool(
+        self, tmp_path
+    ):
+        """V18-09: the fatal-journal legacy direct post carries the same
+        per-sink disposition/spool maps the outbox-delivered payload carries —
+        the manager's run-history decode records the per-sink data on the
+        fallback path too (item 1)."""
+        d = tmp_path / "subdir"
+        d.mkdir()
+        j = WorkerJournal(d)  # journal path is a directory → fatal unavailable
+        posts = []
+        mock_result = _mock_result(run_id="r1")
+        mock_result.disposition = {"sftp": {"delivered": 2}}
+        mock_result.spool = {"spooled": 1}
+        app, client = _make_client(journal=j, manager_url="http://manager")
+        try:
+            with patch("tram.agent.server._post_stats"), \
+                 patch("tram.agent.server._post_run_complete",
+                       side_effect=lambda *a, **k: posts.append((a, k))), \
+                 patch("tram.pipeline.executor.PipelineExecutor.batch_run",
+                       return_value=mock_result):
+                resp = _dispatch(client, run_id="r1")
+                assert resp.status_code == 202
+                deadline = time.time() + 5
+                while time.time() < deadline and not posts:
+                    time.sleep(0.02)
+            assert len(posts) == 1
+            args, kwargs = posts[0]
+            assert args[1] == "r1"
+            assert kwargs["disposition"] == {"sftp": {"delivered": 2}}
+            assert kwargs["spool"] == {"spooled": 1}
+        finally:
+            j.close()
+
+    def test_legacy_outbox_payload_carries_disposition_and_spool(
+        self, journal, auth_env
+    ):
+        """V18-09: a legacy run's journaled outbox payload carries the same
+        per-sink disposition/spool maps as the authorized payload — the
+        manager's legacy run-complete path decodes them identically (item 1)."""
+        mock_result = _mock_result(run_id="r1", records_in=2, records_out=2)
+        mock_result.disposition = {"sftp": {"delivered": 2}}
+        mock_result.spool = {"spooled": 1}
+        app, client = _make_client(journal=journal, manager_url="http://manager")
+        with patch("tram.agent.server._post_stats"), \
+             patch("tram.pipeline.executor.PipelineExecutor.batch_run",
+                   return_value=mock_result):
+            resp = _dispatch(client, run_id="r1")  # no authorization → legacy
+            assert resp.status_code == 202
+            rec = self._wait_completed(journal, "legacy:r1")
+            assert rec is not None and rec.kind == "completion"
+        payload = json.loads(rec.result_json)
+        # Legacy-shaped (no attempt identity) but with the per-sink maps.
+        assert "attempt_id" not in payload
+        assert payload["disposition"] == {"sftp": {"delivered": 2}}
+        assert payload["spool"] == {"spooled": 1}
+
+    def test_stream_completion_carries_disposition_and_spool(self, journal, auth_env):
+        """V18-09: stream-run completions surface the executor's run-scoped
+        per-sink disposition/spool maps on a graceful exit — the completion
+        payload records them exactly like the batch path (item 2)."""
+        from tram.core.context import RunResult, RunStatus
+
+        mock_stream_result = RunResult(
+            run_id="s1",
+            pipeline_name="test-pipe",
+            status=RunStatus.SUCCESS,
+            started_at=datetime.now(UTC),
+            finished_at=datetime.now(UTC),
+            records_in=3,
+            records_out=3,
+            records_skipped=0,
+            error=None,
+        )
+        mock_stream_result.disposition = {"local": {"delivered": 3}}
+        mock_stream_result.spool = {}
+        mock_stream_result.records_failed = 0
+        mock_stream_result.dlq_succeeded = 0
+        mock_stream_result.dlq_failed = 0
+
+        def _fake_stream_run(config, stop_event, stats=None, config_sha256="", *, deadline=None):
+            return mock_stream_result
+
+        app, client = _make_client(journal=journal, manager_url="http://manager")
+        token = _mint(app, attempt_id="a1", run_id="s1")
+        with patch(
+            "tram.pipeline.executor.PipelineExecutor.stream_run",
+            side_effect=_fake_stream_run,
+        ):
+            resp = _dispatch(
+                client, run_id="s1", schedule_type="stream",
+                authorization=token, attempt_id="a1", generation=1, slot_id="s1",
+            )
+            assert resp.status_code == 202
+            rec = self._wait_completed(journal, "a1")
+            assert rec is not None and rec.kind == "completion"
+        payload = json.loads(rec.result_json)
+        assert payload["status"] == "success"
+        assert payload["disposition"] == {"local": {"delivered": 3}}
+        # "Where present": an empty spool map stays absent (None), matching the
+        # batch path's payload normalization.
+        assert payload["spool"] is None
+        assert payload["dlq_succeeded"] == 0
+        assert payload["dlq_failed"] == 0
+
 
 # ── Attempt-aware WorkerState tracking ──────────────────────────────────────
 

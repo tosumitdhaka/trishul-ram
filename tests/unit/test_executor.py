@@ -1785,6 +1785,49 @@ class TestPipelineExecutorStreamRun:
         mock_sink.close.assert_called_once()
         mock_source.close.assert_called_once()
 
+    def test_stream_run_surfaces_disposition_and_spool(self):
+        """V18-09: a graceful stream run returns a RunResult carrying the
+        run-scoped per-sink disposition/spool maps (and the delivery counters)
+        — the completion payload records them exactly like the batch path."""
+        config = _make_pipeline()
+        sink_cfg = config.sinks[0]
+        executor = PipelineExecutor()
+        mock_source = MagicMock()
+        mock_source.read.return_value = iter([
+            (json.dumps([{"id": "1"}, {"id": "2"}]).encode(),
+             {"source_filename": "f.json"}),
+        ])
+        mock_sink = MagicMock()
+        mock_ser_in = MagicMock()
+        mock_ser_in.parse.return_value = [{"id": "1"}, {"id": "2"}]
+        mock_ser_out = MagicMock()
+        mock_ser_out.serialize.return_value = b"[]"
+
+        with (
+            patch.object(executor, "_build_source", return_value=mock_source),
+            patch.object(
+                executor, "_build_sinks",
+                return_value=[(mock_sink, None, [], sink_cfg, None)],
+            ),
+            patch.object(executor, "_build_serializer_in", return_value=mock_ser_in),
+            patch.object(executor, "_build_serializer_out", return_value=mock_ser_out),
+            patch.object(executor, "_build_transforms", return_value=[]),
+            patch.object(executor, "_build_dlq_sink", return_value=None),
+        ):
+            result = executor.stream_run(config, threading.Event())
+
+        # A graceful stream exit now returns a SUCCESS result (V18-09) that
+        # surfaces the per-sink disposition exactly like the batch path.
+        assert result is not None
+        assert result.status == RunStatus.SUCCESS
+        assert result.records_in == 2
+        assert result.records_out == 2
+        assert result.disposition == {"sftp": {"delivered": 2}}
+        assert result.spool == {}
+        assert result.records_failed == 0
+        assert result.dlq_succeeded == 0
+        assert result.dlq_failed == 0
+
 
 class TestTransformChain:
     """Test that transforms are applied in order during execution."""

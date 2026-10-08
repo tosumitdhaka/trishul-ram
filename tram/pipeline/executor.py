@@ -3089,8 +3089,15 @@ class PipelineExecutor:
         — drain the micro-batch buffer, close hooks, persist state — runs
         exactly like a stop request); the run then returns an ``aborted``
         ``RunResult`` carrying the drain reason so the completion recorded by
-        the caller is honest. A normal stop (stop_event only) returns ``None``
-        and keeps the caller's existing behavior.
+        the caller is honest.
+
+        V18-09: the run ALWAYS returns a ``RunResult`` — a natural end or a
+        plain stop_event stop report ``success`` (the caller's previous
+        behavior for those exits), the drain deadline reports ``aborted``.
+        Either way the result carries the run-scoped delivery accounting
+        (``records_failed`` / ``dlq_succeeded`` / ``dlq_failed`` plus the
+        per-sink ``disposition`` and ``spool`` maps) so the caller's completion
+        payload records the same per-sink/spool data the batch path carries.
         """
         logger.info("Stream run started", extra={"pipeline": config.name})
 
@@ -3411,16 +3418,28 @@ class PipelineExecutor:
 
         # V18-07: a reader interrupted by the single monotonic drain deadline
         # reports ABORTED with the drain reason (the graceful-stop finally above
-        # already drained the buffer and closed hooks). A plain stop_event stop
-        # keeps the caller's existing behavior (None → the caller records what
-        # it recorded before).
+        # already drained the buffer and closed hooks). A natural end and a
+        # plain stop_event stop finish the same graceful-stop path and report
+        # SUCCESS — both exits keep the caller's prior behavior, now with a
+        # result to carry the run-scoped delivery accounting.
         if deadline is not None and time.monotonic() >= deadline:
-            return RunResult.from_context(
+            result = RunResult.from_context(
                 ctx,
                 RunStatus.ABORTED,
                 error="drained: worker drain deadline exceeded",
             )
-        return None
+        else:
+            result = RunResult.from_context(ctx, RunStatus.SUCCESS)
+        # V18-09: surface the stream's run-scoped delivery accounting on the
+        # completion exactly like the batch path — the per-sink disposition and
+        # spool maps plus the delivery counters the worker's completion payload
+        # records ("where present": empty maps stay absent from the payload).
+        result.records_failed = delivery.records_failed
+        result.dlq_succeeded = delivery.dlq_succeeded
+        result.dlq_failed = delivery.dlq_failed
+        result.disposition = delivery.sink_disposition_map()
+        result.spool = delivery.spool_counters()
+        return result
 
     def _stream_run_threaded(
         self,

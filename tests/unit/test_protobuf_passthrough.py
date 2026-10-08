@@ -598,6 +598,27 @@ class TestPassthroughUnitAccounting:
         assert mock_source.ack.call_args[0][1] == AckDisposition.DELIVERED
         assert mock_source.finalize.call_args.kwargs["success"] is True
 
+    def test_passthrough_disposition_records_delivered_per_sink(
+        self, schema_a, tmp_path
+    ):
+        """V18-09: a passthrough run records the per-sink delivery disposition
+        — the completion's disposition map names the sink by its connector
+        type exactly like the dictionary path."""
+        executor, config, ser_in, ser_out, sinks, Sample = _build_executor_pieces(
+            schema_a, tmp_path
+        )
+        raw = _make_stream(Sample, count=3)
+        mock_source = MagicMock()
+        mock_source.read.return_value = iter([
+            (raw, {"source_path": "/in/in.bin", "source_filename": "in.bin"}),
+        ])
+
+        result = self._run_batch(executor, config, mock_source, sinks, ser_in, ser_out)
+
+        assert result.status == RunStatus.SUCCESS
+        assert result.disposition == {"local": {"delivered": 3}}
+        assert result.spool == {}
+
     def test_passthrough_sink_failure_continue_acks_dropped_partial(self, schema_a, tmp_path):
         """A failing sink under continue loses the passthrough chunk's frames:
         PARTIAL outcome, loss counted, and the unit acked with the explicit
@@ -622,6 +643,9 @@ class TestPassthroughUnitAccounting:
         assert result.status == RunStatus.PARTIAL
         assert result.records_failed == 3
         assert result.records_out == 0
+        # V18-09: the per-sink failed disposition is recorded like the
+        # dictionary path.
+        assert result.disposition == {"local": {"failed": 3}}
         mock_source.ack.assert_called_once()
         assert mock_source.ack.call_args[0][1] == AckDisposition.DROPPED
 

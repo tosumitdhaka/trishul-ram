@@ -402,6 +402,8 @@ def _run_complete_payload(
     errors: list[str] | None,
     started_at: str | None,
     finished_at: str | None,
+    disposition: dict | None = None,
+    spool: dict | None = None,
 ) -> dict:
     """The legacy-shaped run-complete payload (no attempt identity).
 
@@ -411,6 +413,12 @@ def _run_complete_payload(
     the contract a v1.7 manager expects from a legacy-shaped run. V18-08:
     this is the payload the outbox drain delivers for legacy completions and
     the fallback direct post sends when the journal is unavailable.
+
+    V18-09: the per-sink ``disposition``/``spool`` maps ride in additively
+    (same keys ``_completion_result_json`` carries) so the manager's
+    run-history decode records the same per-sink/spool data on the legacy
+    paths — the outbox-delivered legacy payload and the fatal-journal direct
+    post alike.
     """
     return {
         "run_id": run_id,
@@ -426,6 +434,8 @@ def _run_complete_payload(
         "errors": errors or [],
         "started_at": started_at,
         "finished_at": finished_at,
+        "disposition": disposition,
+        "spool": spool,
     }
 
 
@@ -446,6 +456,8 @@ def _post_run_complete(
     finished_at: str | None = None,
     api_key: str = "",
     client: httpx.Client | None = None,
+    disposition: dict | None = None,
+    spool: dict | None = None,
 ) -> None:
     """POST run-complete to the manager with bounded retry (review D2).
 
@@ -463,6 +475,10 @@ def _post_run_complete(
     V18-08: ``client`` is the worker's pooled RPC client; when omitted the
     function falls back to a per-attempt client (unchanged legacy behavior for
     direct callers).
+
+    V18-09: ``disposition``/``spool`` are forwarded into the legacy payload so
+    the fatal-journal direct post carries the same per-sink/spool maps the
+    outbox-delivered payload carries.
     """
     if not callback_url:
         return
@@ -480,6 +496,8 @@ def _post_run_complete(
         errors=errors,
         started_at=started_at,
         finished_at=finished_at,
+        disposition=disposition,
+        spool=spool,
     )
     headers = {"X-API-Key": api_key} if api_key else None
     last_exc: Exception | None = None
@@ -598,6 +616,8 @@ def _commit_completion(
     finished_at: str | None = None,
     api_key: str = "",
     client: httpx.Client | None = None,
+    disposition: dict | None = None,
+    spool: dict | None = None,
 ) -> None:
     """V18-08: the ONE thread-side completion commit — journal-first, outbox-only.
 
@@ -619,6 +639,11 @@ def _commit_completion(
 
     V18-08: ``client`` is the worker's pooled RPC client, forwarded to the
     legacy fallback post when the journal cannot spool.
+
+    V18-09: ``disposition``/``spool`` (the executor's per-sink delivery maps)
+    are forwarded into the legacy payload build and the legacy direct post, so
+    the manager's run-history decode records the same per-sink/spool data on
+    the legacy paths as the authorized attempt-identity path.
     """
     if attempt_id:
         journal.record_completion(attempt_id, result_json or "")
@@ -639,6 +664,8 @@ def _commit_completion(
             errors=errors,
             started_at=started_at,
             finished_at=finished_at,
+            disposition=disposition,
+            spool=spool,
         )
     )
     if _journal_legacy_completion(journal, run_id, legacy_json):
@@ -648,7 +675,7 @@ def _commit_completion(
         callback_url, run_id, pipeline_name, worker_id, status,
         records_in, records_out, bytes_in, bytes_out, error, records_skipped,
         errors, started_at=started_at, finished_at=finished_at, api_key=api_key,
-        client=client,
+        client=client, disposition=disposition, spool=spool,
     )
 
 
@@ -1727,6 +1754,32 @@ def create_worker_app(
                         completion_status = "aborted"
                         completion_error = "drained: worker drain requested"
                         completion_errors.append(completion_error)
+                    # V18-09: the stream's run-scoped delivery accounting rides
+                    # the completion — the executor surfaces the per-sink
+                    # disposition/spool maps and the delivery counters on the
+                    # RunResult it returns for every graceful exit, so the
+                    # manager's run-history decode records the same per-sink
+                    # data the batch path carries ("where present" — a None
+                    # stream_result keeps the legacy all-zero defaults).
+                    stream_records_failed = (
+                        stream_result.records_failed if stream_result is not None else 0
+                    )
+                    stream_dlq_succeeded = (
+                        stream_result.dlq_succeeded if stream_result is not None else 0
+                    )
+                    stream_dlq_failed = (
+                        stream_result.dlq_failed if stream_result is not None else 0
+                    )
+                    stream_disposition = (
+                        stream_result.disposition or None
+                        if stream_result is not None
+                        else None
+                    )
+                    stream_spool = (
+                        stream_result.spool or None
+                        if stream_result is not None
+                        else None
+                    )
                     result_json = None
                     if attempt_id:
                         # V18-01 §4: journal-first completion — the row commits
@@ -1750,6 +1803,11 @@ def create_worker_app(
                             legacy=active_run.legacy,
                             generation=active_run.generation,
                             dlq_count=int(stats_snapshot.get("dlq_count") or 0),
+                            records_failed=stream_records_failed,
+                            dlq_succeeded=stream_dlq_succeeded,
+                            dlq_failed=stream_dlq_failed,
+                            disposition=stream_disposition,
+                            spool=stream_spool,
                         )
                     _commit_completion(
                         journal,
@@ -1771,6 +1829,8 @@ def create_worker_app(
                         finished_at=datetime.now(UTC).isoformat(),
                         api_key=state.api_key,
                         client=state.rpc_client,
+                        disposition=stream_disposition,
+                        spool=stream_spool,
                     )
                 except Exception as exc:
                     logger.error(
@@ -1929,6 +1989,12 @@ def create_worker_app(
                         finished_at=result.finished_at.isoformat(),
                         api_key=state.api_key,
                         client=state.rpc_client,
+                        # V18-09: the legacy fallback payload (fatal journal →
+                        # direct post, and the legacy outbox payload) carries
+                        # the same per-sink disposition/spool maps the
+                        # attempt-identity result_json carries.
+                        disposition=result.disposition or None,
+                        spool=result.spool or None,
                     )
                 except Exception as exc:
                     logger.error(

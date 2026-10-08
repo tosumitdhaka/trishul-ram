@@ -287,14 +287,23 @@ def _write_sinks(
     per-sink transforms, no per-sink serializer override, no DLQ sink — so the
     general ``_write_one_sink`` machinery from ``_process_records`` collapses
     to the cases that can actually occur here. *delivery* (the batch/stream
-    ``_RunDeliveryAccounting``) gets the same per-sink loss recording as the
-    dictionary path so passthrough units are decided and ack-gated identically.
+    ``_RunDeliveryAccounting``) gets the same per-sink loss recording AND the
+    per-sink delivery disposition (``record_sink``: delivered/failed per sink
+    key) as the dictionary path so passthrough units are decided and ack-gated
+    identically and the completion payload records the same per-sink map.
     """
     key = _source_unit_key(meta)
 
     def _write_one_sink(sink_tuple, sink_index) -> int:
         sink_instance, _condition, _sink_transforms, sink_cfg, _per_sink_ser = _unpack_sink(
             sink_tuple
+        )
+        # V18-09: per-sink disposition key for the completion payload — the
+        # connector type string (the stable per-sink identity), or the class
+        # name for legacy/test sink tuples without a config. Mirrors the
+        # executor's dictionary-path ``_write_one_sink``.
+        disposition_key = (
+            sink_cfg.type if sink_cfg is not None else type(sink_instance).__name__
         )
 
         if rate_limit_rps is not None:
@@ -355,6 +364,8 @@ def _write_sinks(
                 if cb_threshold > 0:
                     with executor._cb_lock:
                         executor._cb_state[sink_key] = (0, 0.0)
+                if delivery is not None:
+                    delivery.record_sink(disposition_key, delivered=len(frames))
                 return len(frames)
             except Exception as exc:
                 last_exc = exc
@@ -397,6 +408,9 @@ def _write_sinks(
 
         if delivery is not None:
             delivery.record_loss(key, records_failed=len(frames))
+            # V18-09: per-sink failed disposition, mirroring the executor's
+            # dictionary-path sink-failure accounting.
+            delivery.record_sink(disposition_key, failed=len(frames))
         if on_error == "abort":
             raise TramError(f"Sink write error: {last_exc}") from last_exc
         if on_error == "retry":
