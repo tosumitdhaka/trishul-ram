@@ -833,6 +833,13 @@ class WorkerPool:
         Returns ``None`` on success, or the failure detail string when the
         HTTP dispatch attempt raised or returned a non-2xx status.
 
+        The dispatch response body is deliberately NEVER read: TRAM dispatch
+        is async (the worker 202s with ``accepted`` and nothing more), and no
+        completion information is parsed from it — completions arrive
+        exclusively via the worker's journal/outbox → ``/api/internal/
+        run-complete`` (identity-checked and idempotent). ``DispatchOutcome``
+        therefore carries only ``worker_url``/``outcome``/``error``.
+
         V18-04 §2: when ``attempt_id`` is not supplied, the ledger attempt
         registered for ``run_id`` (via :meth:`register_attempt`, the queued
         drain path) is resolved so the request still carries the attempt

@@ -13,6 +13,12 @@ V18-05 part 2 (this lane): the /agent/handshake registration exchange
 replay endpoint (all four journal states + 404), the outbox drain (deliver +
 ack, backoff, restart redelivery, duplicate no-op), and attempt-aware
 WorkerState tracking (a superseded attempt can never clobber a newer one).
+
+V18-08 (run-complete offload, this lane): the dispatch thread never posts
+run-complete — the journal + outbox background drain is the ONLY completion
+channel; legacy runs ride the same outbox machinery under a synthetic
+``legacy:{run_id}`` key; the minimal legacy direct post survives ONLY for a
+fatally unavailable journal; the shutdown final pass flushes pending rows.
 """
 
 from __future__ import annotations
@@ -1101,19 +1107,22 @@ class TestOutboxDrain:
         assert len(manager2.requests) == 1
 
     def test_duplicate_delivery_is_noop_manager_side(self, journal, auth_env):
-        """Both the direct post and the outbox may deliver the same attempt
-        — the identity-checked manager commits once and 200s the duplicate
-        (and the worker acks on the 200 either way)."""
+        """A duplicate completion delivery is a no-op — the identity-checked
+        manager commits once and 200s the duplicate (and the worker acks on
+        the 200 either way). V18-08: the duplicate now comes from outbox
+        redelivery (a pre-V18-08 direct post can never happen alongside a
+        journal row), but the idempotency contract is unchanged."""
         _seed_completion_outbox(journal)
         manager = FakeManager()
         payload = json.loads(_completion_payload())
         with _patch_manager_client(manager):
-            # The direct post arrives first (the retained fast path).
+            # A stray duplicate delivery arrives first (e.g. an outbox row
+            # redelivered after an ack was lost)...
             with httpx.Client(transport=httpx.MockTransport(manager)) as direct:
                 direct.post(
                     "http://manager/api/internal/run-complete", json=payload
                 )
-            # The outbox drain delivers the duplicate.
+            # The outbox drain delivers the completion itself.
             _drain_outbox_once(journal, "http://manager", api_key="k")
         # Two deliveries, ONE manager-side commit; the duplicate was a no-op.
         assert len(manager.requests) == 2
@@ -1173,6 +1182,210 @@ class TestOutboxDrain:
                     time.sleep(0.05)
             assert _is_acked(j, "a1")
             assert manager.requests[0]["attempt_id"] == "a1"
+        finally:
+            j.close()
+
+
+# ── V18-08: run-complete offload ────────────────────────────────────────────
+
+
+class TestRunCompleteOffload:
+    """V18-08: the dispatch/run thread never posts run-complete — the journal
+    + outbox drain is the ONLY completion channel. Authorized runs journal an
+    attempt-identity completion; legacy runs journal a legacy-shaped payload
+    under a synthetic ``legacy:{run_id}`` key so they ride the same durable
+    machinery. The minimal legacy direct post survives ONLY when the journal
+    is fatally unavailable (nothing can be spooled then)."""
+
+    def _wait_completed(self, journal, attempt_id, timeout=10.0):
+        deadline = time.time() + timeout
+        while time.time() < deadline:
+            rec = journal.get_attempt(attempt_id)
+            if rec is not None and rec.kind == "completion":
+                return rec
+            time.sleep(0.02)
+        return journal.get_attempt(attempt_id)
+
+    def _wait_outbox_row(self, journal, attempt_id, timeout=10.0):
+        """Wait for the outbox row — ``record_completion`` and
+        ``enqueue_outbox`` are two journal transactions, so the completion row
+        can be visible a hair before the outbox row lands. A single-shot
+        ``_drain_outbox_once`` must never race that window (the real
+        background drain loops, so production is unaffected)."""
+        deadline = time.time() + timeout
+        while time.time() < deadline:
+            if any(r.attempt_id == attempt_id for r in journal.fetch_due_outbox()):
+                return True
+            time.sleep(0.02)
+        return False
+
+    def test_dispatch_thread_never_posts_run_complete(self, journal, auth_env):
+        """Authorized run lifecycle: the thread journals + enqueues and the
+        outbox drain is the ONLY poster — ``_post_run_complete`` is never
+        called, the drain delivers exactly one run-complete, and the ack
+        lands."""
+        app, client = _make_client(journal=journal, manager_url="http://manager")
+        token = _mint(app, attempt_id="a1", run_id="r1")
+        manager = FakeManager()
+        posts = []
+
+        def _fail_if_called(*args, **kwargs):
+            posts.append(args)
+            raise AssertionError("dispatch thread must not post run-complete")
+
+        with patch("tram.agent.server._post_run_complete",
+                   side_effect=_fail_if_called), \
+             patch("tram.agent.server._post_stats"), \
+             _patch_manager_client(manager), \
+             patch("tram.pipeline.executor.PipelineExecutor.batch_run",
+                   return_value=_mock_result(run_id="r1", records_in=3, records_out=3)):
+            resp = _dispatch(
+                client, run_id="r1", authorization=token,
+                attempt_id="a1", generation=1, slot_id="s1",
+            )
+            assert resp.status_code == 202
+            rec = self._wait_completed(journal, "a1")
+            assert rec is not None and rec.kind == "completion"
+            assert self._wait_outbox_row(journal, "a1")
+            _drain_outbox_once(journal, "http://manager", api_key="k")
+
+        assert posts == []  # the dispatch thread never posted
+        assert len(manager.requests) == 1
+        assert manager.requests[0]["attempt_id"] == "a1"
+        assert manager.requests[0]["run_id"] == "r1"
+        assert "a1" in manager.commits
+        assert _is_acked(journal, "a1")
+
+    def test_legacy_completion_delivered_via_outbox(self, journal, auth_env):
+        """A legacy-shaped run's completion rides the SAME outbox machinery
+        under a synthetic ``legacy:{run_id}`` key — the drain delivers the
+        legacy payload (no attempt identity) and the manager's legacy path
+        acks it; the thread never posts."""
+        app, client = _make_client(journal=journal, manager_url="http://manager")
+        manager = FakeManager()
+        posts = []
+
+        def _fail_if_called(*args, **kwargs):
+            posts.append(args)
+            raise AssertionError("dispatch thread must not post run-complete")
+
+        with patch("tram.agent.server._post_run_complete",
+                   side_effect=_fail_if_called), \
+             patch("tram.agent.server._post_stats"), \
+             _patch_manager_client(manager), \
+             patch("tram.pipeline.executor.PipelineExecutor.batch_run",
+                   return_value=_mock_result(run_id="r1", records_in=2, records_out=2)):
+            resp = _dispatch(client, run_id="r1")  # no authorization → legacy
+            assert resp.status_code == 202
+            assert resp.json()["legacy"] is True
+            rec = self._wait_completed(journal, "legacy:r1")
+            assert rec is not None and rec.kind == "completion"
+            assert rec.run_id == "r1"
+            assert self._wait_outbox_row(journal, "legacy:r1")
+            _drain_outbox_once(journal, "http://manager", api_key="k")
+
+        assert posts == []
+        assert len(manager.requests) == 1
+        payload = manager.requests[0]
+        # Legacy-shaped: no attempt identity → the manager's run_id-keyed path.
+        assert "attempt_id" not in payload
+        assert payload["run_id"] == "r1"
+        assert payload["status"] == "success"
+        assert _is_acked(journal, "legacy:r1")
+        assert journal.fetch_due_outbox() == []
+
+    def test_thread_recorded_completion_survives_restart_and_drains(
+        self, tmp_path, auth_env
+    ):
+        """Crash-between-record-and-post: the thread commits the completion +
+        outbox row BEFORE any delivery; a crash before the drain (journal
+        closed) redelivers on the restarted worker's drain — at-least-once,
+        manager-side idempotent."""
+        clock = FakeClock()
+        path = tmp_path / "journal.db"
+        j1 = WorkerJournal(path, clock=clock)
+        try:
+            app, client = _make_client(journal=j1, manager_url="http://manager")
+            token = _mint(app, attempt_id="a1", run_id="r1")
+            with patch("tram.agent.server._post_stats"), \
+                 patch("tram.pipeline.executor.PipelineExecutor.batch_run",
+                       return_value=_mock_result(run_id="r1")):
+                resp = _dispatch(
+                    client, run_id="r1", authorization=token,
+                    attempt_id="a1", generation=1, slot_id="s1",
+                )
+                assert resp.status_code == 202
+                rec = self._wait_completed(j1, "a1")
+                assert rec is not None and rec.kind == "completion"
+                assert self._wait_outbox_row(j1, "a1")
+                # Crash before any drain pass: the row is due and unacked.
+                assert _is_acked(j1, "a1") is False
+                assert len(j1.fetch_due_outbox()) == 1
+        finally:
+            j1.close()
+        # "Restart": same journal file → the drain redelivers + acks.
+        j2 = WorkerJournal(path, clock=clock)
+        try:
+            manager = FakeManager()
+            with _patch_manager_client(manager):
+                _drain_outbox_once(j2, "http://manager", api_key="k")
+            assert _is_acked(j2, "a1")
+            assert manager.requests[0]["attempt_id"] == "a1"
+        finally:
+            j2.close()
+
+    def test_shutdown_final_pass_flushes_pending_completions(
+        self, tmp_path, auth_env
+    ):
+        """W3-A: the lifespan's shutdown final outbox pass is the last chance
+        — pending completions are flushed before the journal closes. With the
+        background loop stubbed out, the pending row is delivered by the
+        final pass alone."""
+        j = WorkerJournal(tmp_path / "journal.db", clock=FakeClock())
+        try:
+            _seed_completion_outbox(j)
+            manager = FakeManager()
+            app = create_worker_app(
+                worker_id="w0", manager_url="http://manager", journal=j
+            )
+            with _patch_manager_client(manager), \
+                 patch("tram.agent.server._outbox_loop",
+                       side_effect=lambda *a, **k: None), \
+                 TestClient(app, raise_server_exceptions=True):
+                # Background loop disabled — the row stays pending all life.
+                assert not _is_acked(j, "a1")
+            # TestClient exit ran the shutdown final pass → delivered + acked.
+            assert _is_acked(j, "a1")
+            assert len(manager.requests) == 1
+            assert manager.requests[0]["attempt_id"] == "a1"
+        finally:
+            j.close()
+
+    def test_legacy_fatal_journal_falls_back_to_direct_post(self, tmp_path):
+        """Documented legacy corner: when the journal cannot record at all, the
+        minimal legacy direct post is the last resort — the outcome is still
+        delivered (the pre-V18-08 path), nothing is silently lost."""
+        d = tmp_path / "subdir"
+        d.mkdir()
+        j = WorkerJournal(d)  # journal path is a directory → fatal unavailable
+        posts = []
+        app, client = _make_client(journal=j, manager_url="http://manager")
+        try:
+            with patch("tram.agent.server._post_stats"), \
+                 patch("tram.agent.server._post_run_complete",
+                       side_effect=lambda *a, **k: posts.append(a)), \
+                 patch("tram.pipeline.executor.PipelineExecutor.batch_run",
+                       return_value=_mock_result(run_id="r1")):
+                resp = _dispatch(client, run_id="r1")
+                assert resp.status_code == 202
+                deadline = time.time() + 5
+                while time.time() < deadline and not posts:
+                    time.sleep(0.02)
+            assert len(posts) == 1
+            # Positional order: callback_url, run_id, pipeline_name, worker_id,
+            # status, ...
+            assert posts[0][1] == "r1"
+            assert posts[0][4] == "success"
         finally:
             j.close()
 

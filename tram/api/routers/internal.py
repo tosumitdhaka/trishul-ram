@@ -127,7 +127,11 @@ async def run_complete(payload: RunCompletePayload, request: Request) -> dict:
     through the identity-checked path — the controller commits the ledger
     (attempt → terminal fenced, intent resolved, guard released by identity)
     and 200 is returned only after that commit (the outbox's durable ack).
-    Legacy requests (no attempt_id) keep today's path unchanged.
+    Legacy requests (no attempt_id) keep today's path unchanged. An
+    empty-string attempt_id is treated as legacy too — the worker's own
+    convention (``ActiveRun.attempt_id == ""`` means a legacy dispatch), so a
+    legacy-shaped outbox payload can never route into the identity-checked
+    ledger path.
     """
     controller = request.app.state.controller
 
@@ -146,7 +150,7 @@ async def run_complete(payload: RunCompletePayload, request: Request) -> dict:
         pipeline=payload.pipeline_name, status=payload.status
     ).inc()
 
-    if payload.attempt_id is not None:
+    if payload.attempt_id:
         return controller.on_attempt_run_complete(
             attempt_id=payload.attempt_id,
             generation=payload.generation,

@@ -519,6 +519,41 @@ class TestDispatch:
         assert outcome.outcome == DISPATCH_ACCEPTED
         assert outcome.error is None
 
+    def test_dispatch_with_result_never_parses_completion_from_response(self):
+        """V18-08 audit: TRAM dispatch is async 202 — the worker's dispatch
+        response body is never read, so completion information can never ride
+        the dispatch response into manager state. Even a worker that echoes a
+        completion ``result`` body (the already-admitted replay shape) leaves
+        ``DispatchOutcome`` with only worker_url/outcome/error."""
+        pool = _pool("http://w0:8766")
+        mock_client = MagicMock()
+        mock_client.__enter__ = lambda s: mock_client
+        mock_client.__exit__ = MagicMock(return_value=False)
+
+        def _post(url, **kwargs):
+            resp = MagicMock()
+            resp.raise_for_status = MagicMock()
+            # A hostile/buggy worker 202s with a completion-shaped body.
+            resp.json.return_value = {
+                "accepted": True,
+                "run_id": "r10",
+                "attempt_id": "r10-a1",
+                "result": {"status": "success", "records_in": 99},
+            }
+            return resp
+
+        mock_client.post.side_effect = _post
+        with patch("httpx.Client", return_value=mock_client):
+            outcome = pool.dispatch_with_result("r10", "p", "yaml", "batch")
+
+        assert outcome.worker_url == "http://w0:8766"
+        assert outcome.outcome == DISPATCH_ACCEPTED
+        assert outcome.error is None
+        # No completion information is surfaced anywhere in the outcome.
+        assert not hasattr(outcome, "result")
+        assert not hasattr(outcome, "status")
+        assert not hasattr(outcome, "attempt_id")
+
     def test_dispatch_with_result_labels_no_capacity(self):
         pool = _pool("http://w0:8766")
         pool._health["http://w0:8766"]["ok"] = False

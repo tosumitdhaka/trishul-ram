@@ -179,6 +179,25 @@ class TestRunCompleteEndpoint:
         ctrl.on_worker_run_complete.assert_called_once()
         ctrl.on_attempt_run_complete.assert_not_called()
 
+    def test_empty_string_attempt_id_keeps_legacy_path(self):
+        """V18-08: an empty-string attempt_id is legacy — the worker's own
+        convention (ActiveRun.attempt_id == "" means a legacy dispatch), so a
+        legacy-shaped outbox payload can never route into the identity-checked
+        ledger path (which would resolve a bogus '' attempt)."""
+        app, ctrl, _ = _make_app()
+        client = TestClient(app)
+
+        client.post("/api/internal/run-complete", json={
+            "run_id": "r-legacy-1",
+            "pipeline_name": "p",
+            "worker_id": "w0",
+            "status": "success",
+            "attempt_id": "",
+        })
+
+        ctrl.on_worker_run_complete.assert_called_once()
+        ctrl.on_attempt_run_complete.assert_not_called()
+
     def test_attempt_payload_propagates_ignored_ack(self):
         """A mismatched/unknown attempt is acked with an 'ignored' marker (the
         worker stops retrying) without any ledger commit."""

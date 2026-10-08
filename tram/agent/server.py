@@ -6,7 +6,11 @@ Worker responsibilities:
   GET  /agent/status  — return active jobs {running: [...], streams: [...]}
   GET  /agent/health  — liveness/readiness {ok: true, worker_id: ...}
 
-On completion the worker POSTs to the manager's run-complete callback URL.
+On completion the worker journals the result FIRST (V18-01 §4) and enqueues
+the run-complete payload to the durable outbox; the background drain loop —
+never the dispatch thread — POSTs it to the manager's run-complete callback
+URL and retries until the manager's identity-checked completion returns 200
+(V18-08: the outbox is the ONLY run-complete channel).
 """
 
 from __future__ import annotations
@@ -49,9 +53,10 @@ logger = logging.getLogger(__name__)
 # Review D2 (GH #55): the run-complete callback must not be a single
 # fire-and-forget POST — a transient manager outage would otherwise lose the
 # completion record and the reconciler would later synthesize a phantom
-# FAILED run for a run that succeeded. Bounded retry with short backoff (the
-# callback runs on the run thread that is already exiting); exhausted retries
-# still swallow the error and let the reconciler adoption path take over.
+# FAILED run for a run that succeeded. Since V18-08 the durable retry lives in
+# the outbox drain (retry-until-ack with exponential backoff); ``_post_run_complete``
+# below is retained ONLY as the minimal legacy-bridge fallback for a legacy
+# completion whose journal is fatally unavailable (nothing can be spooled then).
 _RUN_COMPLETE_RETRIES = 3
 _RUN_COMPLETE_BACKOFF_BASE_S = 0.5
 
@@ -224,8 +229,10 @@ class ActiveRun:
     # run-complete payload errors so the manager's run_history row records them.
     degradation_notes: list[str] = field(default_factory=list)
     # V18-01 §5: attempt identity + legacy-admit marker. Empty ``attempt_id``
-    # means a legacy dispatch (no start authorization) — journal recording is
-    # skipped and no fencing is claimed; ``legacy`` marks it in status payloads.
+    # means a legacy dispatch (no start authorization) — no fencing is
+    # claimed, and since V18-08 its completion is journaled under a synthetic
+    # ``legacy:{run_id}`` identity so it rides the same durable outbox channel;
+    # ``legacy`` marks it in status payloads.
     attempt_id: str = ""
     generation: int | None = None
     slot_id: str = ""
@@ -349,6 +356,48 @@ class WorkerState:
 # ── Manager callback ───────────────────────────────────────────────────────
 
 
+def _run_complete_payload(
+    *,
+    run_id: str,
+    pipeline_name: str,
+    worker_id: str,
+    status: str,
+    records_in: int,
+    records_out: int,
+    records_skipped: int,
+    bytes_in: int,
+    bytes_out: int,
+    error: str | None,
+    errors: list[str] | None,
+    started_at: str | None,
+    finished_at: str | None,
+) -> dict:
+    """The legacy-shaped run-complete payload (no attempt identity).
+
+    Deliberately carries NO ``attempt_id``/``generation`` keys: the manager's
+    ``/api/internal/run-complete`` routes a payload without attempt identity
+    to the legacy run_id-keyed path (idempotent on run_id), which is exactly
+    the contract a v1.7 manager expects from a legacy-shaped run. V18-08:
+    this is the payload the outbox drain delivers for legacy completions and
+    the fallback direct post sends when the journal is unavailable.
+    """
+    return {
+        "run_id": run_id,
+        "pipeline_name": pipeline_name,
+        "worker_id": worker_id,
+        "status": status,
+        "records_in": records_in,
+        "records_out": records_out,
+        "records_skipped": records_skipped,
+        "bytes_in": bytes_in,
+        "bytes_out": bytes_out,
+        "error": error,
+        "errors": errors or [],
+        "started_at": started_at,
+        "finished_at": finished_at,
+    }
+
+
 def _post_run_complete(
     callback_url: str,
     run_id: str,
@@ -368,29 +417,34 @@ def _post_run_complete(
 ) -> None:
     """POST run-complete to the manager with bounded retry (review D2).
 
-    A transient manager outage must not lose the completion record: up to
-    ``_RUN_COMPLETE_RETRIES`` attempts with exponential backoff. Exhausted
-    retries still log and swallow — never raise — so the reconciler's
-    lost/adopted-run path remains the degraded fallback. The manager's
-    duplicate-callback guard (existing-run check) makes retries idempotent.
+    V18-08: the dispatch thread no longer posts run-complete — this function
+    survives ONLY as the minimal legacy-bridge fallback: a legacy completion
+    (no attempt identity) whose journal is fatally unavailable cannot be
+    spooled to the outbox, so the pre-V18-08 direct post remains the last
+    resort for that corner. A transient manager outage must not lose the
+    completion record: up to ``_RUN_COMPLETE_RETRIES`` attempts with
+    exponential backoff. Exhausted retries still log and swallow — never
+    raise — so the reconciler's lost/adopted-run path remains the degraded
+    fallback. The manager's duplicate-callback guard (existing-run check)
+    makes retries idempotent.
     """
     if not callback_url:
         return
-    payload = {
-        "run_id": run_id,
-        "pipeline_name": pipeline_name,
-        "worker_id": worker_id,
-        "status": status,
-        "records_in": records_in,
-        "records_out": records_out,
-        "records_skipped": records_skipped,
-        "bytes_in": bytes_in,
-        "bytes_out": bytes_out,
-        "error": error,
-        "errors": errors or [],
-        "started_at": started_at,
-        "finished_at": finished_at,
-    }
+    payload = _run_complete_payload(
+        run_id=run_id,
+        pipeline_name=pipeline_name,
+        worker_id=worker_id,
+        status=status,
+        records_in=records_in,
+        records_out=records_out,
+        records_skipped=records_skipped,
+        bytes_in=bytes_in,
+        bytes_out=bytes_out,
+        error=error,
+        errors=errors,
+        started_at=started_at,
+        finished_at=finished_at,
+    )
     headers = {"X-API-Key": api_key} if api_key else None
     last_exc: Exception | None = None
     for attempt in range(_RUN_COMPLETE_RETRIES):
@@ -443,6 +497,114 @@ def _post_run_complete(
             "attempts": _RUN_COMPLETE_RETRIES,
             "error": str(last_exc),
         },
+    )
+
+
+def _legacy_outbox_key(run_id: str) -> str:
+    """Synthetic outbox/completion identity for a legacy-shaped run.
+
+    Legacy dispatches carry no ``attempt_id`` (v1.7 manager → v1.8 worker
+    under TRAM_WORKER_LEGACY_ADMIT), so the completion row and the outbox row
+    are keyed on the run_id the manager's legacy run-complete path resolves
+    on. The manager's legacy path is idempotent on run_id (first delivery
+    wins), so the shared key preserving the same first-wins semantics when
+    ``mark_acked`` deletes every outbox row for a run_id is safe.
+    """
+    return f"legacy:{run_id}"
+
+
+def _journal_legacy_completion(
+    journal: WorkerJournal, run_id: str, result_json: str
+) -> bool:
+    """Journal a legacy-shaped completion into the durable outbox machinery.
+
+    The completion row + outbox row commit keyed on ``legacy:{run_id}`` so the
+    background drain (and the shutdown final pass) deliver and retry exactly
+    like an authorized completion. Returns ``False`` when the journal cannot
+    record (fatally unavailable) — the caller then keeps the minimal legacy
+    direct post as the fallback (a dead journal cannot spool anything).
+    """
+    key = _legacy_outbox_key(run_id)
+    try:
+        journal.record_completion(key, result_json, run_id=run_id)
+        journal.enqueue_outbox(key, "run-complete", result_json)
+    except JournalUnavailableError:
+        logger.warning(
+            "legacy completion cannot be journaled (journal unavailable) — "
+            "falling back to the direct run-complete post",
+            extra={"run_id": run_id},
+        )
+        return False
+    return True
+
+
+def _commit_completion(
+    journal: WorkerJournal,
+    *,
+    attempt_id: str,
+    run_id: str,
+    result_json: str | None,
+    callback_url: str = "",
+    pipeline_name: str = "",
+    worker_id: str = "",
+    status: str = "",
+    records_in: int = 0,
+    records_out: int = 0,
+    records_skipped: int = 0,
+    bytes_in: int = 0,
+    bytes_out: int = 0,
+    error: str | None = None,
+    errors: list[str] | None = None,
+    started_at: str | None = None,
+    finished_at: str | None = None,
+    api_key: str = "",
+) -> None:
+    """V18-08: the ONE thread-side completion commit — journal-first, outbox-only.
+
+    The run/dispatch thread NEVER posts run-complete directly; the outbox
+    background drain (and the shutdown final pass) are the ONLY posters.
+    Ordering guarantee preserved: ``record_completion`` commits BEFORE the
+    caller's ``state.remove`` (the run leaves WorkerState only in the
+    ``finally``), so a crash between the journal commit and the drain's
+    delivery redelivers via the outbox on restart (at-least-once; the
+    manager-side identity check makes duplicates idempotent no-ops).
+
+    Authorized attempts (``attempt_id`` set) commit the attempt-identity
+    completion payload as today. Legacy runs commit the legacy-shaped payload
+    (no attempt identity) under the synthetic ``legacy:{run_id}`` key; only
+    when the journal is fatally unavailable does the minimal legacy direct
+    post (:func:`_post_run_complete`) fire — that corner cannot be journaled
+    at all, and the pre-V18-08 path is kept so the legacy outcome is not
+    silently lost.
+    """
+    if attempt_id:
+        journal.record_completion(attempt_id, result_json or "")
+        journal.enqueue_outbox(attempt_id, "run-complete", result_json or "")
+        return
+    legacy_json = json.dumps(
+        _run_complete_payload(
+            run_id=run_id,
+            pipeline_name=pipeline_name,
+            worker_id=worker_id,
+            status=status,
+            records_in=records_in,
+            records_out=records_out,
+            records_skipped=records_skipped,
+            bytes_in=bytes_in,
+            bytes_out=bytes_out,
+            error=error,
+            errors=errors,
+            started_at=started_at,
+            finished_at=finished_at,
+        )
+    )
+    if _journal_legacy_completion(journal, run_id, legacy_json):
+        return
+    # Journal unavailable — the minimal legacy direct post (unchanged path).
+    _post_run_complete(
+        callback_url, run_id, pipeline_name, worker_id, status,
+        records_in, records_out, bytes_in, bytes_out, error, records_skipped,
+        errors, started_at=started_at, finished_at=finished_at, api_key=api_key,
     )
 
 
@@ -601,10 +763,10 @@ def _completion_result_json(
     """Build the journal ``completions.result_json`` payload (V18-01 §4).
 
     Journal-first ordering: the completion row commits BEFORE the run leaves
-    ``WorkerState`` and before the run-complete callback, so a crash between
-    the two never loses the outcome. The follow-up outbox lane reads this
-    payload when the direct callback cannot be delivered — it carries the
-    full attempt identity (``attempt_id`` + ``generation``) the manager's
+    ``WorkerState``, so a crash between the commit and the outbox delivery
+    never loses the outcome (V18-08: the outbox drain is the only delivery
+    channel — the run thread never posts). The payload carries the full
+    attempt identity (``attempt_id`` + ``generation``) the manager's
     identity-checked run-complete path resolves on.
 
     V18-06: the run-scoped delivery counters (``dlq_count``,
@@ -660,8 +822,9 @@ def _drain_outbox_once(
 ) -> int:
     """One outbox drain pass: deliver every due row, ack on manager 200.
 
-    Each outbox row carries the attempt-identity completion payload (the
-    same ``result_json`` the journal committed first). On a manager 200 the
+    Each outbox row carries the completion payload (the same ``result_json``
+    the journal committed first — attempt-identity for authorized runs,
+    legacy-shaped for ``legacy:{run_id}`` keys). On a manager 200 the
     completion is durably acked (``mark_acked`` — the manager commits its
     ledger before 200, so 200 IS the durable ack); any other outcome records
     exponential backoff via ``record_outbox_failure`` and the row stays due
@@ -669,8 +832,10 @@ def _drain_outbox_once(
     run-complete returns 200 even for an unknown/mismatched attempt
     (``ignored`` diagnostics), so a non-200 genuinely means "not delivered".
 
-    Duplicate delivery vs. the direct post is safe: the manager's run-complete
-    is identity-checked and idempotent, so both may deliver.
+    V18-08: this loop (plus the shutdown final pass) is the ONLY run-complete
+    poster — the dispatch thread never posts directly, so a crash between the
+    journal commit and delivery redelivers here on restart (at-least-once;
+    the manager's identity check makes duplicates idempotent no-ops).
 
     Returns the number of rows processed.
     """
@@ -865,11 +1030,12 @@ def create_worker_app(
         )
         stats_thread.start()
 
-        # V18-01 §4/§5: outbox drain — the durable backup for the direct
-        # run-complete post. Rows survive a crash (journal-first ordering);
-        # after a restart this loop redelivers unacked completions. Both the
-        # drain and the direct post may deliver — the manager's run-complete
-        # is identity-checked and idempotent, so duplicates are no-ops.
+        # V18-01 §4/§5 / V18-08: outbox drain — the ONLY run-complete channel.
+        # Rows survive a crash (journal-first ordering); after a restart this
+        # loop redelivers unacked completions. Only the drain and the shutdown
+        # final pass below ever POST run-complete — the run threads journal
+        # and enqueue, never post. The manager's run-complete is
+        # identity-checked and idempotent, so redelivery is a no-op.
         state.outbox_stop.clear()
         outbox_thread = threading.Thread(
             target=_outbox_loop,
@@ -1107,8 +1273,9 @@ def create_worker_app(
         — each as a distinguishable response carrying a ``kind``
         discriminator. 404 means the attempt has NO journal row at all: that
         is neither revocation nor quiescence — the manager must tell the
-        three apart (plan B). ``None`` rows occur for unknown attempt_ids and
-        for legacy dispatches (never journaled).
+        three apart (plan B). ``None`` rows occur for unknown attempt_ids;
+        legacy dispatches surface here under their synthetic
+        ``legacy:{run_id}`` identity once their completion is journaled.
         """
         rec = journal.get_attempt(attempt_id)
         if rec is None:
@@ -1444,14 +1611,11 @@ def create_worker_app(
                         completion_status = "aborted"
                         completion_error = "drained: worker drain requested"
                         completion_errors.append(completion_error)
+                    result_json = None
                     if attempt_id:
                         # V18-01 §4: journal-first completion — the row commits
-                        # BEFORE the run leaves WorkerState and before the
-                        # run-complete callback. The same payload is enqueued
-                        # to the outbox: the drain loop is the durable backup
-                        # for the direct post (both may deliver — the
-                        # manager's run-complete is identity-checked and
-                        # idempotent).
+                        # BEFORE the run leaves WorkerState (the outbox drain,
+                        # not this thread, delivers — V18-08).
                         result_json = _completion_result_json(
                             run_id=req.run_id,
                             pipeline_name=req.pipeline_name,
@@ -1471,18 +1635,22 @@ def create_worker_app(
                             generation=active_run.generation,
                             dlq_count=int(stats_snapshot.get("dlq_count") or 0),
                         )
-                        journal.record_completion(attempt_id, result_json)
-                        journal.enqueue_outbox(attempt_id, "run-complete", result_json)
-                    _post_run_complete(
-                        callback_url, req.run_id, req.pipeline_name, state.worker_id,
-                        completion_status,
-                        int(stats_snapshot["records_in"]),
-                        int(stats_snapshot["records_out"]),
-                        int(stats_snapshot["bytes_in"]),
-                        int(stats_snapshot["bytes_out"]),
-                        completion_error,
-                        int(stats_snapshot["records_skipped"]),
-                        completion_errors,
+                    _commit_completion(
+                        journal,
+                        attempt_id=attempt_id,
+                        run_id=req.run_id,
+                        result_json=result_json,
+                        callback_url=callback_url,
+                        pipeline_name=req.pipeline_name,
+                        worker_id=state.worker_id,
+                        status=completion_status,
+                        records_in=int(stats_snapshot["records_in"]),
+                        records_out=int(stats_snapshot["records_out"]),
+                        records_skipped=int(stats_snapshot["records_skipped"]),
+                        bytes_in=int(stats_snapshot["bytes_in"]),
+                        bytes_out=int(stats_snapshot["bytes_out"]),
+                        error=completion_error,
+                        errors=completion_errors,
                         started_at=active_run.started_at,
                         finished_at=datetime.now(UTC).isoformat(),
                         api_key=state.api_key,
@@ -1499,6 +1667,7 @@ def create_worker_app(
                     # C2: files finalized before the failure still get their
                     # buffered marks flushed.
                     _flush_file_tracker(file_tracker)
+                    result_json = None
                     if attempt_id:
                         result_json = _completion_result_json(
                             run_id=req.run_id,
@@ -1513,11 +1682,16 @@ def create_worker_app(
                             legacy=active_run.legacy,
                             generation=active_run.generation,
                         )
-                        journal.record_completion(attempt_id, result_json)
-                        journal.enqueue_outbox(attempt_id, "run-complete", result_json)
-                    _post_run_complete(
-                        callback_url, req.run_id, req.pipeline_name, state.worker_id,
-                        "error", 0, 0, 0, 0, str(exc),
+                    _commit_completion(
+                        journal,
+                        attempt_id=attempt_id,
+                        run_id=req.run_id,
+                        result_json=result_json,
+                        callback_url=callback_url,
+                        pipeline_name=req.pipeline_name,
+                        worker_id=state.worker_id,
+                        status="error",
+                        error=str(exc),
                         started_at=active_run.started_at,
                         finished_at=datetime.now(UTC).isoformat(),
                         api_key=state.api_key,
@@ -1561,14 +1735,11 @@ def create_worker_app(
                     # C2: emit buffered processed-file marks (batched) before
                     # the run-complete callback so the next run sees them.
                     _flush_file_tracker(file_tracker)
+                    result_json = None
                     if attempt_id:
                         # V18-01 §4: journal-first completion — the row commits
-                        # BEFORE the run leaves WorkerState and before the
-                        # run-complete callback. The same payload is enqueued
-                        # to the outbox: the drain loop is the durable backup
-                        # for the direct post (both may deliver — the
-                        # manager's run-complete is identity-checked and
-                        # idempotent).
+                        # BEFORE the run leaves WorkerState (the outbox drain,
+                        # not this thread, delivers — V18-08).
                         result_json = _completion_result_json(
                             run_id=req.run_id,
                             pipeline_name=req.pipeline_name,
@@ -1597,8 +1768,6 @@ def create_worker_app(
                             disposition=result.disposition or None,
                             spool=result.spool or None,
                         )
-                        journal.record_completion(attempt_id, result_json)
-                        journal.enqueue_outbox(attempt_id, "run-complete", result_json)
                     if active_run.stats is not None:
                         payload = {
                             "worker_id": state.worker_id,
@@ -1615,21 +1784,28 @@ def create_worker_app(
                             "snmp_stack": state.snmp_stack,
                             **active_run.stats.snapshot_and_reset_window(),
                         }
-                        # If stats_url is empty, run-complete still executes below and
-                        # manager-side on_worker_run_complete removes the store entry.
+                        # If stats_url is empty, the completion still commits
+                        # below and manager-side on_worker_run_complete removes
+                        # the store entry.
                         _post_stats(active_run.stats_url, payload, api_key=state.api_key)
-                    _post_run_complete(
-                        callback_url, req.run_id, req.pipeline_name, state.worker_id,
-                        result.status.value,
-                        result.records_in,
-                        result.records_out,
-                        result.bytes_in,
-                        result.bytes_out,
-                        result.error,
-                        result.records_skipped,
-                        list(result.errors or []) + active_run.degradation_notes,
-                        result.started_at.isoformat(),
-                        result.finished_at.isoformat(),
+                    _commit_completion(
+                        journal,
+                        attempt_id=attempt_id,
+                        run_id=req.run_id,
+                        result_json=result_json,
+                        callback_url=callback_url,
+                        pipeline_name=req.pipeline_name,
+                        worker_id=state.worker_id,
+                        status=result.status.value,
+                        records_in=result.records_in,
+                        records_out=result.records_out,
+                        records_skipped=result.records_skipped,
+                        bytes_in=result.bytes_in,
+                        bytes_out=result.bytes_out,
+                        error=result.error,
+                        errors=list(result.errors or []) + active_run.degradation_notes,
+                        started_at=result.started_at.isoformat(),
+                        finished_at=result.finished_at.isoformat(),
                         api_key=state.api_key,
                     )
                 except Exception as exc:
@@ -1644,6 +1820,7 @@ def create_worker_app(
                     # C2: files finalized before the failure still get their
                     # buffered marks flushed.
                     _flush_file_tracker(file_tracker)
+                    result_json = None
                     if attempt_id:
                         result_json = _completion_result_json(
                             run_id=req.run_id,
@@ -1658,11 +1835,16 @@ def create_worker_app(
                             legacy=active_run.legacy,
                             generation=active_run.generation,
                         )
-                        journal.record_completion(attempt_id, result_json)
-                        journal.enqueue_outbox(attempt_id, "run-complete", result_json)
-                    _post_run_complete(
-                        callback_url, req.run_id, req.pipeline_name, state.worker_id,
-                        "error", 0, 0, 0, 0, str(exc),
+                    _commit_completion(
+                        journal,
+                        attempt_id=attempt_id,
+                        run_id=req.run_id,
+                        result_json=result_json,
+                        callback_url=callback_url,
+                        pipeline_name=req.pipeline_name,
+                        worker_id=state.worker_id,
+                        status="error",
+                        error=str(exc),
                         started_at=active_run.started_at,
                         finished_at=datetime.now(UTC).isoformat(),
                         api_key=state.api_key,
