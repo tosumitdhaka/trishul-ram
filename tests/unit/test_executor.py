@@ -2284,6 +2284,89 @@ class TestDeliveryCheckpointGate:
         mock_source.ack.assert_not_called()
         client.checkpoint.assert_not_called()
 
+    def test_hydrated_base_revision_flows_to_cas_and_advances(self):
+        """A run hydrating state at revision 3 sends 3 as the FIRST
+        checkpoint's state_base_revision (never 0 — an advanced row must not
+        be rejected by the fence); a committed response (revision 4) advances
+        the base for the next unit's checkpoint."""
+        class FakeStateful:
+            """Minimal StatefulTransform so hydration consults the store."""
+
+            state_key = "t:0"
+
+            def __init__(self):
+                self.state: dict = {}
+
+            def get_state(self) -> dict:
+                return dict(self.state)
+
+            def set_state(self, blob: dict) -> None:
+                self.state = dict(blob)
+
+            def close(self, flush: bool) -> None:
+                return None
+
+            def apply(self, records):
+                return records
+
+        config = _make_pipeline()
+        store = types.SimpleNamespace(
+            get=lambda name: types.SimpleNamespace(
+                state={"t:0": {"count": 9}}, config_sha256="",
+                revision=3, generation=2,
+            ),
+        )
+        client = MagicMock()
+        client.checkpoint.side_effect = lambda **kw: self._committed(
+            checkpoint_id="cp-1", revision=4
+        )
+        mock_source = MagicMock()
+        mock_source.read.return_value = iter([
+            (json.dumps([{"id": "1"}]).encode(), {"source_filename": "f1.json"}),
+            (json.dumps([{"id": "2"}]).encode(), {"source_filename": "f2.json"}),
+        ])
+        mock_source.source_unit_id.side_effect = (
+            lambda meta: f"unit:{meta['source_filename']}"
+        )
+        mock_sink = MagicMock()
+        mock_sink.commit.return_value = SinkCommitReceipt(
+            sink_key="sftp", tier=DeliveryTier.FSYNCED_LOCAL, confirmed=True, notes="",
+        )
+        mock_ser_in = MagicMock()
+        mock_ser_in.parse.return_value = [{"id": "1"}]
+        mock_ser_out = MagicMock()
+        mock_ser_out.serialize.return_value = b"[]"
+
+        result = self._run(
+            config, mock_source, mock_sink, mock_ser_in, mock_ser_out,
+            checkpoint_client=client, state_store=store,
+            transforms=[FakeStateful()],
+        )
+
+        assert result.status == RunStatus.SUCCESS
+        assert client.checkpoint.call_count == 2
+        bases = [c.kwargs["state_base_revision"] for c in client.checkpoint.call_args_list]
+        # Hydrated base (3) for the first unit; the committed response's
+        # revision (4) for the second — never a raw 0.
+        assert bases == [3, 4]
+
+    def test_stale_writer_base_zero_rejected_is_manager_side(self):
+        """A writer that does NOT hydrate the advanced revision keeps sending
+        base 0 and is rejected by the manager's fence — pinned here as the
+        executor's honest handoff (the 409 surfaces as CheckpointError and a
+        strict run leaves the unit pending)."""
+        config = _make_pipeline("delivery:\n            contract: strict")
+        client = MagicMock()
+        client.checkpoint.side_effect = CheckpointError(
+            "checkpoint rejected (stale state revision): 409"
+        )
+        result, mock_source = self._one_chunk_run(
+            config, MagicMock(), checkpoint_client=client,
+        )
+        assert result.status == RunStatus.PARTIAL
+        mock_source.ack.assert_not_called()
+        assert client.checkpoint.call_args.kwargs["state_base_revision"] == 0
+
     # ── (f) client plumbing ────────────────────────────────────────────────
 
     def test_checkpoint_client_posts_attempt_identity_and_raises_on_error(self):
@@ -2337,3 +2420,135 @@ class TestDeliveryCheckpointGate:
                 frontier={"offset": 5}, frontier_seq=5, sink_receipts=[],
                 state={},
             )
+
+
+class TestRunResultDisposition:
+    """V18-06 — the run-result payload's per-sink disposition and spool maps.
+
+    The worker's completion JSON carries these so the manager's run-history
+    decode (``_decode_disposition``) records them; "where present" — a sink
+    that neither delivered, failed, nor DLQ'd anything is not named, and
+    empty maps stay empty.
+    """
+
+    def test_delivered_and_failed_per_sink(self):
+        """A run with one working sink and one failing sink produces a
+        per-sink disposition map keyed by connector type."""
+        config = _make_pipeline("on_error: continue\n")
+        working = MagicMock()
+        failing = MagicMock()
+        failing.write.side_effect = OSError("down")
+        working_sink_cfg = types.SimpleNamespace(type="sftp")
+        failing_sink_cfg = types.SimpleNamespace(type="local")
+
+        mock_source = MagicMock()
+        mock_source.read.return_value = iter([
+            (json.dumps([{"id": "1"}, {"id": "2"}]).encode(),
+             {"source_filename": "f.json"}),
+        ])
+        mock_source.source_unit_id.return_value = "local:/in/f.json:<fp>:0"
+        mock_ser_in = MagicMock()
+        mock_ser_in.parse.return_value = [{"id": "1"}, {"id": "2"}]
+        mock_ser_out = MagicMock()
+        mock_ser_out.serialize.return_value = b"[]"
+
+        executor = PipelineExecutor()
+        with (
+            patch.object(executor, "_build_source", return_value=mock_source),
+            patch.object(
+                executor, "_build_sinks",
+                return_value=[
+                    (working, None, [], working_sink_cfg, None),
+                    (failing, None, [], failing_sink_cfg, None),
+                ],
+            ),
+            patch.object(executor, "_build_serializer_in", return_value=mock_ser_in),
+            patch.object(executor, "_build_serializer_out", return_value=mock_ser_out),
+            patch.object(executor, "_build_transforms", return_value=[]),
+        ):
+            result = executor.batch_run(config)
+
+        # on_error: continue with loss → PARTIAL; both sinks saw the records.
+        assert result.status == RunStatus.PARTIAL
+        assert result.disposition == {
+            "sftp": {"delivered": 2},
+            "local": {"failed": 2},
+        }
+        assert result.spool == {}
+
+    def test_dlq_disposition_and_spool_counters(self, tmp_path, monkeypatch):
+        """A DLQ'd failed sink records the per-sink dlq disposition and the
+        disk-spool outcome (review D1 fallback) in the spool map."""
+        monkeypatch.setenv("TRAM_DLQ_SPOOL_DIR", str(tmp_path))
+        config = _make_pipeline(
+            "on_error: dlq\n"
+            "          dlq:\n"
+            "            type: local\n"
+            "            path: /tmp/dlq"
+        )
+        sink_cfg = config.sinks[0]
+        failing = MagicMock()
+        failing.write.side_effect = OSError("down")
+        mock_dlq = MagicMock()
+        mock_dlq.write.side_effect = OSError("dlq down too")  # → spool fallback
+
+        mock_source = MagicMock()
+        mock_source.read.return_value = iter([
+            (json.dumps([{"id": "1"}]).encode(), {"source_filename": "f.json"}),
+        ])
+        mock_source.source_unit_id.return_value = "local:/in/f.json:<fp>:0"
+        mock_ser_in = MagicMock()
+        mock_ser_in.parse.return_value = [{"id": "1"}]
+        mock_ser_out = MagicMock()
+        mock_ser_out.serialize.return_value = b"[]"
+
+        executor = PipelineExecutor()
+        with (
+            patch.object(executor, "_build_source", return_value=mock_source),
+            patch.object(
+                executor, "_build_sinks",
+                return_value=[(failing, None, [], sink_cfg, None)],
+            ),
+            patch.object(executor, "_build_serializer_in", return_value=mock_ser_in),
+            patch.object(executor, "_build_serializer_out", return_value=mock_ser_out),
+            patch.object(executor, "_build_transforms", return_value=[]),
+            patch.object(executor, "_build_dlq_sink", return_value=mock_dlq),
+        ):
+            result = executor.batch_run(config)
+
+        assert result.status == RunStatus.SUCCESS  # DLQ disposition is decided
+        assert result.disposition == {"sftp": {"dlq": 1}}
+        assert result.spool == {"spooled": 1}
+
+    def test_clean_run_has_empty_disposition_and_spool(self):
+        """A run that only delivered leaves the maps "where present" minimal:
+        the delivered per-sink map is present; the spool map stays empty."""
+        config = _make_pipeline()
+        sink_cfg = config.sinks[0]
+        working = MagicMock()
+        mock_source = MagicMock()
+        mock_source.read.return_value = iter([
+            (json.dumps([{"id": "1"}]).encode(), {"source_filename": "f.json"}),
+        ])
+        mock_source.source_unit_id.return_value = "local:/in/f.json:<fp>:0"
+        mock_ser_in = MagicMock()
+        mock_ser_in.parse.return_value = [{"id": "1"}]
+        mock_ser_out = MagicMock()
+        mock_ser_out.serialize.return_value = b"[]"
+
+        executor = PipelineExecutor()
+        with (
+            patch.object(executor, "_build_source", return_value=mock_source),
+            patch.object(
+                executor, "_build_sinks",
+                return_value=[(working, None, [], sink_cfg, None)],
+            ),
+            patch.object(executor, "_build_serializer_in", return_value=mock_ser_in),
+            patch.object(executor, "_build_serializer_out", return_value=mock_ser_out),
+            patch.object(executor, "_build_transforms", return_value=[]),
+        ):
+            result = executor.batch_run(config)
+
+        assert result.status == RunStatus.SUCCESS
+        assert result.disposition == {"sftp": {"delivered": 1}}
+        assert result.spool == {}

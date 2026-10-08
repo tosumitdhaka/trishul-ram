@@ -28,10 +28,18 @@ _STATE_TIMEOUT = 10.0
 
 @dataclass
 class TransformState:
-    """A pipeline's persisted transform-state blob plus its config fingerprint."""
+    """A pipeline's persisted transform-state blob plus its config fingerprint.
+
+    ``revision``/``generation`` are the frozen §7 CAS identity of the stored
+    row: the checkpoint CAS advances ``revision`` (and fences writers on it),
+    so a run hydrating state must adopt the stored revision as its base
+    rather than assuming 0. ``generation`` is NULL for M5 legacy rows.
+    """
 
     state: dict
     config_sha256: str = ""
+    revision: int = 0
+    generation: int | None = None
 
 
 class TransformStateStore(Protocol):
@@ -72,7 +80,12 @@ class DbTransformStateStore:
         TRANSFORM_STATE_IO_TOTAL.labels(op="get", result="ok").inc()
         if row is None:
             return None
-        return TransformState(state=row["state"], config_sha256=row["config_sha256"])
+        return TransformState(
+            state=row["state"],
+            config_sha256=row["config_sha256"],
+            revision=int(row.get("revision") or 0),
+            generation=row.get("generation"),
+        )
 
     def put(
         self,
@@ -144,6 +157,10 @@ class HttpTransformStateStore:
         return TransformState(
             state=data.get("state", {}),
             config_sha256=data.get("config_sha256", ""),
+            # The manager's GET exposes the frozen §7 CAS identity additively;
+            # a pre-wiring manager (or a legacy blob) simply omits them.
+            revision=int(data.get("revision") or 0),
+            generation=data.get("generation"),
         )
 
     def put(

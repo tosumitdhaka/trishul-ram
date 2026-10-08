@@ -32,6 +32,7 @@ from tram.core.context import PipelineRunContext, RunResult, RunStatus
 from tram.core.exceptions import TramError
 from tram.interfaces.base_sink import SinkCommitReceipt
 from tram.interfaces.base_source import AckDisposition
+from tram.pipeline.state_store import TransformState
 from tram.registry.registry import get_serializer, get_sink, get_source, get_transform
 from tram.transforms.stateful import StatefulTransform
 
@@ -433,6 +434,7 @@ def _write_dlq_envelope(
     error: str,
     record=None,
     raw: bytes | None = None,
+    delivery=None,
 ) -> bool:
     """Write a DLQ envelope to the DLQ sink.
 
@@ -440,6 +442,10 @@ def _write_dlq_envelope(
     the envelope is spooled to local disk as a durable fallback (replayable
     JSON file), or — when even the spool fails — surfaced via ERROR logs and
     the ``DLQ_WRITE_FAILED`` counter.
+
+    *delivery* (when given) records the disk-spool outcome run-level
+    (``record_spool``) so the completion payload can carry the spool/failure
+    counters the manager's run-history decode reads.
 
     Returns True when the envelope is durably handled (DLQ write confirmed OR
     spooled to disk), False when both failed — the caller then treats the
@@ -461,6 +467,8 @@ def _write_dlq_envelope(
         return True
     except Exception as dlq_exc:
         spooled = _spool_dlq_envelope(envelope, ctx, error=str(dlq_exc))
+        if delivery is not None:
+            delivery.record_spool(spooled is not None)
         return spooled is not None
 
 
@@ -677,6 +685,11 @@ class _RunDeliveryAccounting:
     counters that decide the terminal outcome (``partial`` under continue).
     One instance per batch attempt; chunk processing mutates it from worker
     threads (thread_workers > 1), so every mutation is lock-protected.
+
+    V18-06: also tracks per-sink delivery disposition (``delivered`` /
+    ``failed`` / ``dlq`` per sink key) and the DLQ disk-spool outcome, so the
+    completion payload can carry the per-sink disposition/spool maps the
+    manager's run-history decode reads.
     """
 
     def __init__(self) -> None:
@@ -690,8 +703,17 @@ class _RunDeliveryAccounting:
         # report clean success.
         self.checkpoint_pending = 0
         # The pipeline's transform-state revision this attempt is based on
-        # (the frozen §7 CAS base); advanced from checkpoint responses.
+        # (the frozen §7 CAS base); seeded from hydration, advanced from
+        # checkpoint responses.
         self.state_revision = 0
+        # Per-sink delivery disposition: {sink_key: {delivered, failed, dlq}}.
+        # Filled by the sink write path; emitted in the completion payload.
+        self.sinks: dict[str, dict[str, int]] = {}
+        # DLQ disk-spool outcome (review D1 fallback): spool_succeeded =
+        # envelopes durably spooled after the DLQ sink write failed;
+        # spool_failed = envelopes lost entirely (DLQ write AND spool failed).
+        self.spool_succeeded = 0
+        self.spool_failed = 0
 
     def register_unit(self, key: tuple[str, str], meta: dict) -> _UnitOutcome:
         with self._lock:
@@ -735,6 +757,65 @@ class _RunDeliveryAccounting:
                 unit.records_failed += records_failed
                 unit.dlq_succeeded += dlq_succeeded
                 unit.dlq_failed += dlq_failed
+
+    def record_sink(
+        self,
+        sink_key: str,
+        *,
+        delivered: int = 0,
+        failed: int = 0,
+        dlq: int = 0,
+    ) -> None:
+        """Per-sink disposition accounting (delivered/failed/DLQ'd records).
+
+        Keyed by the sink's disposition key (the connector type string);
+        ``sink_key`` may be empty (dynamic/legacy sink tuples) — empty keys
+        are skipped so the disposition map only names configured sinks.
+        """
+        if not sink_key:
+            return
+        with self._lock:
+            entry = self.sinks.get(sink_key)
+            if entry is None:
+                entry = {"delivered": 0, "failed": 0, "dlq": 0}
+                self.sinks[sink_key] = entry
+            if delivered:
+                entry["delivered"] += delivered
+            if failed:
+                entry["failed"] += failed
+            if dlq:
+                entry["dlq"] += dlq
+
+    def record_spool(self, spool_ok: bool) -> None:
+        """Record one DLQ disk-spool outcome (True = durably spooled)."""
+        with self._lock:
+            if spool_ok:
+                self.spool_succeeded += 1
+            else:
+                self.spool_failed += 1
+
+    def sink_disposition_map(self) -> dict[str, dict[str, int]]:
+        """The per-sink disposition map for the completion payload.
+
+        Drops zero-count keys so a sink that neither delivered, failed, nor
+        DLQ'd anything is not named in the payload ("where present").
+        """
+        with self._lock:
+            return {
+                key: {k: v for k, v in entry.items() if v}
+                for key, entry in self.sinks.items()
+                if any(entry.values())
+            }
+
+    def spool_counters(self) -> dict[str, int]:
+        """The spool/failure counters for the completion payload, or {}."""
+        with self._lock:
+            counters = {}
+            if self.spool_succeeded:
+                counters["spooled"] = self.spool_succeeded
+            if self.spool_failed:
+                counters["failed"] = self.spool_failed
+            return counters
 
     def record_checkpoint_pending(self) -> None:
         """Count a DELIVERED unit whose checkpoint did not commit (strict)."""
@@ -1123,16 +1204,21 @@ class PipelineExecutor:
 
     def _hydrate_state_from_store(
         self, config: PipelineConfig, transforms: list, config_sha256: str
-    ) -> dict:
+    ) -> TransformState:
         """Load the pipeline's durable state and hydrate stateful transforms.
 
-        Returns the *in-run snapshot* (the state as loaded) so a retry rebuild
-        can re-hydrate from the same snapshot — a failed attempt's partial
-        writes are discarded (design §3.2c). Discards the blob on config-sha
-        mismatch (D.2 §6.1 pattern → one first-sight interval).
+        Returns the *in-run snapshot* (the state as loaded, carrying the
+        frozen §7 CAS identity — ``revision``/``generation``) so a retry
+        rebuild can re-hydrate from the same snapshot — a failed attempt's
+        partial writes are discarded (design §3.2c) — and so the run's
+        checkpoint gate adopts the stored revision as its CAS base (a run
+        starting against an advanced row sends the hydrated revision, never
+        0). Discards the blob on config-sha mismatch (D.2 §6.1 pattern → one
+        first-sight interval). Always returns a snapshot (empty when no store
+        / no stateful transforms / no state).
         """
         if self._state_store is None or not self._stateful_transforms(transforms):
-            return {}
+            return TransformState(state={}, config_sha256="")
         try:
             loaded = self._state_store.get(config.name)
         except Exception as exc:
@@ -1140,17 +1226,25 @@ class PipelineExecutor:
                 "Transform state load failed — continuing unhydrated",
                 extra={"pipeline": config.name, "error": str(exc)},
             )
-            return {}
+            return TransformState(state={}, config_sha256="")
         if loaded is None:
-            return {}
+            return TransformState(state={}, config_sha256="")
         if config_sha256 and loaded.config_sha256 != config_sha256:
             logger.info(
                 "Transform state discarded — config_sha256 mismatch",
                 extra={"pipeline": config.name},
             )
-            return {}
+            return TransformState(state={}, config_sha256="")
         self._apply_state(transforms, loaded.state)
-        return loaded.state
+        # Normalize the store's return into the snapshot contract (the store
+        # Protocol is duck-typed; a minimal/legacy return may omit the CAS
+        # identity — treat it as revision 0, generation None).
+        return TransformState(
+            state=loaded.state,
+            config_sha256=getattr(loaded, "config_sha256", ""),
+            revision=int(getattr(loaded, "revision", 0) or 0),
+            generation=getattr(loaded, "generation", None),
+        )
 
     @staticmethod
     def _collect_state_blob(transforms: list) -> dict:
@@ -1660,6 +1754,7 @@ class PipelineExecutor:
                     dlq_ok = _write_dlq_envelope(
                         dlq_sink, ctx,
                         stage="transform", error=str(exc), record=record,
+                        delivery=delivery,
                     )
                     ctx.record_dlq()
                     DLQ_RECORDS.labels(pipeline=ctx.pipeline_name).inc()
@@ -1756,6 +1851,12 @@ class PipelineExecutor:
                     sink_instance, condition, sink_transforms = sink_tuple
                     sink_cfg = None
                     per_sink_ser = None
+                # V18-06: per-sink disposition key for the completion payload —
+                # the connector type string (the stable per-sink identity), or
+                # the class name for legacy/test sink tuples without a config.
+                disposition_key = (
+                    sink_cfg.type if sink_cfg is not None else type(sink_instance).__name__
+                )
 
                 if condition:
                     filtered = _filter_by_condition(
@@ -1787,6 +1888,7 @@ class PipelineExecutor:
                             dlq_ok = _write_dlq_envelope(
                                 dlq_sink, ctx,
                                 stage="transform", error=str(exc), record=pre_transform,
+                                delivery=delivery,
                             )
                             ctx.record_dlq()
                             DLQ_RECORDS.labels(pipeline=ctx.pipeline_name).inc()
@@ -1934,6 +2036,7 @@ class PipelineExecutor:
                         dlq_ok = _write_dlq_envelope(
                             dlq_sink, ctx,
                             stage="sink", error=str(last_exc), record=partition_records,
+                            delivery=delivery,
                         )
                         ctx.record_dlq()
                         DLQ_RECORDS.labels(pipeline=ctx.pipeline_name).inc()
@@ -1942,6 +2045,11 @@ class PipelineExecutor:
                                 key,
                                 dlq_succeeded=int(dlq_ok),
                                 dlq_failed=int(not dlq_ok),
+                            )
+                            delivery.record_sink(
+                                disposition_key,
+                                dlq=int(dlq_ok),
+                                failed=int(not dlq_ok),
                             )
                         if not dlq_ok and on_error in ("dlq", "retry") and delivery is not None:
                             # Failed-DLQ: pause/stop and leave the input
@@ -1953,6 +2061,7 @@ class PipelineExecutor:
                             ) from last_exc
                     elif delivery is not None:
                         delivery.record_loss(key, records_failed=len(partition_records))
+                        delivery.record_sink(disposition_key, failed=len(partition_records))
                     if on_error == "abort":
                         raise TramError(f"Sink write error: {last_exc}") from last_exc
                     if on_error == "retry" and (dlq_sink is None or not dlq_ok):
@@ -1977,8 +2086,12 @@ class PipelineExecutor:
                         )
                     # A partition failure stops this sink; earlier partitions
                     # that already wrote still count toward records_out.
+                    if delivery is not None:
+                        delivery.record_sink(disposition_key, delivered=written)
                     return written
 
+                if delivery is not None:
+                    delivery.record_sink(disposition_key, delivered=written)
                 return written
 
             if parallel_sinks and len(sinks) > 1:
@@ -2131,6 +2244,7 @@ class PipelineExecutor:
                     dlq_ok = _write_dlq_envelope(
                         dlq_sink, ctx,
                         stage="parse", error=str(exc), record=None, raw=raw,
+                        delivery=delivery,
                     )
                     ctx.record_dlq()
                     DLQ_RECORDS.labels(pipeline=ctx.pipeline_name).inc()
@@ -2244,6 +2358,7 @@ class PipelineExecutor:
                     dlq_ok = _write_dlq_envelope(
                         dlq_sink, ctx,
                         stage="parse", error=str(exc), record=None, raw=raw,
+                        delivery=delivery,
                     )
                     ctx.record_dlq()
                     DLQ_RECORDS.labels(pipeline=ctx.pipeline_name).inc()
@@ -2391,7 +2506,11 @@ class PipelineExecutor:
         # Pre-compute stable circuit-breaker keys for all sinks.
         sink_cb_keys = [self._make_sink_cb_key(config, i) for i in range(len(sinks))]
         # Load the durable state once at run start and hydrate; retries re-hydrate
-        # from this same in-run snapshot (failed attempts persist nothing).
+        # from this same in-run snapshot (failed attempts persist nothing). The
+        # snapshot's revision is the run's frozen §7 CAS base — each attempt's
+        # delivery accounting seeds ``state_revision`` from it, so the first
+        # checkpoint of a run starting against an advanced row sends the
+        # hydrated revision instead of 0.
         in_run_snapshot = self._hydrate_state_from_store(config, transforms, config_sha256)
 
         retry_count = config.retry_count if config.on_error == "retry" else 0
@@ -2404,6 +2523,7 @@ class PipelineExecutor:
                 # rebuilt ctx): a failed attempt's losses never leak into the
                 # final attempt's outcome.
                 delivery = _RunDeliveryAccounting()
+                delivery.state_revision = in_run_snapshot.revision
                 # V18-06: one checkpoint gate per attempt — its transforms
                 # reference the attempt's rebuilt instances and its base state
                 # revision tracks the attempt's committed checkpoints.
@@ -2447,6 +2567,11 @@ class PipelineExecutor:
                     result.records_failed = delivery.records_failed
                     result.dlq_succeeded = delivery.dlq_succeeded
                     result.dlq_failed = delivery.dlq_failed
+                    # V18-06: the completion payload's per-sink disposition
+                    # and spool maps — "where present" only (empty maps are
+                    # omitted by the payload builder).
+                    result.disposition = delivery.sink_disposition_map()
+                    result.spool = delivery.spool_counters()
                     # Persist transform state only on the success path: a failed
                     # run keeps the previous snapshot intact (counters are
                     # cumulative, so a lost update spans the gap correctly).
@@ -2512,13 +2637,15 @@ class PipelineExecutor:
                         # Re-hydrate the rebuilt transforms from the in-run
                         # snapshot — never from a fresh GET — so a failed
                         # attempt's partial writes are discarded.
-                        self._apply_state(transforms, in_run_snapshot)
+                        self._apply_state(transforms, in_run_snapshot.state)
                         continue
 
                     result = RunResult.from_context(ctx, RunStatus.FAILED, error=str(exc))
                     result.records_failed = delivery.records_failed
                     result.dlq_succeeded = delivery.dlq_succeeded
                     result.dlq_failed = delivery.dlq_failed
+                    result.disposition = delivery.sink_disposition_map()
+                    result.spool = delivery.spool_counters()
                     logger.error(
                         "Batch run failed",
                         extra={"pipeline": config.name, "run_id": ctx.run_id, "error": str(exc)},
@@ -2873,8 +3000,12 @@ class PipelineExecutor:
         )
 
         # Hydrate stateful transforms at run start; a D.2 redispatch then
-        # recovers state up to the last persisted snapshot.
-        self._hydrate_state_from_store(config, transforms, config_sha256)
+        # recovers state up to the last persisted snapshot. The snapshot's
+        # revision seeds the run's frozen §7 CAS base — a stream resuming
+        # against an advanced row checkpoints with the hydrated revision,
+        # never 0.
+        snapshot = self._hydrate_state_from_store(config, transforms, config_sha256)
+        delivery.state_revision = snapshot.revision
 
         persist_interval = float(getattr(config, "state_persist_interval_s", 0) or 0)
         last_persist = time.monotonic()

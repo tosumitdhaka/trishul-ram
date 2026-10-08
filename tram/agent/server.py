@@ -557,6 +557,12 @@ def _completion_result_json(
     finished_at: str | None = None,
     legacy: bool = False,
     generation: int | None = None,
+    dlq_count: int = 0,
+    records_failed: int = 0,
+    dlq_succeeded: int = 0,
+    dlq_failed: int = 0,
+    disposition: dict | None = None,
+    spool: dict | None = None,
 ) -> str:
     """Build the journal ``completions.result_json`` payload (V18-01 §4).
 
@@ -566,6 +572,13 @@ def _completion_result_json(
     payload when the direct callback cannot be delivered — it carries the
     full attempt identity (``attempt_id`` + ``generation``) the manager's
     identity-checked run-complete path resolves on.
+
+    V18-06: the run-scoped delivery counters (``dlq_count``,
+    ``records_failed``, ``dlq_succeeded``, ``dlq_failed``), the per-sink
+    ``disposition`` map and the DLQ ``spool`` counters ride in additively —
+    the manager's run-history decode (``_decode_disposition``) reads exactly
+    these keys, so a completion payload carrying them activates the
+    per-sink/spool recording on the boot-adoption path.
     """
     return json.dumps(
         {
@@ -585,6 +598,12 @@ def _completion_result_json(
             "started_at": started_at,
             "finished_at": finished_at,
             "legacy": legacy,
+            "dlq_count": dlq_count,
+            "records_failed": records_failed,
+            "dlq_succeeded": dlq_succeeded,
+            "dlq_failed": dlq_failed,
+            "disposition": disposition,
+            "spool": spool,
         }
     )
 
@@ -1196,7 +1215,33 @@ def create_worker_app(
             if state.manager_url
             else None
         )
-        executor = PipelineExecutor(state_store=state_store, file_tracker=file_tracker)
+        # V18-06: an AUTHORIZED run mints a manager-authoritative
+        # delivery-checkpoint client bound to the admitted attempt identity
+        # (attempt_id + generation; the same manager-URL source run-complete
+        # uses) so strict pipelines can gate unit acks on the manager's
+        # commit. Legacy-admitted runs (no attempt identity) and runs without
+        # a manager URL get None — the executor's gate then keeps the legacy
+        # best-effort / strict fail-closed behavior unchanged.
+        checkpoint_client = None
+        if (
+            authorized
+            and attempt_id
+            and state.manager_url
+            and req.generation is not None
+        ):
+            from tram.pipeline.executor import CheckpointClient
+
+            checkpoint_client = CheckpointClient(
+                state.manager_url,
+                state.api_key,
+                generation=req.generation,
+                attempt_id=attempt_id,
+            )
+        executor = PipelineExecutor(
+            state_store=state_store,
+            file_tracker=file_tracker,
+            checkpoint_client=checkpoint_client,
+        )
 
         # GH #39 (A1)/#54: the worker is stateless — no per-worker DB exists,
         # so without a manager URL the executor is built without a
@@ -1261,6 +1306,7 @@ def create_worker_app(
                             finished_at=datetime.now(UTC).isoformat(),
                             legacy=active_run.legacy,
                             generation=active_run.generation,
+                            dlq_count=int(stats_snapshot.get("dlq_count") or 0),
                         )
                         journal.record_completion(attempt_id, result_json)
                         journal.enqueue_outbox(attempt_id, "run-complete", result_json)
@@ -1360,6 +1406,16 @@ def create_worker_app(
                             finished_at=result.finished_at.isoformat(),
                             legacy=active_run.legacy,
                             generation=active_run.generation,
+                            # V18-06: the per-sink disposition / spool maps and
+                            # delivery counters the manager's run-history
+                            # decode records ("where present" — empty maps
+                            # stay absent from the payload's recorded set).
+                            dlq_count=result.dlq_count,
+                            records_failed=result.records_failed,
+                            dlq_succeeded=result.dlq_succeeded,
+                            dlq_failed=result.dlq_failed,
+                            disposition=result.disposition or None,
+                            spool=result.spool or None,
                         )
                         journal.record_completion(attempt_id, result_json)
                         journal.enqueue_outbox(attempt_id, "run-complete", result_json)
