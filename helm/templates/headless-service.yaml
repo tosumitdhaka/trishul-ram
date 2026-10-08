@@ -7,6 +7,9 @@ metadata:
     {{- include "tram.labels" . | nindent 4 }}
 spec:
   clusterIP: None
+  ## V18-07 (review finding "unready DNS"): same rationale as the worker
+  ## headless service — internal DNS stays published while unready.
+  publishNotReadyAddresses: true
   selector:
     {{- include "tram.selectorLabels" . | nindent 4 }}
   ports:
