@@ -352,6 +352,10 @@ class TestDeliveryContract:
     """
 
     _SOURCE_LOCAL = "      source:\n        type: local\n        path: /tmp/in\n"
+    _SOURCE_SFTP = (
+        "      source:\n        type: sftp\n        host: example.com\n"
+        "        username: u\n        password: p\n        remote_path: /in\n"
+    )
     _SOURCE_AMQP = "      source:\n        type: amqp\n        queue: q\n"
     _SOURCE_AMQP_REQUIRED = (
         "      source:\n        type: amqp\n        queue: q\n"
@@ -396,6 +400,15 @@ class TestDeliveryContract:
             _strict_pipeline_yaml(self._SOURCE_LOCAL + self._SER + self._SINK_SFTP)
         )
         assert cfg.delivery.contract == "strict"
+
+    def test_strict_accepts_sftp_source(self):
+        """SFTP source implements source_unit_id() (content-fingerprint
+        identity, V18-01 §7) — strict accepts it alongside the local source."""
+        cfg = _load(
+            _strict_pipeline_yaml(self._SOURCE_SFTP + self._SER + self._SINK_LOCAL)
+        )
+        assert cfg.delivery.contract == "strict"
+        assert cfg.source.type == "sftp"
 
     def test_strict_rejects_undeclared_sink(self):
         """rest is a built-in sink with no delivery_capability declaration —

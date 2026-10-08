@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import fnmatch
+import hashlib
 import logging
 import time
 from collections.abc import Iterator
@@ -137,7 +138,16 @@ class SFTPSource(BaseSource):
                                     "Read file chunk",
                                     extra={"filepath": remote_file, "chunk": chunk_index, "bytes": len(chunk)},
                                 )
-                                yield chunk, {**chunk_meta, "chunk_index": chunk_index}
+                                yield chunk, {
+                                    **chunk_meta,
+                                    "chunk_index": chunk_index,
+                                    # Content fingerprint captured at read time
+                                    # (V18-01 §7 replay identity matrix). For
+                                    # chunked files each chunk is its own unit,
+                                    # so the fingerprint is the sha256 of the
+                                    # unit's own fetched content.
+                                    "source_fingerprint": hashlib.sha256(chunk).hexdigest(),
+                                }
                                 chunk_index += 1
                         else:
                             content = fh.read()
@@ -149,6 +159,11 @@ class SFTPSource(BaseSource):
                                 "source_filename": meta_filename,
                                 "source_path": remote_file,
                                 "source_host": self.host,
+                                # Content fingerprint captured at read time —
+                                # the identity of the unit actually processed.
+                                # Same-path replacement between read and ack is
+                                # detected by a fingerprint change (V18-01 §7).
+                                "source_fingerprint": hashlib.sha256(content).hexdigest(),
                             }
                 except SourceError:
                     raise
@@ -190,6 +205,27 @@ class SFTPSource(BaseSource):
                 pass
         self._sftp = None
         self._transport = None
+
+    def source_unit_id(self, meta: dict) -> str | None:
+        """Stable replay identity: ``{source_namespace}:{fingerprint}:{unit_position}``.
+
+        Namespace is ``sftp:{host}:{remote_path}`` (mirrors the file-tracker
+        source key); the fingerprint is the sha256 of the unit's fetched
+        content captured at read time (``meta["source_fingerprint"]``); the
+        unit position is the chunk index when the file is read in chunks
+        (``read_chunk_bytes``), else 0 because the batch source reads each
+        file as one unit. Returns None when the unit has no readable file
+        identity (V18-01 §7 replay identity matrix: same-path replacement is
+        detected by a fingerprint change; pathname alone is insufficient).
+        """
+        fp_str = str(meta.get("source_path", "") or "").strip()
+        if not fp_str:
+            return None
+        fingerprint = str(meta.get("source_fingerprint", "") or "").strip()
+        if not fingerprint:
+            return None
+        position = int(meta.get("chunk_index", 0) or 0)
+        return f"sftp:{self.host}:{self.remote_path}:{fingerprint}:{position}"
 
     def _stable_candidates(self, filenames: list[str], sftp) -> list[str]:
         """File-done eligibility filter (F.2 part 1).
