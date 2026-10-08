@@ -30,7 +30,7 @@ from fastapi.testclient import TestClient
 
 import tram.core.config as cfg_mod
 from tram.agent.auth_tokens import mint_start_authorization
-from tram.agent.journal import WorkerJournal
+from tram.agent.journal import JournalUnavailableError, WorkerJournal
 from tram.agent.server import (
     _WORKER_CAPABILITIES,
     TRAM_PROTOCOL_VERSION,
@@ -178,7 +178,8 @@ class TestAuthorizedAdmission:
         """
         gate = threading.Event()
 
-        def _blocking_batch(config, run_id=None, stats=None, config_sha256="", flush=False):
+        def _blocking_batch(config, run_id=None, stats=None, config_sha256="", flush=False,
+                     *, stop_event=None, deadline=None):
             gate.wait(timeout=30)
             return _mock_result(run_id=run_id or "r1")
 
@@ -248,7 +249,8 @@ class TestAuthorizedAdmission:
         gate = threading.Event()
         started = []
 
-        def _blocking_batch(config, run_id=None, stats=None, config_sha256="", flush=False):
+        def _blocking_batch(config, run_id=None, stats=None, config_sha256="", flush=False,
+                     *, stop_event=None, deadline=None):
             started.append(run_id)
             gate.wait(timeout=30)
             return _mock_result(run_id=run_id or "r1")
@@ -286,7 +288,8 @@ class TestAuthorizedAdmission:
         gate = threading.Event()
         started = []
 
-        def _blocking_batch(config, run_id=None, stats=None, config_sha256="", flush=False):
+        def _blocking_batch(config, run_id=None, stats=None, config_sha256="", flush=False,
+                     *, stop_event=None, deadline=None):
             started.append(run_id)
             gate.wait(timeout=30)
             return _mock_result(run_id=run_id or "r1")
@@ -392,7 +395,8 @@ class TestLegacyAdmit:
 
         gate = threading.Event()
 
-        def _blocking_batch(config, run_id=None, stats=None, config_sha256="", flush=False):
+        def _blocking_batch(config, run_id=None, stats=None, config_sha256="", flush=False,
+                     *, stop_event=None, deadline=None):
             gate.wait(timeout=30)
             return _mock_result(run_id=run_id or "r1")
 
@@ -700,7 +704,8 @@ class TestBootAndStatus:
 
         gate = threading.Event()
 
-        def _blocking_batch(config, run_id=None, stats=None, config_sha256="", flush=False):
+        def _blocking_batch(config, run_id=None, stats=None, config_sha256="", flush=False,
+                     *, stop_event=None, deadline=None):
             gate.wait(timeout=30)
             return _mock_result(run_id=run_id or "r1")
 
@@ -893,9 +898,10 @@ class TestHandshake:
             "commit_receipts",
             "durable_completion",
             "query_replay",
+            "drain",
         ]
-        # Not claimed (not implemented): admission_limits, drain, status_snapshot.
-        for absent in ("admission_limits", "drain", "status_snapshot"):
+        # Not claimed (not implemented): admission_limits, status_snapshot.
+        for absent in ("admission_limits", "status_snapshot"):
             assert absent not in body["capabilities"]
         assert body["session_id"] == app.state.worker_session
         assert body["session_id"].startswith("w0-")
@@ -1241,7 +1247,8 @@ class TestWorkerStateAttemptAware:
         started: list[int] = []
         started_lock = threading.Lock()
 
-        def _blocking_batch(config, run_id=None, stats=None, config_sha256="", flush=False):
+        def _blocking_batch(config, run_id=None, stats=None, config_sha256="", flush=False,
+                     *, stop_event=None, deadline=None):
             with started_lock:
                 started.append(1)
                 idx = len(started)
@@ -1296,3 +1303,351 @@ class TestWorkerStateAttemptAware:
             assert len(items) == 1
             assert items[0]["attempt_id"] == "b2"
             gate_b.set()
+
+
+# ── V18-07: drain lifecycle (plan E) ────────────────────────────────────────
+
+
+class TestDrainTimeoutConfig:
+    """The drain deadline is single-sourced from ``TRAM_DRAIN_TIMEOUT_S`` —
+    the ONE monotonic deadline of plan E, with no independent second timeout
+    constant anywhere."""
+
+    def test_default_30(self, monkeypatch):
+        monkeypatch.delenv("TRAM_DRAIN_TIMEOUT_S", raising=False)
+        assert cfg_mod.drain_timeout_s() == 30
+
+    def test_env_override(self, monkeypatch):
+        monkeypatch.setenv("TRAM_DRAIN_TIMEOUT_S", "45")
+        assert cfg_mod.drain_timeout_s() == 45
+
+    def test_invalid_value_fails_loud(self, monkeypatch):
+        monkeypatch.setenv("TRAM_DRAIN_TIMEOUT_S", "soon")
+        with pytest.raises(ValueError, match="TRAM_DRAIN_TIMEOUT_S"):
+            cfg_mod.drain_timeout_s()
+
+    def test_no_independent_timeout_constant(self):
+        """Single-sourcing pin: neither the agent server nor the executor
+        defines a drain-timeout constant of its own — the only source is
+        tram.core.config.drain_timeout_s."""
+        import tram.agent.server as server_mod
+        import tram.pipeline.executor as exec_mod
+
+        for mod in (server_mod, exec_mod):
+            assert not hasattr(mod, "TRAM_DRAIN_TIMEOUT_S")
+            assert not hasattr(mod, "_DRAIN_TIMEOUT_S")
+
+
+class TestDrainLifecycle:
+    def test_drain_marks_state_refuses_new_admission_and_status_surfaces(
+        self, journal, auth_env
+    ):
+        """POST /agent/drain → 202 + drain state; /agent/status surfaces
+        admission_state "draining" with the drained/idle indicator; new
+        /agent/run dispatches are refused 503 (draining) — authorized and
+        legacy alike."""
+        app, client = _make_client(journal=journal)
+        resp = client.post("/agent/drain")
+        assert resp.status_code == 202
+        body = resp.json()
+        assert body["draining"] is True
+        assert body["admission_state"] == "draining"
+        assert body["deadline_seconds"] == 30
+        assert body["already_draining"] is False
+        assert body["worker_id"] == "w0"
+        assert app.state.worker.drain_started_at is not None
+
+        status = client.get("/agent/status").json()
+        assert status["admission_state"] == "draining"
+        assert status["drain"]["draining"] is True
+        assert status["drain"]["started_at"] is not None
+        assert status["drain"]["idle"] is True
+        assert status["drain"]["deadline_expired"] is False
+        assert status["drain"]["drained"] is True
+
+        # No new dispatches while draining — authorized and legacy alike.
+        token = _mint(app, attempt_id="a1", run_id="r1")
+        resp = _dispatch(client, run_id="r1", authorization=token, attempt_id="a1")
+        assert resp.status_code == 503
+        assert "draining" in resp.json()["detail"]["reason"]
+        assert resp.json()["detail"]["admission_state"] == "draining"
+        resp = _dispatch(client, run_id="r2")
+        assert resp.status_code == 503
+        assert app.state.worker.snapshot() == []
+
+    def test_drain_idempotent_repeat_keeps_first_deadline(self, journal, auth_env):
+        """A second drain call is idempotent (202) and never extends the ONE
+        deadline — the first monotonic bound is kept."""
+        app, client = _make_client(journal=journal)
+        r1 = client.post("/agent/drain")
+        assert r1.status_code == 202
+        first_deadline = app.state.worker.drain_deadline
+        assert first_deadline is not None
+
+        r2 = client.post("/agent/drain")
+        assert r2.status_code == 202
+        body = r2.json()
+        assert body["already_draining"] is True
+        assert body["admission_state"] == "draining"
+        assert body["deadline_seconds"] == 30
+        assert app.state.worker.drain_deadline == first_deadline
+
+    def test_drain_deadline_single_sourced_from_config(self, journal, auth_env, monkeypatch):
+        """The drain endpoint computes its ONE deadline from
+        TRAM_DRAIN_TIMEOUT_S — pinning the config reader as the single
+        source."""
+        monkeypatch.setenv("TRAM_DRAIN_TIMEOUT_S", "7")
+        app, client = _make_client(journal=journal)
+        body = client.post("/agent/drain").json()
+        assert body["deadline_seconds"] == 7
+        assert app.state.worker.drain_deadline is not None
+        assert abs((app.state.worker.drain_deadline - time.monotonic()) - 7) < 1.0
+
+    def test_drain_in_flight_batch_aborts_with_drain_reason(self, journal, auth_env):
+        """An in-flight batch stopped by the drain records an ABORTED
+        completion whose error carries the drain reason, via the existing
+        journal-first path. The run thread received the drain's stop_event
+        (the mid-run delivery mechanism)."""
+        from tram.core.context import RunStatus
+
+        def _draining_batch(config, run_id=None, stats=None, config_sha256="", flush=False,
+                            *, stop_event=None, deadline=None):
+            assert stop_event is not None
+            stop_event.wait(timeout=10)
+            result = _mock_result(run_id=run_id or "r1")
+            result.status = RunStatus.ABORTED
+            result.error = "drained: worker drain deadline exceeded"
+            return result
+
+        app, client = _make_client(journal=journal)
+        token = _mint(app, attempt_id="a1", run_id="r1")
+        with patch(
+            "tram.pipeline.executor.PipelineExecutor.batch_run",
+            side_effect=_draining_batch,
+        ):
+            resp = _dispatch(
+                client, run_id="r1", authorization=token,
+                attempt_id="a1", generation=1, slot_id="s1",
+            )
+            assert resp.status_code == 202
+            deadline = time.time() + 5
+            while time.time() < deadline and not app.state.worker.snapshot():
+                time.sleep(0.02)
+            resp_drain = client.post("/agent/drain")
+            assert resp_drain.status_code == 202
+            deadline = time.time() + 5
+            while time.time() < deadline and (
+                journal.get_attempt("a1") is None
+                or journal.get_attempt("a1").kind != "completion"
+            ):
+                time.sleep(0.02)
+
+        rec = journal.get_attempt("a1")
+        assert rec is not None and rec.kind == "completion"
+        payload = json.loads(rec.result_json)
+        assert payload["status"] == "aborted"
+        assert "drain" in (payload.get("error") or "")
+        assert app.state.worker.get("r1") is None
+
+    def test_drain_interrupted_stream_records_aborted_completion(
+        self, journal, auth_env
+    ):
+        """A stream whose stop fired while the worker is draining records an
+        ABORTED completion with the drain reason (the executor returned an
+        aborted RunResult at the deadline, or the thread sees the drain)."""
+        from tram.core.context import RunStatus
+
+        def _drained_stream(config, stop_event, stats=None, config_sha256="", *,
+                            deadline=None):
+            from tram.core.context import RunResult
+
+            result = RunResult(
+                run_id="r1",
+                pipeline_name="test-pipe",
+                status=RunStatus.ABORTED,
+                started_at=datetime.now(UTC),
+                finished_at=datetime.now(UTC),
+                records_in=1,
+                records_out=1,
+                records_skipped=0,
+                error="drained: worker drain deadline exceeded",
+            )
+            return result
+
+        app, client = _make_client(journal=journal)
+        token = _mint(app, attempt_id="a1", run_id="r1")
+        with patch(
+            "tram.pipeline.executor.PipelineExecutor.stream_run",
+            side_effect=_drained_stream,
+        ):
+            resp = _dispatch(
+                client, run_id="r1", authorization=token,
+                attempt_id="a1", generation=1, slot_id="s1",
+                schedule_type="stream",
+            )
+            assert resp.status_code == 202
+            client.post("/agent/drain")
+            deadline = time.time() + 5
+            while time.time() < deadline and (
+                journal.get_attempt("a1") is None
+                or journal.get_attempt("a1").kind != "completion"
+            ):
+                time.sleep(0.02)
+
+        rec = journal.get_attempt("a1")
+        assert rec is not None and rec.kind == "completion"
+        payload = json.loads(rec.result_json)
+        assert payload["status"] == "aborted"
+        assert "drain" in (payload.get("error") or "")
+
+    def test_shutdown_runs_drain_bounded(self, journal, auth_env, monkeypatch):
+        """Lifespan shutdown runs the same drain state machine: admission
+        closed, in-flight runs signalled, and the wait bounded by the single
+        deadline — a run that ignores the cooperative stop cannot stall the
+        shutdown past the bound (R7: after the deadline, shutdown proceeds
+        regardless)."""
+        monkeypatch.setenv("TRAM_DRAIN_TIMEOUT_S", "1")
+        release = threading.Event()
+
+        def _stuck_batch(config, run_id=None, stats=None, config_sha256="", flush=False,
+                         *, stop_event=None, deadline=None):
+            release.wait(timeout=30)  # deliberately ignores the drain stop
+            return _mock_result(run_id=run_id or "r1")
+
+        app = create_worker_app(worker_id="w0", manager_url="", journal=journal)
+        token = _mint(app, attempt_id="a1", run_id="r1")
+        with patch(
+            "tram.pipeline.executor.PipelineExecutor.batch_run",
+            side_effect=_stuck_batch,
+        ):
+            started = time.monotonic()
+            with TestClient(app, raise_server_exceptions=True) as client:
+                resp = _dispatch(
+                    client, run_id="r1", authorization=token,
+                    attempt_id="a1", generation=1,
+                )
+                assert resp.status_code == 202
+                deadline = time.time() + 5
+                while time.time() < deadline and not app.state.worker.snapshot():
+                    time.sleep(0.02)
+                # context exit → lifespan shutdown begins the drain
+            elapsed = time.monotonic() - started
+        # Shutdown ran the drain: admission closed with the single deadline.
+        assert app.state.worker.admission_state == "draining"
+        assert app.state.worker.drain_event.is_set()
+        assert app.state.worker.drain_started_at is not None
+        # Bounded: the 1 s deadline was respected — shutdown returned without
+        # joining the stuck thread past the bound (a daemon thread is left to
+        # the process exit — R7).
+        assert elapsed < 5.0
+        release.set()  # let the stuck thread unwind (journal is closed)
+
+    def test_status_reports_drained_idle_indicator(self, journal, auth_env):
+        """After the drain's in-flight runs finish, /agent/status keeps
+        reporting admission_state draining with the drained/idle indicator
+        true — observable, and the worker never exits the process itself."""
+        app, client = _make_client(journal=journal)
+        client.post("/agent/drain")
+        status = client.get("/agent/status").json()
+        assert status["admission_state"] == "draining"
+        assert status["drain"]["idle"] is True
+        assert status["drain"]["drained"] is True
+        # Still serving /agent/status and /agent/health — no self-exit.
+        assert client.get("/agent/health").status_code == 200
+
+
+# ── V18-07: outbox drain backoff on a fatal journal ─────────────────────────
+
+
+class TestOutboxLoopBackoff:
+    def _run_loop(self, journal_, state, *, failures_before_recovery=0, run_s=0.4):
+        """Start ``_outbox_loop`` with fast base/cap constants, capture its
+        ERROR/INFO logs, and return (captured, thread) after ``run_s``."""
+        import tram.agent.server as server_mod
+
+        captured_errors: list[dict] = []
+        captured_infos: list[tuple[str, dict]] = []
+        real_error = server_mod.logger.error
+        real_info = server_mod.logger.info
+        calls: list[int] = []
+
+        def _flaky_drain(journal_, manager_url, api_key=""):
+            calls.append(1)
+            if len(calls) <= failures_before_recovery:
+                raise JournalUnavailableError("journal unavailable")
+            return 0
+
+        def _capture_error(msg, *args, **kwargs):
+            captured_errors.append(kwargs.get("extra") or {})
+            real_error(msg, *args, **kwargs)
+
+        def _capture_info(msg, *args, **kwargs):
+            captured_infos.append((str(msg), kwargs.get("extra") or {}))
+            real_info(msg, *args, **kwargs)
+
+        with (
+            patch.object(server_mod, "_OUTBOX_DRAIN_INTERVAL_S", 0.01),
+            patch.object(server_mod, "_OUTBOX_DRAIN_BACKOFF_MAX_S", 0.08),
+            patch.object(server_mod, "_drain_outbox_once", side_effect=_flaky_drain),
+            patch.object(server_mod.logger, "error", side_effect=_capture_error),
+            patch.object(server_mod.logger, "info", side_effect=_capture_info),
+        ):
+            thread = threading.Thread(
+                target=server_mod._outbox_loop,
+                args=(journal_, state, "http://manager", ""),
+                daemon=True,
+                name="tram-agent-outbox-test",
+            )
+            thread.start()
+            time.sleep(run_s)
+            state.outbox_stop.set()
+            thread.join(timeout=2)
+        return {
+            "calls": len(calls),
+            "errors": captured_errors,
+            "infos": captured_infos,
+            "alive": thread.is_alive(),
+        }
+
+    def test_fatal_journal_backs_off_exponentially_and_caps(self, tmp_path, auth_env):
+        """A fatally unavailable journal makes the loop back off exponentially
+        (base interval → cap 60 s in production; scaled down here) and log the
+        condition once per backoff period — the backoff_seconds values are
+        non-decreasing and capped, never a per-second ERROR spam."""
+        d = tmp_path / "subdir"
+        d.mkdir()
+        j = WorkerJournal(d)  # journal path is a directory → fatal unavailable
+        state = WorkerState(worker_id="w0", manager_url="")
+        try:
+            # The failure source is the patched drain (which models the fatal
+            # journal); it must keep failing for the whole window so the
+            # backoff growth is observable.
+            result = self._run_loop(j, state, failures_before_recovery=1_000_000)
+        finally:
+            j.close()
+
+        assert not result["alive"]
+        backoffs = [e.get("backoff_seconds") for e in result["errors"]]
+        assert backoffs, "the fatal condition must be logged"
+        assert backoffs == sorted(backoffs)
+        assert backoffs[0] == 0.01
+        assert backoffs[-1] == 0.08  # capped at _OUTBOX_DRAIN_BACKOFF_MAX_S
+        # The exponential growth bounds the log volume: an unbounded
+        # per-second spam would log ~40 times in the 0.4 s window at the base
+        # cadence; the backoff caps the period count well below that.
+        assert len(backoffs) < 20
+
+    def test_fatal_journal_recovery_resets_backoff(self, journal, auth_env):
+        """After the journal recovers, the loop resets to the base cadence and
+        logs the recovery once (with the missed-pass count)."""
+        state = WorkerState(worker_id="w0", manager_url="")
+        result = self._run_loop(journal, state, failures_before_recovery=2)
+
+        assert not result["alive"]
+        assert result["calls"] > 2
+        recovered = [e for m, e in result["infos"] if "outbox drain recovered" in m]
+        assert len(recovered) == 1
+        assert recovered[0]["missed_passes"] == 2
+        # After recovery the loop resumed the base cadence: a subsequent ERROR
+        # (if any) would start from the base interval again.
+        assert result["errors"][-1]["backoff_seconds"] == 0.02  # 2nd failure

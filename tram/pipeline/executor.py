@@ -45,6 +45,28 @@ if TYPE_CHECKING:
 logger = logging.getLogger(__name__)
 
 
+# V18-07 (plan E): the cooperative-stop check shared by every run loop. A run
+# stops when its ``stop_event`` is set (the mid-run delivery mechanism — a
+# drain or an admin stop sets it on the in-flight ``ActiveRun``) OR the single
+# monotonic drain deadline has been reached (now + TRAM_DRAIN_TIMEOUT_S, the
+# one deadline computed by the worker drain). There is deliberately no
+# independent second timeout constant: ``deadline`` is always the plan-E
+# deadline threaded from the worker drain.
+def _stop_requested(stop_event, deadline: float | None) -> bool:
+    if stop_event is not None and stop_event.is_set():
+        return True
+    return deadline is not None and time.monotonic() >= deadline
+
+
+# V18-07: the terminal reason an interrupted run carries (V18-01 §8 outcome
+# ``aborted`` with a drain reason). Distinguishes the deadline-expired stop
+# from a plain cooperative-stop request so the completion payload is honest.
+def _stop_reason(stop_event, deadline: float | None) -> str:
+    if deadline is not None and time.monotonic() >= deadline:
+        return "drained: worker drain deadline exceeded"
+    return "interrupted: run stop requested"
+
+
 def _make_evaluator():
     try:
         from simpleeval import DEFAULT_FUNCTIONS, EvalWithCompoundTypes
@@ -2457,6 +2479,9 @@ class PipelineExecutor:
         stats: PipelineStats | None = None,
         config_sha256: str = "",
         flush: bool = False,
+        *,
+        stop_event: threading.Event | None = None,
+        deadline: float | None = None,
     ) -> RunResult:
         """Execute one discrete batch run.
 
@@ -2467,6 +2492,12 @@ class PipelineExecutor:
         then emits any open windows as partials (``window_complete: false``)
         and clears them from state before the final PUT — the saved blob
         reflects the cleared windows, so the partials are never re-emitted.
+
+        V18-07 (plan E): ``stop_event`` and ``deadline`` are the cooperative
+        stop / single monotonic drain deadline. When either fires, the run
+        finishes the CURRENT source unit cleanly (commit barrier + checkpoint
+        + ack) and stops, reporting ``aborted`` with the drain/stop reason —
+        never clean success for an interrupted run.
         """
         import contextlib
         try:
@@ -2479,7 +2510,7 @@ class PipelineExecutor:
         with span_ctx:
             return self._batch_run_inner(
                 config, run_id=run_id, stats=stats, config_sha256=config_sha256,
-                flush=flush,
+                flush=flush, stop_event=stop_event, deadline=deadline,
             )
 
     def _batch_run_inner(
@@ -2489,6 +2520,9 @@ class PipelineExecutor:
         stats: PipelineStats | None = None,
         config_sha256: str = "",
         flush: bool = False,
+        *,
+        stop_event: threading.Event | None = None,
+        deadline: float | None = None,
     ) -> RunResult:
         kw = {"run_id": run_id} if run_id else {}
         ctx = PipelineRunContext(pipeline_name=config.name, **kw)
@@ -2536,7 +2570,14 @@ class PipelineExecutor:
                         config, source, sinks, serializer_in, serializer_out,
                         transforms, dlq_sink, ctx, sink_cb_keys=sink_cb_keys, stats=stats,
                         delivery=delivery, checkpointer=checkpointer,
+                        stop_event=stop_event, deadline=deadline,
                     )
+
+                    # V18-07 (plan E): a cooperative stop (drain stop_event or
+                    # the single monotonic deadline) already finished the
+                    # current source unit inside the loop — the run reports
+                    # ABORTED with the drain/stop reason, never clean success.
+                    drained = _stop_requested(stop_event, deadline)
 
                     if flush:
                         # Manual flush run (design §5): emit open windows as
@@ -2560,10 +2601,15 @@ class PipelineExecutor:
                     # close ordering). Under continue a barrier failure yields a
                     # PARTIAL outcome instead of raising.
                     commit_ok = self._commit_sinks(sinks, ctx, on_error=config.on_error)
-                    status = self._batch_outcome(
-                        config.on_error, delivery, commit_failed=not commit_ok
-                    )
-                    result = RunResult.from_context(ctx, status)
+                    if drained:
+                        status = RunStatus.ABORTED
+                        error = _stop_reason(stop_event, deadline)
+                    else:
+                        status = self._batch_outcome(
+                            config.on_error, delivery, commit_failed=not commit_ok
+                        )
+                        error = None
+                    result = RunResult.from_context(ctx, status, error=error)
                     result.records_failed = delivery.records_failed
                     result.dlq_succeeded = delivery.dlq_succeeded
                     result.dlq_failed = delivery.dlq_failed
@@ -2673,6 +2719,8 @@ class PipelineExecutor:
         stats: PipelineStats | None = None,
         delivery: _RunDeliveryAccounting | None = None,
         checkpointer: _CheckpointGate | None = None,
+        stop_event: threading.Event | None = None,
+        deadline: float | None = None,
     ) -> None:
         """Inner loop: read source chunks and process with optional thread pool."""
         passthrough = False
@@ -2703,12 +2751,14 @@ class PipelineExecutor:
                 config, source, sinks, serializer_in, serializer_out,
                 transforms, dlq_sink, ctx, sink_cb_keys=sink_cb_keys, stats=stats,
                 passthrough=passthrough, delivery=delivery, checkpointer=checkpointer,
+                stop_event=stop_event, deadline=deadline,
             )
             return
         self._run_batch_chunks_sequential(
             config, source, sinks, serializer_in, serializer_out,
             transforms, dlq_sink, ctx, sink_cb_keys=sink_cb_keys, stats=stats,
             passthrough=passthrough, delivery=delivery, checkpointer=checkpointer,
+            stop_event=stop_event, deadline=deadline,
         )
 
     def _run_batch_chunks_sequential(
@@ -2726,10 +2776,19 @@ class PipelineExecutor:
         passthrough: bool = False,
         delivery: _RunDeliveryAccounting | None = None,
         checkpointer: _CheckpointGate | None = None,
+        stop_event: threading.Event | None = None,
+        deadline: float | None = None,
     ) -> None:
         """Single-threaded batch loop. Each chunk is fully processed before the
         next one is pulled, so source finalize runs strictly after the chunk
-        writes complete."""
+        writes complete.
+
+        V18-07 (plan E): a cooperative stop (``stop_event`` set or the single
+        monotonic ``deadline`` reached) stops the read at the next chunk
+        boundary and finishes the CURRENT source unit cleanly — the in-loop
+        finalize runs with the commit barrier + checkpoint + ack so the unit is
+        never left undecided by a drain.
+        """
         batch_size = config.batch_size
         record_chunk_size = getattr(config, "record_chunk_size", None)
         on_error = config.on_error
@@ -2740,8 +2799,16 @@ class PipelineExecutor:
         current_source_meta: dict | None = None
         current_unit: _UnitOutcome | None = None
         stopped_early = False
+        drain_stopped = False
         try:
             for raw, meta in source.read():
+                if _stop_requested(stop_event, deadline):
+                    logger.info(
+                        "Batch run stop requested — finishing current source unit",
+                        extra={"pipeline": config.name},
+                    )
+                    drain_stopped = True
+                    break
                 meta = _augment_chunk_meta(meta, ctx)
                 source_key = _source_unit_key(meta)
                 if source_key is not None:
@@ -2796,7 +2863,11 @@ class PipelineExecutor:
                 self._finalize_batch_source_unit(
                     sinks, source, delivery, current_source_key,
                     current_source_meta, current_unit, ctx, on_error,
-                    finalize_source=not stopped_early, checkpointer=checkpointer,
+                    # V18-07: a drain stop finalizes the current unit cleanly
+                    # (commit barrier + checkpoint + ack) — only a batch_size
+                    # boundary keeps the incomplete file unmarked.
+                    finalize_source=not stopped_early or drain_stopped,
+                    checkpointer=checkpointer,
                 )
 
     def _run_batch_chunks_threaded(
@@ -2814,6 +2885,8 @@ class PipelineExecutor:
         passthrough: bool = False,
         delivery: _RunDeliveryAccounting | None = None,
         checkpointer: _CheckpointGate | None = None,
+        stop_event: threading.Event | None = None,
+        deadline: float | None = None,
     ) -> None:
         """Multi-threaded batch loop: bounded in-flight chunks + deferred finalize.
 
@@ -2908,7 +2981,15 @@ class PipelineExecutor:
         with ThreadPoolExecutor(max_workers=config.thread_workers) as pool:
             try:
                 stopped_early = False
+                drain_stopped = False
                 for raw, meta in source.read():
+                    if _stop_requested(stop_event, deadline):
+                        logger.info(
+                            "Batch run stop requested — finishing current source unit",
+                            extra={"pipeline": config.name},
+                        )
+                        drain_stopped = True
+                        break
                     _submit(raw, meta)
                     while len(in_flight) >= cap:
                         _drain_one()
@@ -2921,11 +3002,13 @@ class PipelineExecutor:
                         )
                         stopped_early = True
                         break
-                if units and not stopped_early:
+                if units and (not stopped_early or drain_stopped):
                     # Natural end of the source: the last unit is fully
                     # submitted, so it may be finalized once its chunks drain.
                     # On a batch_size stop the generator was abandoned mid-file
-                    # and the current unit must stay unmarked.
+                    # and the current unit must stay unmarked. V18-07: a drain
+                    # stop is NOT a batch_size boundary — the current unit is
+                    # finished cleanly (commit barrier + checkpoint + ack).
                     units[-1][3] = True
                 while in_flight:
                     _drain_one()
@@ -2946,7 +3029,9 @@ class PipelineExecutor:
         stop_event: threading.Event,
         stats: PipelineStats | None = None,
         config_sha256: str = "",
-    ) -> None:
+        *,
+        deadline: float | None = None,
+    ) -> RunResult | None:
         """Run indefinitely until stop_event is set.
 
         *config_sha256* is the D.2 §6.1 YAML fingerprint used to discard stale
@@ -2954,6 +3039,14 @@ class PipelineExecutor:
         sets ``state_persist_interval_s``, the durable state blob is PUT
         periodically (timed with the chunk loop, not a new thread) so a D.2
         redispatch that hydrates recovers the state up to the last snapshot.
+
+        V18-07 (plan E): ``deadline`` is the single monotonic drain deadline.
+        The reader is interrupted when it is reached (the cooperative stop path
+        — drain the micro-batch buffer, close hooks, persist state — runs
+        exactly like a stop request); the run then returns an ``aborted``
+        ``RunResult`` carrying the drain reason so the completion recorded by
+        the caller is honest. A normal stop (stop_event only) returns ``None``
+        and keeps the caller's existing behavior.
         """
         logger.info("Stream run started", extra={"pipeline": config.name})
 
@@ -3100,6 +3193,7 @@ class PipelineExecutor:
                     flush_lock=flush_lock,
                     delivery=delivery,
                     checkpointer=checkpointer,
+                    deadline=deadline,
                 )
             else:
                 current_source_key: tuple[str, str] | None = None
@@ -3109,6 +3203,13 @@ class PipelineExecutor:
                 for raw, meta in source.read():
                     if stop_event.is_set():
                         logger.info("Stream stop requested", extra={"pipeline": config.name})
+                        stopped = True
+                        break
+                    if deadline is not None and time.monotonic() >= deadline:
+                        logger.info(
+                            "Stream drain deadline reached — interrupting reader",
+                            extra={"pipeline": config.name},
+                        )
                         stopped = True
                         break
                     source_key = _stream_source_unit_key(source, meta)
@@ -3247,6 +3348,19 @@ class PipelineExecutor:
                 },
             )
 
+        # V18-07: a reader interrupted by the single monotonic drain deadline
+        # reports ABORTED with the drain reason (the graceful-stop finally above
+        # already drained the buffer and closed hooks). A plain stop_event stop
+        # keeps the caller's existing behavior (None → the caller records what
+        # it recorded before).
+        if deadline is not None and time.monotonic() >= deadline:
+            return RunResult.from_context(
+                ctx,
+                RunStatus.ABORTED,
+                error="drained: worker drain deadline exceeded",
+            )
+        return None
+
     def _stream_run_threaded(
         self,
         config: PipelineConfig,
@@ -3265,6 +3379,7 @@ class PipelineExecutor:
         flush_lock: threading.Lock | None = None,
         delivery: _RunDeliveryAccounting | None = None,
         checkpointer: _CheckpointGate | None = None,
+        deadline: float | None = None,
     ) -> None:
         """Stream mode with N worker threads. Producer reads; workers process.
 
@@ -3356,6 +3471,13 @@ class PipelineExecutor:
             for raw, meta in source.read():
                 if stop_event.is_set():
                     logger.info("Stream stop requested", extra={"pipeline": config.name})
+                    stopped = True
+                    break
+                if deadline is not None and time.monotonic() >= deadline:
+                    logger.info(
+                        "Stream drain deadline reached — interrupting reader",
+                        extra={"pipeline": config.name},
+                    )
                     stopped = True
                     break
                 source_key = _stream_source_unit_key(source, meta)

@@ -68,20 +68,23 @@ _CONSECUTIVE_STATS_MISSES: dict[str, int] = {}
 #   commit_receipts    — sink commit barrier + latched_error + tier
 #                        declarations (V18-01 §6/§7, landed in this release);
 #   durable_completion — journal-first completions + outbox redelivery
-#                        (V18-05, completed by the drain lane);
+#                        (V18-05, landed);
 #   query_replay       — get_attempt / list_unacked_completions replay API
-#                        (V18-05, landed).
+#                        (V18-05, landed);
+#   drain              — POST /agent/drain + admission_state on /agent/status,
+#                        one monotonic deadline (plan E, V18-07, landed).
 # Deliberately NOT declared: admission_limits (worker-side slot limits not
-# implemented — slot capacity is only REPORTED), drain (POST /agent/drain is
-# a later lane), status_snapshot (the draining state machine does not exist
-# yet). A v1.8 manager reading these capabilities enters the compatibility
-# bridge for anything absent (frozen §5).
+# implemented — slot capacity is only REPORTED), status_snapshot (the slot
+# usage/status snapshot surface is a later lane). A v1.8 manager reading
+# these capabilities enters the compatibility bridge for anything absent
+# (frozen §5).
 TRAM_PROTOCOL_VERSION = "1.8"
 _WORKER_CAPABILITIES: tuple[str, ...] = (
     "fencing",
     "commit_receipts",
     "durable_completion",
     "query_replay",
+    "drain",
 )
 
 # V18-01 §9 (frozen names): worker slot capacity REPORTED at handshake. The
@@ -96,6 +99,11 @@ _WORKER_STREAM_SLOTS_DEFAULT = 4
 # run-complete is identity-checked and idempotent).
 _OUTBOX_DRAIN_INTERVAL_S = 1.0
 _OUTBOX_DRAIN_BATCH = 10
+# V18-07: when the journal is fatally unavailable a pass raises before
+# touching any row — the loop then backs off exponentially (capped) and logs
+# the condition once per backoff period instead of spamming an ERROR +
+# traceback every second. The backoff resets on the first successful pass.
+_OUTBOX_DRAIN_BACKOFF_MAX_S = 60.0
 
 # GH #39/#54: the worker agent is a stateless executor with no per-worker DB,
 # so a ProcessedFileTracker cannot be constructed here from a local DB. With a
@@ -261,6 +269,32 @@ class WorkerState:
         self.stats_stop = threading.Event()
         # V18-05: outbox drain loop stop event (same pattern as stats_stop).
         self.outbox_stop = threading.Event()
+        # V18-07 (plan E): drain lifecycle state. ``drain_event`` set marks
+        # admission_state "draining" (POST /agent/drain or SIGTERM shutdown);
+        # ``drain_deadline`` is the ONE monotonic deadline (now +
+        # TRAM_DRAIN_TIMEOUT_S) threaded to the in-flight run executors —
+        # there is deliberately no independent second timeout.
+        self.drain_event = threading.Event()
+        self.drain_deadline: float | None = None
+        self.drain_started_at: str | None = None
+
+    @property
+    def admission_state(self) -> str:
+        """Frozen §5: ``admitting`` | ``draining``."""
+        return "draining" if self.drain_event.is_set() else "admitting"
+
+    def begin_drain(self, deadline: float) -> bool:
+        """Enter the draining state with the ONE monotonic deadline.
+
+        Idempotent: a second drain call keeps the FIRST deadline (a drain
+        repeat must never extend the bound) and returns False.
+        """
+        if self.drain_event.is_set():
+            return False
+        self.drain_event.set()
+        self.drain_deadline = deadline
+        self.drain_started_at = datetime.now(UTC).isoformat()
+        return True
 
     @staticmethod
     def _key(run: ActiveRun) -> str:
@@ -691,12 +725,41 @@ def _drain_outbox_once(
 def _outbox_loop(
     journal: WorkerJournal, state: WorkerState, manager_url: str, api_key: str = ""
 ) -> None:
-    """Background daemon drain loop (same pattern as the stats loop)."""
-    while not state.outbox_stop.wait(_OUTBOX_DRAIN_INTERVAL_S):
+    """Background daemon drain loop (same pattern as the stats loop).
+
+    V18-07: a pass that raises before touching any row (fatally unavailable
+    journal) backs off exponentially — the wait IS the backoff, so the
+    ERROR fires once per backoff period, never per second — capped at
+    ``_OUTBOX_DRAIN_BACKOFF_MAX_S``, and the base cadence resumes after the
+    first successful pass (recovery is logged once).
+    """
+    backoff = _OUTBOX_DRAIN_INTERVAL_S
+    consecutive_failures = 0
+    while not state.outbox_stop.wait(backoff):
         try:
             _drain_outbox_once(journal, manager_url, api_key)
-        except Exception:
-            logger.exception("outbox drain pass failed")
+        except Exception as exc:
+            consecutive_failures += 1
+            logger.error(
+                "outbox drain pass failed — backing off",
+                extra={
+                    "consecutive_failures": consecutive_failures,
+                    "backoff_seconds": backoff,
+                    "error": str(exc),
+                },
+            )
+            backoff = min(
+                max(backoff * 2, _OUTBOX_DRAIN_INTERVAL_S),
+                _OUTBOX_DRAIN_BACKOFF_MAX_S,
+            )
+            continue
+        if consecutive_failures:
+            logger.info(
+                "outbox drain recovered",
+                extra={"missed_passes": consecutive_failures},
+            )
+            consecutive_failures = 0
+        backoff = _OUTBOX_DRAIN_INTERVAL_S
 
 
 # ── App factory ────────────────────────────────────────────────────────────
@@ -819,16 +882,51 @@ def create_worker_app(
         logger.info("Worker agent ready", extra={"worker_id": worker_id})
         yield
 
-        # Signal all active streams to stop on shutdown
+        # V18-07 (plan E, R7): uvicorn/SIGTERM shutdown runs the SAME drain
+        # state machine as POST /agent/drain — admission closed, in-flight
+        # runs signalled cooperatively, ONE monotonic deadline
+        # (TRAM_DRAIN_TIMEOUT_S) bounding the wait. After the deadline expires
+        # shutdown proceeds regardless: the run threads are daemon and are
+        # never joined past the bound (an uncooperative blocked adapter is
+        # resolved by process termination/recovery — plan E).
         state.stats_stop.set()
         state.outbox_stop.set()
+        if not state.drain_event.is_set():
+            state.begin_drain(time.monotonic() + cfg.drain_timeout_s())
         for run in state.snapshot():
             run.stop_event.set()
+
+        def _drain_remaining() -> float:
+            if state.drain_deadline is None:
+                return 0.0
+            return max(state.drain_deadline - time.monotonic(), 0.0)
+
+        for run in state.snapshot():
+            thread = run.thread
+            if thread is None or not thread.is_alive():
+                continue
+            thread.join(timeout=_drain_remaining())
+            if _drain_remaining() <= 0:
+                break
+        # Final best-effort outbox pass (bounded by the remaining deadline) so
+        # completions recorded during the drain are flushed before the journal
+        # closes — the background loop has stopped, this is the last chance.
+        if _drain_remaining() > 0:
+            try:
+                _drain_outbox_once(journal, manager_url, api_key)
+            except Exception:
+                logger.warning(
+                    "final outbox drain pass failed",
+                    extra={"worker_id": worker_id},
+                )
         if stats_thread.is_alive():
             stats_thread.join(timeout=stats_interval + 1)
         if outbox_thread.is_alive():
             outbox_thread.join(timeout=_OUTBOX_DRAIN_INTERVAL_S + 1)
-        logger.info("Worker agent stopped", extra={"worker_id": worker_id})
+        logger.info(
+            "Worker agent stopped",
+            extra={"worker_id": worker_id, "admission_state": state.admission_state},
+        )
         journal.close()
 
     app = FastAPI(
@@ -910,6 +1008,29 @@ def create_worker_app(
         return {
             "worker_id": worker_id,
             "worker_session": worker_session,
+            # V18-07 (plan E / frozen §5): worker admission state — the
+            # manager-side drain surface. ``drained`` is the release-runbook
+            # gate: draining AND (all in-flight runs finished OR the single
+            # monotonic deadline passed). The worker never exits the process
+            # on its own — the indicator stays observable.
+            "admission_state": state.admission_state,
+            "drain": {
+                "draining": state.drain_event.is_set(),
+                "started_at": state.drain_started_at,
+                "deadline_expired": (
+                    state.drain_deadline is not None
+                    and time.monotonic() >= state.drain_deadline
+                ),
+                "idle": len(active) == 0,
+                "drained": state.drain_event.is_set()
+                and (
+                    len(active) == 0
+                    or (
+                        state.drain_deadline is not None
+                        and time.monotonic() >= state.drain_deadline
+                    )
+                ),
+            },
             "active_runs": len(active),
             "running_pipelines": sorted({r.pipeline_name for r in active}),
             "running": running,
@@ -1038,6 +1159,20 @@ def create_worker_app(
 
     @app.post("/agent/run", status_code=202)
     def run(req: RunRequest):  # noqa: A001
+        # ── V18-07 (plan E / frozen §5): drain admission gate ───────────────
+        # While the worker is draining no NEW dispatch is admitted — 503
+        # admission closed (draining), distinct from the journal-unavailable
+        # 503. In-flight attempts are unaffected (they drain under the one
+        # deadline); the manager's drain-only compatibility bridge expects
+        # exactly this closure.
+        if state.drain_event.is_set():
+            raise HTTPException(
+                status_code=503,
+                detail={
+                    "reason": "admission closed (draining)",
+                    "admission_state": state.admission_state,
+                },
+            )
         # ── V18-01 §5: admission path selection ────────────────────────────
         # ``authorization`` present → start-authorization admission against the
         # journal (per-attempt idempotency — a repeat returns 200, never a
@@ -1273,14 +1408,42 @@ def create_worker_app(
                 try:
                     from tram.agent.assets import sync_assets
                     sync_assets(config, state.manager_url, data_dir, api_key)
-                    executor.stream_run(
+                    # V18-07: the single monotonic drain deadline is threaded
+                    # to the in-flight stream executor; the drain also sets the
+                    # run's stop_event (the mid-run interrupt). The returned
+                    # RunResult carries the drain reason when the deadline
+                    # interrupted the reader.
+                    stream_result = executor.stream_run(
                         config, active_run.stop_event, stats=active_run.stats,
                         config_sha256=config_sha256,
+                        deadline=state.drain_deadline,
                     )
                     # C2: emit buffered processed-file marks (batched) before
                     # the run-complete callback so the next run sees them.
                     _flush_file_tracker(file_tracker)
                     stats_snapshot = _final_stats_snapshot(active_run)
+                    # V18-07: a stream interrupted by the drain (deadline
+                    # expired, or its stop_event fired while the worker is
+                    # draining) reports ABORTED with the drain reason — never
+                    # clean success for an interrupted run.
+                    completion_status = "success"
+                    completion_error = None
+                    completion_errors = (
+                        list(stats_snapshot["errors_last_window"])
+                        + active_run.degradation_notes
+                    )
+                    if (
+                        stream_result is not None
+                        and stream_result.status.value in ("aborted", "partial")
+                    ):
+                        completion_status = stream_result.status.value
+                        completion_error = stream_result.error
+                        if completion_error:
+                            completion_errors.append(completion_error)
+                    elif state.drain_event.is_set():
+                        completion_status = "aborted"
+                        completion_error = "drained: worker drain requested"
+                        completion_errors.append(completion_error)
                     if attempt_id:
                         # V18-01 §4: journal-first completion — the row commits
                         # BEFORE the run leaves WorkerState and before the
@@ -1294,14 +1457,14 @@ def create_worker_app(
                             pipeline_name=req.pipeline_name,
                             worker_id=state.worker_id,
                             attempt_id=attempt_id,
-                            status="success",
+                            status=completion_status,
+                            error=completion_error,
                             records_in=int(stats_snapshot["records_in"]),
                             records_out=int(stats_snapshot["records_out"]),
                             records_skipped=int(stats_snapshot["records_skipped"]),
                             bytes_in=int(stats_snapshot["bytes_in"]),
                             bytes_out=int(stats_snapshot["bytes_out"]),
-                            errors=list(stats_snapshot["errors_last_window"])
-                            + active_run.degradation_notes,
+                            errors=completion_errors,
                             started_at=active_run.started_at,
                             finished_at=datetime.now(UTC).isoformat(),
                             legacy=active_run.legacy,
@@ -1312,15 +1475,14 @@ def create_worker_app(
                         journal.enqueue_outbox(attempt_id, "run-complete", result_json)
                     _post_run_complete(
                         callback_url, req.run_id, req.pipeline_name, state.worker_id,
-                        "success",
+                        completion_status,
                         int(stats_snapshot["records_in"]),
                         int(stats_snapshot["records_out"]),
                         int(stats_snapshot["bytes_in"]),
                         int(stats_snapshot["bytes_out"]),
-                        None,
+                        completion_error,
                         int(stats_snapshot["records_skipped"]),
-                        list(stats_snapshot["errors_last_window"])
-                        + active_run.degradation_notes,
+                        completion_errors,
                         started_at=active_run.started_at,
                         finished_at=datetime.now(UTC).isoformat(),
                         api_key=state.api_key,
@@ -1373,11 +1535,29 @@ def create_worker_app(
                 try:
                     from tram.agent.assets import sync_assets
                     sync_assets(config, state.manager_url, data_dir, api_key)
+                    # V18-07: the run's stop_event + the single monotonic drain
+                    # deadline are threaded to the in-flight batch executor —
+                    # on either, it finishes the CURRENT source unit cleanly
+                    # (commit barrier + checkpoint + ack) and returns an
+                    # ``aborted`` result whose error carries the drain reason.
                     result = executor.batch_run(
                         config, run_id=req.run_id, stats=active_run.stats,
                         config_sha256=config_sha256,
                         flush=req.flush,
+                        stop_event=active_run.stop_event,
+                        deadline=state.drain_deadline,
                     )
+                    # V18-07: when the drain's cooperative stop interrupts a
+                    # batch BEFORE the deadline, the executor reports ABORTED
+                    # with a generic interrupt reason — surface the drain
+                    # reason explicitly on the completion payload (mirrors the
+                    # stream thread's drain override).
+                    if (
+                        result.status.value == "aborted"
+                        and state.drain_event.is_set()
+                        and "drain" not in (result.error or "")
+                    ):
+                        result.error = "drained: worker drain requested"
                     # C2: emit buffered processed-file marks (batched) before
                     # the run-complete callback so the next run sees them.
                     _flush_file_tracker(file_tracker)
@@ -1532,6 +1712,47 @@ def create_worker_app(
             )
         active_run.stop_event.set()
         return {"stopping": True, "run_id": req.run_id, "worker_id": worker_id}
+
+    # ── POST /agent/drain (V18-07, plan E / frozen §5) ─────────────────────
+
+    @app.post("/agent/drain", status_code=202)
+    def drain():
+        """Machine-authenticated worker drain (frozen §5 protocol table).
+
+        Marks the worker draining — ``/agent/status`` surfaces
+        ``admission_state: "draining"`` and new ``/agent/run`` dispatches are
+        refused 503 admission closed (draining). SIGTERM shutdown runs the
+        SAME state machine (plan E): one monotonic deadline = now +
+        ``TRAM_DRAIN_TIMEOUT_S``, threaded to every in-flight run executor —
+        batch runs finish the current source unit cleanly, stream readers are
+        interrupted at the deadline. In-flight runs are signalled
+        cooperatively via their stop_event (the mid-run delivery mechanism);
+        the deadline bounds the wait and shutdown proceeds regardless after it
+        expires. A second drain call is idempotent (202, first deadline kept —
+        a repeat never extends the bound).
+        """
+        timeout_s = cfg.drain_timeout_s()
+        deadline = time.monotonic() + timeout_s
+        first_call = state.begin_drain(deadline)
+        for run in state.snapshot():
+            run.stop_event.set()
+        logger.info(
+            "Worker drain requested",
+            extra={
+                "worker_id": worker_id,
+                "deadline_seconds": timeout_s,
+                "active_runs": len(state.snapshot()),
+                "already_draining": not first_call,
+            },
+        )
+        return {
+            "draining": True,
+            "worker_id": worker_id,
+            "admission_state": state.admission_state,
+            "deadline_seconds": timeout_s,
+            "active_runs": len(state.snapshot()),
+            "already_draining": not first_call,
+        }
 
     return app
 

@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 import textwrap
 import threading
+import time
 import types
 from unittest.mock import MagicMock, patch
 
@@ -1275,6 +1276,111 @@ class TestBatchDeliveryIntegrity:
             assert call.kwargs["success"] is True
 
 
+class TestDrainDeadline:
+    """V18-07 (plan E) — the single monotonic drain deadline in the executor.
+
+    A batch run whose deadline or cooperative stop_event fires mid-source
+    finishes the CURRENT source unit cleanly (sink commit barrier + delivery
+    checkpoint + ack) and reports ABORTED with the drain/stop reason — never
+    clean success for an interrupted run. A stream reader is interrupted at
+    the deadline (the graceful-stop path runs) and returns an ABORTED
+    RunResult carrying the drain reason so the caller's completion is honest.
+    """
+
+    UNIT = "local:/in/f.json:<fp>:0"
+
+    @staticmethod
+    def _infinite_source():
+        """Source generator that never ends — the deadline must break it."""
+        i = 0
+        while True:
+            yield (
+                json.dumps([{"id": str(i)}]).encode(),
+                {"source_filename": "f.json", "source_path": "/in/f.json"},
+            )
+            i += 1
+
+    def test_batch_deadline_finishes_current_unit_and_aborts(self):
+        """A batch run interrupted by the deadline finishes the CURRENT unit
+        (commit barrier + checkpoint + ack) and reports ABORTED with the
+        drain reason."""
+        config = _make_pipeline()
+        client = MagicMock()
+        client.checkpoint.return_value = CheckpointResult(
+            committed=True, already_committed=False,
+            checkpoint_id="cp-1", state_revision=1,
+        )
+        executor = PipelineExecutor(checkpoint_client=client)
+        mock_source = MagicMock()
+        mock_source.read.return_value = self._infinite_source()
+        mock_source.source_unit_id.return_value = self.UNIT
+        mock_sink = MagicMock()
+        mock_sink.commit.return_value = SinkCommitReceipt(
+            sink_key="sftp", tier=DeliveryTier.FSYNCED_LOCAL, confirmed=True, notes="",
+        )
+        mock_ser_in = MagicMock()
+        mock_ser_in.parse.return_value = [{"id": "1"}]
+        mock_ser_out = MagicMock()
+        mock_ser_out.serialize.return_value = b"[]"
+
+        with (
+            patch.object(executor, "_build_source", return_value=mock_source),
+            patch.object(executor, "_build_sinks", return_value=[(mock_sink, None, [])]),
+            patch.object(executor, "_build_serializer_in", return_value=mock_ser_in),
+            patch.object(executor, "_build_serializer_out", return_value=mock_ser_out),
+            patch.object(executor, "_build_transforms", return_value=[]),
+        ):
+            result = executor.batch_run(
+                config, deadline=time.monotonic() + 0.25
+            )
+
+        assert result.status == RunStatus.ABORTED
+        assert "drain" in (result.error or "")
+        # The current source unit was finished cleanly before stopping: the
+        # commit barrier ran, the delivery checkpoint committed, and the unit
+        # was acked DELIVERED (never left undecided by the drain).
+        mock_sink.commit.assert_called()
+        client.checkpoint.assert_called_once()
+        assert client.checkpoint.call_args.kwargs["source_unit"] == self.UNIT
+        mock_source.ack.assert_called_once()
+        assert mock_source.ack.call_args[0][1] == AckDisposition.DELIVERED
+        mock_source.finalize.assert_called_once()
+        assert mock_source.finalize.call_args.kwargs["success"] is True
+
+    def test_batch_stop_event_finishes_current_unit_and_aborts(self):
+        """The cooperative stop_event path (the drain's mid-run delivery
+        mechanism) finishes the current unit and reports ABORTED too."""
+        config = _make_pipeline()
+        executor = PipelineExecutor()
+        mock_source = MagicMock()
+        mock_source.read.return_value = self._infinite_source()
+        mock_sink = MagicMock()
+        mock_ser_in = MagicMock()
+        mock_ser_in.parse.return_value = [{"id": "1"}]
+        mock_ser_out = MagicMock()
+        mock_ser_out.serialize.return_value = b"[]"
+        stop_event = threading.Event()
+        timer = threading.Timer(0.1, stop_event.set)
+        timer.daemon = True
+        timer.start()
+
+        with (
+            patch.object(executor, "_build_source", return_value=mock_source),
+            patch.object(executor, "_build_sinks", return_value=[(mock_sink, None, [])]),
+            patch.object(executor, "_build_serializer_in", return_value=mock_ser_in),
+            patch.object(executor, "_build_serializer_out", return_value=mock_ser_out),
+            patch.object(executor, "_build_transforms", return_value=[]),
+        ):
+            result = executor.batch_run(config, stop_event=stop_event)
+
+        assert result.status == RunStatus.ABORTED
+        assert "interrupted" in (result.error or "")
+        mock_source.ack.assert_called_once()
+        assert mock_source.ack.call_args[0][1] == AckDisposition.DELIVERED
+        mock_source.finalize.assert_called_once()
+        assert mock_source.finalize.call_args.kwargs["success"] is True
+
+
 class TestRetryTaxonomy:
     """V18-02 — retry taxonomy refinement (plan C error-policy table).
 
@@ -1643,6 +1749,41 @@ class TestPipelineExecutorStreamRun:
         assert sink.closed is True
         assert sink._timer is not None
         assert not sink._timer.is_alive()
+
+    def test_stream_run_interrupted_at_deadline_returns_aborted(self):
+        """V18-07: a stream reader is interrupted at the single monotonic
+        deadline — the graceful-stop path runs (buffer drained, sinks/source
+        closed) and the run returns an ABORTED RunResult carrying the drain
+        reason so the caller's completion is honest."""
+        config = _make_pipeline()
+        executor = PipelineExecutor()
+        mock_source = MagicMock()
+        mock_source.read.return_value = TestDrainDeadline._infinite_source()
+        mock_sink = MagicMock()
+        mock_ser_in = MagicMock()
+        mock_ser_in.parse.return_value = [{"id": "1"}]
+        mock_ser_out = MagicMock()
+        mock_ser_out.serialize.return_value = b"[]"
+
+        with (
+            patch.object(executor, "_build_source", return_value=mock_source),
+            patch.object(executor, "_build_sinks", return_value=[(mock_sink, None, [])]),
+            patch.object(executor, "_build_serializer_in", return_value=mock_ser_in),
+            patch.object(executor, "_build_serializer_out", return_value=mock_ser_out),
+            patch.object(executor, "_build_transforms", return_value=[]),
+            patch.object(executor, "_build_dlq_sink", return_value=None),
+        ):
+            result = executor.stream_run(
+                config, threading.Event(), deadline=time.monotonic() + 0.25
+            )
+
+        assert result is not None
+        assert result.status == RunStatus.ABORTED
+        assert "drain" in (result.error or "")
+        # The cooperative stop path ran: buffer drained, resources closed.
+        assert mock_sink.write.call_count >= 1
+        mock_sink.close.assert_called_once()
+        mock_source.close.assert_called_once()
 
 
 class TestTransformChain:

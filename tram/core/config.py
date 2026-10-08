@@ -349,6 +349,25 @@ def worker_journal_replay_retention_s() -> int:
     return _env_int("TRAM_WORKER_JOURNAL_REPLAY_RETENTION_S", _WORKER_JOURNAL_REPLAY_RETENTION_S_DEFAULT)
 
 
+# V18-01 §9 (frozen): the drain deadline — the ONE monotonic deadline of plan
+# E. The worker drain computes deadline = now + TRAM_DRAIN_TIMEOUT_S and
+# threads it to every in-flight run executor; batch runs finish the current
+# source unit, stream readers are interrupted at the deadline, and shutdown
+# proceeds regardless once it expires. Deliberately no independent second
+# timeout constant anywhere.
+_DRAIN_TIMEOUT_S_DEFAULT = 30
+
+
+def drain_timeout_s() -> int:
+    """``TRAM_DRAIN_TIMEOUT_S`` (V18-01 §9) — the single drain deadline in seconds.
+
+    Single source for the one monotonic deadline of plan E (matches the 30 s
+    cooperative drain / 45 s pod grace gate). Invalid values fail loud via
+    ``_env_int`` (the strictest pattern in this module).
+    """
+    return _env_int("TRAM_DRAIN_TIMEOUT_S", _DRAIN_TIMEOUT_S_DEFAULT)
+
+
 def worker_legacy_admit() -> str:
     """``TRAM_WORKER_LEGACY_ADMIT`` (V18-01 §5) — rollback-bridge gate.
 

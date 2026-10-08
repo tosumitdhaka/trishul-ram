@@ -426,7 +426,7 @@ class TestConfigSha256:
         expected = hashlib.sha256(_MINIMAL_YAML.encode()).hexdigest()[:16]
         stopped = threading.Event()
 
-        def _fake_stream_run(config, stop_event, stats=None, config_sha256=""):
+        def _fake_stream_run(config, stop_event, stats=None, config_sha256="", *, deadline=None):
             stop_event.wait(timeout=5)
             stopped.set()
 
@@ -607,7 +607,7 @@ class TestRunEndpoint:
         """Stream run: POST /agent/run then POST /agent/stop signals completion."""
         stopped = threading.Event()
 
-        def _fake_stream_run(config, stop_event, stats=None, config_sha256=""):
+        def _fake_stream_run(config, stop_event, stats=None, config_sha256="", *, deadline=None):
             # Block until stop is requested (simulates a real stream)
             if stats is not None:
                 stats.increment(records_in=7, records_out=6, skipped=1, bytes_in=700, bytes_out=600)
@@ -929,7 +929,8 @@ class TestStatefulTransformWiring:
         captured = {}
 
         def _fake_batch_run(self, config, run_id=None, stats=None,
-                            config_sha256="", flush=False):
+                            config_sha256="", flush=False, *,
+                            stop_event=None, deadline=None):
             captured["flush"] = flush
             return mock_result
 
@@ -974,7 +975,8 @@ class TestStatefulTransformWiring:
         captured = {}
 
         def _fake_batch_run(self, config, run_id=None, stats=None,
-                            config_sha256="", flush=False):
+                            config_sha256="", flush=False, *,
+                            stop_event=None, deadline=None):
             captured["flush"] = flush
             return mock_result
 
@@ -1304,7 +1306,7 @@ class TestWorkerSkipProcessedFailLoud:
         payload of a stream run."""
         stopped = threading.Event()
 
-        def _fake_stream_run(config, stop_event, stats=None, config_sha256=""):
+        def _fake_stream_run(config, stop_event, stats=None, config_sha256="", *, deadline=None):
             stop_event.wait(timeout=5)
             stopped.set()
 
