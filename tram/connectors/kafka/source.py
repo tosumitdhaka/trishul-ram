@@ -36,6 +36,11 @@ class KafkaSource(BaseSource):
         sasl_username     (str, optional)           SASL username.
         sasl_password     (str, optional)           SASL password.
         ssl_cafile        (str, optional)           CA certificate path.
+        cluster_incarnation (str, optional)         Operator-declared cluster
+                                                    incarnation token for the
+                                                    §7 replay identity;
+                                                    overrides the broker
+                                                    cluster ID.
 
     Commit semantics (at-least-once default):
     With ``enable_auto_commit: false`` (the default) offsets are committed
@@ -83,6 +88,20 @@ class KafkaSource(BaseSource):
     true`` restores the legacy at-most-once behavior: the consumer commits on
     its own ~5s timer regardless of sink progress, and the explicit commits
     are disabled.
+
+    Replay identity (V18-01 §7): ``source_unit_id(meta)`` returns the frozen
+    ``{cluster_incarnation}/{topic}/{partition}`` unit identity. The
+    incarnation is the broker cluster ID — the consumer-group metadata that
+    defines offset continuity: committed offsets live in the cluster's
+    ``__consumer_offsets`` topic, so the same cluster ID means the same offset
+    store. Rebalances, consumer-session resets, and worker/broker restarts of
+    the same cluster all keep the identity and the per-partition frontier
+    (the committed offset) advances in place; a new cluster (fresh format /
+    new log storage) reports a new cluster ID and offsets never carry over —
+    a new identity. An operator-declared ``cluster_incarnation`` config
+    override wins (e.g. after an approved state reset). The identity never
+    embeds the offset: the checkpoint row keys on
+    ``{incarnation}/{topic}/{partition}`` and upserts the offset frontier.
     """
 
     def __init__(self, config: dict) -> None:
@@ -139,6 +158,22 @@ class KafkaSource(BaseSource):
         # most one consolidated commit per partition per drain, epoch-fenced
         # (revoked partitions and reset sessions drop their pending entries).
         self._pending_commits: dict[tuple[str, int], int] = {}
+        # V18-01 §7 replay identity: the cluster-incarnation token that feeds
+        # ``source_unit_id(meta)``. This is the component that changes only
+        # when committed offsets stop being meaningful (a new cluster, or an
+        # operator-approved reset), so the ``{cluster_incarnation}/{topic}/
+        # {partition}`` identity is stable across rebalances and worker
+        # restarts within one incarnation. An operator-declared
+        # ``cluster_incarnation`` config override wins; otherwise the token is
+        # captured lazily from the active consumer's broker metadata (the
+        # cluster ID is the offset-continuity metadata) and cached on first
+        # use — never a guessed value.
+        configured_incarnation = config.get("cluster_incarnation")
+        self._incarnation: str | None = (
+            configured_incarnation
+            if isinstance(configured_incarnation, str) and configured_incarnation
+            else None
+        )
 
     # ── Lifecycle ──────────────────────────────────────────────────────────
 
@@ -313,6 +348,57 @@ class KafkaSource(BaseSource):
                     "error": str(exc),
                 },
             )
+
+    # ── V18-01 §7: replay identity ─────────────────────────────────────────
+
+    def _resolve_incarnation(self) -> str | None:
+        """Cluster-incarnation token for the replay identity, resolved once.
+
+        Committed offsets live in the cluster's ``__consumer_offsets`` topic,
+        so the broker-reported cluster ID is the consumer-group metadata that
+        defines offset continuity: the same cluster ID means the same offset
+        store. Rebalances, consumer-session resets, and worker/broker restarts
+        of the same cluster all keep the identity and the per-partition
+        frontier advances in place; a new cluster (fresh format / new log
+        storage) reports a new cluster ID and the old offsets no longer carry
+        over — a new identity. An operator-declared ``cluster_incarnation``
+        config override wins (e.g. after an approved state reset). The token
+        is captured from the active consumer's broker metadata on first use
+        and cached; ``None`` while no consumer is active and no override is
+        declared — no durable identity (never a guessed one).
+        """
+        if self._incarnation is not None:
+            return self._incarnation
+        consumer = self._consumer
+        if consumer is None:
+            return None
+        cluster = getattr(getattr(consumer, "_client", None), "cluster", None)
+        cluster_id = getattr(cluster, "cluster_id", None)
+        if isinstance(cluster_id, str) and cluster_id:
+            self._incarnation = cluster_id
+            return cluster_id
+        return None
+
+    def source_unit_id(self, meta: dict) -> str | None:
+        """Frozen V18-01 §7 replay identity: ``{cluster_incarnation}/{topic}/{partition}``.
+
+        The unit is the partition, never the record: the identity never embeds
+        the offset, so ``(pipeline_name, source_unit)`` checkpoint rows upsert
+        in place and the frontier — the per-partition committed offset — moves
+        within the identity. ``None`` when the meta lacks the partition
+        coordinates or no incarnation is resolvable (no active consumer and no
+        operator-declared incarnation); the §7 matrix counts Kafka as
+        identity-present, so a strict pipeline is accepted at validation and
+        an identity-less meta simply is not delivery-checkpointed.
+        """
+        topic = meta.get("kafka_topic")
+        partition = meta.get("kafka_partition")
+        if topic is None or partition is None:
+            return None
+        incarnation = self._resolve_incarnation()
+        if incarnation is None:
+            return None
+        return f"{incarnation}/{topic}/{partition}"
 
     def ack(self, meta: dict, disposition) -> None:
         """Advance the per-partition completed frontier and record its commit.

@@ -1277,3 +1277,197 @@ class TestKafkaSinkDelivery:
         # synchronously as SinkError. Only a live broker could prove acks=all
         # is honored end to end (V18-02 broker-test gate).
         assert self._make_sink().latched_error() is None
+
+
+class TestKafkaSourceUnitIdentity:
+    """V18-01 §7 replay identity: ``{cluster_incarnation}/{topic}/{partition}``.
+
+    The incarnation is the component that changes only when committed offsets
+    stop being meaningful (a new cluster, or an operator-approved reset), so
+    the identity is stable across rebalances, consumer-session resets, and
+    worker restarts within one incarnation — checkpoint rows upsert in place
+    and the frontier (the per-partition committed offset) advances. The
+    offset is never part of the identity: embedding it would mint a new
+    checkpoint row per record instead of advancing the partition's frontier.
+    """
+
+    @staticmethod
+    def _make_source(extra: dict | None = None) -> KafkaSource:
+        cfg = {"brokers": ["kafka:9092"], "topic": "events"}
+        if extra:
+            cfg.update(extra)
+        return KafkaSource(cfg)
+
+    @staticmethod
+    def _meta(partition: int = 0, offset: int = 42, topic: str = "events") -> dict:
+        return {
+            "kafka_topic": topic,
+            "kafka_partition": partition,
+            "kafka_offset": offset,
+            "kafka_epoch": 3,
+        }
+
+    @staticmethod
+    def _consumer_with_cluster(cluster_id: str) -> MagicMock:
+        consumer = MagicMock()
+        consumer._client.cluster.cluster_id = cluster_id
+        return consumer
+
+    def test_identity_format_and_partition_distinctness(self):
+        src = self._make_source({"cluster_incarnation": "inc-abc123"})
+        assert src.source_unit_id(self._meta(partition=0)) == "inc-abc123/events/0"
+        assert src.source_unit_id(self._meta(partition=1)) == "inc-abc123/events/1"
+        assert src.source_unit_id(self._meta(topic="orders")) == "inc-abc123/orders/0"
+        assert src.source_unit_id(self._meta(partition=0)) != src.source_unit_id(
+            self._meta(partition=1)
+        )
+
+    def test_source_unit_id_is_an_override(self):
+        """The connector declares the identity — the strict-validation override
+        detection and the executor's source_unit_id preference both key on
+        this (the BaseSource default is None)."""
+        from tram.interfaces.base_source import BaseSource
+
+        assert KafkaSource.source_unit_id is not BaseSource.source_unit_id
+
+    def test_source_unit_id_none_without_identity(self):
+        src = self._make_source()  # no override, no active consumer
+        assert src.source_unit_id(self._meta()) is None
+        assert src.source_unit_id({}) is None
+        assert src.source_unit_id({"kafka_topic": "t"}) is None
+        assert src.source_unit_id({"kafka_partition": 0}) is None
+
+    def test_identity_never_embeds_the_offset(self):
+        """The unit is the partition, not the record: different offsets on the
+        same partition share one identity, so the (pipeline_name, source_unit)
+        checkpoint row upserts in place and the committed-offset frontier
+        advances within the identity."""
+        src = self._make_source({"cluster_incarnation": "inc-1"})
+        assert (
+            src.source_unit_id(self._meta(offset=5))
+            == src.source_unit_id(self._meta(offset=9))
+            == "inc-1/events/0"
+        )
+
+    def test_identity_stable_across_rebalance_and_session_reset(self):
+        """A rebalance (assignment-epoch bump) or a new consumer session within
+        the same cluster keeps the identity — frontiers advance in place. The
+        per-message epoch fencing that gates acks is orthogonal to the replay
+        identity."""
+        from kafka import TopicPartition
+
+        src = self._make_source()
+        src._consumer = self._consumer_with_cluster("cluster-A")
+        identity = src.source_unit_id(self._meta())
+        assert identity == "cluster-A/events/0"
+
+        # Rebalance: the partition is revoked and another assigned — the
+        # assignment epoch bumps, the identity holds.
+        src._assigned = {TopicPartition("events", 0)}
+        src._consumer.assignment.return_value = [TopicPartition("events", 1)]
+        src._sync_assignment(src._consumer)
+        assert src._assignment_epoch == 1
+        assert src.source_unit_id(self._meta()) == identity
+
+        # New consumer session on the same cluster: epoch bumps again, the
+        # identity still holds (committed offsets remain meaningful).
+        src._reset_session_state()
+        assert src.source_unit_id(self._meta()) == identity
+
+    def test_worker_restart_keeps_identity_within_incarnation(self):
+        """A fresh source instance (worker restart) re-captures the same
+        broker cluster ID → the same identity → checkpoint rows carry over."""
+        src_a = self._make_source()
+        src_a._consumer = self._consumer_with_cluster("cluster-A")
+        id_a = src_a.source_unit_id(self._meta())
+        src_b = self._make_source()
+        src_b._consumer = self._consumer_with_cluster("cluster-A")
+        assert src_b.source_unit_id(self._meta()) == id_a
+
+    def test_new_cluster_new_identity_no_offset_carryover(self):
+        """A new cluster (fresh format → new cluster ID) mints a new identity:
+        the old incarnation's checkpoint rows never apply to the new one."""
+        src_old = self._make_source()
+        src_old._consumer = self._consumer_with_cluster("cluster-old")
+        old_id = src_old.source_unit_id(self._meta())
+        src_new = self._make_source()
+        src_new._consumer = self._consumer_with_cluster("cluster-new")
+        new_id = src_new.source_unit_id(self._meta())
+        assert new_id != old_id
+        assert new_id == "cluster-new/events/0"
+
+    def test_operator_declared_incarnation_overrides_broker_cluster_id(self):
+        src = self._make_source({"cluster_incarnation": "op-inc-2"})
+        assert src.source_unit_id(self._meta()) == "op-inc-2/events/0"
+        # The override wins even with an active consumer on another cluster.
+        src._consumer = self._consumer_with_cluster("cluster-A")
+        assert src.source_unit_id(self._meta()) == "op-inc-2/events/0"
+
+    def test_read_meta_yields_broker_cluster_identity(self):
+        """End-to-end: metas yielded by read() resolve the identity from the
+        consumer's broker metadata — the offset-continuity metadata."""
+        msg = TestKafkaSourceRead._make_msg(offset=42)
+        sentinel = TestKafkaSourceRead._make_msg(value=b"SENTINEL", offset=43)
+        mock_consumer = MagicMock()
+        mock_consumer.assignment.return_value = []
+        mock_consumer.end_offsets.return_value = {}
+        mock_consumer.poll.side_effect = [
+            {_TopicPartition("events", 0): [msg]},
+            {_TopicPartition("events", 0): [sentinel]},
+        ]
+        mock_consumer._client.cluster.cluster_id = "cluster-A"
+        mock_kafka = MagicMock()
+        mock_kafka.KafkaConsumer.return_value = mock_consumer
+
+        with patch.dict(sys.modules, {"kafka": mock_kafka}):
+            src = self._make_source()
+            it = src.read()
+            _payload, meta = next(it)
+            assert src.source_unit_id(meta) == "cluster-A/events/0"
+            it.close()
+
+    def test_frontier_scalar_is_the_committed_offset(self):
+        """The checkpoint frontier scalar for a Kafka unit is the per-partition
+        committed offset — the ``kafka_offset`` meta key of the ``{ns}_offset``
+        family (no change, pinned here)."""
+        from tram.pipeline.executor import _checkpoint_frontier
+
+        frontier_json, frontier_seq = _checkpoint_frontier(
+            {"kafka_topic": "events", "kafka_partition": 0,
+             "kafka_offset": 77, "kafka_epoch": 1}
+        )
+        assert frontier_json == {"offset": 77}
+        assert frontier_seq == 77
+
+    def test_strict_pipeline_with_kafka_source_passes_identity_validation(self):
+        """A strict pipeline with a Kafka source passes the identity-existence
+        validation — the §7 matrix counts Kafka as identity-present."""
+        import textwrap
+
+        from tram.models.pipeline import _source_replay_identity_problem
+        from tram.pipeline.loader import load_pipeline_from_yaml
+
+        cfg = load_pipeline_from_yaml(
+            textwrap.dedent(
+                """\
+                pipeline:
+                  name: strict-kafka-pipe
+                  delivery:
+                    contract: strict
+                  source:
+                    type: kafka
+                    brokers: [broker:9092]
+                    topic: t
+                  serializer_in:
+                    type: json
+                  serializer_out:
+                    type: json
+                  sink:
+                    type: local
+                    path: /tmp/out
+                """
+            )
+        )
+        assert cfg.delivery.contract == "strict"
+        assert cfg.source.type == "kafka"
+        assert _source_replay_identity_problem(cfg) is None
