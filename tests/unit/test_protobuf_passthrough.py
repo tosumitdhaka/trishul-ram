@@ -26,8 +26,9 @@ pytest.importorskip("google.protobuf")
 import tram.connectors  # noqa: F401  (registers source/sink plugins)
 import tram.serializers  # noqa: F401  (registers serializer plugins)
 from tram.agent.metrics import PipelineStats
-from tram.core.context import PipelineRunContext
+from tram.core.context import PipelineRunContext, RunStatus
 from tram.core.exceptions import ConfigError, TramError
+from tram.interfaces.base_source import AckDisposition
 from tram.pipeline.executor import PipelineExecutor
 from tram.pipeline.loader import load_pipeline_from_yaml
 
@@ -555,3 +556,150 @@ class TestFlagOffAndFallback:
         # The dictionary path actually ran (incremental parse_chunks entry).
         assert ctx.records_in == 3
         assert ctx.records_out == 3
+
+
+# ── V18-02: passthrough unit accounting ────────────────────────────────────
+#
+# Passthrough chunks bypass _process_records, so V18-02 wired the delivery
+# accounting (record_chunk / record_loss) into the passthrough path: units are
+# decided and ack-gated exactly like dictionary-path batch units.
+
+
+class TestPassthroughUnitAccounting:
+    def _run_batch(self, executor, config, mock_source, sinks, ser_in, ser_out):
+        with (
+            patch.object(executor, "_build_source", return_value=mock_source),
+            patch.object(executor, "_build_sinks", return_value=sinks),
+            patch.object(executor, "_build_serializer_in", return_value=ser_in),
+            patch.object(executor, "_build_serializer_out", return_value=ser_out),
+            patch.object(executor, "_build_transforms", return_value=[]),
+            patch.object(executor, "_build_dlq_sink", return_value=None),
+        ):
+            return executor.batch_run(config)
+
+    def test_passthrough_unit_acked_delivered(self, schema_a, tmp_path):
+        """A passthrough batch unit is tracked like any other unit: fully
+        delivered → ack(DELIVERED) and legacy finalize(success=True)."""
+        executor, config, ser_in, ser_out, sinks, Sample = _build_executor_pieces(
+            schema_a, tmp_path
+        )
+        raw = _make_stream(Sample, count=3)
+        mock_source = MagicMock()
+        mock_source.read.return_value = iter([
+            (raw, {"source_path": "/in/in.bin", "source_filename": "in.bin"}),
+        ])
+
+        result = self._run_batch(executor, config, mock_source, sinks, ser_in, ser_out)
+
+        assert result.status == RunStatus.SUCCESS
+        assert result.records_in == 3
+        assert result.records_out == 3
+        mock_source.ack.assert_called_once()
+        assert mock_source.ack.call_args[0][1] == AckDisposition.DELIVERED
+        assert mock_source.finalize.call_args.kwargs["success"] is True
+
+    def test_passthrough_sink_failure_continue_acks_dropped_partial(self, schema_a, tmp_path):
+        """A failing sink under continue loses the passthrough chunk's frames:
+        PARTIAL outcome, loss counted, and the unit acked with the explicit
+        DROPPED disposition — never a clean DELIVERED."""
+        executor, config, ser_in, ser_out, sinks, Sample = _build_executor_pieces(
+            schema_a, tmp_path
+        )
+        mock_sink = MagicMock()
+        mock_sink.write.side_effect = OSError("sink down")
+        sink_cfg = sinks[0][3]
+        failing_sinks = [(mock_sink, None, [], sink_cfg, None)]
+        raw = _make_stream(Sample, count=3)
+        mock_source = MagicMock()
+        mock_source.read.return_value = iter([
+            (raw, {"source_path": "/in/in.bin", "source_filename": "in.bin"}),
+        ])
+
+        result = self._run_batch(
+            executor, config, mock_source, failing_sinks, ser_in, ser_out
+        )
+
+        assert result.status == RunStatus.PARTIAL
+        assert result.records_failed == 3
+        assert result.records_out == 0
+        mock_source.ack.assert_called_once()
+        assert mock_source.ack.call_args[0][1] == AckDisposition.DROPPED
+
+    def test_passthrough_sink_failure_abort_never_acks(self, schema_a, tmp_path):
+        """Under abort a passthrough sink failure fails the run; the undecided
+        unit is never acked and finalized as failure (input kept for replay)."""
+        executor, config, ser_in, ser_out, sinks, Sample = _build_executor_pieces(
+            schema_a, tmp_path
+        )
+        config.on_error = "abort"
+        mock_sink = MagicMock()
+        mock_sink.write.side_effect = OSError("sink down")
+        sink_cfg = sinks[0][3]
+        failing_sinks = [(mock_sink, None, [], sink_cfg, None)]
+        raw = _make_stream(Sample, count=3)
+        mock_source = MagicMock()
+        mock_source.read.return_value = iter([
+            (raw, {"source_path": "/in/in.bin", "source_filename": "in.bin"}),
+        ])
+
+        result = self._run_batch(
+            executor, config, mock_source, failing_sinks, ser_in, ser_out
+        )
+
+        assert result.status == RunStatus.FAILED
+        mock_source.ack.assert_not_called()
+        assert mock_source.finalize.call_args.kwargs["success"] is False
+
+    def test_passthrough_retry_sink_exhaustion_fails_with_loss_visible(self, schema_a, tmp_path):
+        """Passthrough sink retry exhaustion under on_error=retry engages the
+        run/unit retry loop (never a swallowed SUCCESS-with-loss); exhausted
+        retries FAIL with the loss visible and the unit undecided."""
+        executor, config, ser_in, ser_out, sinks, Sample = _build_executor_pieces(
+            schema_a, tmp_path
+        )
+        config.on_error = "retry"
+        config.retry_count = 1
+        config.retry_delay_seconds = 0
+        sink_cfg = sinks[0][3]
+        raw = _make_stream(Sample, count=3)
+
+        sources = [MagicMock(), MagicMock()]
+        for src in sources:
+            src.read.return_value = iter([
+                (raw, {"source_path": "/in/in.bin", "source_filename": "in.bin"}),
+            ])
+        failing_sinks = [(MagicMock(), None, [], sink_cfg, None)]
+        failing_sinks[0][0].write.side_effect = OSError("sink down")
+        with (
+            patch.object(executor, "_build_source", side_effect=sources),
+            patch.object(executor, "_build_sinks", side_effect=[list(failing_sinks), list(failing_sinks)]),
+            patch.object(executor, "_build_serializer_in", side_effect=[ser_in, ser_in]),
+            patch.object(executor, "_build_serializer_out", side_effect=[ser_out, ser_out]),
+            patch.object(executor, "_build_transforms", side_effect=[[], []]),
+            patch.object(executor, "_build_dlq_sink", return_value=None),
+            patch("time.sleep"),
+        ):
+            result = executor.batch_run(config)
+
+        assert result.status == RunStatus.FAILED
+        assert result.records_failed == 3
+        for src in sources:
+            src.ack.assert_not_called()
+
+    def test_passthrough_parse_error_continue_partial_with_loss(self, schema_a, tmp_path):
+        """A malformed frame under continue is a recorded loss (never clean
+        success): the run finishes PARTIAL and the unit is acked DROPPED."""
+        executor, config, ser_in, ser_out, sinks, Sample = _build_executor_pieces(
+            schema_a, tmp_path
+        )
+        mock_source = MagicMock()
+        mock_source.read.return_value = iter([
+            (_frame(b"\x08"), {"source_path": "/in/in.bin", "source_filename": "in.bin"}),
+        ])
+
+        result = self._run_batch(executor, config, mock_source, sinks, ser_in, ser_out)
+
+        assert result.status == RunStatus.PARTIAL
+        assert result.records_failed == 1
+        mock_source.ack.assert_called_once()
+        assert mock_source.ack.call_args[0][1] == AckDisposition.DROPPED

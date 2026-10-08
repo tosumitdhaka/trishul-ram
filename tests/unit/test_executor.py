@@ -1266,6 +1266,241 @@ class TestBatchDeliveryIntegrity:
             assert call.kwargs["success"] is True
 
 
+class TestRetryTaxonomy:
+    """V18-02 — retry taxonomy refinement (plan C error-policy table).
+
+    Under ``on_error: retry`` the outcome must be truthful for swallowed chunk
+    errors: no SUCCESS-with-loss. Sink retry (the per-sink ``retry_count``
+    loop) is distinct from unit/run retry (``config.retry_count`` run loop) —
+    a permanently failing sink hands the run to the unit/run retry loop, which
+    either retries to success or reports a non-success outcome with the loss
+    visible.
+    """
+
+    def _retry_pipeline(self):
+        return _make_pipeline(
+            "on_error: retry\n"
+            "          retry_count: 1\n"
+            "          retry_delay_seconds: 0"
+        )
+
+    def _patched_run(self, executor, config, *, sources, sinks, ser_ins, ser_outs):
+        with (
+            patch.object(executor, "_build_source", side_effect=sources),
+            patch.object(executor, "_build_sinks", side_effect=sinks),
+            patch.object(executor, "_build_serializer_in", side_effect=ser_ins),
+            patch.object(executor, "_build_serializer_out", side_effect=ser_outs),
+            patch.object(executor, "_build_transforms", side_effect=[
+                [] for _ in range(len(sources))
+            ]),
+            patch("time.sleep"),
+        ):
+            return executor.batch_run(config)
+
+    def _two_attempt_sources(self, records):
+        sources = [MagicMock(), MagicMock()]
+        for src in sources:
+            src.read.return_value = iter([
+                (json.dumps(records).encode(), {"source_filename": "f.json"}),
+            ])
+        return sources
+
+    def test_retry_sink_write_exhaustion_engages_run_retry_and_fails(self):
+        """A permanently failing sink (its own retries exhausted) under retry
+        hands the run to the unit/run retry loop — both attempts run, the
+        retries exhaust, and the run FAILS with the loss visible. The unit is
+        never acked (undecided)."""
+        config = self._retry_pipeline()
+        executor = PipelineExecutor()
+        records = [{"id": "1"}, {"id": "2"}]
+        sources = self._two_attempt_sources(records)
+        sinks = [MagicMock(), MagicMock()]
+        for s in sinks:
+            s.write.side_effect = OSError("sink down")
+        ser_ins = [MagicMock(), MagicMock()]
+        for si in ser_ins:
+            si.parse.side_effect = lambda raw: json.loads(raw)
+        ser_outs = [MagicMock(), MagicMock()]
+        for so in ser_outs:
+            so.serialize.return_value = b"[]"
+
+        result = self._patched_run(
+            executor, config, sources=sources, sinks=[[(s, None, [])] for s in sinks],
+            ser_ins=ser_ins, ser_outs=ser_outs,
+        )
+
+        assert result.status == RunStatus.FAILED
+        assert "sink down" in (result.error or "")
+        assert result.records_failed == 2  # the loss is visible
+        # Both attempts actually ran: the sink failure engaged the run retry
+        # instead of being swallowed into SUCCESS-with-loss.
+        assert sinks[0].write.call_count == 1
+        assert sinks[1].write.call_count == 1
+        for src in sources:
+            src.ack.assert_not_called()
+
+    def test_retry_sink_write_exhaustion_retried_to_success(self):
+        """A sink that fails on the first attempt and succeeds on the retried
+        run: the unit is retried to success and acked DELIVERED."""
+        config = self._retry_pipeline()
+        executor = PipelineExecutor()
+        records = [{"id": "1"}, {"id": "2"}]
+        sources = self._two_attempt_sources(records)
+        failing_sink = MagicMock()
+        failing_sink.write.side_effect = OSError("sink down")
+        ok_sink = MagicMock()
+        ser_ins = [MagicMock(), MagicMock()]
+        for si in ser_ins:
+            si.parse.side_effect = lambda raw: json.loads(raw)
+        ser_outs = [MagicMock(), MagicMock()]
+        for so in ser_outs:
+            so.serialize.return_value = b"[]"
+
+        result = self._patched_run(
+            executor, config, sources=sources,
+            sinks=[[(failing_sink, None, [])], [(ok_sink, None, [])]],
+            ser_ins=ser_ins, ser_outs=ser_outs,
+        )
+
+        assert result.status == RunStatus.SUCCESS
+        assert result.records_out == 2
+        assert result.records_failed == 0
+        # The final attempt's unit is decided: acked DELIVERED.
+        assert sources[1].ack.call_args[0][1] == AckDisposition.DELIVERED
+        assert sources[0].ack.assert_not_called() is None
+
+    def test_retry_parse_error_retried_to_success(self):
+        """A chunk parse error under retry (loss recorded, then raised) is not
+        swallowed: the run retries and succeeds on the next attempt."""
+        from tram.core.exceptions import SerializerError
+
+        config = self._retry_pipeline()
+        executor = PipelineExecutor()
+        sources = [MagicMock(), MagicMock()]
+        for src in sources:
+            src.read.return_value = iter([
+                (b"raw", {"source_filename": "f.json"}),
+            ])
+        failing_ser = MagicMock()
+        failing_ser.parse.side_effect = SerializerError("bad data")
+        ok_ser = MagicMock()
+        ok_ser.parse.return_value = [{"id": "1"}]
+        sinks = [MagicMock(), MagicMock()]
+        ser_outs = [MagicMock(), MagicMock()]
+        for so in ser_outs:
+            so.serialize.return_value = b"[]"
+
+        result = self._patched_run(
+            executor, config, sources=sources, sinks=[[(s, None, [])] for s in sinks],
+            ser_ins=[failing_ser, ok_ser], ser_outs=ser_outs,
+        )
+
+        assert result.status == RunStatus.SUCCESS
+        assert result.records_out == 1
+        assert sources[1].ack.call_args[0][1] == AckDisposition.DELIVERED
+
+    def test_retry_parse_error_exhausted_fails_with_loss_visible(self):
+        """A deterministic parse error across every attempt: retries exhaust
+        and the run FAILS with the loss visible — never SUCCESS-with-loss."""
+        from tram.core.exceptions import SerializerError
+
+        config = self._retry_pipeline()
+        executor = PipelineExecutor()
+        sources = [MagicMock(), MagicMock()]
+        for src in sources:
+            src.read.return_value = iter([
+                (b"raw", {"source_filename": "f.json"}),
+            ])
+        ser_ins = [MagicMock(), MagicMock()]
+        for si in ser_ins:
+            si.parse.side_effect = SerializerError("bad data")
+        sinks = [MagicMock(), MagicMock()]
+        ser_outs = [MagicMock(), MagicMock()]
+        for so in ser_outs:
+            so.serialize.return_value = b"[]"
+
+        result = self._patched_run(
+            executor, config, sources=sources, sinks=[[(s, None, [])] for s in sinks],
+            ser_ins=ser_ins, ser_outs=ser_outs,
+        )
+
+        assert result.status == RunStatus.FAILED
+        assert "bad data" in (result.error or "")
+        assert result.records_failed == 1
+        for src in sources:
+            src.ack.assert_not_called()
+
+    def test_retry_transform_loss_reports_partial_not_success(self):
+        """A transform error under retry is lost at record level (chunk-level
+        swallow); the terminal outcome is PARTIAL with the loss visible — never
+        clean SUCCESS — and the unit stays undecided (never acked)."""
+        config = self._retry_pipeline()
+        executor = PipelineExecutor()
+
+        class BoomTransform:
+            def apply(self, records):
+                raise ValueError("transform boom")
+
+        records = [{"id": "1"}]
+        mock_source = MagicMock()
+        mock_source.read.return_value = iter([
+            (json.dumps(records).encode(), {"source_filename": "f.json"}),
+        ])
+        mock_sink = MagicMock()
+        mock_ser_in = MagicMock()
+        mock_ser_in.parse.return_value = records
+        mock_ser_out = MagicMock()
+        mock_ser_out.serialize.return_value = b"[]"
+
+        with (
+            patch.object(executor, "_build_source", return_value=mock_source),
+            patch.object(executor, "_build_sinks", return_value=[(mock_sink, None, [])]),
+            patch.object(executor, "_build_serializer_in", return_value=mock_ser_in),
+            patch.object(executor, "_build_serializer_out", return_value=mock_ser_out),
+            patch.object(executor, "_build_transforms", return_value=[BoomTransform()]),
+            patch("time.sleep"),
+        ):
+            result = executor.batch_run(config)
+
+        assert result.status == RunStatus.PARTIAL
+        assert result.records_failed == 1
+        assert result.records_out == 0
+        mock_source.ack.assert_not_called()  # loss under retry: undecided
+
+    def test_threaded_retry_sink_failure_engages_run_retry(self):
+        """Threaded batch path: a drained chunk's sink failure under retry is
+        re-raised by the drainer (not swallowed), engaging the run retry."""
+        config = _make_pipeline(
+            "on_error: retry\n"
+            "          retry_count: 1\n"
+            "          retry_delay_seconds: 0\n"
+            "          thread_workers: 2"
+        )
+        executor = PipelineExecutor()
+        records = [{"id": "1"}, {"id": "2"}]
+        sources = self._two_attempt_sources(records)
+        sinks = [MagicMock(), MagicMock()]
+        for s in sinks:
+            s.write.side_effect = OSError("sink down")
+        ser_ins = [MagicMock(), MagicMock()]
+        for si in ser_ins:
+            si.parse.side_effect = lambda raw: json.loads(raw)
+        ser_outs = [MagicMock(), MagicMock()]
+        for so in ser_outs:
+            so.serialize.return_value = b"[]"
+
+        result = self._patched_run(
+            executor, config, sources=sources, sinks=[[(s, None, [])] for s in sinks],
+            ser_ins=ser_ins, ser_outs=ser_outs,
+        )
+
+        assert result.status == RunStatus.FAILED
+        assert "sink down" in (result.error or "")
+        assert result.records_failed == 2
+        for src in sources:
+            src.ack.assert_not_called()
+
+
 class TestPipelineExecutorStreamRun:
     """Stream lifecycle: sinks/source must close on every exit path and the
     stop-watcher must not leak on the crash path (GH #46)."""

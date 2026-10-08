@@ -25,6 +25,7 @@ from typing import TYPE_CHECKING
 
 from tram.connectors.file_sink_common import extract_field_paths
 from tram.core.exceptions import SerializerError, TramError
+from tram.pipeline.executor import _source_unit_key
 from tram.serializers.protobuf_serializer import _proto_content_hash
 
 if TYPE_CHECKING:
@@ -277,6 +278,7 @@ def _write_sinks(
     parallel_sinks: bool,
     sink_cb_keys: list[str] | None,
     stats,
+    delivery=None,
 ) -> list[int]:
     """Write the re-framed payload through every sink, mirroring the executor's
     per-sink retry / circuit-breaker / rate-limit / accounting semantics.
@@ -284,8 +286,11 @@ def _write_sinks(
     Eligibility guarantees the simplified conditions: no sink condition, no
     per-sink transforms, no per-sink serializer override, no DLQ sink — so the
     general ``_write_one_sink`` machinery from ``_process_records`` collapses
-    to the cases that can actually occur here.
+    to the cases that can actually occur here. *delivery* (the batch/stream
+    ``_RunDeliveryAccounting``) gets the same per-sink loss recording as the
+    dictionary path so passthrough units are decided and ack-gated identically.
     """
+    key = _source_unit_key(meta)
 
     def _write_one_sink(sink_tuple, sink_index) -> int:
         sink_instance, _condition, _sink_transforms, sink_cfg, _per_sink_ser = _unpack_sink(
@@ -315,6 +320,8 @@ def _write_sinks(
                     extra={"pipeline": ctx.pipeline_name},
                 )
                 ctx.note_skip("Circuit breaker open")
+                if delivery is not None:
+                    delivery.record_loss(key, records_failed=len(frames))
                 if stats is not None:
                     stats.increment(errors=["Circuit breaker open"])
                 return 0
@@ -388,7 +395,15 @@ def _write_sinks(
                     open_until = 0.0
                 executor._cb_state[sink_key] = (failures, open_until)
 
+        if delivery is not None:
+            delivery.record_loss(key, records_failed=len(frames))
         if on_error == "abort":
+            raise TramError(f"Sink write error: {last_exc}") from last_exc
+        if on_error == "retry":
+            # Sink retry (per-sink retry_count) exhausted under on_error=retry:
+            # hand the permanently failing sink to the run/unit retry loop —
+            # never a swallowed SUCCESS-with-loss (plan C), mirroring the
+            # dictionary path.
             raise TramError(f"Sink write error: {last_exc}") from last_exc
         # Issue #84 parity: the chunk-level skip accounting below counts the
         # records; note_skip records the reason without double-counting.
@@ -428,6 +443,7 @@ def process_chunk(
     parallel_sinks: bool = False,
     sink_cb_keys: list[str] | None = None,
     stats=None,
+    delivery=None,
 ) -> bool:
     """Process one (raw, meta) chunk through the passthrough path.
 
@@ -435,7 +451,9 @@ def process_chunk(
     runtime eligibility re-check passed. Returns True on success; malformed
     frames and sink failures follow the same error semantics as the dictionary
     path (``TramError("Parse error: ...")`` / ``TramError("Sink write error:
-    ...")``, with ``on_error`` applying identically).
+    ...")``, with ``on_error`` applying identically). *delivery* receives the
+    same per-chunk/per-sink accounting as the dictionary path so passthrough
+    source units are decided and ack-gated like other batch units (V18-02).
     """
     from tram.metrics.registry import DURATION, ERRORS, RECORDS_IN, RECORDS_OUT, RECORDS_SKIP
 
@@ -451,7 +469,11 @@ def process_chunk(
             frames = _iter_validated_frames(raw, message_class)
         except Exception as exc:
             # Parity with the dictionary path's parse-error handling (no DLQ
-            # in eligibility, so no DLQ envelope write here).
+            # in eligibility, so no DLQ envelope write here). The chunk is a
+            # lost unit of input — recorded as failed so the run outcome is
+            # never clean success under continue/retry.
+            if delivery is not None:
+                delivery.record_loss(_source_unit_key(meta), records_failed=1)
             if stats is not None:
                 stats.increment(errors=[f"Parse error: {exc}"])
             raise TramError(f"Parse error: {exc}") from exc
@@ -471,12 +493,14 @@ def process_chunk(
         written_counts = _write_sinks(
             executor, payload, frames, meta, serializer_out, sinks, ctx, on_error,
             rate_limit_rps=rate_limit_rps, parallel_sinks=parallel_sinks,
-            sink_cb_keys=sink_cb_keys, stats=stats,
+            sink_cb_keys=sink_cb_keys, stats=stats, delivery=delivery,
         )
 
         # records_out counts records delivered to at least one sink (per
         # record, not per sink-fanout) — same max() rule as the normal path.
         records_written = max(written_counts) if written_counts else 0
+        if delivery is not None:
+            delivery.record_chunk(_source_unit_key(meta), len(frames), records_written)
         if records_written > 0:
             ctx.inc_records_out(records_written)
             RECORDS_OUT.labels(pipeline=ctx.pipeline_name).inc(records_written)
@@ -517,6 +541,11 @@ def process_chunk(
         )
         ERRORS.labels(pipeline=ctx.pipeline_name).inc()
         if on_error == "abort":
+            raise
+        if on_error == "retry" and delivery is not None and delivery.has_loss():
+            # Plan C: a passthrough chunk error that lost records under
+            # on_error=retry hands the unit to the run/unit retry loop instead
+            # of being swallowed into clean success.
             raise
         ctx.record_error(msg)
         if stats is not None:
