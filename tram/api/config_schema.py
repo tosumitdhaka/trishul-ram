@@ -410,6 +410,11 @@ _COMMON_FIELD_DESCRIPTIONS: dict[str, str] = {
 _TYPE_FIELD_DESCRIPTIONS: dict[tuple[str, str, str], str] = {
     # ── sources ─────────────────────────────────────────────────────────────
     ("source", "amqp", "url"): "AMQP connection URL (includes credentials and vhost)",
+    ("source", "amqp", "require_message_id"): (
+        "Require a producer message_id property on every message; "
+        "delivery.contract: strict rejects AMQP sources without it (V18-01 §7 "
+        "replay identity)"
+    ),
     ("source", "clickhouse", "query"): "SQL SELECT query",
     ("source", "corba", "ior"): "Direct CORBA IOR string (mutually exclusive with naming_service)",
     ("source", "corba", "naming_service"): "corbaloc: URI of the naming service",

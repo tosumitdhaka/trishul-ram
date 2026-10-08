@@ -8,6 +8,8 @@ from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 from pydantic import AliasChoices, Field, field_validator, model_validator
 from pydantic import BaseModel as PydanticBaseModel
 
+from tram.interfaces.base_sink import SinkCapability
+
 
 class BaseModel(PydanticBaseModel):
     model_config = {"extra": "forbid"}
@@ -300,6 +302,12 @@ class AmqpSourceConfig(BaseModel):
     queue: str
     prefetch_count: int = 10
     auto_ack: bool = False
+    # V18-01 §7 replay identity: source_unit_id() is
+    # ``{queue}/{producer message ID}`` and the connector returns None
+    # identity when no producer message ID is present. require_message_id:
+    # true asks the connector to verify presence; delivery.contract: strict
+    # rejects AMQP sources without it (no durable replay identity).
+    require_message_id: bool = False
 
 
 class NatsSourceConfig(BaseModel):
@@ -1468,6 +1476,83 @@ class KubernetesServiceConfig(BaseModel):
         return self
 
 
+class DeliveryContractConfig(BaseModel):
+    """Delivery contract (V18-01 §9, frozen pipeline YAML field).
+
+    ``legacy`` (the default) is exactly today's behavior — no additional
+    checks and no new guarantees. ``strict`` requires tier-declared sinks,
+    durable source replay identity, and single-threaded Kafka; enforced by
+    ``PipelineConfig.check_delivery_contract``.
+    """
+
+    contract: Literal["legacy", "strict"] = "legacy"
+
+
+def _sink_delivery_capability(sink_type: str) -> SinkCapability | None:
+    """Resolve a registered sink's declared ``delivery_capability``.
+
+    Returns None when the sink is not registered or declares no capability —
+    both count as undeclared under ``delivery.contract: strict`` (V18-01 §6:
+    an unknown custom plugin with ``delivery_capability = None`` is rejected;
+    a capability is never guessed).
+    """
+    import tram.connectors  # noqa: F401  — populate the registry (built-ins)
+    from tram.core.exceptions import PluginNotFoundError
+    from tram.registry.registry import get_sink
+
+    try:
+        cls = get_sink(sink_type)
+    except PluginNotFoundError:
+        return None
+    return getattr(cls, "delivery_capability", None)
+
+
+def _source_replay_identity_problem(pipeline: PipelineConfig) -> str | None:
+    """Report why a strict pipeline's source lacks durable replay identity.
+
+    Returns None when identity is provable, otherwise a documented reason.
+    The V18-01 §7 replay-identity matrix is the authority: Kafka units are
+    ``{cluster}/{topic}/{partition}`` with a committed-offset frontier
+    (epoch-fenced); AMQP identity is ``{queue}/{producer message ID}`` and
+    requires ``require_message_id: true`` (the connector returns None
+    identity without message IDs); every other connector must implement
+    ``source_unit_id()`` itself. Rejection is conservative — only what is
+    demonstrably absent is rejected.
+    """
+    source = pipeline.source
+    if source.type == "kafka":
+        # Epoch-fenced topic/partition/offset frontier (§7) — identity present.
+        return None
+    if source.type == "amqp":
+        if not getattr(source, "require_message_id", False):
+            return (
+                "amqp source requires require_message_id: true for durable "
+                "replay identity — without producer message IDs "
+                "source_unit_id() returns None (V18-01 §7)"
+            )
+        return None
+    import tram.connectors  # noqa: F401  — populate the registry (built-ins)
+    from tram.core.exceptions import PluginNotFoundError
+    from tram.interfaces.base_source import BaseSource
+    from tram.registry.registry import get_source
+
+    try:
+        cls = get_source(source.type)
+    except PluginNotFoundError:
+        return (
+            f"source '{source.type}' is not a registered connector and "
+            "declares no durable replay identity — strict requires a "
+            "source_unit_id-style identity (V18-01 §7)"
+        )
+    if cls.source_unit_id is not BaseSource.source_unit_id:
+        return None
+    return (
+        f"source '{source.type}' does not provide durable replay identity "
+        "(no source_unit_id() implementation) — strict requires a "
+        "source_unit_id-style identity (V18-01 §7)"
+    )
+
+
 class PipelineConfig(BaseModel):
     version: str = "1"
 
@@ -1475,6 +1560,12 @@ class PipelineConfig(BaseModel):
     name: str
     description: str = ""
     enabled: bool = True
+
+    # Delivery contract (V18-01 §9, frozen). `legacy` (default) is exactly
+    # today's behavior; `strict` requires tier-declared sinks, durable source
+    # replay identity, and single-threaded Kafka (enforced at validation by
+    # check_delivery_contract, shared by `tram validate` and API registration).
+    delivery: DeliveryContractConfig = Field(default_factory=DeliveryContractConfig)
 
     # Execution
     schedule: ScheduleConfig = Field(default_factory=ScheduleConfig)
@@ -1746,6 +1837,58 @@ class PipelineConfig(BaseModel):
             raise ValueError(
                 "protobuf_passthrough is not supported for this pipeline: "
                 + "; ".join(reasons)
+            )
+        return self
+
+    @model_validator(mode="after")
+    def check_delivery_contract(self) -> PipelineConfig:
+        """Enforce ``delivery.contract: strict`` (V18-01 §6/§7/§9).
+
+        ``legacy`` (the default) is exactly today's behavior — no additional
+        checks. ``strict`` is enforced at validation time so both ``tram
+        validate`` and API registration (they share
+        ``PipelineConfig.model_validate``) reject non-compliant pipelines:
+
+        - every configured sink must declare a ``delivery_capability`` —
+          undeclared built-in or custom sinks are rejected with a capability
+          error (a capability is never guessed);
+        - the source must provide durable replay identity (Kafka and
+          connectors implementing ``source_unit_id()`` do; AMQP additionally
+          requires ``require_message_id: true``; sources where identity is
+          demonstrably absent are rejected);
+        - Kafka sources must run single-threaded (``thread_workers == 1``) —
+          threaded frontiers are not yet broker-proven.
+
+        Every unmet condition is listed in the error.
+        """
+        if self.delivery.contract != "strict":
+            return self
+
+        problems: list[str] = []
+
+        for sink in self.sinks:
+            if _sink_delivery_capability(sink.type) is None:
+                problems.append(
+                    f"sink '{sink.type}' does not declare a "
+                    "delivery_capability — strict delivery requires a "
+                    "tier-declared sink; undeclared built-in or custom sinks "
+                    "are rejected (V18-01 §6)"
+                )
+
+        identity_problem = _source_replay_identity_problem(self)
+        if identity_problem is not None:
+            problems.append(identity_problem)
+
+        if self.source.type == "kafka" and self.thread_workers > 1:
+            problems.append(
+                "kafka source with thread_workers > 1 is not supported under "
+                "delivery.contract: strict — threaded frontiers are not yet "
+                "broker-proven (V18-01 §7)"
+            )
+
+        if problems:
+            raise ValueError(
+                "delivery.contract: strict requires: " + "; ".join(problems)
             )
         return self
 
