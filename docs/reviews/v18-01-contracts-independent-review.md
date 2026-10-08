@@ -61,6 +61,27 @@ The reviewer's completed state×event grid also flagged `dispatching` ×
 manager crash → boot adoption as defined in the migration narrative but
 absent from the table; a row was added.
 
+## Disposition D1 — tier-table amendment
+
+**Disposition D1 (2026-10-08, release/v1.8.0): section 6 tier table
+amended.** The frozen table assigned `fsynced_local` to ftp, s3, gcs, and
+azure_blob "(post V18-02 manifest+fsync)"; that assignment is inapplicable —
+object stores have atomic server-confirmed PUTs with no rename/fsync
+semantics, and FTP has no client-observable fsync and server-dependent rename
+atomicity — so assigning it would have violated invariant 4 (truthful
+results) and the table's own tier definitions. Amended assignment:
+s3/gcs/azure_blob → `remote_durable` (per-write server-confirmed PUT, trivial
+commit barrier, replay_safe=False); ftp → `remote_accepted` (synchronous STOR
+completion reply, durability not asserted, non-atomic publication documented
+in the receipt). The wave-1 file-publication implementation, which left the
+four sinks undeclared rather than claim false durability, is correct as-is;
+the follow-up is the mechanical capability declarations on the four sinks,
+with FTP temp-name+RNFR/RNTO staging an optional hardening that cannot reach
+`fsynced_local` in any case. The sftp cell gains the landed code's documented
+limitation note, and the Kafka/AMQP cells move from pending to confirmed per
+the completed V18-02 audit. No strict-validation change is required — strict
+requires tier-declared sinks, not a minimum tier.
+
 ## Verification boundary
 
 Documentation inspection and code citation verification only. No application
