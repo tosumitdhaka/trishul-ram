@@ -10,7 +10,8 @@ import pytest
 
 from tram.connectors.kafka.sink import KafkaSink
 from tram.connectors.kafka.source import KafkaSource
-from tram.core.exceptions import SourceError
+from tram.core.exceptions import SinkError, SourceError
+from tram.interfaces.base_sink import DeliveryTier
 from tram.serializers.json_serializer import JsonSerializer
 
 
@@ -537,3 +538,92 @@ class TestKafkaSinkFastPath:
             sink.write(data, meta)
 
         mock_parse.assert_called_once_with(data, meta)
+
+
+class TestKafkaSinkDelivery:
+    """Kafka sink delivery tier and commit barrier (V18-01 sections 6 and 12.1).
+
+    Audit finding (pending decision 1): the producer default is already
+    ``acks=all``, and weaker acks configurations are now rejected at
+    construction — no path may restore weaker-ack false success silently.
+    Real broker durability (acks=all honored, flush drains) is only provable
+    against a live broker (V18-02 broker-test gate).
+    """
+
+    @staticmethod
+    def _make_sink(config_extra: dict | None = None) -> KafkaSink:
+        cfg = {"brokers": ["kafka:9092"], "topic": "events"}
+        if config_extra:
+            cfg.update(config_extra)
+        return KafkaSink(cfg)
+
+    def test_delivery_capability_declared_remote_durable(self):
+        cap = KafkaSink.delivery_capability
+        assert cap is not None
+        assert cap.tier == DeliveryTier.REMOTE_DURABLE
+        assert cap.replay_safe is False
+
+    def test_default_acks_is_all(self):
+        assert self._make_sink().acks == "all"
+
+    def test_producer_built_with_acks_all(self):
+        mock_kafka = MagicMock()
+        mock_kafka.KafkaProducer.return_value = MagicMock()
+
+        with patch.dict(sys.modules, {"kafka": mock_kafka}):
+            sink = self._make_sink()
+            sink._get_producer()
+
+        assert mock_kafka.KafkaProducer.call_args[1]["acks"] == "all"
+
+    @pytest.mark.parametrize("weak", ["0", "1", 0, 1, "none", None])
+    def test_weaker_acks_rejected_fail_closed(self, weak):
+        with pytest.raises(SinkError, match="acks"):
+            self._make_sink({"acks": weak})
+
+    def test_minus_one_acks_accepted(self):
+        assert self._make_sink({"acks": "-1"}).acks == "-1"
+        assert self._make_sink({"acks": -1}).acks == -1
+
+    def test_commit_confirms_remote_durable_and_flushes(self):
+        sink = self._make_sink()
+        producer = MagicMock()
+        sink._producer = producer
+
+        receipt = sink.commit()
+
+        assert receipt.tier == DeliveryTier.REMOTE_DURABLE
+        assert receipt.confirmed is True
+        assert "acks=all" in receipt.notes
+        producer.flush.assert_called_once()
+
+    def test_commit_without_producer_is_confirmed_barrier(self):
+        sink = self._make_sink()
+        receipt = sink.commit()
+        assert receipt.tier == DeliveryTier.REMOTE_DURABLE
+        assert receipt.confirmed is True
+
+    def test_commit_flush_failure_raises_sink_error(self):
+        sink = self._make_sink()
+        producer = MagicMock()
+        producer.flush.side_effect = RuntimeError("broker unreachable")
+        sink._producer = producer
+
+        with pytest.raises(SinkError, match="commit flush failed"):
+            sink.commit()
+
+    def test_commit_honors_deadline(self):
+        sink = self._make_sink()
+        producer = MagicMock()
+        sink._producer = producer
+
+        with pytest.raises(SinkError, match="deadline"):
+            sink.commit(deadline=time.monotonic() - 1)
+        producer.flush.assert_not_called()
+
+    def test_latched_error_defaults_to_none(self):
+        # kafka-python buffers no delivery errors this path can miss: every
+        # send future is awaited in write() (future.get), so failures surface
+        # synchronously as SinkError. Only a live broker could prove acks=all
+        # is honored end to end (V18-02 broker-test gate).
+        assert self._make_sink().latched_error() is None

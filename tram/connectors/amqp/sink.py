@@ -4,10 +4,16 @@ from __future__ import annotations
 import logging
 
 from tram.core.exceptions import SinkError
-from tram.interfaces.base_sink import BaseSink
+from tram.interfaces.base_sink import (
+    BaseSink,
+    DeliveryTier,
+    SinkCapability,
+    SinkCommitReceipt,
+)
 from tram.registry.registry import register_sink
 
 logger = logging.getLogger(__name__)
+
 
 @register_sink("amqp")
 class AmqpSink(BaseSink):
@@ -18,7 +24,25 @@ class AmqpSink(BaseSink):
         exchange        (str, default "")
         routing_key     (str, required)
         content_type    (str, default "application/json")
+
+    Delivery (V18-01 audit, pending decision 1): pika supports publisher
+    confirms via ``channel.confirm_delivery()``. In blocking mode each
+    ``basic_publish`` then blocks until the broker confirms the message (a
+    ``basic.nack`` raises), so a synchronous return is a broker-confirmed
+    publish — no false clean success. Every publish opens its own connection
+    and blocks on its confirm, so the sink holds no buffered state and
+    ``commit()`` is a trivial confirmed barrier at ``remote_durable``. The
+    tier assignment is confirmed by this audit; end-to-end behavior against a
+    live broker is validated by the V18-02 broker-test gate.
     """
+
+    # V18-01 frozen tier table, section 6: remote_durable (publisher confirms).
+    # Not replay-safe: re-publishing duplicates messages.
+    delivery_capability = SinkCapability(
+        tier=DeliveryTier.REMOTE_DURABLE,
+        replay_safe=False,
+    )
+
     def __init__(self, config: dict) -> None:
         super().__init__(config)
         self.url: str = config.get("url", "amqp://guest:guest@localhost:5672/")
@@ -53,6 +77,10 @@ class AmqpSink(BaseSink):
             params = pika.URLParameters(self.url)
             connection = pika.BlockingConnection(params)
             channel = connection.channel()
+            # Publisher confirms: basic_publish now blocks until the broker
+            # confirms the message (or raises on basic.nack) — a synchronous
+            # return is a broker-confirmed publish, never fire-and-forget.
+            channel.confirm_delivery()
             channel.basic_publish(
                 exchange=self.exchange,
                 routing_key=self.routing_key,
@@ -63,3 +91,18 @@ class AmqpSink(BaseSink):
             logger.info("Published to AMQP", extra={"routing_key": self.routing_key, "bytes": len(data)})
         except Exception as exc:
             raise SinkError(f"AMQP publish failed: {exc}") from exc
+
+    def commit(self, *, deadline: float | None = None) -> SinkCommitReceipt:
+        """Delivery flush/commit barrier (V18-01 section 6).
+
+        Each ``write()`` opens its own connection and blocks on the broker's
+        publisher confirm, so the sink holds no buffered state; the barrier
+        confirms the synchronous confirmed-publish contract at
+        ``remote_durable``.
+        """
+        return SinkCommitReceipt(
+            sink_key=self.__class__.__name__,
+            tier=DeliveryTier.REMOTE_DURABLE,
+            confirmed=True,
+            notes="per-publish publisher confirms (channel.confirm_delivery); nothing buffered",
+        )

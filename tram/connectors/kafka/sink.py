@@ -4,13 +4,24 @@ from __future__ import annotations
 
 import json
 import logging
+import time
 
 from tram.connectors.config_utils import cfg_int
 from tram.core.exceptions import SinkError
-from tram.interfaces.base_sink import BaseSink
+from tram.interfaces.base_sink import (
+    BaseSink,
+    DeliveryTier,
+    SinkCapability,
+    SinkCommitReceipt,
+)
 from tram.registry.registry import get_serializer, register_sink
 
 logger = logging.getLogger(__name__)
+
+# The only acks levels that mean "all in-sync replicas acknowledged" — the
+# values the sink accepts now that commit() reports remote_durable (V18-01
+# section 12, pending decision 1; audit concludes acks=all is required).
+_DURABLE_ACKS = {"all", "-1"}
 
 
 def chunk_records_by_caps(
@@ -62,7 +73,10 @@ class KafkaSink(BaseSink):
         sasl_username     (str, optional)
         sasl_password     (str, optional)
         ssl_cafile        (str, optional)
-        acks              (str/int, default "all")  "all" | 0 | 1
+        acks              (str/int, default "all")  "all" | -1 only — weaker
+                                                    levels (0/1) are rejected
+                                                    (delivery-contract change,
+                                                    V18-01 section 12.1)
         compression_type  (str, optional)           "gzip" | "snappy" | "lz4" | "zstd"
         chunk_records     (int, default 1000)       Max records per message.
         chunk_bytes       (int, default 524288)     Max serialized bytes per message
@@ -92,7 +106,22 @@ class KafkaSink(BaseSink):
     many chunks were already delivered; on retry the whole batch is re-sent
     from the first chunk and already-delivered chunks are NOT retracted, so
     duplicates are possible — that is the accepted at-least-once trade.
+
+    Delivery tier (V18-01 audit, pending decision 1): the producer default is
+    ``acks=all`` and weaker acks configurations are rejected at construction —
+    no path may restore weaker-ack false success silently. ``write()`` awaits
+    every send future, and ``commit()`` drains the producer via ``flush()``
+    before reporting ``remote_durable``. kafka-python exposes no separate
+    delivery-callback error buffer that this path can miss, so
+    ``latched_error()`` keeps the base-class ``None`` default.
     """
+
+    # V18-01 frozen tier table, section 6: remote_durable (acks=all). Not
+    # replay-safe: re-sending a batch duplicates messages (at-least-once).
+    delivery_capability = SinkCapability(
+        tier=DeliveryTier.REMOTE_DURABLE,
+        replay_safe=False,
+    )
 
     def __init__(self, config: dict) -> None:
         super().__init__(config)
@@ -106,6 +135,12 @@ class KafkaSink(BaseSink):
         self.sasl_password: str | None = config.get("sasl_password")
         self.ssl_cafile: str | None = config.get("ssl_cafile")
         self.acks = config.get("acks", "all")
+        if str(self.acks).lower() not in _DURABLE_ACKS:
+            raise SinkError(
+                f"kafka sink acks={self.acks!r} is not a durable acknowledgement level; "
+                "the v1.8 delivery contract requires acks='all' (or -1) so commit() "
+                "can report remote_durable truthfully"
+            )
         self.compression_type: str | None = config.get("compression_type")
         # Bounded-batch send caps (issue #76). The Pydantic config schema
         # validates chunk_bytes <= max_request_size for real pipelines; the
@@ -330,4 +365,32 @@ class KafkaSink(BaseSink):
         logger.info(
             "Kafka message sent",
             extra={"topic": self.topic, "bytes": len(payload)},
+        )
+
+    def commit(self, *, deadline: float | None = None) -> SinkCommitReceipt:
+        """Delivery flush/commit barrier (V18-01 section 6).
+
+        ``write()`` already awaits each send future (``future.get``), so send
+        failures surface synchronously; ``commit()`` additionally drains the
+        producer's linger/network buffer via ``flush()`` so every accepted
+        message is broker-acked (acks=all) before the source may be
+        acknowledged. A flush timeout or failure raises ``SinkError`` — no
+        clean success without confirmation.
+        """
+        if self._producer is not None:
+            if deadline is not None and time.monotonic() >= deadline:
+                raise SinkError(f"Kafka commit deadline exceeded for topic '{self.topic}'")
+            try:
+                if deadline is not None:
+                    timeout = max(0.0, deadline - time.monotonic())
+                else:
+                    timeout = 10  # matches the per-send future.get timeout
+                self._producer.flush(timeout=timeout)
+            except Exception as exc:
+                raise SinkError(f"Kafka commit flush failed to topic '{self.topic}': {exc}") from exc
+        return SinkCommitReceipt(
+            sink_key=self.__class__.__name__,
+            tier=DeliveryTier.REMOTE_DURABLE,
+            confirmed=True,
+            notes=f"acks={self.acks} producer flush completed; broker confirmed every message",
         )

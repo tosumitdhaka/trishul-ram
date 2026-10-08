@@ -3,6 +3,8 @@ from __future__ import annotations
 
 import json
 import sys
+import threading
+import time
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -10,6 +12,7 @@ import pytest
 from tram.connectors.clickhouse.sink import ClickHouseSink
 from tram.connectors.clickhouse.source import ClickHouseSource
 from tram.core.exceptions import SinkError, SourceError
+from tram.interfaces.base_sink import DeliveryTier
 
 # ── ClickHouseSource tests ───────────────────────────────────────────────────
 
@@ -315,7 +318,11 @@ class TestClickHouseSink:
         mock_client.execute.assert_called_once()
         assert mock_client.execute.call_args[0][1] == records
 
-    def test_close_with_flush_on_stop_false_discards_buffer(self):
+    def test_close_with_flush_on_stop_false_retains_buffer(self):
+        """Stop/cancellation never erases the pending buffer (R1 fix): with
+        ``batch_flush_on_stop=False`` no flush is attempted and the rows stay
+        buffered for replay/retry — the sink never destroys unconfirmed input.
+        """
         mock_module, mock_client = self._mock_module()
 
         with patch.dict(sys.modules, {"clickhouse_driver": mock_module}):
@@ -326,4 +333,181 @@ class TestClickHouseSink:
             sink.write(json.dumps([{"id": 1}]).encode(), {})
             sink.close()
 
+        mock_client.execute.assert_not_called()
+        assert len(sink._buffer) == 1
+
+    # ── Delivery tier / commit barrier (R1 fix, V18-01 section 6) ──────────
+
+    def test_delivery_capability_declared_remote_durable(self):
+        cap = ClickHouseSink.delivery_capability
+        assert cap is not None
+        assert cap.tier == DeliveryTier.REMOTE_DURABLE
+        assert cap.replay_safe is False
+
+    def test_insert_failure_retains_rows_and_commit_fails(self):
+        """Insert failure: rows retained, no confirmed receipt, the failure is
+        latched, and commit() fails — the executor cannot ack the source."""
+        mock_module, mock_client = self._mock_module()
+        mock_client.execute.side_effect = RuntimeError("Table not found")
+
+        with patch.dict(sys.modules, {"clickhouse_driver": mock_module}):
+            sink = self._make_sink()  # batch_size=1 forces a flush on write
+            with pytest.raises(SinkError, match="ClickHouse insert failed"):
+                sink.write(json.dumps([{"x": 1}]).encode(), {})
+            # R1: the buffer is cleared only after the insert is confirmed.
+            assert len(sink._buffer) == 1
+            # The failure is latched and surfaces.
+            assert sink.latched_error() is not None
+            # commit() fails — no confirmed receipt.
+            with pytest.raises(SinkError):
+                sink.commit()
+
+    def test_timer_flush_failure_latched_and_visible(self):
+        """Background (timer) flush failure is latched, rows retained, and
+        commit() refuses to report clean success."""
+        mock_module, mock_client = self._mock_module()
+        mock_client.execute.side_effect = RuntimeError("insert boom")
+
+        with patch.dict(sys.modules, {"clickhouse_driver": mock_module}):
+            sink = ClickHouseSink({"table": "events", "batch_size": 100, "batch_timeout_seconds": 0})
+            sink.write(json.dumps([{"id": 1}]).encode(), {})
+            assert sink.latched_error() is None
+            sink._timer_flush()  # timer path invoked directly (no thread race)
+            assert sink.latched_error() is not None
+            assert len(sink._buffer) == 1  # retained
+            with pytest.raises(SinkError):
+                sink.commit()
+
+    def test_flushes_serialized_no_interleaving(self):
+        """Timer/foreground/close flushes are serialized: a second flush must
+        not enter the insert while a first is in flight."""
+        mock_module, mock_client = self._mock_module()
+        active = 0
+        peak = 0
+        state_lock = threading.Lock()
+        entered = threading.Event()
+        release = threading.Event()
+
+        def slow_execute(*args, **kwargs):
+            nonlocal active, peak
+            with state_lock:
+                active += 1
+                peak = max(peak, active)
+            entered.set()
+            release.wait(timeout=5)
+            with state_lock:
+                active -= 1
+
+        mock_client.execute.side_effect = slow_execute
+
+        with patch.dict(sys.modules, {"clickhouse_driver": mock_module}):
+            sink = ClickHouseSink({"table": "events", "batch_size": 100, "batch_timeout_seconds": 0})
+            sink.write(json.dumps([{"id": 1}]).encode(), {})  # buffered, no flush yet
+            first = threading.Thread(target=sink._flush)
+            first.start()
+            assert entered.wait(timeout=2)
+            second = threading.Thread(target=sink._flush)
+            second.start()
+            time.sleep(0.2)  # the second flush must be blocked on the flush lock
+            with state_lock:
+                assert active == 1
+            release.set()
+            first.join(timeout=2)
+            second.join(timeout=2)
+            with state_lock:
+                assert active == 0
+        assert peak == 1  # at most one insert in flight at any time
+
+    def test_stop_path_close_flush_failure_retains_rows_and_latches(self):
+        """A failed final flush on close latches the error and keeps the rows
+        buffered — cancellation cannot erase the pending buffer."""
+        mock_module, mock_client = self._mock_module()
+        mock_client.execute.side_effect = RuntimeError("down")
+
+        with patch.dict(sys.modules, {"clickhouse_driver": mock_module}):
+            sink = ClickHouseSink({"table": "events", "batch_size": 100, "batch_timeout_seconds": 0})
+            sink.write(json.dumps([{"id": 1}]).encode(), {})
+            sink.close()
+            assert sink.latched_error() is not None
+            assert len(sink._buffer) == 1
+
+    def test_commit_success_confirms_remote_durable(self):
+        mock_module, mock_client = self._mock_module()
+
+        with patch.dict(sys.modules, {"clickhouse_driver": mock_module}):
+            sink = self._make_sink({"batch_size": 100})
+            sink.write(json.dumps([{"id": 1}, {"id": 2}]).encode(), {})
+            receipt = sink.commit()
+
+        assert receipt.tier == DeliveryTier.REMOTE_DURABLE
+        assert receipt.confirmed is True
+        assert len(sink._buffer) == 0
+        mock_client.execute.assert_called_once()
+        assert mock_client.execute.call_args[0][1] == [{"id": 1}, {"id": 2}]
+
+    def test_commit_with_empty_buffer_confirms(self):
+        mock_module, mock_client = self._mock_module()
+
+        with patch.dict(sys.modules, {"clickhouse_driver": mock_module}):
+            sink = ClickHouseSink({"table": "events", "batch_timeout_seconds": 0})
+            receipt = sink.commit()
+
+        assert receipt.tier == DeliveryTier.REMOTE_DURABLE
+        assert receipt.confirmed is True
+        mock_client.execute.assert_not_called()
+
+    def test_commit_fails_on_latched_error_without_retrying_flush(self):
+        """commit() fails on a latched background failure even when the next
+        flush would succeed — conservative barrier, no false clean success."""
+        mock_module, mock_client = self._mock_module()
+        calls = {"n": 0}
+
+        def flaky_execute(*args, **kwargs):
+            calls["n"] += 1
+            if calls["n"] == 1:
+                raise RuntimeError("first attempt fails")
+
+        mock_client.execute.side_effect = flaky_execute
+
+        with patch.dict(sys.modules, {"clickhouse_driver": mock_module}):
+            sink = ClickHouseSink({"table": "events", "batch_size": 100, "batch_timeout_seconds": 0})
+            sink.write(json.dumps([{"id": 1}]).encode(), {})
+            sink._timer_flush()  # fails -> latched
+            with pytest.raises(SinkError):
+                sink.commit()
+
+        assert calls["n"] == 1  # commit did not even retry the insert
+
+    def test_commit_recovers_after_latched_error_observed(self):
+        """Once the latched error is observed, a healthy commit succeeds and
+        delivers the retained rows."""
+        mock_module, mock_client = self._mock_module()
+        calls = {"n": 0}
+
+        def flaky_execute(*args, **kwargs):
+            calls["n"] += 1
+            if calls["n"] == 1:
+                raise RuntimeError("first attempt fails")
+
+        mock_client.execute.side_effect = flaky_execute
+
+        with patch.dict(sys.modules, {"clickhouse_driver": mock_module}):
+            sink = ClickHouseSink({"table": "events", "batch_size": 100, "batch_timeout_seconds": 0})
+            sink.write(json.dumps([{"id": 1}]).encode(), {})
+            sink._timer_flush()
+            assert sink.latched_error() is not None
+            receipt = sink.commit()  # latch observed -> flush retry succeeds
+
+        assert receipt.tier == DeliveryTier.REMOTE_DURABLE
+        assert receipt.confirmed is True
+        assert len(sink._buffer) == 0
+        assert calls["n"] == 2
+
+    def test_commit_honors_deadline(self):
+        mock_module, mock_client = self._mock_module()
+
+        with patch.dict(sys.modules, {"clickhouse_driver": mock_module}):
+            sink = self._make_sink({"batch_size": 100})
+            with pytest.raises(SinkError, match="deadline"):
+                sink.commit(deadline=time.monotonic() - 1)
         mock_client.execute.assert_not_called()
