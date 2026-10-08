@@ -30,6 +30,17 @@ logger = logging.getLogger(__name__)
 # the retry mints a fresh version instead of failing the caller.
 _VERSION_SAVE_RETRIES = 3
 
+
+class TransformStateBudgetExceeded(Exception):
+    """A transform-state write exceeded the frozen V18-01 §9 budgets
+    (``TRAM_TRANSFORM_MAX_STATE_BYTES`` / ``TRAM_TRANSFORM_MAX_CARDINALITY``).
+
+    The write is REJECTED with this reason — never silently truncated and never
+    evicting un-emitted state (plan F: overflow pauses intake or fails
+    undecided). The message names the budget that was exceeded and the actual
+    size/cardinality observed.
+    """
+
 # SQLite busy timeout (milliseconds) applied to every new connection via
 # PRAGMA. Without it, concurrent writers across APScheduler/API/stream threads
 # hit "database is locked" under load (code review D5); the driver default of
@@ -1682,13 +1693,37 @@ class TramDB:
         Uses the E.2 ``_upsert`` helper; the row is replaced wholesale (single
         writer per pipeline, design §3.3), ``updated_at`` refreshed and
         ``updated_by`` recording the last writer's run_id for audit.
+
+        V18-08 (plan F): the write is budget-enforced BEFORE it is persisted —
+        serialized size over ``TRAM_TRANSFORM_MAX_STATE_BYTES`` or top-level
+        key cardinality over ``TRAM_TRANSFORM_MAX_CARDINALITY`` raises
+        :class:`TransformStateBudgetExceeded` with the reason (``0`` disables
+        a bound). The rejection is explicit and visible to the caller/logs;
+        the state is never silently truncated or evicted.
         """
+        state_json = json.dumps(state)
+        from tram.core.config import transform_max_cardinality, transform_max_state_bytes
+
+        max_bytes = transform_max_state_bytes()
+        if max_bytes > 0 and len(state_json) > max_bytes:
+            raise TransformStateBudgetExceeded(
+                f"transform-state write rejected for pipeline {pipeline_name!r}: "
+                f"{len(state_json)} serialized bytes exceeds the "
+                f"{max_bytes} budget (TRAM_TRANSFORM_MAX_STATE_BYTES)"
+            )
+        max_cardinality = transform_max_cardinality()
+        if max_cardinality > 0 and len(state) > max_cardinality:
+            raise TransformStateBudgetExceeded(
+                f"transform-state write rejected for pipeline {pipeline_name!r}: "
+                f"{len(state)} state keys exceed the {max_cardinality} budget "
+                f"(TRAM_TRANSFORM_MAX_CARDINALITY)"
+            )
         now = datetime.now(UTC).isoformat()
         self._upsert(
             "transform_state",
             {
                 "pipeline_name": pipeline_name,
-                "state_json": json.dumps(state),
+                "state_json": state_json,
                 "config_sha256": config_sha256,
                 "updated_at": now,
                 "updated_by": updated_by,

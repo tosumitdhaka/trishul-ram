@@ -58,6 +58,99 @@ _AUDIT_RETENTION_DAYS_DEFAULT = 30
 # Ledger audit retention sweep interval (plan F: incremental retention jobs).
 _LEDGER_RETENTION_INTERVAL_S = 3600
 
+# V18-08 (plan F): the manager-side batch/management executor runs on a bounded
+# pool (10 workers) with an explicit admission ceiling — work beyond the
+# ceiling is REJECTED with a log instead of accumulating unbounded queued
+# futures. Not a frozen V18-01 §9 name; tunable via the constructor kwargs
+# ``management_pool_workers`` / ``management_queue_ceiling``.
+_MANAGEMENT_POOL_WORKERS_DEFAULT = 10
+_MANAGEMENT_QUEUE_CEILING_DEFAULT = 1000
+
+
+class QueueCapacityError(RuntimeError):
+    """Queued-run admission rejected (V18-08): the durable E.2 manual-run queue
+    is at its count/byte ceiling. The rejection is explicit and logged — never
+    a silent drop and never unbounded growth. The API layer maps this to a
+    retryable overload response.
+    """
+
+
+class ExecutorOverloadError(RuntimeError):
+    """Manager-side management executor saturated (V18-08): the bounded pool's
+    admission ceiling is reached. The submission is rejected with a log — the
+    caller surfaces an explicit overload response instead of letting the run
+    id resolve nowhere.
+    """
+
+
+class _BoundedExecutor:
+    """ThreadPoolExecutor with an explicit admission ceiling (V18-08, plan F).
+
+    ``max_workers`` threads execute submitted callables; up to
+    ``queue_ceiling`` additional callables may wait queued. A submit that would
+    exceed the ceiling is REJECTED: logged at WARNING and ``None`` returned so
+    the caller surfaces an explicit overload rejection. Pending count includes
+    both queued and running work, so unbounded bookkeeping can never
+    accumulate behind a slow dependency.
+    """
+
+    def __init__(
+        self,
+        max_workers: int,
+        queue_ceiling: int,
+        thread_name_prefix: str,
+    ) -> None:
+        self._executor = ThreadPoolExecutor(
+            max_workers=max(1, max_workers),
+            thread_name_prefix=thread_name_prefix,
+        )
+        self._queue_ceiling = max(1, queue_ceiling)
+        self._pending = 0
+        self._lock = threading.Lock()
+        self._shutdown = False
+
+    def submit(self, fn, *args, **kwargs):
+        """Submit *fn* to the bounded pool. Returns the Future, or ``None``
+        when the admission ceiling is reached (rejection logged at WARNING)."""
+        with self._lock:
+            if self._shutdown:
+                logger.warning(
+                    "Management executor submit rejected — executor shut down",
+                    extra={"target": getattr(fn, "__name__", repr(fn))},
+                )
+                return None
+            if self._pending >= self._queue_ceiling:
+                logger.warning(
+                    "Management executor at capacity — submission rejected",
+                    extra={
+                        "target": getattr(fn, "__name__", repr(fn)),
+                        "pending": self._pending,
+                        "queue_ceiling": self._queue_ceiling,
+                    },
+                )
+                return None
+            self._pending += 1
+        try:
+            return self._executor.submit(self._tracked, fn, *args, **kwargs)
+        except Exception:
+            # The executor rejected the work (shutdown raced us) — restore the
+            # pending count so the admission ceiling stays honest.
+            with self._lock:
+                self._pending = max(0, self._pending - 1)
+            raise
+
+    def _tracked(self, fn, *args, **kwargs):
+        try:
+            return fn(*args, **kwargs)
+        finally:
+            with self._lock:
+                self._pending = max(0, self._pending - 1)
+
+    def shutdown(self, wait: bool = True, cancel_futures: bool = False) -> None:
+        with self._lock:
+            self._shutdown = True
+        self._executor.shutdown(wait=wait, cancel_futures=cancel_futures)
+
 
 def _audit_retention_days() -> int:
     """``TRAM_AUDIT_RETENTION_DAYS`` (V18-01 §9, frozen default 30) — audit
@@ -139,6 +232,11 @@ class PipelineController:
         queue_manual_runs: bool | None = None,
         queue_ttl_seconds: int = 900,
         stateful_transforms: bool | None = None,
+        # V18-08 (plan F): the manager-side bookkeeping executor is bounded —
+        # pool workers plus an explicit admission ceiling. Work beyond the
+        # ceiling is rejected with a log (never unbounded queued futures).
+        management_pool_workers: int = _MANAGEMENT_POOL_WORKERS_DEFAULT,
+        management_queue_ceiling: int = _MANAGEMENT_QUEUE_CEILING_DEFAULT,
     ) -> None:
         self._db = db
         self._node_id = node_id
@@ -222,7 +320,11 @@ class PipelineController:
         self._scheduler = None          # APScheduler BackgroundScheduler
         self._stream_threads: dict[str, threading.Thread] = {}
         self._stop_events: dict[str, threading.Event] = {}
-        self._thread_pool = ThreadPoolExecutor(max_workers=10, thread_name_prefix="tram-batch")
+        self._thread_pool = _BoundedExecutor(
+            max_workers=management_pool_workers,
+            queue_ceiling=management_queue_ceiling,
+            thread_name_prefix="tram-batch",
+        )
         # Tracks dispatched stream run_ids per pipeline: {pipeline_name: [run_id, ...]}
         self._stream_run_ids: dict[str, list[str]] = {}
         # {placement_group_id: placement_dict}
@@ -1188,7 +1290,18 @@ class PipelineController:
                     # run_id the user already saw.
                     existing = self._db.get_active_queued_run_for_pipeline(name)
                     return TriggerResult(existing["run_id"], "queued")
-            self._thread_pool.submit(partial(self._run_batch, name, run_id, origin="manual", flush=flush))
+            # V18-08 (plan F): the management executor is bounded — a submit
+            # beyond its admission ceiling is rejected (logged at WARNING) and
+            # must surface as an explicit overload error, never a run_id that
+            # resolves nowhere.
+            future = self._thread_pool.submit(
+                partial(self._run_batch, name, run_id, origin="manual", flush=flush)
+            )
+            if future is None:
+                raise ExecutorOverloadError(
+                    f"Management executor saturated — manual run for pipeline "
+                    f"'{name}' rejected (retry when load subsides)"
+                )
             return TriggerResult(run_id, "dispatched")
 
     # ── Queued manual runs (E.2 / GH #21) ────────────────────────────────
@@ -1211,6 +1324,12 @@ class PipelineController:
         already exists for the pipeline (dedupe). Sets pipeline status
         'queued', bumps MGR_DISPATCH_TOTAL{no_workers} (metric continuity with
         the legacy fail-fast) and MGR_QUEUE_ENQUEUED_TOTAL.
+
+        V18-08 (plan F): admission is bounded — when the durable queue is at
+        its count/byte ceiling (``TRAM_QUEUE_MAX_COUNT`` /
+        ``TRAM_QUEUE_MAX_BYTES``, invariant 7), the enqueue raises
+        :class:`QueueCapacityError` with the reason instead of growing without
+        bound. The rejection is logged; it is never a silent drop.
         """
         with self._lock:
             if self._db is None:
@@ -1223,6 +1342,7 @@ class PipelineController:
                 if self.manager.exists(pipeline_name):
                     self.manager.set_status(pipeline_name, "queued")
                 return False
+            self._reject_queue_over_capacity(pipeline_name, yaml_text)
             now = datetime.now(UTC)
             expires_at = now + timedelta(seconds=self._queue_ttl_seconds)
             self._db.save_queued_run(run_id, pipeline_name, yaml_text, now, expires_at)
@@ -1258,6 +1378,50 @@ class PipelineController:
                 },
             )
             return True
+
+    def _reject_queue_over_capacity(self, pipeline_name: str, yaml_text: str) -> None:
+        """V18-08 (plan F): enforce the queued-run admission budgets at enqueue.
+
+        Raises :class:`QueueCapacityError` (with the reason) when the active
+        queue is at its count ceiling (``TRAM_QUEUE_MAX_COUNT``) or the
+        incoming YAML snapshot would push the queued bytes over
+        ``TRAM_QUEUE_MAX_BYTES``. A bound of ``0`` disables that bound.
+        Called under the lifecycle lock; the budget query is the same short
+        read the enqueue already performs.
+        """
+        from tram.core.config import queue_max_bytes, queue_max_count
+
+        max_count = queue_max_count()
+        max_bytes = queue_max_bytes()
+        if max_count <= 0 and max_bytes <= 0:
+            return
+        active = self._db.get_active_queued_runs() if self._db is not None else []
+        if max_count > 0 and len(active) >= max_count:
+            reason = (
+                f"queued-run admission rejected: {len(active)} active queued "
+                f"runs at the {max_count} cap (TRAM_QUEUE_MAX_COUNT)"
+            )
+            logger.warning(
+                "Manual run rejected — queued-run capacity exceeded",
+                extra={"pipeline": pipeline_name, "reason": reason},
+            )
+            raise QueueCapacityError(reason)
+        if max_bytes > 0:
+            existing_bytes = sum(
+                len(r["yaml_snapshot"].encode("utf-8")) for r in active
+            )
+            incoming_bytes = len(yaml_text.encode("utf-8"))
+            if existing_bytes + incoming_bytes > max_bytes:
+                reason = (
+                    f"queued-run admission rejected: {existing_bytes + incoming_bytes} "
+                    f"bytes of queued YAML over the {max_bytes} cap "
+                    f"(TRAM_QUEUE_MAX_BYTES)"
+                )
+                logger.warning(
+                    "Manual run rejected — queued-run byte budget exceeded",
+                    extra={"pipeline": pipeline_name, "reason": reason},
+                )
+                raise QueueCapacityError(reason)
 
     # ── Execution ledger wiring (V18-04 / frozen V18-01 §1–3) ─────────────
 
@@ -2554,8 +2718,21 @@ class PipelineController:
                             generation=attempt["generation"],
                             resolve_outcome=None,
                         )
-                    if self._enqueue_manual_run(pipeline_name, run_id, yaml_text):
-                        return  # queued — no FAILED row, no finalize
+                    try:
+                        if self._enqueue_manual_run(pipeline_name, run_id, yaml_text):
+                            return  # queued — no FAILED row, no finalize
+                    except QueueCapacityError as exc:
+                        # V18-08 (plan F): the queue is at its ceiling — the run
+                        # cannot queue, but the client's run_id (returned by the
+                        # synchronous trigger site) must still resolve: record an
+                        # explicit FAILED row with the rejection reason.
+                        logger.error(
+                            "Manual run failed — queued-run admission rejected",
+                            extra={"pipeline": pipeline_name, "run_id": run_id, "reason": str(exc)},
+                        )
+                        with self._lock:
+                            self._record_skipped_manual_run(pipeline_name, run_id, str(exc))
+                        return
                     # Dedupe hit: the synchronous trigger_run site already queued
                     # this pipeline (different run_id). _enqueue_manual_run is
                     # check-then-insert under the RLock, so no row was created for

@@ -146,6 +146,33 @@ class TestDbStateStore:
         row = db.load_transform_state("p1")
         assert row["updated_by"] == "r9"
 
+    def test_save_rejected_at_cardinality_ceiling_with_reason(self, tmp_path, monkeypatch):
+        """V18-08 (plan F): a transform-state write whose top-level key
+        cardinality exceeds ``TRAM_TRANSFORM_MAX_CARDINALITY`` is REJECTED at
+        the state write with the reason — never silently evicted or stored."""
+        monkeypatch.setenv("TRAM_TRANSFORM_MAX_CARDINALITY", "2")
+        from tram.persistence.db import TransformStateBudgetExceeded
+
+        db = TramDB(url=f"sqlite:///{tmp_path}/state-card.db")
+        with pytest.raises(TransformStateBudgetExceeded, match="TRAM_TRANSFORM_MAX_CARDINALITY"):
+            db.save_transform_state("p1", {"a": 1, "b": 2, "c": 3}, "sha")
+        # Under the ceiling the write persists unchanged (no behavior change
+        # for pipelines within the budget).
+        db.save_transform_state("p1", {"a": 1, "b": 2}, "sha")
+        assert db.load_transform_state("p1")["state"] == {"a": 1, "b": 2}
+
+    def test_save_rejected_at_byte_ceiling_with_reason(self, tmp_path, monkeypatch):
+        """V18-08 (plan F): a transform-state write whose serialized size
+        exceeds ``TRAM_TRANSFORM_MAX_STATE_BYTES`` is REJECTED at the state
+        write with the reason — the row cannot grow without bound."""
+        monkeypatch.setenv("TRAM_TRANSFORM_MAX_STATE_BYTES", "64")
+        from tram.persistence.db import TransformStateBudgetExceeded
+
+        db = TramDB(url=f"sqlite:///{tmp_path}/state-bytes.db")
+        with pytest.raises(TransformStateBudgetExceeded, match="TRAM_TRANSFORM_MAX_STATE_BYTES"):
+            db.save_transform_state("p1", {"k": "x" * 500}, "sha")
+        db.close()
+
     def test_checkpoint_advanced_row_exposes_revision_and_generation(self, tmp_path):
         """A row advanced by the atomic checkpoint CAS surfaces its stored
         revision/generation through the store — a run hydrating it adopts the

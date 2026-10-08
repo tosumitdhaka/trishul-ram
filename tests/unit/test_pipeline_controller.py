@@ -26,10 +26,16 @@ from tram.agent.worker_pool import (
     DISPATCH_FAILED,
     DISPATCH_NO_CAPACITY,
     DispatchOutcome,
+    WorkerPool,
 )
 from tram.core.context import RunResult, RunStatus
+from tram.persistence.db import TramDB
 from tram.persistence.ledger import CLAIMED, claim_run
-from tram.pipeline.controller import PipelineController
+from tram.pipeline.controller import (
+    ExecutorOverloadError,
+    PipelineController,
+    QueueCapacityError,
+)
 from tram.pipeline.loader import load_pipeline_from_yaml
 from tram.pipeline.manager import PipelineManager
 
@@ -180,6 +186,7 @@ def _make_controller(
     manager_url="",
     kubernetes_service_manager=None,
     single_stream_placements=True,
+    **kwargs,
 ) -> PipelineController:
     """Build a controller with a patched BackgroundScheduler that doesn't start."""
     ctrl = PipelineController(
@@ -189,6 +196,7 @@ def _make_controller(
         manager_url=manager_url,
         kubernetes_service_manager=kubernetes_service_manager,
         single_stream_placements=single_stream_placements,
+        **kwargs,
     )
     return ctrl
 
@@ -3637,6 +3645,187 @@ class TestLifecycleOperationsWiring:
             assert ctrl.get_lifecycle_operations(pipeline_name="nope") == []
         finally:
             ctrl.stop()
+
+
+# ── V18-08: budgets, bounded executor, lock audit (plan F) ───────────────────
+
+
+class TestV1808Efficiency:
+    """V18-08 (plan F) manager-side capacity controls: queued-run admission
+    budgets rejected at enqueue, the bounded management executor rejecting past
+    its ceiling, and the lock audit pinning that the scheduler/drain dispatch
+    HTTP runs with the lifecycle lock released."""
+
+    def _queued_controller(self, tmp_path, wp, **kwargs):
+        db = TramDB(url=f"sqlite:///{tmp_path}/v1808.db", node_id="test-node")
+        ctrl = PipelineController(
+            db=db,
+            node_id="test-node",
+            worker_pool=wp,
+            manager_url="http://manager:8765",
+            queue_manual_runs=True,
+            **kwargs,
+        )
+        return db, ctrl
+
+    # ── Queue admission budgets ───────────────────────────────────────────
+
+    def test_enqueue_rejected_at_count_cap(self, tmp_path, monkeypatch):
+        monkeypatch.setenv("TRAM_QUEUE_MAX_COUNT", "1")
+        wp = MagicMock()
+        wp.healthy_workers.return_value = []
+        db, ctrl = self._queued_controller(tmp_path, wp)
+        try:
+            ctrl.manager.register(load_pipeline_from_yaml(_MANUAL_YAML), yaml_text=_MANUAL_YAML)
+            ctrl.manager.register(load_pipeline_from_yaml(_INTERVAL_YAML), yaml_text=_INTERVAL_YAML)
+            assert ctrl.trigger_run("my-manual").disposition == "queued"
+            with pytest.raises(QueueCapacityError, match="TRAM_QUEUE_MAX_COUNT"):
+                ctrl.trigger_run("my-interval")
+            # The rejected run left no row and no silent drop.
+            assert len(db.get_active_queued_runs()) == 1
+        finally:
+            ctrl.stop()
+            db.close()
+
+    def test_enqueue_rejected_at_byte_cap(self, tmp_path, monkeypatch):
+        monkeypatch.setenv("TRAM_QUEUE_MAX_BYTES", str(len(_MANUAL_YAML.encode("utf-8"))))
+        wp = MagicMock()
+        wp.healthy_workers.return_value = []
+        db, ctrl = self._queued_controller(tmp_path, wp)
+        try:
+            ctrl.manager.register(load_pipeline_from_yaml(_MANUAL_YAML), yaml_text=_MANUAL_YAML)
+            ctrl.manager.register(load_pipeline_from_yaml(_INTERVAL_YAML), yaml_text=_INTERVAL_YAML)
+            assert ctrl.trigger_run("my-manual").disposition == "queued"
+            with pytest.raises(QueueCapacityError, match="TRAM_QUEUE_MAX_BYTES"):
+                ctrl.trigger_run("my-interval")
+            assert len(db.get_active_queued_runs()) == 1
+        finally:
+            ctrl.stop()
+            db.close()
+
+    def test_enqueue_byte_cap_zero_disables_bound(self, tmp_path, monkeypatch):
+        monkeypatch.setenv("TRAM_QUEUE_MAX_COUNT", "0")
+        monkeypatch.setenv("TRAM_QUEUE_MAX_BYTES", "0")
+        wp = MagicMock()
+        wp.healthy_workers.return_value = []
+        db, ctrl = self._queued_controller(tmp_path, wp)
+        try:
+            ctrl.manager.register(load_pipeline_from_yaml(_MANUAL_YAML), yaml_text=_MANUAL_YAML)
+            assert ctrl.trigger_run("my-manual").disposition == "queued"
+            assert len(db.get_active_queued_runs()) == 1
+        finally:
+            ctrl.stop()
+            db.close()
+
+    # ── Bounded management executor ───────────────────────────────────────
+
+    def test_bounded_executor_rejects_past_ceiling(self, caplog):
+        ctrl = _make_controller(management_pool_workers=1, management_queue_ceiling=2)
+        gate = threading.Event()
+
+        def _block():
+            gate.wait(5)
+            return "done"
+
+        try:
+            assert ctrl._thread_pool.submit(_block) is not None
+            assert ctrl._thread_pool.submit(_block) is not None
+            with caplog.at_level("WARNING", logger="tram.pipeline.controller"):
+                rejected = ctrl._thread_pool.submit(_block)
+            assert rejected is None
+            assert any("at capacity" in r.message for r in caplog.records)
+            # Pending count stays at the ceiling — no unbounded accumulation.
+            assert ctrl._thread_pool._pending == 2
+        finally:
+            gate.set()
+            ctrl.stop()
+
+    def test_trigger_run_raises_overload_when_executor_saturated(self):
+        ctrl = _make_controller(management_pool_workers=1, management_queue_ceiling=1)
+        ctrl.manager.register(load_pipeline_from_yaml(_INTERVAL_YAML), yaml_text=_INTERVAL_YAML)
+        ctrl.manager.set_status("my-interval", "scheduled")
+        gate = threading.Event()
+        try:
+            assert ctrl._thread_pool.submit(lambda: gate.wait(5)) is not None
+            with pytest.raises(ExecutorOverloadError, match="saturated"):
+                ctrl.trigger_run("my-interval")
+        finally:
+            gate.set()
+            ctrl.stop()
+
+    # ── Lock audit (plan F: no network I/O under the lifecycle lock) ──────
+
+    def test_scheduler_dispatch_runs_with_lifecycle_lock_released(self):
+        """V18-08 lock audit: the scheduler/batch path performs its
+        manager→worker HTTP dispatch with the controller lifecycle lock
+        RELEASED (claim → network work → identity-checked commit). A dispatch
+        under the lock would serialize every worker HTTP call against
+        lifecycle ops and stall the scheduler."""
+        wp = MagicMock()
+        wp.healthy_workers.return_value = ["http://worker-0:8766"]
+        wp.dispatch_with_result.return_value = DispatchOutcome(
+            worker_url="http://worker-0:8766", outcome=DISPATCH_ACCEPTED,
+        )
+        ctrl = _make_controller(worker_pool=wp, manager_url="http://manager:8765")
+        config = load_pipeline_from_yaml(_INTERVAL_YAML)
+        ctrl.manager.register(config, yaml_text=_INTERVAL_YAML)
+        ctrl.manager.set_status("my-interval", "scheduled")
+
+        observed = {}
+        wp.dispatch_with_result.return_value = DispatchOutcome(
+            worker_url="http://worker-0:8766", outcome=DISPATCH_ACCEPTED,
+        )
+
+        def _probe_dispatch(**kwargs):
+            observed["lock_owned"] = ctrl._lock._is_owned()
+            return wp.dispatch_with_result.return_value
+
+        wp.dispatch_with_result.side_effect = _probe_dispatch
+        try:
+            ctrl._run_batch("my-interval", run_id="audit-r1")
+            assert observed["lock_owned"] is False
+        finally:
+            ctrl.stop()
+
+    def test_queued_drain_dispatch_runs_with_lifecycle_lock_released(self, tmp_path):
+        """V18-08 lock audit: the E.2 drain dispatches between the claim and
+        the commit — the claim/commit transitions each hold the RLock, but the
+        dispatch HTTP call itself runs with the lock released."""
+        wp = WorkerPool(workers=["http://w0:8766"], manager_url="http://manager:8765")
+        wp._health["http://w0:8766"]["ok"] = False  # force the enqueue path
+        db, ctrl = self._queued_controller(tmp_path, wp)
+        try:
+            ctrl.manager.register(load_pipeline_from_yaml(_MANUAL_YAML), yaml_text=_MANUAL_YAML)
+            result = ctrl.trigger_run("my-manual")
+            assert result.disposition == "queued"
+
+            wp._health["http://w0:8766"]["ok"] = True  # capacity returns
+            observed = {}
+
+            def _probe_dispatch(**kwargs):
+                observed["lock_owned"] = ctrl._lock._is_owned()
+                return DispatchOutcome(
+                    worker_url="http://w0:8766", outcome=DISPATCH_ACCEPTED,
+                )
+
+            wp.dispatch_with_result = _probe_dispatch
+            runs = ctrl.drainable_queued_runs()
+            assert len(runs) == 1
+            claimed = ctrl.claim_queued_run(runs[0]["run_id"])
+            assert claimed is not None
+            assert observed.get("lock_owned") is None  # claim returned, no dispatch yet
+            wp.dispatch_with_result(
+                run_id=claimed["run_id"],
+                pipeline_name=claimed["pipeline_name"],
+                yaml_text=claimed["yaml_snapshot"],
+                schedule_type=claimed["schedule_type"],
+                callback_url=claimed["callback_url"],
+            )
+            assert observed["lock_owned"] is False
+            assert ctrl.commit_queued_dispatch(claimed["run_id"], "http://w0:8766") is True
+        finally:
+            ctrl.stop()
+            db.close()
 
 
 # ── Live PostgreSQL mirror of the wave-2 gate scenarios ─────────────────────

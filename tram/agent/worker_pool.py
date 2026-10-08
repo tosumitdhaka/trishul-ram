@@ -67,6 +67,15 @@ _MANAGER_CAPABILITIES = [
 ]
 _HANDSHAKE_TIMEOUT_S = 5
 
+# V18-08 (plan F): fair-placement anti-starvation threshold. A healthy worker
+# skipped by this many consecutive single-slot selection decisions is
+# *starved* and is promoted ahead of less-starved peers for the next
+# selection (still ordered by load within the starved tier), so a cold
+# worker/pipeline is never perpetually deprioritized by a slightly-less-loaded
+# sibling. Not a frozen V18-01 §9 name — exposed as the constructor kwarg
+# ``fair_placement_threshold``.
+_FAIR_PLACEMENT_STARVATION_DEFAULT = 2
+
 
 @dataclass
 class DispatchOutcome:
@@ -94,6 +103,7 @@ class WorkerPool:
         stats_interval: int = 30,
         health_failures_to_down: int = 2,
         on_health_restored: Callable[[], None] | None = None,
+        fair_placement_threshold: int = _FAIR_PLACEMENT_STARVATION_DEFAULT,
     ) -> None:
         self._workers = list(workers)
         self._manager_url = manager_url
@@ -103,6 +113,9 @@ class WorkerPool:
         # Number of consecutive failed health probes before a worker is marked
         # down (health debounce / hysteresis).
         self._health_failures_to_down = max(1, health_failures_to_down)
+        # V18-08 (plan F): consecutive selection decisions a healthy worker may
+        # be skipped before it is promoted for the next single-slot placement.
+        self._fair_placement_threshold = max(1, fair_placement_threshold)
         # E.2 (§6.5): optional hook fired when a worker transitions down→up in
         # the poll loop. The app wires it to the BatchReconciler's drain nudge
         # event so a restored worker wakes the drain immediately. Public
@@ -139,6 +152,10 @@ class WorkerPool:
         self._worker_sessions: dict[str, dict] = {}
         # Round-robin counter for tie-breaking equally-loaded workers
         self._rr_counter: int = 0
+        # V18-08 (plan F): consecutive selection decisions each healthy worker
+        # has been skipped (anti-starvation). Advanced on every selection
+        # decision; a selected worker resets to 0.
+        self._starvation: dict[str, int] = {url: 0 for url in workers}
         self._last_healthy_count: int = -1
         self._lock = threading.Lock()
 
@@ -159,9 +176,20 @@ class WorkerPool:
         goes through this helper so the shared machine key is attached as
         ``X-API-Key`` whenever ``TRAM_API_KEY`` is set. Without a key the
         client carries no header, matching the agent server's behavior.
+
+        V18-08 (plan F): the read/total deadline is the caller's ``timeout``
+        argument (the frozen §9 read timeout for dispatch/query/status calls),
+        and the TCP/TLS connect deadline is the frozen §9 connect timeout
+        (``TRAM_RPC_CONNECT_TIMEOUT_S``, default 5) — a separate bound so a
+        hung connect cannot consume the whole read budget.
         """
+        from tram.core.config import rpc_connect_timeout_s
+
         headers = {"X-API-Key": self._api_key} if self._api_key else None
-        return httpx.Client(timeout=timeout, headers=headers)
+        return httpx.Client(
+            timeout=httpx.Timeout(timeout, connect=rpc_connect_timeout_s()),
+            headers=headers,
+        )
 
     # ── Discovery ──────────────────────────────────────────────────────────
 
@@ -285,7 +313,13 @@ class WorkerPool:
         window, plan B.6).
         """
         probes: dict[str, dict] = {}
-        with ThreadPoolExecutor(max_workers=len(self._workers) or 1) as executor:
+        # V18-08 (plan F): the probe fan-out is bounded by the frozen §9 RPC
+        # concurrency cap (``TRAM_RPC_MAX_CONCURRENCY``, default 32) — a fleet
+        # larger than the cap probes in bounded waves instead of opening one
+        # thread per worker.
+        from tram.core.config import rpc_max_concurrency
+        fan_out = min(len(self._workers) or 1, rpc_max_concurrency())
+        with ThreadPoolExecutor(max_workers=fan_out) as executor:
             futures = {executor.submit(self._probe_health, url): url for url in self._workers}
             for future in as_completed(futures):
                 url = futures[future]
@@ -451,20 +485,77 @@ class WorkerPool:
         with self._lock:
             return [url for url, h in self._health.items() if h["ok"]]
 
-    def least_loaded(self) -> str | None:
-        """Return a healthy worker URL, using least-loaded + round-robin tiebreaker."""
-        with self._lock:
-            healthy_urls = [url for url, h in self._health.items() if h["ok"]]
+    def _select_placements(self, healthy_urls: list[str], count: int) -> list[str]:
+        """V18-08 (plan F): fair placement — least-loaded first, anti-starvation.
+
+        ``count == 1`` (single-slot placement: batch dispatch and count=1
+        streams): the least-loaded healthy worker wins with the round-robin
+        tie-break, UNLESS a healthy worker is *starved* — skipped for
+        ``fair_placement_threshold`` consecutive selection decisions — in
+        which case the least-loaded starved worker is promoted so a cold
+        worker/pipeline is never perpetually deprioritized. ``count > 1``
+        (broadcast) keeps today's pure least-loaded order; "all" selects every
+        healthy worker. Selection counters always advance: selected workers
+        reset, healthy non-selected workers count one more skip.
+
+        Caller must NOT hold ``self._lock`` (``load_score`` takes it).
+        """
+        if not healthy_urls:
+            return []
         candidates = [(url, self.load_score(url)) for url in healthy_urls]
         with self._lock:
-            if not candidates:
-                return None
-            min_score = min(score for _, score in candidates)
-            min_workers = [url for url, score in candidates if score == min_score]
-            # Round-robin among equally loaded workers to spread pipelines evenly
-            idx = self._rr_counter % len(min_workers)
-            self._rr_counter += 1
-        return min_workers[idx]
+            scores = {url: score for url, score in candidates}
+            selected: list[str]
+            if count == 1:
+                if any(
+                    self._starvation.get(url, 0) >= self._fair_placement_threshold
+                    for url, _ in candidates
+                ):
+                    # Anti-starvation tier: promote the least-loaded starved
+                    # worker (round-robin among tied starved workers).
+                    pool = [
+                        url
+                        for url, _ in candidates
+                        if self._starvation.get(url, 0) >= self._fair_placement_threshold
+                    ]
+                else:
+                    pool = [url for url, _ in candidates]
+                min_score = min(scores[url] for url in pool)
+                tied = sorted(url for url in pool if scores[url] == min_score)
+                idx = self._rr_counter % len(tied)
+                self._rr_counter += 1
+                selected = [tied[idx]]
+            else:
+                # Broadcast tiers: starved workers first (by load), then the
+                # rest (by load) — still least-loaded within each tier.
+                starved = sorted(
+                    (
+                        url
+                        for url, _ in candidates
+                        if self._starvation.get(url, 0) >= self._fair_placement_threshold
+                    ),
+                    key=lambda url: scores[url],
+                )
+                rest = sorted(
+                    (url for url, _ in candidates if url not in starved),
+                    key=lambda url: scores[url],
+                )
+                ordered = starved + rest
+                selected = ordered[:count] if count < len(ordered) else ordered
+            for url, _ in candidates:
+                self._starvation[url] = 0 if url in selected else self._starvation.get(url, 0) + 1
+            return list(selected)
+
+    def least_loaded(self) -> str | None:
+        """Return a healthy worker URL, using least-loaded + round-robin
+        tiebreaker with V18-08 anti-starvation (a starved worker is promoted
+        ahead of less-starved peers)."""
+        with self._lock:
+            healthy_urls = [url for url, h in self._health.items() if h["ok"]]
+        if not healthy_urls:
+            return None
+        selected = self._select_placements(healthy_urls, 1)
+        return selected[0] if selected else None
 
     def load_score(self, worker_url: str) -> float:
         """Return a sortable load score for a worker."""
@@ -486,7 +577,14 @@ class WorkerPool:
             return float(self._health.get(worker_url, {}).get("active_runs", 0)) * 1_000_000.0
 
     def resolve(self, workers_cfg: WorkersConfig) -> list[str]:
-        """Return worker URLs selected by the workers config."""
+        """Return worker URLs selected by the workers config.
+
+        V18-08 (plan F): selection is least-loaded first with anti-starvation
+        (``_select_placements``) — a healthy worker skipped for
+        ``fair_placement_threshold`` consecutive decisions is promoted so it is
+        never perpetually deprioritized. Pinned ``worker_ids`` selection is
+        unchanged (explicit pinning is not fair-placement territory).
+        """
         if workers_cfg.worker_ids is not None:
             resolved: list[str] = []
             with self._lock:
@@ -499,13 +597,13 @@ class WorkerPool:
             return resolved
         with self._lock:
             healthy_urls = [url for url, h in self._health.items() if h["ok"]]
-        candidates = [(url, self.load_score(url)) for url in healthy_urls]
-        candidates.sort(key=lambda item: item[1])
+        if not healthy_urls:
+            return []
         if isinstance(workers_cfg.count, int) and workers_cfg.count > 1:
-            return [url for url, _ in candidates[:workers_cfg.count]]
+            return self._select_placements(healthy_urls, workers_cfg.count)
         if workers_cfg.count == "all":
-            return [url for url, _ in candidates]
-        return [candidates[0][0]] if candidates else []
+            return self._select_placements(healthy_urls, len(healthy_urls))
+        return self._select_placements(healthy_urls, 1)
 
     def workers_for_pipeline(self, pipeline_name: str) -> list[str]:
         with self._lock:
@@ -615,7 +713,11 @@ class WorkerPool:
         in the worst case, inside async API handlers).
         """
         results: dict[str, dict | None] = {}
-        with ThreadPoolExecutor(max_workers=len(worker_urls) or 1) as executor:
+        # V18-08 (plan F): bounded by the frozen §9 RPC concurrency cap —
+        # same rationale as the health-probe fan-out in ``_poll_all``.
+        from tram.core.config import rpc_max_concurrency
+        fan_out = min(len(worker_urls) or 1, rpc_max_concurrency())
+        with ThreadPoolExecutor(max_workers=fan_out) as executor:
             futures = {executor.submit(self.worker_status, url): url for url in worker_urls}
             for future in as_completed(futures):
                 results[futures[future]] = future.result()

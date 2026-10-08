@@ -368,6 +368,154 @@ def drain_timeout_s() -> int:
     return _env_int("TRAM_DRAIN_TIMEOUT_S", _DRAIN_TIMEOUT_S_DEFAULT)
 
 
+# V18-01 §9 (frozen): transform-state storage budgets. The state blob is
+# bounded twice: the PUT body cap (``TRAM_STATE_MAX_BYTES``, above) rejects
+# oversized HTTP bodies with 413, and these budgets bound what may actually be
+# STORED — serialized bytes and top-level key cardinality — enforced at the
+# state write with rejection (plan F: overflow pauses intake or fails
+# undecided; it never evicts un-emitted state).
+_TRANSFORM_MAX_STATE_BYTES_DEFAULT = 64 * 1024 * 1024
+_TRANSFORM_MAX_CARDINALITY_DEFAULT = 1_000_000
+
+
+def transform_max_state_bytes() -> int:
+    """``TRAM_TRANSFORM_MAX_STATE_BYTES`` (V18-01 §9, frozen default 64 MiB) —
+    byte budget of a pipeline's stored transform-state blob.
+
+    A state write whose serialized size exceeds this is REJECTED (the write
+    raises with the reason) instead of silently inflating the
+    ``transform_state`` row. ``0`` disables the byte bound. Invalid values
+    are logged at WARNING and fall back to the default (the webhook body-cap
+    convention, matching ``state_max_bytes``).
+    """
+    raw = os.environ.get("TRAM_TRANSFORM_MAX_STATE_BYTES")
+    if raw is None:
+        return _TRANSFORM_MAX_STATE_BYTES_DEFAULT
+    try:
+        return max(int(raw), 0)
+    except ValueError:
+        logger.warning(
+            "Invalid TRAM_TRANSFORM_MAX_STATE_BYTES=%r — using default",
+            raw,
+        )
+        return _TRANSFORM_MAX_STATE_BYTES_DEFAULT
+
+
+def transform_max_cardinality() -> int:
+    """``TRAM_TRANSFORM_MAX_CARDINALITY`` (V18-01 §9, frozen default
+    1,000,000) — key-cardinality budget of a pipeline's stored transform-state
+    blob (top-level state keys, e.g. counter/window identities).
+
+    A state write exceeding this is REJECTED with the reason, never silently
+    evicted. ``0`` disables the cardinality bound. Invalid values are logged
+    at WARNING and fall back to the default (the webhook body-cap convention).
+    """
+    raw = os.environ.get("TRAM_TRANSFORM_MAX_CARDINALITY")
+    if raw is None:
+        return _TRANSFORM_MAX_CARDINALITY_DEFAULT
+    try:
+        return max(int(raw), 0)
+    except ValueError:
+        logger.warning(
+            "Invalid TRAM_TRANSFORM_MAX_CARDINALITY=%r — using default",
+            raw,
+        )
+        return _TRANSFORM_MAX_CARDINALITY_DEFAULT
+
+
+# V18-01 §9 (frozen): manager→worker RPC deadlines and fan-out concurrency.
+# The read timeout (10 s) matches today's dispatch client (``worker_pool.py``
+# ``_dispatch_to_worker``); the connect timeout and the concurrency cap bound
+# the RPC fan-out (health probes, status sweeps) and the dispatch client.
+_RPC_CONNECT_TIMEOUT_S_DEFAULT = 5
+_RPC_READ_TIMEOUT_S_DEFAULT = 10
+_RPC_MAX_CONCURRENCY_DEFAULT = 32
+
+
+def rpc_connect_timeout_s() -> int:
+    """``TRAM_RPC_CONNECT_TIMEOUT_S`` (V18-01 §9, frozen default 5) — TCP/TLS
+    connect deadline for manager→worker agent calls.
+
+    Invalid values fail loud via ``_env_int`` (the strictest pattern in this
+    module — a silently-defaulted timeout would hide a pathological network).
+    """
+    return _env_int("TRAM_RPC_CONNECT_TIMEOUT_S", _RPC_CONNECT_TIMEOUT_S_DEFAULT)
+
+
+def rpc_read_timeout_s() -> int:
+    """``TRAM_RPC_READ_TIMEOUT_S`` (V18-01 §9, frozen default 10) — read
+    deadline for manager→worker agent calls (dispatch, status, query).
+
+    Matches today's dispatch client timeout so the default is behavior-
+    preserving. Invalid values fail loud via ``_env_int``.
+    """
+    return _env_int("TRAM_RPC_READ_TIMEOUT_S", _RPC_READ_TIMEOUT_S_DEFAULT)
+
+
+def rpc_max_concurrency() -> int:
+    """``TRAM_RPC_MAX_CONCURRENCY`` (V18-01 §9, frozen default 32) — ceiling on
+    concurrent manager→worker RPC calls (the per-pass probe/status fan-out).
+
+    A fleet larger than the cap probes in bounded waves instead of opening one
+    thread per worker. Invalid values fail loud via ``_env_int``; ``0`` is
+    clamped to 1 (a zero-worker fan-out would dispatch nothing).
+    """
+    return max(1, _env_int("TRAM_RPC_MAX_CONCURRENCY", _RPC_MAX_CONCURRENCY_DEFAULT))
+
+
+# E.2 queued-run admission budgets. Not named in the V18-01 §9 table (which
+# froze the bridge/transform/webhook budgets) but required by plan invariant 7
+# ("every admission queue ... has a count/byte/concurrency limit"): the durable
+# manual-run queue must reject at a ceiling instead of growing without bound.
+# Named after the frozen ``_MAX_COUNT``/``_MAX_BYTES`` convention.
+_QUEUE_MAX_COUNT_DEFAULT = 1000
+_QUEUE_MAX_BYTES_DEFAULT = 64 * 1024 * 1024
+
+
+def queue_max_count() -> int:
+    """``TRAM_QUEUE_MAX_COUNT`` — ceiling on active (status='queued') manual
+    runs across all pipelines.
+
+    Enforced at enqueue: a manual run whose admission would exceed the ceiling
+    is REJECTED with an explicit reason (never silently dropped). ``0``
+    disables the count bound. Invalid values are logged at WARNING and fall
+    back to the default (the webhook body-cap convention).
+    """
+    raw = os.environ.get("TRAM_QUEUE_MAX_COUNT")
+    if raw is None:
+        return _QUEUE_MAX_COUNT_DEFAULT
+    try:
+        return max(int(raw), 0)
+    except ValueError:
+        logger.warning(
+            "Invalid TRAM_QUEUE_MAX_COUNT=%r — using default",
+            raw,
+        )
+        return _QUEUE_MAX_COUNT_DEFAULT
+
+
+def queue_max_bytes() -> int:
+    """``TRAM_QUEUE_MAX_BYTES`` — byte ceiling on the queued YAML snapshots of
+    active (status='queued') manual runs.
+
+    Enforced at enqueue: the incoming snapshot counts toward the total, and an
+    admission that would exceed the ceiling is REJECTED with an explicit
+    reason. ``0`` disables the byte bound. Invalid values are logged at
+    WARNING and fall back to the default (the webhook body-cap convention).
+    """
+    raw = os.environ.get("TRAM_QUEUE_MAX_BYTES")
+    if raw is None:
+        return _QUEUE_MAX_BYTES_DEFAULT
+    try:
+        return max(int(raw), 0)
+    except ValueError:
+        logger.warning(
+            "Invalid TRAM_QUEUE_MAX_BYTES=%r — using default",
+            raw,
+        )
+        return _QUEUE_MAX_BYTES_DEFAULT
+
+
 def worker_legacy_admit() -> str:
     """``TRAM_WORKER_LEGACY_ADMIT`` (V18-01 §5) — rollback-bridge gate.
 

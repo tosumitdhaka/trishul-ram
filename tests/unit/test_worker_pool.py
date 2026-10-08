@@ -292,6 +292,77 @@ class TestHealthPolling:
         assert pool.least_loaded() is None
 
 
+# ── V18-08: fair placement (plan F) ──────────────────────────────────────────
+
+
+class TestFairPlacement:
+    """V18-08 (plan F): placement stays least-loaded-first, but a healthy
+    worker skipped for ``fair_placement_threshold`` consecutive selection
+    decisions is *starved* and promoted — a cold worker is never perpetually
+    deprioritized by a slightly-less-loaded sibling."""
+
+    def _pool_with_loads(self, loads: dict[str, int]):
+        pool = _pool(*loads.keys())
+        for url, active in loads.items():
+            pool._health[url] = {"ok": True, "active_runs": active}
+        return pool
+
+    def test_least_loaded_still_preferred_before_starvation(self):
+        pool = self._pool_with_loads({
+            "http://w0:8766": 5, "http://w1:8766": 1, "http://w2:8766": 3,
+        })
+        # Nobody is starved yet → pure least-loaded (existing semantics).
+        assert pool.least_loaded() == "http://w1:8766"
+        assert pool.least_loaded() == "http://w1:8766"
+
+    def test_starved_worker_promoted_after_threshold(self):
+        pool = self._pool_with_loads({
+            "http://w0:8766": 5, "http://w1:8766": 1,
+        })
+        # w1 is least-loaded: it wins the first two decisions while w0's
+        # starvation counter climbs (default threshold 2).
+        assert pool.least_loaded() == "http://w1:8766"
+        assert pool.least_loaded() == "http://w1:8766"
+        # w0 is now starved (skipped twice while healthy) → promoted even
+        # though it is more loaded, then the counter resets and least-loaded
+        # preference resumes.
+        assert pool.least_loaded() == "http://w0:8766"
+        assert pool.least_loaded() == "http://w1:8766"
+
+    def test_resolve_count1_shares_fair_selection(self):
+        from tram.models.pipeline import WorkersConfig
+
+        pool = self._pool_with_loads({
+            "http://w0:8766": 5, "http://w1:8766": 1,
+        })
+        assert pool.resolve(WorkersConfig(count=1)) == ["http://w1:8766"]
+        assert pool.resolve(WorkersConfig(count=1)) == ["http://w1:8766"]
+        assert pool.resolve(WorkersConfig(count=1)) == ["http://w0:8766"]
+        assert pool.resolve(WorkersConfig(count=1)) == ["http://w1:8766"]
+
+    def test_resolve_count_n_keeps_least_loaded_order(self):
+        from tram.models.pipeline import WorkersConfig
+
+        pool = self._pool_with_loads({
+            "http://w0:8766": 5, "http://w1:8766": 1, "http://w2:8766": 3,
+        })
+        # Broadcast selection is still pure least-loaded when nobody starves.
+        assert pool.resolve(WorkersConfig(count=2)) == ["http://w1:8766", "http://w2:8766"]
+
+    def test_broadcast_promotes_starved_worker(self):
+        from tram.models.pipeline import WorkersConfig
+
+        pool = self._pool_with_loads({
+            "http://w0:8766": 5, "http://w1:8766": 1, "http://w2:8766": 2,
+        })
+        pool._starvation["http://w0:8766"] = 2  # starved
+        # The starved worker leads the broadcast tier (by load within tier),
+        # then the least-loaded rest — and resets its counter.
+        assert pool.resolve(WorkersConfig(count=2)) == ["http://w0:8766", "http://w1:8766"]
+        assert pool._starvation["http://w0:8766"] == 0
+        assert pool._starvation["http://w2:8766"] == 1
+
+
 # ── D.6: per-worker probes run concurrently ────────────────────────────────
 
 
@@ -805,7 +876,12 @@ class TestManagerToWorkerAuthHeader:
         with patch("httpx.Client", side_effect=factory):
             pool.dispatch("r1", "p", "yaml", "batch")
         assert captured[0]["headers"] == {"X-API-Key": "manager-key"}
-        assert captured[0]["timeout"] == 10
+        # V18-08 (plan F): the RPC client carries the frozen §9 deadlines — the
+        # read/total timeout is today's dispatch timeout (10 s) and the TCP/TLS
+        # connect deadline is the frozen 5 s (TRAM_RPC_CONNECT_TIMEOUT_S).
+        timeout = captured[0]["timeout"]
+        assert timeout.read == 10
+        assert timeout.connect == 5
 
     def test_stop_run_carries_api_key_header_when_configured(self, monkeypatch):
         pool = self._pool_with_env_key(monkeypatch)
