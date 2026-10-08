@@ -145,9 +145,13 @@ class TestPipelineLifecycle:
         client.post("/api/pipelines", content=yaml_text, headers={"Content-Type": "text/plain"})
 
         response = client.post("/api/pipelines/api-test/run")
-        assert response.status_code == 200
+        # V18-09: the trigger receipt is 202 with run_id + operation_id
+        # (lifecycle_operations row) alongside the legacy status key.
+        assert response.status_code == 202
         data = response.json()
         assert data.get("status") in ("success", "running", "started", "triggered")
+        assert data.get("run_id")
+        assert "operation_id" in data
 
     def test_get_run_history(self, client, tmp_dirs):
         """GET /api/runs returns run records after a pipeline execution."""

@@ -53,11 +53,54 @@ def _queued_run_to_dict(row: dict) -> dict:
     }
 
 
+def _outcome_from_status(status: str | None) -> str | None:
+    """Derive the outcome-domain value from a run status when the recorded
+    ``run_history.outcome`` column is absent (pre-M2 rows / in-memory mode).
+
+    Identical to ``get_run_detail``'s fallback: the outcome domain is
+    ``success | partial | failed | aborted``; anything else (legacy ``error``
+    statuses, ``queued``) carries no outcome.
+    """
+    if status in ("success", "partial", "failed", "aborted"):
+        return status
+    return None
+
+
+def _attach_outcomes(rows: list[dict], db) -> None:
+    """Attach the recorded ``run_history.outcome`` to listing rows (V18-09).
+
+    One page-scoped query (the controller's ``get_runs`` returns RunResult
+    objects that carry status but not the recorded outcome column). Rows
+    without a recorded outcome fall back to the status-derived value; queued
+    rows (no history row) carry ``None``.
+    """
+    if not rows:
+        return
+    recorded: dict[str, str] = {}
+    if db is not None:
+        run_ids = [row["run_id"] for row in rows if row.get("status") != "queued"]
+        if run_ids:
+            placeholders = ",".join(f":rid_{i}" for i in range(len(run_ids)))
+            params = {f"rid_{i}": rid for i, rid in enumerate(run_ids)}
+            with db._engine.connect() as conn:  # noqa: SLF001
+                found = conn.execute(
+                    text(
+                        "SELECT run_id, outcome FROM run_history "
+                        f"WHERE run_id IN ({placeholders})"
+                    ),
+                    params,
+                ).mappings().fetchall()
+            recorded = {r["run_id"]: r["outcome"] for r in found if r["outcome"]}
+    for row in rows:
+        outcome = recorded.get(row["run_id"])
+        row["outcome"] = outcome if outcome is not None else _outcome_from_status(row.get("status"))
+
+
 @router.get("/runs")
 async def list_runs(
     request: Request,
     pipeline: str | None = Query(None, description="Filter by pipeline name"),
-    status: str | None = Query(None, description="Filter by status (success/failed/aborted)"),
+    status: str | None = Query(None, description="Filter by status (success/failed/partial/aborted)"),
     limit: int = Query(100, ge=1, le=1000, description="Maximum records to return"),
     offset: int = Query(0, ge=0, description="Records to skip (for pagination)"),
     from_dt: datetime | None = Query(None, description="Only runs started at or after this ISO timestamp"),
@@ -115,6 +158,12 @@ async def list_runs(
         rows = [*rows, *queued_slice]
         rows.sort(key=lambda r: r["started_at"] or "", reverse=True)
 
+    # V18-09: expose the recorded run_history.outcome on every listing row.
+    # PARTIAL runs surface as their own status ("partial") and outcome here —
+    # never folded into "error" (the pipeline-level status mapping in the
+    # controller is a separate surface).
+    _attach_outcomes(rows, getattr(request.app.state, "db", None))
+
     if format == "csv":
         if not rows:
             csv_content = ""
@@ -141,7 +190,7 @@ async def list_runs(
 async def count_runs(
     request: Request,
     pipeline: str | None = Query(None, description="Filter by pipeline name"),
-    status: str | None = Query(None, description="Filter by status (success/failed/aborted/queued)"),
+    status: str | None = Query(None, description="Filter by status (success/failed/partial/aborted/queued)"),
     from_dt: datetime | None = Query(None, description="Count runs started at or after this ISO timestamp"),
 ):
     """Total run count for the current list filters (honest pagination UI).
