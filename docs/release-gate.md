@@ -69,7 +69,7 @@ TRAM_BROWSER_NODE=/path/to/node20 scripts/release-gate.sh
 
 ## Release procedure
 
-1. **Scope complete.** All roadmap items assigned to this version (see `docs/ideas/consolidated-roadmap.md`) are done, and the release PR (one branch + one PR per version, with its progress table) is ready to merge or already merged.
+1. **Scope complete.** All roadmap items assigned to this version (see `docs/roadmap.md` and its linked release plan) are done, and the release PR (one branch + one PR per version, with its progress table) is ready to merge or already merged.
 2. **Review sign-off** (required, recorded in the release PR body):
    - Self-review checklist: every commit's diff re-read against its stated intent.
    - Independent review of the full release diff (an adversarial agent review is the established bar — see the v1.4.0 wave reviews). Summarize findings and their resolutions in the PR.

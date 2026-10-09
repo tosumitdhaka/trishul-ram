@@ -1,5 +1,15 @@
 # Consolidated Roadmap — Pending Work, Grouping & Versioning
 
+> **Current planning index (2026-10-10):** [docs/roadmap.md](../roadmap.md) owns
+> version assignments and the unversioned backlog. v1.8.0 shipped; the agreed
+> next cycle prioritizes maturity and hardening:
+> [v1.8.1 journal/security readiness](../plans/v1.8.1-hardening-plan.md) →
+> [v1.8.2 connector correctness](../plans/v1.8.2-connector-hardening-plan.md) →
+> [v1.8.3 operational confidence](../plans/v1.8.3-operational-confidence-plan.md).
+> New-feature proposals remain unscheduled. Source snapshot:
+> [2026-10-10 inventory](open-items-inventory-2026-10-10.md).
+> The dated grouping and release decisions below are historical.
+
 **Date:** 2026-09-18
 **Purpose:** single planning view over ALL pending work — findings from both 2026-09-17 reviews, all improvement proposals, open GitHub issues, and the treq reuse feasibility — grouped by cross-cutting pattern and assigned to releases. All releases stay in the 1.4.x patch series per maintainers' preference (themed waves, not majors).
 
