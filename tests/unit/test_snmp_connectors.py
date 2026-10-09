@@ -41,13 +41,18 @@ def _deterministic_pysnmp_mock_state():
 
     Also asserts TRAM_SNMP_STACK is not leaking from another module — the
     mock targets the legacy wire layer and only makes sense with the flag
-    off.
+    off. v1.8.0 flipped the default to trishul, so the fixture now PINS
+    legacy explicitly for this file (it tests the legacy implementation;
+    the whole legacy surface is scheduled for removal in v1.9.0). Tests
+    that set TRAM_SNMP_STACK themselves still override the pin.
     """
     stack = os.environ.get("TRAM_SNMP_STACK")
     assert stack in (None, "", "legacy"), (
         f"TRAM_SNMP_STACK={stack!r} leaked into the mocked-pysnmp connector "
         "tests — they mock the legacy pysnmp wire layer"
     )
+    if stack is None:
+        os.environ["TRAM_SNMP_STACK"] = "legacy"
     saved = {key: sys.modules.get(key, _MISSING) for key in _PYSNMP_HLAPI_SUBMODULES}
     for key in _PYSNMP_HLAPI_SUBMODULES:
         sys.modules.pop(key, None)
@@ -57,6 +62,8 @@ def _deterministic_pysnmp_mock_state():
             sys.modules.pop(key, None)
         else:
             sys.modules[key] = value
+    if stack is None:
+        os.environ.pop("TRAM_SNMP_STACK", None)
 
 
 class _FakeWireValue:

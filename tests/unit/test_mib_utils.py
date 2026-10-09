@@ -82,8 +82,13 @@ class TestMibUtilsWithMocks:
             result = symbolic_to_oid(mock_view, "IF-MIB::ifOperStatus.1")
         assert result is None
 
-    def test_get_mib_view_caches_result(self):
-        """Same dirs+modules combination returns same object (cached)."""
+    def test_get_mib_view_caches_result(self, monkeypatch):
+        """Same dirs+modules combination returns same object (cached).
+
+        Legacy (pysnmp) view path — v1.8.0 flipped the default to trishul,
+        so the legacy path is pinned explicitly (the trishul bundle path has
+        its own caching tests)."""
+        monkeypatch.setenv("TRAM_SNMP_STACK", "legacy")
         from tram.connectors.snmp import mib_utils
         # Clear cache
         mib_utils._cached_mib_view.cache_clear()

@@ -26,14 +26,18 @@ def _env_int(name: str, default: int) -> int:
 def _env_snmp_stack() -> str:
     """``TRAM_SNMP_STACK`` (v1.5.0, GH #72) — ``legacy`` (pysnmp) | ``trishul`` (tsmi/tsnmp).
 
-    Default ``legacy``. Invalid values fail loud (a ``ValueError`` naming the
-    variable) instead of silently picking a stack — the strictest pattern in
-    this module (``_env_int``), since silently flipping a deployment's SNMP
-    stack would be worse than a startup error. Manager and every worker must
-    agree on the value; mismatch handling ships with the flag reader in
-    v1.5.0 layer 3.
+    Default ``trishul`` (v1.8.0 — the flip; all upstream blockers closed at
+    the shipped pins, outputs byte-identical, 31×/1.26× perf). ``legacy`` is
+    the explicit escape hatch and stays available through v1.9.0; the legacy
+    stack (pysnmp/pysmi branches, .py corpus serving, image extras) is
+    scheduled for removal in v1.9.0. Invalid values fail loud (a
+    ``ValueError`` naming the variable) instead of silently picking a stack —
+    the strictest pattern in this module (``_env_int``), since silently
+    flipping a deployment's SNMP stack would be worse than a startup error.
+    Manager and every worker must agree on the value; mismatch handling ships
+    with the flag reader in v1.5.0 layer 3.
     """
-    raw = os.environ.get("TRAM_SNMP_STACK", "legacy").lower()
+    raw = os.environ.get("TRAM_SNMP_STACK", "trishul").lower()
     if raw not in ("legacy", "trishul"):
         raise ValueError(
             f"Environment variable TRAM_SNMP_STACK={raw!r} must be 'legacy' or 'trishul'"
