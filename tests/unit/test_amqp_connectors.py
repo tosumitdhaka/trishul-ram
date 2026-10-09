@@ -234,28 +234,40 @@ class TestAmqpSourceRequireMessageId:
         # Nothing touches the channel from the intake thread.
         mock_channel.basic_ack.assert_not_called()
         mock_channel.basic_nack.assert_not_called()
-        # The refusal is marshalled onto the connection thread and requeues.
-        mock_connection.add_callback_threadsafe.assert_called_once()
-        callback = mock_connection.add_callback_threadsafe.call_args[0][0]
-        callback()
+        # Two callbacks are marshalled onto the connection thread: the refusal
+        # nack (requeue) and the shutdown cancel. Both run on the connection
+        # thread in production; run them here as that thread would.
+        assert mock_connection.add_callback_threadsafe.call_count == 2
+        for callback in [
+            c[0][0] for c in mock_connection.add_callback_threadsafe.call_args_list
+        ]:
+            callback()
         mock_channel.basic_nack.assert_called_once_with(delivery_tag=42, requeue=True)
         mock_channel.basic_ack.assert_not_called()
 
     def test_accepts_delivery_with_message_id(self):
         source = AmqpSource({"queue": "myqueue", "require_message_id": True})
-        results, mock_connection, _ = self._read_with(source, message_id="mid-9")
+        results, mock_connection, mock_channel = self._read_with(source, message_id="mid-9")
         assert len(results) == 1
         assert results[0][1]["amqp_message_id"] == "mid-9"
-        mock_connection.add_callback_threadsafe.assert_not_called()
+        # Only the shutdown cancel is marshalled — no refusal, no ack/nack.
+        assert mock_connection.add_callback_threadsafe.call_count == 1
+        mock_connection.add_callback_threadsafe.call_args[0][0]()
+        mock_channel.basic_ack.assert_not_called()
+        mock_channel.basic_nack.assert_not_called()
 
     def test_default_behavior_unchanged_without_message_id(self):
         """require_message_id absent (default false): a delivery without a
         message_id is processed exactly as today — no refusal, no nack."""
         source = AmqpSource({"queue": "myqueue"})
-        results, mock_connection, _ = self._read_with(source, message_id=None)
+        results, mock_connection, mock_channel = self._read_with(source, message_id=None)
         assert len(results) == 1
         assert "amqp_message_id" not in results[0][1]
-        mock_connection.add_callback_threadsafe.assert_not_called()
+        # Only the shutdown cancel is marshalled — the delivery is untouched.
+        assert mock_connection.add_callback_threadsafe.call_count == 1
+        mock_connection.add_callback_threadsafe.call_args[0][0]()
+        mock_channel.basic_ack.assert_not_called()
+        mock_channel.basic_nack.assert_not_called()
 
     def test_refusal_skips_nack_when_auto_ack(self):
         """auto_ack has already settled the tag broker-side — the delivery is
@@ -264,7 +276,8 @@ class TestAmqpSourceRequireMessageId:
         source = AmqpSource({"queue": "myqueue", "require_message_id": True, "auto_ack": True})
         results, mock_connection, _ = self._read_with(source, message_id=None)
         assert results == []
-        mock_connection.add_callback_threadsafe.assert_not_called()
+        # Only the shutdown cancel is marshalled — no refusal nack.
+        assert mock_connection.add_callback_threadsafe.call_count == 1
 
 
 class TestSourceBridgeBounds:
