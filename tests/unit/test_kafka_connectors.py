@@ -17,11 +17,47 @@ from tram.serializers.json_serializer import JsonSerializer
 
 
 class _TopicPartition:
-    """Stand-in for kafka.TopicPartition (the connector ignores poll-dict keys)."""
+    """Stand-in for kafka.TopicPartition (the connector ignores poll-dict keys).
+
+    Value equality/hashing mirrors kafka's struct so assignment-set diffs and
+    ``{TopicPartition} == {TopicPartition}`` assertions work without
+    kafka-python installed (CI installs only the dev extra).
+    """
 
     def __init__(self, topic: str, partition: int) -> None:
         self.topic = topic
         self.partition = partition
+
+    def __eq__(self, other) -> bool:
+        if not isinstance(other, _TopicPartition):
+            return NotImplemented
+        return (self.topic, self.partition) == (other.topic, other.partition)
+
+    def __hash__(self) -> int:
+        return hash((self.topic, self.partition))
+
+
+class _OffsetAndMetadata:
+    """Stand-in for kafka.OffsetAndMetadata (offset, metadata, leader_epoch)."""
+
+    def __init__(self, offset: int, metadata: str = "", leader_epoch: int = -1) -> None:
+        self.offset = offset
+        self.metadata = metadata
+        self.leader_epoch = leader_epoch
+
+
+def _mock_kafka_module(consumer: MagicMock | None = None) -> MagicMock:
+    """Mock kafka module with the stand-in structs bound, per the file's
+    ``patch.dict(sys.modules, ...)`` convention: the connector's internal
+    ``from kafka import TopicPartition / OffsetAndMetadata`` resolve to the
+    stand-ins so commit offsets can be asserted directly without kafka-python
+    installed. ``consumer``, when given, is what ``KafkaConsumer()`` returns."""
+    mock_kafka = MagicMock()
+    mock_kafka.TopicPartition = _TopicPartition
+    mock_kafka.OffsetAndMetadata = _OffsetAndMetadata
+    if consumer is not None:
+        mock_kafka.KafkaConsumer.return_value = consumer
+    return mock_kafka
 
 
 def _make_source(extra: dict | None = None) -> KafkaSource:
@@ -472,10 +508,17 @@ class TestKafkaSourceStop:
 class TestKafkaSourceEpochFrontier:
     """V18-01 §7: per-partition completed frontiers + assignment-epoch fencing.
 
-    Uses the real ``kafka`` structs (installed in the venv) for the commit
-    offsets so the explicit frontier values are asserted directly; the
-    consumer itself stays a MagicMock.
+    The kafka module is mocked via ``sys.modules`` (the file's convention)
+    with ``TopicPartition`` bound to the ``_TopicPartition`` stand-in and a
+    matching ``_OffsetAndMetadata`` stand-in, so the explicit frontier values
+    are asserted directly without kafka-python installed (CI installs only
+    the dev extra); the consumer itself stays a MagicMock.
     """
+
+    @pytest.fixture(autouse=True)
+    def _kafka_structs(self):
+        with patch.dict(sys.modules, {"kafka": _mock_kafka_module()}):
+            yield
 
     @staticmethod
     def _make_source(extra: dict | None = None) -> KafkaSource:
@@ -572,18 +615,16 @@ class TestKafkaSourceEpochFrontier:
         assert next(iter(offsets2.values())).offset == 5
 
     def test_assignment_change_bumps_epoch_and_drops_revoked_frontier(self):
-        from kafka import TopicPartition
-
         src = self._make_source()
         mock_consumer = MagicMock()
-        mock_consumer.assignment.return_value = [TopicPartition("events", 1)]
-        src._assigned = {TopicPartition("events", 0)}
+        mock_consumer.assignment.return_value = [_TopicPartition("events", 1)]
+        src._assigned = {_TopicPartition("events", 0)}
         src._completed = {("events", 0): 5, ("events", 1): 3}
 
         src._sync_assignment(mock_consumer)
 
         assert src._assignment_epoch == 1
-        assert src._assigned == {TopicPartition("events", 1)}
+        assert src._assigned == {_TopicPartition("events", 1)}
         # Revoked partition's frontier is dropped; the still-owned one is kept.
         assert src._completed == {("events", 1): 3}
 
@@ -661,7 +702,16 @@ class TestKafkaSourceGapFrontier:
     order. Out-of-order completions sit in a per-partition gap set until the
     missing offsets complete; tombstones (recorded by read()) are bridged by
     the frontier sweep without firing a commit of their own.
+
+    The kafka module is mocked via ``sys.modules`` (the file's convention)
+    with the ``_TopicPartition`` / ``_OffsetAndMetadata`` stand-ins bound, so
+    the tests run without kafka-python installed.
     """
+
+    @pytest.fixture(autouse=True)
+    def _kafka_structs(self):
+        with patch.dict(sys.modules, {"kafka": _mock_kafka_module()}):
+            yield
 
     @staticmethod
     def _make_source(extra: dict | None = None) -> KafkaSource:
@@ -757,12 +807,10 @@ class TestKafkaSourceGapFrontier:
         assert src._completed_ooo == {}
 
     def test_revoke_drops_gap_tracking(self):
-        from kafka import TopicPartition
-
         src = self._make_source()
         mock_consumer = MagicMock()
-        mock_consumer.assignment.return_value = [TopicPartition("events", 1)]
-        src._assigned = {TopicPartition("events", 0)}
+        mock_consumer.assignment.return_value = [_TopicPartition("events", 1)]
+        src._assigned = {_TopicPartition("events", 0)}
         src._completed = {("events", 0): 4}
         src._completed_ooo = {("events", 0): {7}, ("events", 1): {5}}
         src._tombstone_offsets = {("events", 0): {6}, ("events", 1): {4}}
@@ -771,7 +819,7 @@ class TestKafkaSourceGapFrontier:
         src._sync_assignment(mock_consumer)
 
         assert src._assignment_epoch == 1
-        assert src._assigned == {TopicPartition("events", 1)}
+        assert src._assigned == {_TopicPartition("events", 1)}
         # Revoked partition's frontier, out-of-order, tombstone, and read
         # tracking are dropped; the still-owned partition keeps its state.
         assert src._completed == {}
@@ -864,8 +912,6 @@ class TestKafkaSourceGapFrontier:
         """The batch-boundary commit path keeps its exact behavior for
         non-strict/legacy pipelines: epoch-guarded, commits the batch-observed
         frontier, and never touches the per-record gap tracking."""
-        from kafka import TopicPartition
-
         src = self._make_source()
         mock_consumer = MagicMock()
         src._consumer = mock_consumer
@@ -875,10 +921,10 @@ class TestKafkaSourceGapFrontier:
         src._tombstone_offsets = {("events", 0): {6}}
         src._read_min = {("events", 0): 3}
 
-        src._commit_batch(mock_consumer, {TopicPartition("events", 0): 9}, epoch=1)
+        src._commit_batch(mock_consumer, {_TopicPartition("events", 0): 9}, epoch=1)
         mock_consumer.commit.assert_not_called()  # stale epoch: skipped
 
-        src._commit_batch(mock_consumer, {TopicPartition("events", 0): 9}, epoch=2)
+        src._commit_batch(mock_consumer, {_TopicPartition("events", 0): 9}, epoch=2)
         assert self._committed_offsets(mock_consumer) == {0: 10}  # resume past 9
 
         # Gap tracking is untouched by the batch path.
@@ -905,10 +951,11 @@ class TestKafkaSourceGapFrontier:
             {tp: [sentinel]},
         ]
 
-        # Patch only KafkaConsumer so the real kafka TopicPartition /
-        # OffsetAndMetadata structs resolve inside the source and the commit
-        # offsets can be asserted directly.
-        with patch("kafka.KafkaConsumer", return_value=mock_consumer):
+        # Mock the kafka module with KafkaConsumer returning mock_consumer
+        # and the stand-in structs bound, so the source's internal imports
+        # resolve without kafka-python installed and the commit offsets are
+        # asserted directly (the file's sys.modules convention).
+        with patch.dict(sys.modules, {"kafka": _mock_kafka_module(consumer=mock_consumer)}):
             src = self._make_source()
             it = src.read()
             _payload, meta1 = next(it)  # offset 1
@@ -948,7 +995,16 @@ class TestKafkaCommitSerialization:
     land oldest-last (re-processing on restart). The poll loop (reader thread)
     drains the pending set and issues at most one consolidated commit per
     partition per drain, epoch-fenced (revoke/session reset clears pending).
+
+    The kafka module is mocked via ``sys.modules`` (the file's convention)
+    with the ``_TopicPartition`` / ``_OffsetAndMetadata`` stand-ins bound, so
+    the tests run without kafka-python installed.
     """
+
+    @pytest.fixture(autouse=True)
+    def _kafka_structs(self):
+        with patch.dict(sys.modules, {"kafka": _mock_kafka_module()}):
+            yield
 
     @staticmethod
     def _make_source(extra: dict | None = None) -> KafkaSource:
@@ -1048,8 +1104,6 @@ class TestKafkaCommitSerialization:
     def test_revoke_clears_pending_commits(self):
         """A revoked partition's pending commits are dropped with its frontier
         — the new owner re-polls from the last committed offsets."""
-        from kafka import TopicPartition
-
         src = self._make_source()
         mock_consumer = MagicMock()
         src._consumer = mock_consumer
@@ -1058,8 +1112,8 @@ class TestKafkaCommitSerialization:
         self._ack(src, 0, 5)
         assert src._pending_commits == {("events", 0): 5}
 
-        mock_consumer.assignment.return_value = [TopicPartition("events", 1)]
-        src._assigned = {TopicPartition("events", 0)}
+        mock_consumer.assignment.return_value = [_TopicPartition("events", 1)]
+        src._assigned = {_TopicPartition("events", 0)}
         src._sync_assignment(mock_consumer)
 
         assert src._assignment_epoch == 2
@@ -1354,8 +1408,6 @@ class TestKafkaSourceUnitIdentity:
         the same cluster keeps the identity — frontiers advance in place. The
         per-message epoch fencing that gates acks is orthogonal to the replay
         identity."""
-        from kafka import TopicPartition
-
         src = self._make_source()
         src._consumer = self._consumer_with_cluster("cluster-A")
         identity = src.source_unit_id(self._meta())
@@ -1363,8 +1415,8 @@ class TestKafkaSourceUnitIdentity:
 
         # Rebalance: the partition is revoked and another assigned — the
         # assignment epoch bumps, the identity holds.
-        src._assigned = {TopicPartition("events", 0)}
-        src._consumer.assignment.return_value = [TopicPartition("events", 1)]
+        src._assigned = {_TopicPartition("events", 0)}
+        src._consumer.assignment.return_value = [_TopicPartition("events", 1)]
         src._sync_assignment(src._consumer)
         assert src._assignment_epoch == 1
         assert src.source_unit_id(self._meta()) == identity
