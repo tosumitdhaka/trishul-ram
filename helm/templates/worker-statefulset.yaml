@@ -27,6 +27,10 @@ spec:
   serviceName: {{ include "tram.fullname" . }}-worker
   ## OrderedReady so worker-0 comes up first and manager starts probing from a known state.
   podManagementPolicy: OrderedReady
+  ## Drain budget (v1.8.0): TRAM_DRAIN_TIMEOUT_S defaults to 30s; the 45s pod
+  ## grace gives the drain's final best-effort outbox pass a real window
+  ## before SIGKILL instead of racing it exactly at the deadline.
+  terminationGracePeriodSeconds: 45
   selector:
     matchLabels:
       {{- include "tram.selectorLabels" . | nindent 6 }}
@@ -69,6 +73,12 @@ spec:
               protocol: TCP
           env:
             - name: TRAM_NODE_ID
+              valueFrom:
+                fieldRef:
+                  fieldPath: metadata.name
+            ## POD_NAME backs the journal mount's subPathExpr (per-replica
+            ## subdirectory on a shared existingClaim).
+            - name: POD_NAME
               valueFrom:
                 fieldRef:
                   fieldPath: metadata.name
@@ -152,6 +162,13 @@ spec:
             ## reports admission-closed instead of healthy.
             - name: worker-journal
               mountPath: /var/lib/tram/worker
+              {{- if $jp.existingClaim }}
+              ## Per-replica subdirectory on the shared claim — one journal.db
+              ## per worker (the journal's single-owner invariant). Without
+              ## this, every replica would open the SAME SQLite file and a
+              ## sibling's boot would mark live reservations interrupted.
+              subPathExpr: $(POD_NAME)
+              {{- end }}
             {{- if .Values.keys.secretName }}
             - name: keys
               mountPath: {{ .Values.keys.mountPath | default "/secrets" }}

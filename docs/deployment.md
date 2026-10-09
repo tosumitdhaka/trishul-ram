@@ -348,6 +348,20 @@ the `apiKey` Helm value or `envSecret.TRAM_API_KEY`, and set `TRAM_INTERNAL_AUTH
 after the rollout window. Workers automatically receive the same key from the chart
 (`worker-statefulset.yaml` injects `.Values.apiKey` as `TRAM_API_KEY`).
 
+**Production posture (v1.8.0 — expanded internal surface):** v1.8 adds state-changing
+internal endpoints (the checkpoint endpoint writes `delivery_checkpoints` + `transform_state`;
+the identity-checked run-complete terminalizes ledger attempts), and the worker
+`/agent/handshake` returns the live session secret used to mint start-authorization
+tokens. Under the default `warn` mode, any caller with pod-network reach can use all of
+it — including running arbitrary pipeline YAML via the worker legacy-admit bridge
+(`TRAM_WORKER_LEGACY_ADMIT=auto` default). The internal channel is plain HTTP, so the API
+key and the handshake secret both travel unencrypted. For any deployment that is not a
+sealed dev cluster: set `TRAM_INTERNAL_AUTH_MODE=enforce` with a real `TRAM_API_KEY`, and
+restrict pod-level reach with a NetworkPolicy (the chart ships an optional template —
+`networkPolicy.enabled=true` limits worker ingress to manager pods and manager ingress to
+worker + NodePort traffic). Restricting the Kubernetes NodePort to trusted networks remains
+the outer boundary for the browser-facing API.
+
 ## TLS / HTTPS (v1.0.0)
 
 ```bash
@@ -444,10 +458,18 @@ v1.8.0 delivery guarantees (frozen V18-01 §9):
     every other source must implement `source_unit_id()` itself. Sources where
     identity is demonstrably absent are rejected (identity-less
     sources cannot provide replay without duplicate risk).
+  - **Batch schedules only** — `delivery.contract: strict` requires
+    `schedule.type` to be one of `interval`/`cron`/`manual`. Stream dispatch
+    carries no attempt/run identity yet, so a strict stream run could never
+    checkpoint or acknowledge (every unit would stay checkpoint-pending and
+    the run would never complete without duplicates on restart). Rejected at
+    validation with that exact reason; stream strict support arrives when
+    stream dispatch carries attempt identity.
   - **Threaded Kafka** — `thread_workers > 1` Kafka sources run under strict
-    delivery contracts: the gap-aware per-partition frontiers (tombstone
-    bridging, reader-thread-owned commit serialization) are broker-proven by
-    the env-gated live suite (tests/unit/test_kafka_live_broker.py, V18-10).
+    delivery contracts on batch schedules: the gap-aware per-partition
+    frontiers (tombstone bridging, reader-thread-owned commit serialization)
+    are broker-proven by the env-gated live suite
+    (tests/unit/test_kafka_live_broker.py, V18-10).
   - Every unmet condition is listed in the validation error.
 
 **Confirmation tiers (frozen V18-01 §6).** Each built-in sink declares the

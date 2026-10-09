@@ -121,8 +121,11 @@ worker:
   ##
   ## existingClaim: pre-provisioned PVC name; takes precedence over enabled.
   ## Mounted via a plain volumes entry (mutable — works via helm upgrade): the
-  ## validated upgrade path. All replicas share this claim — RWO pins them to
-  ## one node, RWX lets them spread.
+  ## validated upgrade path. The claim is shared across replicas, but each
+  ## worker mounts its OWN subdirectory on it (subPathExpr: POD_NAME), so every
+  ## replica owns a separate journal.db — never the same SQLite file. RWO
+  ## still pins all replicas to one node; RWX (e.g. nfs-rwx) lets them spread
+  ## across nodes while keeping per-replica ownership.
   journal:
     persistence:
       enabled: false
@@ -495,3 +498,11 @@ postgresql:
 
 ## Extra labels to add to all resources
 extraLabels: {}
+
+## Optional NetworkPolicy restricting worker ingress to manager pods (v1.8.0).
+## Off by default. Enforcement depends on the CNI (kind's kindnet does NOT
+## enforce NetworkPolicy — Calico/Cilium do). See deployment.md's production
+## posture note; on CNIs where kubelet probes are subject to policy, allow the
+## node CIDR on the agent port before enabling.
+networkPolicy:
+  enabled: false

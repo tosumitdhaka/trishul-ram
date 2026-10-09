@@ -93,7 +93,8 @@ TRAM {{ .Chart.AppVersion }} has been deployed!
      per replica via volumeClaimTemplates.
    - Existing release: volumeClaimTemplates is immutable and CANNOT be added
      by helm upgrade. Keep enabled=false and reuse a manually provisioned PVC
-     (all replicas share it — use a ReadWriteMany claim on multi-node):
+     (each replica mounts its OWN subdirectory on it — per-worker
+     journal.db; RWO pins replicas to one node, RWX spreads them):
   helm upgrade {{ .Release.Name }} tram/tram \
     --set worker.journal.persistence.existingClaim=<pvc-name>
      Or recreate the worker StatefulSet to gain per-replica PVCs:

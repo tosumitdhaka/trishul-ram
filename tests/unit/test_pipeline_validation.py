@@ -445,6 +445,20 @@ class TestDeliveryContract:
         assert cfg.source.type == "kafka"
         assert cfg.thread_workers == 1
 
+    def test_strict_rejects_stream_schedule(self):
+        """Stream dispatch carries no attempt identity — a strict stream run
+        could never checkpoint or acknowledge (units stay pending forever).
+        Rejected at validation instead of silently non-progressing."""
+        with pytest.raises(ConfigError, match="schedule.type 'stream' is not supported"):
+            _load(
+                _strict_pipeline_yaml(
+                    self._SOURCE_KAFKA
+                    + self._SER
+                    + self._SINK_LOCAL
+                    + "      schedule:\n        type: stream\n"
+                )
+            )
+
     def test_strict_accepts_object_store_sink(self):
         """s3 declares remote_durable (disposition D1) — strict accepts it
         alongside the local source's fingerprint identity."""

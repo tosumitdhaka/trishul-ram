@@ -1,0 +1,40 @@
+{{- /*
+Optional network restriction for the internal manager/worker surface (v1.8.0).
+
+Off by default (networkPolicy.enabled=false) — rendering is verified by the
+release gate's helm template check, but enforcement depends on the cluster's
+CNI actually implementing NetworkPolicy (kind's default kindnet does NOT
+enforce it; Calico/Cilium do). Kubelet probe traffic originates from node
+IPs: on CNIs where probes are subject to policy, add a rule allowing the
+node CIDR on the agent port before enabling.
+
+With enabled=true: worker pods accept ingress ONLY from manager pods (the
+/agent/* dispatch/status/handshake surface). The manager API stays open
+(browser/NodePort reach) — restrict it at the NodePort/ingress boundary.
+*/ -}}
+{{- if .Values.networkPolicy.enabled }}
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: {{ include "tram.fullname" . }}-worker-internal
+  labels:
+    {{- include "tram.labels" . | nindent 4 }}
+    app.kubernetes.io/component: worker
+spec:
+  podSelector:
+    matchLabels:
+      {{- include "tram.selectorLabels" . | nindent 6 }}
+      app.kubernetes.io/component: worker
+  policyTypes:
+    - Ingress
+  ingress:
+    ## Manager → worker: dispatch, status probes, handshake, attempts query.
+    - from:
+        - podSelector:
+            matchLabels:
+              {{- include "tram.selectorLabels" . | nindent 14 }}
+              app.kubernetes.io/component: manager
+      ports:
+        - protocol: TCP
+          port: {{ .Values.worker.agentPort | default 8766 }}
+{{- end }}

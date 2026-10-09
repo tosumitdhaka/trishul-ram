@@ -1481,7 +1481,8 @@ class DeliveryContractConfig(BaseModel):
 
     ``legacy`` (the default) is exactly today's behavior — no additional
     checks and no new guarantees. ``strict`` requires tier-declared sinks,
-    durable source replay identity, and single-threaded Kafka; enforced by
+    durable source replay identity, and a batch schedule (stream dispatch
+    carries no attempt identity yet); enforced by
     ``PipelineConfig.check_delivery_contract``.
     """
 
@@ -1563,8 +1564,10 @@ class PipelineConfig(BaseModel):
 
     # Delivery contract (V18-01 §9, frozen). `legacy` (default) is exactly
     # today's behavior; `strict` requires tier-declared sinks, durable source
-    # replay identity, and single-threaded Kafka (enforced at validation by
-    # check_delivery_contract, shared by `tram validate` and API registration).
+    # replay identity, and a batch schedule — stream dispatch carries no
+    # attempt identity yet (enforced at validation by
+    # check_delivery_contract, shared by `tram validate` and API
+    # registration).
     delivery: DeliveryContractConfig = Field(default_factory=DeliveryContractConfig)
 
     # Execution
@@ -1863,6 +1866,18 @@ class PipelineConfig(BaseModel):
             return self
 
         problems: list[str] = []
+
+        if self.schedule.type == "stream":
+            problems.append(
+                "schedule.type 'stream' is not supported under "
+                "delivery.contract: strict — stream dispatch carries no "
+                "attempt/run identity, so a strict stream run could never "
+                "checkpoint or acknowledge (units would stay "
+                "checkpoint-pending forever and the run would never "
+                "complete; on restart everything would re-read). Strict "
+                "delivery is batch-schedule only until stream dispatch "
+                "carries attempt identity"
+            )
 
         for sink in self.sinks:
             if _sink_delivery_capability(sink.type) is None:
