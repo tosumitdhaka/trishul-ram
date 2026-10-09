@@ -100,7 +100,10 @@ jobs:
         working-directory: tram/ui
 
       - name: Install Playwright browser
-        run: npx playwright install --with-deps chromium
+        # Pinned to the exact version in tram/ui/package.json — a mismatched
+        # installer ships a different chromium revision than the suite's
+        # playwright package expects, and every check fails at launch.
+        run: npx --yes playwright@1.63.0 install --with-deps chromium
 
       - name: Build
         run: npm run build
