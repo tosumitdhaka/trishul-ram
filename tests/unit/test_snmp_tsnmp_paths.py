@@ -245,7 +245,7 @@ class TestTsmiMibResolve:
 
     def test_explicit_legacy_returns_pysnmp_view(self, tmp_path, monkeypatch):
         """Explicit escape hatch: TRAM_SNMP_STACK=legacy keeps the pysnmp
-        MibViewController (available through v1.9.0)."""
+        MibViewController (available through the v1.8.x releases)."""
         monkeypatch.setenv("TRAM_SNMP_STACK", "legacy")
         view = get_mib_view([str(tmp_path)], ["SNMPv2-MIB"])
         assert type(view).__name__ == "MibViewController"

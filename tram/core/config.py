@@ -28,9 +28,9 @@ def _env_snmp_stack() -> str:
 
     Default ``trishul`` (v1.8.0 — the flip; all upstream blockers closed at
     the shipped pins, outputs byte-identical, 31×/1.26× perf). ``legacy`` is
-    the explicit escape hatch and stays available through v1.9.0; the legacy
-    stack (pysnmp/pysmi branches, .py corpus serving, image extras) is
-    scheduled for removal in v1.9.0. Invalid values fail loud (a
+    the explicit escape hatch, available through the v1.8.x releases; the
+    legacy stack (pysnmp/pysmi branches, .py corpus serving, image extras)
+    is removed in v1.9.0. Invalid values fail loud (a
     ``ValueError`` naming the variable) instead of silently picking a stack —
     the strictest pattern in this module (``_env_int``), since silently
     flipping a deployment's SNMP stack would be worse than a startup error.

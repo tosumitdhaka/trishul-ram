@@ -198,6 +198,10 @@ timing is gate-driven. Single-manager deployment, UTC/coalesced schedules, one
 pending manual run, and explicitly in-memory webhook 202 remain documented
 contracts. No universal exactly-once or blind partition-failover guarantee.
 
+## v1.9.0 (planned)
+
+- [ ] **Legacy SNMP stack removal** — v1.8.0 flipped `TRAM_SNMP_STACK` to `trishul`; `legacy` (pysnmp) is the explicit escape hatch through the v1.8.x releases. v1.9.0 deletes the legacy surface: the legacy branches in `tram/connectors/snmp/{source,sink,mib_utils}.py`, the `get_hlapi_asyncio` shims, the pysmi compile path, `.py` compiled-corpus serving (retire the dual-format corpus to JSON-only), image extras, and the legacy test surface (incl. `tests/unit/test_snmp_connectors.py` and the legacy-pinned MIB tests); drop the pysnmp/pyasn1/pysmi runtime deps (pysnmp stays as a dev/test-only cross-stack oracle). Scope per [the feasibility doc](ideas/pysnmp-replacement-deprecation-feasibility.md) Phase 2 (~1,300 lines subtractive, 4–6 days).
+
 ## Post-v1.5.0 — AI Provider Layer (open design question)
 
 - [ ] treq `_providers/` vendoring (GH #71) + Wave C (A9 streaming; B3–B6 = MIB compile-error explanation, alert-rule authoring, throughput-anomaly explanation, connector test-failure explanation, per `docs/plans/ai-expansion-plan.md`) + A.2/A.3 plugin docstrings/examples (GH #41/#42) — **not scheduled to a version**; the maintainer runs a design round after the v1.6.0 re-measurement reevaluation. Calibration from the 2026-09-28 plan review: vendor 4–6 days, Wave C 2–3 weeks, A.2/A.3 ~1 week; treq's portable tests ~1,346 lines, no bedrock coverage.

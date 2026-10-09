@@ -971,7 +971,7 @@ tram_chunk_duration_seconds_bucket{le="0.01",pipeline="pm-ingest"} 120.0
 
 ## SNMP MIBs (v1.0.3)
 
-Manages compiled pysnmp MIB `.py` files in `TRAM_MIB_DIR` (default `/mibs`).
+Manages the compiled MIB corpus in `TRAM_MIB_DIR` (default `/mibs`) — dual-format since v1.5.0: pysmi `.py` modules + tsmi JSON bundles (`manifest.json`/`oid_index.json` sidecars). The `trishul` stack (default since v1.8.0) compiles JSON; the `legacy` escape hatch compiles `.py`.
 Standard MIBs (`IF-MIB`, `ENTITY-MIB`, `HOST-RESOURCES-MIB`, `IP-MIB`, `TCP-MIB`, `UDP-MIB`, `IANAifType-MIB`) are pre-compiled in the Docker image.
 
 ### GET /api/mibs
@@ -979,13 +979,13 @@ List all compiled MIB modules in `TRAM_MIB_DIR`.
 
 ```json
 [
-  {"name": "IF-MIB", "file": "IF-MIB.py", "size_bytes": 14823},
-  {"name": "ENTITY-MIB", "file": "ENTITY-MIB.py", "size_bytes": 22104}
+  {"name": "IF-MIB", "file": "IF-MIB.py", "size_bytes": 14823, "compiled_formats": ["py", "json"]},
+  {"name": "ENTITY-MIB", "file": "ENTITY-MIB.py", "size_bytes": 22104, "compiled_formats": ["py", "json"]}
 ]
 ```
 
 ### POST /api/mibs/upload
-Upload a raw `.mib` text file and compile it. Requires `tram[mib]`; returns `501` if not installed.
+Upload a raw `.mib` text file and compile it. Requires the compile backend for the active stack (`tram[mib]` for `legacy`, `tram[snmp]` for `trishul`); returns `501` if not installed.
 
 ```bash
 curl -X POST http://localhost:8765/api/mibs/upload \
@@ -998,7 +998,7 @@ Response:
 ```
 
 ### POST /api/mibs/download
-Download and compile MIB modules by name from `mibs.pysnmp.com`. Requires internet access and `tram[mib]`.
+Download and compile MIB modules by name from `mibs.pysnmp.com`. Requires internet access and the compile backend for the active stack (`tram[mib]` for `legacy`, `tram[snmp]` for `trishul`).
 
 ```bash
 curl -X POST http://localhost:8765/api/mibs/download \

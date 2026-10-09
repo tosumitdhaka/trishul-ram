@@ -51,10 +51,10 @@ All configuration is via environment variables (12-factor).
 | `TRAM_OTEL_ENDPOINT` | _(empty)_ | OTLP gRPC endpoint (e.g. `http://jaeger:4317`) for OpenTelemetry traces |
 | `TRAM_OTEL_SERVICE` | `tram` | Service name reported to OTel collector |
 | `TRAM_WATCH_PIPELINES` | `false` | Watch `TRAM_PIPELINE_DIR` for YAML changes and auto-reload pipelines |
-| `TRAM_MIB_DIR` | `/mibs` | Directory containing compiled pysnmp MIB `.py` files; standard MIBs baked into Docker image at build time (v1.0.3) |
+| `TRAM_MIB_DIR` | `/mibs` | Directory containing the compiled MIB corpus — dual-format since v1.5.0 (pysmi `.py` + tsmi JSON bundles with `manifest.json`/`oid_index.json` sidecars); the `trishul` stack (default since v1.8.0) compiles JSON, the `legacy` escape hatch compiles `.py`. Standard MIBs baked into the Docker image at build time (v1.0.3) |
 | `TRAM_MIB_SOURCE_DIR` | sibling `mib-sources` beside `TRAM_MIB_DIR` | Directory containing persisted raw ASN.1 MIB source files uploaded/downloaded at runtime; used for local dependency resolution during later compiles |
 | `TRAM_MIB_BUNDLED_SOURCE_DIR` | `/mib-sources` | Read-only bundled ASN.1 MIB source directories consulted during compile/dependency resolution; separate multiple paths with the OS path separator |
-| `TRAM_SNMP_STACK` | `legacy` | SNMP library stack (v1.5.0, GH #72): `legacy` (pysnmp — the pre-v1.5.0 behavior, default) \| `trishul` (trishul-smi / trishul-snmp). During the flag period **both stacks must be installed** (`tram[snmp]` ships both). Manager and every worker must set the same value; an invalid value is a startup error (no silent fallback) |
+| `TRAM_SNMP_STACK` | `trishul` | SNMP library stack (v1.5.0, GH #72; **default flipped to `trishul` in v1.8.0** — byte-identical outputs, 31× GET / 1.26× walk-1000): `trishul` (trishul-smi / trishul-snmp, default) \| `legacy` (pysnmp — the explicit escape hatch, available through the v1.8.x releases; removed in v1.9.0). During the escape-hatch period **both stacks must be installed** (`tram[snmp]` ships both). Manager and every worker must set the same value; an invalid value is a startup error (no silent fallback) |
 | `TRAM_SNMP_METRIC_PATTERNS` | _(empty)_ | Comma-separated, case-sensitive globs (v1.4.5, GH #35) that force `snmp_poll` INTEGER fields to classify as metrics when `classify: true` — the exception layer, winning over label patterns and MIB enums. Pipeline-level `metric_patterns` and the env var EXTEND — never replace — the code defaults (there are none for metrics). Unlisted INTEGER fields default to metrics |
 | `TRAM_SNMP_LABEL_PATTERNS` | _(empty)_ | Comma-separated, case-sensitive globs (v1.4.5, GH #35) that force `snmp_poll` INTEGER fields to classify as labels when `classify: true`. Pipeline-level `label_patterns` and this env var EXTEND — never replace — the code defaults (`*Id`, `*ID`, `*Index`, `*Port`). `*Vdom` was removed from the defaults (deployment-specific Fortigate vocabulary) — Fortigate pipelines relying on the old default must add it explicitly here or via `label_patterns` |
 | `TRAM_SCHEMA_DIR` | `/schemas` | Directory containing serialization schema files (`.proto`, `.avsc`, `.asn`, etc.); managed via `POST /api/schemas/upload` (v1.0.3) |
@@ -111,16 +111,21 @@ All configuration is via environment variables (12-factor).
 
 ### SNMP library stack (v1.5.0, GH #72)
 
-`TRAM_SNMP_STACK` defaults to `legacy` (pysnmp), so existing deployments are
-unaffected until they opt in. During the flag period **both** stacks must be
-installed on every plane (`tram[snmp]` pins pysnmp/pyasn1 **and**
-`trishul-smi==0.5.3` / `trishul-snmp[v3]==0.6.2`), because the flag is read at
-startup and rollback is a redeploy with the flag off. Manager/worker mismatch
-handling: a mismatched rolling upgrade does **not** fail at startup — the
-manager logs a WARNING (once per worker) when a worker's reported stack
-differs from its own, and a mixed fleet can serve one stack's MIB artifacts
-(`.py` vs `.json`) to the other's consumers, so align the value across every
-plane before enabling `trishul`. An invalid value is still a startup error
+`TRAM_SNMP_STACK` defaults to `trishul` as of v1.8.0 (the flip — all upstream
+blockers closed at the shipped pins, outputs byte-identical, 31× GET / 1.26×
+walk-1000; evidence: `docs/snmp-polling-performance.md`). Deployments that
+never set the flag switch stacks on the v1.8.0 upgrade; to stay on pysnmp, set
+`legacy` explicitly — the escape hatch is available through the v1.8.x
+releases, and the legacy stack is removed in v1.9.0. During the
+escape-hatch period **both**
+stacks must be installed on every plane (`tram[snmp]` pins pysnmp/pyasn1
+**and** `trishul-smi==0.5.3` / `trishul-snmp[v3]==0.6.2`), because the flag
+is read at startup and rollback is a redeploy with the other value.
+Manager/worker mismatch handling: a mismatched rolling upgrade does **not**
+fail at startup — the manager logs a WARNING (once per worker) when a
+worker's reported stack differs from its own, and a mixed fleet can serve one
+stack's MIB artifacts (`.py` vs `.json`) to the other's consumers, so align
+the value across every plane. An invalid value is still a startup error
 (no silent fallback).
 
 ### Database backends (v0.7.0)

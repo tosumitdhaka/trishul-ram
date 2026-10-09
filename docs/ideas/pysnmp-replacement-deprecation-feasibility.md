@@ -1,5 +1,11 @@
 # Feasibility: Formal tsnmp default flip and legacy pysnmp/pysmi stack deprecation/removal
 
+> **Maintainer decision (2026-10-09):** the flip shipped in **v1.8.0** (not
+> v1.9.0 as §6 recommends) and the legacy removal is scheduled for **v1.9.0**
+> (not v1.10.0). `TRAM_SNMP_STACK=legacy` is the explicit escape hatch through
+> the v1.8.x releases. §6's sequencing is superseded; Phase 2's removal scope
+> is unchanged and now targets v1.9.0 (roadmap row).
+
 **Date:** 2026-10-09
 **Status:** Feasibility assessment only — one standalone document, no issues filed, no
 implementation, no dependency changes. Product owner decides next steps.

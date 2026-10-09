@@ -236,14 +236,17 @@ env:
   ## a missing package is ignored with a WARNING (never crashes). "0" (default)
   ## keeps today's asyncio/h11 runtime.
   # TRAM_HTTP_ACCELERATED: "0"
-  ## SNMP library stack (v1.5.0, GH #72): "legacy" (pysnmp, the pre-v1.5.0
-  ## behavior) | "trishul" (trishul-smi / trishul-snmp). This generic env map
-  ## is applied to BOTH the manager and worker planes — set the SAME value
-  ## everywhere. A mismatched rolling upgrade does NOT fail at startup: the
-  ## manager logs a once-per-worker WARNING and a mixed fleet can serve one
-  ## stack's MIB artifacts (".py" vs ".json") to the other's consumers. An
-  ## invalid value IS a startup error (no silent fallback).
-  # TRAM_SNMP_STACK: legacy
+  ## SNMP library stack (v1.5.0, GH #72): "trishul" (trishul-smi /
+  ## trishul-snmp, default since v1.8.0) | "legacy" (pysnmp escape hatch).
+  ## This generic env map is applied to BOTH the manager and worker planes —
+  ## set the SAME value everywhere. During the escape-hatch period BOTH
+  ## stacks must be installed; "legacy" is available through the v1.8.x
+  ## releases and is removed in v1.9.0. A mismatched rolling
+  ## upgrade does NOT fail at startup: the manager logs a once-per-worker
+  ## WARNING and a mixed fleet can serve one stack's MIB artifacts (".py" vs
+  ## ".json") to the other's consumers. An invalid value IS a startup error
+  ## (no silent fallback).
+  # TRAM_SNMP_STACK: trishul
   # TRAM_QUEUE_TTL_SECONDS: "900"  # max wait for capacity before expiry
   # TRAM_NODE_ID: ""            # defaults to hostname (auto-set from pod name in StatefulSet)
   # TRAM_SHUTDOWN_TIMEOUT_SECONDS: "30"  # drain timeout before forced stop

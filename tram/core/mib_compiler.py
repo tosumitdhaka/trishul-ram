@@ -1,11 +1,11 @@
 """Shared SNMP MIB source-store and compilation helpers.
 
 v1.5.0 (GH #72): the compile path is stack-aware. With the default
-``TRAM_SNMP_STACK=legacy`` the pysmi pipeline compiles to ``.py`` exactly as
-before. With ``TRAM_SNMP_STACK=trishul`` the tsmi compiler (trishul-smi)
+``TRAM_SNMP_STACK=trishul`` (since v1.8.0) the tsmi compiler (trishul-smi)
 produces its JSON IR bundles (``<MODULE>.json`` plus ``manifest.json`` /
-``oid_index.json`` sidecars) into the same ``TRAM_MIB_DIR`` — a dual-format
-corpus where ``IF-MIB.py`` and ``IF-MIB.json`` coexist.
+``oid_index.json`` sidecars) into ``TRAM_MIB_DIR``. The ``legacy`` escape
+hatch keeps the pysmi pipeline compiling to ``.py`` exactly as before — a
+dual-format corpus where ``IF-MIB.py`` and ``IF-MIB.json`` coexist.
 """
 
 from __future__ import annotations

@@ -1,11 +1,12 @@
 """SNMP source connectors — trap receiver and polling source.
 
-v1.5.0 (GH #72): dual-stack. ``TRAM_SNMP_STACK=trishul`` runs the poll and
-trap paths over tsnmp (``trishul_snmp``: V1/V2c/V3 managers, notification
-listeners, ``decode_notification``); the default ``legacy`` path is the
-byte-identical pysnmp implementation. Shared parse/normalize (MIB resolution,
+v1.5.0 (GH #72): dual-stack. ``TRAM_SNMP_STACK=trishul`` (the default since
+v1.8.0) runs the poll and trap paths over tsnmp (``trishul_snmp``: V1/V2c/V3
+managers, notification listeners, ``decode_notification``); the ``legacy``
+escape hatch is the byte-identical pysnmp implementation (available through
+the v1.8.x releases). Shared parse/normalize (MIB resolution,
 row grouping, classification) is stack-agnostic — only the wire layers differ,
-and the flag-off branch is deleted wholesale after the flag period.
+and the legacy branch is deleted wholesale in v1.9.0.
 """
 
 from __future__ import annotations

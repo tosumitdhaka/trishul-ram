@@ -1,12 +1,13 @@
 """SNMP MIB utilities — build MIB view, resolve OIDs, symbolic lookup,
 SNMPv3 auth builders, and PySNMP HLAPI compatibility helpers.
 
-v1.5.0 (GH #72): dual-stack. ``TRAM_SNMP_STACK=trishul`` resolves OIDs
-against tsmi JSON IR bundles (:class:`trishul_snmp.MibBundle`) instead of
-pysmi ``.py`` modules; ``legacy`` (default) keeps the byte-identical pysnmp
-path. The two views are cleanly separated behind :func:`get_mib_view` and the
-``mibBuilder``-vs-``lookup`` duck-type check in the resolve helpers — after
-the flag period the legacy branch is deleted wholesale.
+v1.5.0 (GH #72): dual-stack. ``TRAM_SNMP_STACK=trishul`` (the default since
+v1.8.0) resolves OIDs against tsmi JSON IR bundles
+(:class:`trishul_snmp.MibBundle`) instead of pysmi ``.py`` modules; the
+``legacy`` escape hatch keeps the byte-identical pysnmp path (available
+through the v1.8.x releases). The two views are cleanly separated behind
+:func:`get_mib_view` and the ``mibBuilder``-vs-``lookup`` duck-type check in
+the resolve helpers — the legacy branch is deleted wholesale in v1.9.0.
 """
 
 from __future__ import annotations
@@ -489,9 +490,10 @@ def _cached_mib_view(mib_dirs_key: tuple[str, ...], mib_modules_key: tuple[str, 
 def get_mib_view(mib_dirs: list[str], mib_modules: list[str]):
     """Return a cached MIB view for the given dirs + modules.
 
-    v1.5.0 (GH #72): ``TRAM_SNMP_STACK=trishul`` returns a cached tsmi JSON
-    bundle view (:class:`_TsmiBundleView`) over the same ``mib_dirs``; the
-    default ``legacy`` path is byte-identical to the pre-flag behavior.
+    v1.5.0 (GH #72): ``TRAM_SNMP_STACK=trishul`` (the default since v1.8.0)
+    returns a cached tsmi JSON bundle view (:class:`_TsmiBundleView`) over
+    the same ``mib_dirs``; the ``legacy`` escape hatch is byte-identical to
+    the pre-flag pysnmp behavior.
     """
     dirs_key = tuple(sorted(mib_dirs))
     modules_key = tuple(sorted(mib_modules))
