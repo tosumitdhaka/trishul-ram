@@ -30,6 +30,17 @@ logger = logging.getLogger(__name__)
 # the retry mints a fresh version instead of failing the caller.
 _VERSION_SAVE_RETRIES = 3
 
+
+class TransformStateBudgetExceeded(Exception):
+    """A transform-state write exceeded the frozen V18-01 §9 budgets
+    (``TRAM_TRANSFORM_MAX_STATE_BYTES`` / ``TRAM_TRANSFORM_MAX_CARDINALITY``).
+
+    The write is REJECTED with this reason — never silently truncated and never
+    evicting un-emitted state (plan F: overflow pauses intake or fails
+    undecided). The message names the budget that was exceeded and the actual
+    size/cardinality observed.
+    """
+
 # SQLite busy timeout (milliseconds) applied to every new connection via
 # PRAGMA. Without it, concurrent writers across APScheduler/API/stream threads
 # hit "database is locked" under load (code review D5); the driver default of
@@ -60,6 +71,21 @@ def _build_engine(url: str = "") -> Engine:
     resolved = url or os.environ.get("TRAM_DB_URL", "")
 
     if resolved:
+        # v1.8.0 (frozen V18-01 §3): SQLite and PostgreSQL are the only
+        # supported dialects. A MySQL/MariaDB URL fails closed at engine
+        # construction time with an explicit message — the v1.8 ledger DDL and
+        # claim semantics are not portable to MySQL (TEXT PRIMARY KEY without a
+        # key length, no INSERT ... ON CONFLICT DO NOTHING), and no third
+        # dialect branch is added. Operators must migrate to PostgreSQL before
+        # upgrading (docs/deployment.md).
+        _scheme = resolved.split("://", 1)[0].lower()
+        if _scheme.startswith(("mysql", "mariadb")):
+            raise RuntimeError(
+                "Unsupported database dialect: TRAM_DB_URL points at MySQL/MariaDB "
+                f"({resolved!r}). v1.8.0 supports SQLite and PostgreSQL only — the "
+                "manager execution ledger is not portable to MySQL. Migrate to "
+                "PostgreSQL before upgrading (see docs/deployment.md)."
+            )
         is_sqlite = resolved.startswith("sqlite")
         kwargs: dict = {}
         if is_sqlite:
@@ -126,6 +152,262 @@ def _add_column_if_missing(conn, dialect: str, table: str, column: str, typedef:
         if _is_duplicate_column_error(exc):
             return  # column already exists (SQLite has no IF NOT EXISTS for ADD COLUMN)
         raise  # anything else (lock, disk full, ...) is loud — review B8
+
+
+# ── v1.8.0 versioned migrations (frozen V18-01 §3) ───────────────────────────
+#
+# M1–M5 implement the frozen manager execution ledger contract. Every migration
+# is idempotent, recorded in `schema_migrations`, and executed inside the same
+# transaction as the rest of schema init — a crash midway rolls the whole block
+# back, and re-running from a real v1.7 database re-applies cleanly (plan
+# upgrade gate 1). The ledger tables live in `_create_tables`; the migration
+# helpers below are shared by the schema-init path only.
+
+
+def _migration_applied(conn, migration_id: str) -> bool:
+    """True when *migration_id* is already recorded in schema_migrations."""
+    row = conn.execute(
+        text("SELECT 1 FROM schema_migrations WHERE migration_id = :migration_id"),
+        {"migration_id": migration_id},
+    ).fetchone()
+    return row is not None
+
+
+def _record_migration(conn, migration_id: str) -> None:
+    """Record a completed migration. Runs in the same transaction as its DDL/data."""
+    conn.execute(
+        text(
+            "INSERT INTO schema_migrations (migration_id, applied_at) "
+            "VALUES (:migration_id, :applied_at)"
+        ),
+        {"migration_id": migration_id, "applied_at": datetime.now(UTC).isoformat()},
+    )
+
+
+def _apply_v180_migrations(conn, dialect: str) -> None:
+    """Apply the v1.8.0 ledger migrations M1–M5 (frozen V18-01 §3).
+
+    M1   six ledger tables + indexes (created in ``_create_tables`` above, but
+         recorded here so the migration ledger is complete).
+    M2   additive columns on legacy tables via ``_add_column_if_missing``.
+    M3   desired-state backfill from ``registered_pipelines`` + stopped-flag.
+    M4   run_intents backfill for in-flight ``queued_runs`` rows (flush 0 —
+         lost flags are not invented).
+    M5   transform_state generation/revision NULL-marking (legacy blobs hydrate
+         under weaker semantics; V18-06 decides preserve/flush/reset).
+
+    The block is executed inside ``_create_tables``' single transaction; each
+    step is additionally idempotent so a re-run (record lost to a mid-way
+    crash, or an upgrade gate exercising the migration twice) is a no-op.
+    """
+    conn.execute(text("""
+        CREATE TABLE IF NOT EXISTS schema_migrations (
+            migration_id TEXT PRIMARY KEY NOT NULL,
+            applied_at   TEXT NOT NULL
+        )
+    """))
+
+    # M1 — ledger tables. DDL is `CREATE TABLE IF NOT EXISTS` (idempotent by
+    # construction); the record makes the migration ledger complete.
+    if not _migration_applied(conn, "M1"):
+        _create_ledger_tables(conn)
+        _record_migration(conn, "M1")
+
+    # M2 — additive columns on legacy tables (frozen V18-01 §3).
+    if not _migration_applied(conn, "M2"):
+        _add_column_if_missing(conn, dialect, "run_history", "attempt_id", "TEXT")
+        _add_column_if_missing(conn, dialect, "run_history", "generation", "INTEGER")
+        _add_column_if_missing(conn, dialect, "run_history", "outcome", "TEXT")
+        _add_column_if_missing(conn, dialect, "run_history", "disposition_json", "TEXT")
+        _add_column_if_missing(conn, dialect, "queued_runs", "flush", "INTEGER NOT NULL DEFAULT 0")
+        _add_column_if_missing(conn, dialect, "queued_runs", "requested_generation", "INTEGER")
+        _add_column_if_missing(conn, dialect, "queued_runs", "schedule_type", "TEXT")
+        _add_column_if_missing(conn, dialect, "queued_runs", "origin", "TEXT")
+        _add_column_if_missing(conn, dialect, "queued_runs", "terminal_reason", "TEXT")
+        _add_column_if_missing(conn, dialect, "transform_state", "generation", "INTEGER")
+        _add_column_if_missing(conn, dialect, "transform_state", "revision", "INTEGER NOT NULL DEFAULT 0")
+        _record_migration(conn, "M2")
+
+    # M3 — desired-state backfill from registered_pipelines + stopped-flag
+    # (drives boot order, plan D). Every registered pipeline gets a desired
+    # row; a stopped or tombstoned pipeline is never desired-running. Deleted
+    # rows keep the tombstone. `generation` starts at 1.
+    if not _migration_applied(conn, "M3"):
+        conn.execute(text("""
+            INSERT INTO pipeline_desired_state
+                (pipeline_name, desired_status, generation, config_version,
+                 schedule_type, misfire_policy, deleted, stopped_reason, updated_at)
+            SELECT
+                rp.name,
+                CASE WHEN rp.deleted = 1 OR rp.stopped = 1 THEN 'stopped' ELSE 'running' END,
+                1,
+                NULL,
+                'manual',
+                'coalesced_skip',
+                rp.deleted,
+                NULL,
+                :now
+            FROM registered_pipelines rp
+            WHERE NOT EXISTS (
+                SELECT 1 FROM pipeline_desired_state pds
+                WHERE pds.pipeline_name = rp.name
+            )
+        """), {"now": datetime.now(UTC).isoformat()})
+        _record_migration(conn, "M3")
+
+    # M4 — run_intents backfill for in-flight queued_runs rows (queued or
+    # dispatching; dispatched/expired are audit rows). origin is reconstructed
+    # as 'queued' — these were queue-held manual runs; flush defaults to 0
+    # because lost flags are not invented; requested_generation starts at 1
+    # (V18-06 reconciles real generations).
+    if not _migration_applied(conn, "M4"):
+        conn.execute(text("""
+            INSERT INTO run_intents
+                (run_id, pipeline_name, origin, flush, requested_at, expires_at,
+                 requested_generation, requested_config_version, yaml_snapshot,
+                 schedule_type)
+            SELECT
+                qr.run_id,
+                qr.pipeline_name,
+                'queued',
+                0,
+                qr.requested_at,
+                qr.expires_at,
+                1,
+                NULL,
+                qr.yaml_snapshot,
+                NULL
+            FROM queued_runs qr
+            WHERE qr.status IN ('queued', 'dispatching')
+              AND NOT EXISTS (
+                  SELECT 1 FROM run_intents ri WHERE ri.run_id = qr.run_id
+              )
+        """))
+        _record_migration(conn, "M4")
+
+    # M5 — transform_state NULL-marking: rows present at migration time are
+    # legacy blobs (generation NULL, revision 0) that hydrate under weaker
+    # semantics; the V18-06 config-state migration decides preserve/flush/reset.
+    # M2's column adds already leave these values; the UPDATE normalises any
+    # partial state and is a no-op when nothing needs marking.
+    if not _migration_applied(conn, "M5"):
+        conn.execute(text("""
+            UPDATE transform_state SET generation = NULL, revision = 0
+             WHERE generation IS NOT NULL OR revision != 0
+        """))
+        _record_migration(conn, "M5")
+
+
+def _create_ledger_tables(conn) -> None:
+    """M1: the six frozen manager execution ledger tables + indexes.
+
+    DDL is written once, portable across SQLite and PostgreSQL (frozen
+    V18-01 §3). Timestamps stay TEXT ISO-8601 UTC per the existing convention.
+    """
+    conn.execute(text("""
+        CREATE TABLE IF NOT EXISTS pipeline_desired_state (
+            pipeline_name  TEXT PRIMARY KEY NOT NULL,
+            desired_status  TEXT NOT NULL CHECK (desired_status IN ('running','stopped')),
+            generation      INTEGER NOT NULL DEFAULT 1,
+            config_version  INTEGER,
+            schedule_type   TEXT NOT NULL DEFAULT 'manual',
+            misfire_policy  TEXT NOT NULL DEFAULT 'coalesced_skip',
+            deleted         INTEGER NOT NULL DEFAULT 0,        -- tombstone
+            stopped_reason  TEXT,
+            updated_at      TEXT NOT NULL
+        )
+    """))
+    conn.execute(text("""
+        CREATE TABLE IF NOT EXISTS run_intents (
+            run_id              TEXT PRIMARY KEY NOT NULL,
+            pipeline_name       TEXT NOT NULL,
+            origin              TEXT NOT NULL CHECK (origin IN ('manual','scheduled','recovery','queued')),
+            flush               INTEGER NOT NULL DEFAULT 0,
+            requested_at        TEXT NOT NULL,
+            expires_at          TEXT,
+            requested_generation INTEGER NOT NULL,
+            requested_config_version INTEGER,
+            yaml_snapshot       TEXT,                -- claimed dispatch snapshot
+            schedule_type       TEXT,
+            final_outcome       TEXT CHECK (final_outcome IN
+                            ('success','partial','failed','aborted','expired','superseded')),
+            final_attempt_id    TEXT,
+            resolved_at         TEXT
+        )
+    """))
+    conn.execute(text(
+        "CREATE INDEX IF NOT EXISTS idx_ri_pipeline ON run_intents(pipeline_name, requested_at)"
+    ))
+    conn.execute(text(
+        "CREATE INDEX IF NOT EXISTS idx_ri_expires ON run_intents(expires_at)"
+    ))
+    conn.execute(text("""
+        CREATE TABLE IF NOT EXISTS execution_attempts (
+            attempt_id      TEXT PRIMARY KEY NOT NULL,
+            run_id          TEXT NOT NULL,
+            pipeline_name   TEXT NOT NULL,
+            ordinal         INTEGER NOT NULL,
+            generation      INTEGER NOT NULL,
+            slot_id         TEXT NOT NULL DEFAULT '',
+            worker_id       TEXT,
+            worker_session  TEXT,
+            fence_token     TEXT NOT NULL,
+            state           TEXT NOT NULL CHECK (state IN
+                        ('claimed','dispatching','running','stopping','unknown','terminal')),
+            dispatch_sent_at TEXT,
+            accepted_at     TEXT,
+            started_at      TEXT,
+            finished_at     TEXT,
+            uncertainty_reason TEXT,
+            cancel_reason   TEXT,
+            result_json     TEXT,
+            UNIQUE (run_id, ordinal)
+        )
+    """))
+    conn.execute(text(
+        "CREATE INDEX IF NOT EXISTS idx_ea_state ON execution_attempts(state)"
+    ))
+    conn.execute(text(
+        "CREATE INDEX IF NOT EXISTS idx_ea_run ON execution_attempts(run_id)"
+    ))
+    conn.execute(text("""
+        CREATE TABLE IF NOT EXISTS execution_guards (
+            guard_key   TEXT PRIMARY KEY NOT NULL,   -- pipeline_name (batch) or slot_id (stream)
+            guard_kind  TEXT NOT NULL CHECK (guard_kind IN ('batch','stream_slot')),
+            run_id      TEXT,
+            attempt_id  TEXT,
+            generation  INTEGER,
+            acquired_at TEXT
+        )
+    """))
+    conn.execute(text("""
+        CREATE TABLE IF NOT EXISTS delivery_checkpoints (
+            checkpoint_id  TEXT PRIMARY KEY NOT NULL,
+            pipeline_name  TEXT NOT NULL,
+            generation     INTEGER NOT NULL,
+            attempt_id     TEXT NOT NULL,
+            run_id         TEXT NOT NULL,
+            source_unit    TEXT NOT NULL,            -- replay identity
+            frontier_json  TEXT NOT NULL,
+            frontier_seq   INTEGER NOT NULL,         -- comparable scalar: committed offset (Kafka), unit position (files)
+            sink_receipts  TEXT NOT NULL,            -- per-sink {sink_key, tier, confirmed}
+            state_revision INTEGER NOT NULL,
+            committed_at   TEXT NOT NULL,
+            UNIQUE (pipeline_name, source_unit)
+        )
+    """))
+    conn.execute(text("""
+        CREATE TABLE IF NOT EXISTS lifecycle_operations (
+            operation_id  TEXT PRIMARY KEY NOT NULL,
+            pipeline_name TEXT NOT NULL,
+            op_kind       TEXT NOT NULL,              -- stop|restart|update|delete|drain|force_release|boot_adopt|trigger
+            state         TEXT NOT NULL CHECK (state IN ('pending','complete','failed')),
+            attempt_id    TEXT,
+            detail        TEXT,
+            created_at    TEXT NOT NULL,
+            updated_at    TEXT NOT NULL
+        )
+    """))
 
 
 def _create_tables(engine: Engine) -> None:
@@ -407,6 +689,11 @@ def _create_tables(engine: Engine) -> None:
             ))
         except Exception:
             pass  # paused column may not exist on fresh DBs
+
+        # v1.8.0 (frozen V18-01 §3): manager execution ledger — M1..M5.
+        # Same transaction as the legacy migrations above; every step is
+        # idempotent and recorded in schema_migrations.
+        _apply_v180_migrations(conn, dialect)
 
 
 def _slot_matches_clause(dialect: str, check_run_id: bool) -> str:
@@ -1368,12 +1655,17 @@ class TramDB:
 
         The ``state`` value is the decoded JSON blob (``{state_key: blob}``);
         ``config_sha256`` lets the executor discard state on config change
-        (D.2 §6.1 convention, design §3.2d).
+        (D.2 §6.1 convention, design §3.2d). ``generation``/``revision`` are
+        the frozen §7 CAS identity of the row (the checkpoint CAS advances
+        ``revision`` and fences on it; ``generation`` is NULL for M5 legacy
+        rows), exposed so a run hydrating state adopts the stored revision as
+        its checkpoint CAS base instead of assuming 0.
         """
         with self._engine.connect() as conn:
             row = conn.execute(
                 text(
-                    "SELECT state_json, config_sha256, updated_at, updated_by "
+                    "SELECT state_json, config_sha256, updated_at, updated_by, "
+                    "generation, revision "
                     "FROM transform_state WHERE pipeline_name = :pn"
                 ),
                 {"pn": pipeline_name},
@@ -1385,6 +1677,8 @@ class TramDB:
             "config_sha256": row["config_sha256"],
             "updated_at": row["updated_at"],
             "updated_by": row["updated_by"],
+            "generation": row["generation"],
+            "revision": row["revision"],
         }
 
     def save_transform_state(
@@ -1399,13 +1693,37 @@ class TramDB:
         Uses the E.2 ``_upsert`` helper; the row is replaced wholesale (single
         writer per pipeline, design §3.3), ``updated_at`` refreshed and
         ``updated_by`` recording the last writer's run_id for audit.
+
+        V18-08 (plan F): the write is budget-enforced BEFORE it is persisted —
+        serialized size over ``TRAM_TRANSFORM_MAX_STATE_BYTES`` or top-level
+        key cardinality over ``TRAM_TRANSFORM_MAX_CARDINALITY`` raises
+        :class:`TransformStateBudgetExceeded` with the reason (``0`` disables
+        a bound). The rejection is explicit and visible to the caller/logs;
+        the state is never silently truncated or evicted.
         """
+        state_json = json.dumps(state)
+        from tram.core.config import transform_max_cardinality, transform_max_state_bytes
+
+        max_bytes = transform_max_state_bytes()
+        if max_bytes > 0 and len(state_json) > max_bytes:
+            raise TransformStateBudgetExceeded(
+                f"transform-state write rejected for pipeline {pipeline_name!r}: "
+                f"{len(state_json)} serialized bytes exceeds the "
+                f"{max_bytes} budget (TRAM_TRANSFORM_MAX_STATE_BYTES)"
+            )
+        max_cardinality = transform_max_cardinality()
+        if max_cardinality > 0 and len(state) > max_cardinality:
+            raise TransformStateBudgetExceeded(
+                f"transform-state write rejected for pipeline {pipeline_name!r}: "
+                f"{len(state)} state keys exceed the {max_cardinality} budget "
+                f"(TRAM_TRANSFORM_MAX_CARDINALITY)"
+            )
         now = datetime.now(UTC).isoformat()
         self._upsert(
             "transform_state",
             {
                 "pipeline_name": pipeline_name,
-                "state_json": json.dumps(state),
+                "state_json": state_json,
                 "config_sha256": config_sha256,
                 "updated_at": now,
                 "updated_by": updated_by,

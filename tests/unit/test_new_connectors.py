@@ -11,6 +11,7 @@ from tram.connectors.local.sink import LocalSink
 from tram.connectors.local.source import LocalSource
 from tram.connectors.sftp.sink import SFTPSink
 from tram.core.exceptions import SinkError, SourceError
+from tram.interfaces.base_source import AckDisposition
 
 # ── LocalSource ────────────────────────────────────────────────────────────
 
@@ -49,7 +50,7 @@ class TestLocalSource:
         })
         results = list(source.read())  # read() no longer moves files itself
         for _, meta in results:
-            source.finalize(meta, success=True)
+            source.ack(meta, AckDisposition.DELIVERED)
 
         assert not (src / "f.txt").exists()
         assert (dst / "f.txt").exists()
@@ -59,7 +60,7 @@ class TestLocalSource:
         source = LocalSource({"path": str(tmp_path), "delete_after_read": True})
         results = list(source.read())
         for _, meta in results:
-            source.finalize(meta, success=True)
+            source.ack(meta, AckDisposition.DELIVERED)
         assert not (tmp_path / "f.txt").exists()
 
     def test_missing_path_raises(self):
@@ -80,6 +81,131 @@ class TestLocalSource:
     def test_empty_dir_yields_nothing(self, tmp_path):
         source = LocalSource({"path": str(tmp_path)})
         assert list(source.read()) == []
+
+    def test_no_destructive_action_until_ack(self, tmp_path):
+        """finalize() is non-destructive (V18-01 §6): the file is only
+        moved/deleted/marked when ack() is called with a decided disposition."""
+        src = tmp_path / "in"
+        dst = tmp_path / "processed"
+        src.mkdir()
+        (src / "f.txt").write_bytes(b"data")
+
+        source = LocalSource({"path": str(src), "move_after_read": str(dst)})
+        results = list(source.read())
+        meta = results[0][1]
+
+        # finalize() — the executor's current hook — must never destroy input.
+        source.finalize(meta, success=True)
+        assert (src / "f.txt").exists()
+        assert not (dst / "f.txt").exists()
+
+        # The unit is consumed only behind a decided ack().
+        source.ack(meta, AckDisposition.DELIVERED)
+        assert not (src / "f.txt").exists()
+        assert (dst / "f.txt").exists()
+
+    def test_incomplete_at_boundary_never_marked_done(self, tmp_path):
+        """A unit abandoned at a batch_size boundary is never acked, so it is
+        never marked done, moved, or deleted (R10 preserved at the source)."""
+        src = tmp_path / "in"
+        dst = tmp_path / "processed"
+        src.mkdir()
+        (src / "f.txt").write_bytes(b"data")
+
+        source = LocalSource({
+            "path": str(src),
+            "move_after_read": str(dst),
+            "skip_processed": True,
+            "_pipeline_name": "pipe",
+        })
+        tracker = MagicMock()
+        tracker.is_processed.return_value = False
+        source._file_tracker = tracker
+
+        results = list(source.read())
+        meta = results[0][1]
+        # The executor's batch_size-stop path never acks the incomplete unit.
+        source.finalize(meta, success=True)
+
+        assert (src / "f.txt").exists()
+        assert not (dst / "f.txt").exists()
+        tracker.mark_processed.assert_not_called()
+
+    def test_source_unit_id_stable_and_fingerprinted(self, tmp_path):
+        import hashlib
+
+        (tmp_path / "f.txt").write_bytes(b"hello")
+        source = LocalSource({"path": str(tmp_path)})
+        results = list(source.read())
+        meta = results[0][1]
+
+        expected = hashlib.sha256(b"hello").hexdigest()
+        unit_id = source.source_unit_id(meta)
+        assert unit_id == f"local:{tmp_path}:{expected}:0"
+        # Stable across calls (retries within a run must not change identity).
+        assert source.source_unit_id(meta) == unit_id
+
+        # Same-path replacement is detected by a fingerprint change.
+        (tmp_path / "f.txt").write_bytes(b"hello-changed")
+        replaced_meta = list(source.read())[0][1]
+        assert source.source_unit_id(replaced_meta) != unit_id
+
+    def test_source_unit_id_none_without_file_identity(self):
+        source = LocalSource({"path": "/tmp"})
+        assert source.source_unit_id({}) is None
+        assert source.source_unit_id({"source_filename": "x.txt"}) is None
+
+    def test_partial_fan_out_failed_sink_does_not_finalize_source_unit(
+        self, tmp_path
+    ):
+        """One sink publishes, another fails → the source unit is NOT consumed;
+        it survives for replay until a decided ack() (R10)."""
+        src = tmp_path / "in"
+        dst = tmp_path / "processed"
+        src.mkdir()
+        (src / "f.txt").write_bytes(b'[{"x":1}]')
+
+        sink_ok = LocalSink({
+            "path": str(tmp_path / "out_ok"),
+            "filename_template": "rows.ndjson",
+            "file_mode": "single",
+        })
+        sink_bad = LocalSink({
+            "path": str(tmp_path / "out_bad"),
+            "filename_template": "rows.ndjson",
+            "file_mode": "single",
+        })
+        meta = {
+            "pipeline_name": "p",
+            "run_id": "run-1",
+            "source_filename": "f.txt",
+            "source_path": str(src / "f.txt"),
+            "serializer_type": "ndjson",
+            "serializer_config": {"type": "ndjson"},
+            "output_record_count": 1,
+            "enable_safe_finalize": True,
+        }
+
+        sink_ok.write(b'{"x":1}', meta)
+        sink_bad.write(b'{"x":1}', meta)
+
+        source = LocalSource({"path": str(src), "move_after_read": str(dst)})
+
+        # Executor per-sink finalize loop: one sink publishes, one fails.
+        sink_ok.finalize_source(meta, success=True)
+        assert (tmp_path / "out_ok" / "rows.ndjson").exists()
+        with patch.object(sink_bad._backend, "replace", side_effect=OSError("boom")):
+            with pytest.raises(SinkError):
+                sink_bad.finalize_source(meta, success=True)
+
+        # The source unit is not finalized while any required publication is
+        # unresolved — only a decided ack() consumes it.
+        assert (src / "f.txt").exists()
+        assert not (dst / "f.txt").exists()
+
+        source.ack(meta, AckDisposition.DELIVERED)
+        assert not (src / "f.txt").exists()
+        assert (dst / "f.txt").exists()
 
 
 # ── LocalSink ──────────────────────────────────────────────────────────────
@@ -813,6 +939,28 @@ class TestRestSource:
 
 
 class TestRestSink:
+    def _patch_pool(self, mock_resp):
+        """Patch the shared-client construction seam and return the mock client.
+
+        The pool caches one client per ``verify_ssl`` value, so tests reset the
+        pool first (and afterwards) to keep the construction count pinned and
+        avoid leaking a mock into later tests.
+        """
+        from tram.connectors import http_pool
+
+        http_pool.reset_pool_for_tests()
+        mock_client = MagicMock()
+        mock_client.request.return_value = mock_resp
+        mock_class = MagicMock()
+        mock_class.return_value = mock_client
+        patcher = patch("tram.connectors.http_pool.httpx.Client", mock_class)
+        patcher.start()
+        return mock_client, mock_class, patcher, http_pool
+
+    def _cleanup_pool(self, http_pool, patcher):
+        patcher.stop()
+        http_pool.reset_pool_for_tests()
+
     def test_post_data(self):
         from tram.connectors.rest.sink import RestSink
 
@@ -820,14 +968,12 @@ class TestRestSink:
         mock_resp.status_code = 201
         mock_resp.raise_for_status = MagicMock()
 
-        with patch("httpx.Client") as mock_client_cls:
-            mock_client = MagicMock()
-            mock_client_cls.return_value.__enter__ = lambda s: mock_client
-            mock_client_cls.return_value.__exit__ = MagicMock(return_value=False)
-            mock_client.request.return_value = mock_resp
-
+        mock_client, _mock_class, patcher, http_pool = self._patch_pool(mock_resp)
+        try:
             sink = RestSink({"url": "http://example.com/ingest"})
             sink.write(b'[{"x":1}]', {})
+        finally:
+            self._cleanup_pool(http_pool, patcher)
 
         mock_client.request.assert_called_once()
         call_args = mock_client.request.call_args
@@ -841,12 +987,84 @@ class TestRestSink:
         mock_resp.status_code = 500
         mock_resp.text = "Internal Server Error"
 
-        with patch("httpx.Client") as mock_client_cls:
-            mock_client = MagicMock()
-            mock_client_cls.return_value.__enter__ = lambda s: mock_client
-            mock_client_cls.return_value.__exit__ = MagicMock(return_value=False)
-            mock_client.request.return_value = mock_resp
-
+        mock_client, _mock_class, patcher, http_pool = self._patch_pool(mock_resp)
+        try:
             sink = RestSink({"url": "http://example.com/ingest"})
             with pytest.raises(SinkError):
                 sink.write(b"data", {})
+        finally:
+            self._cleanup_pool(http_pool, patcher)
+
+    def test_shared_client_pooled_across_requests_and_sinks(self):
+        """V18-08: one shared httpx.Client serves ALL writes of ALL RestSink
+        instances — construction count pinned to 1, not one per request."""
+        from tram.connectors.rest.sink import RestSink
+
+        mock_resp = MagicMock()
+        mock_resp.status_code = 200
+        mock_resp.raise_for_status = MagicMock()
+
+        mock_client, mock_class, patcher, http_pool = self._patch_pool(mock_resp)
+        try:
+            sink_a = RestSink({"url": "http://example.com/a"})
+            sink_b = RestSink({"url": "http://example.com/b"})
+            for _ in range(3):
+                sink_a.write(b"data", {})
+                sink_b.write(b"data", {})
+        finally:
+            self._cleanup_pool(http_pool, patcher)
+
+        assert mock_client.request.call_count == 6
+        # Exactly ONE pooled client serves every request of every sink
+        # instance (the pool cache pins the construction count).
+        assert mock_class.call_count == 1
+
+    def test_shared_client_reused_across_sink_instances(self):
+        """V18-08: a second sink instance (a later run) reuses the pooled
+        client instead of constructing a new one."""
+        from tram.connectors.rest.sink import RestSink
+
+        mock_resp = MagicMock()
+        mock_resp.status_code = 200
+        mock_resp.raise_for_status = MagicMock()
+
+        mock_client, mock_class, patcher, http_pool = self._patch_pool(mock_resp)
+        try:
+            sink_a = RestSink({"url": "http://example.com/a"})
+            sink_a.write(b"1", {})
+            sink_a.write(b"2", {})          # reuse within the run
+            sink_b = RestSink({"url": "http://example.com/b"})
+            sink_b.write(b"3", {})          # "next run" reuse
+        finally:
+            self._cleanup_pool(http_pool, patcher)
+
+        assert mock_class.call_count == 1
+        assert mock_client.request.call_count == 3
+
+    def test_close_is_per_sink_and_does_not_tear_down_shared_client(self):
+        """V18-08: the executor's per-sink close() stays a no-op for REST (the
+        shared client is NOT run-scoped) — closing a sink must not break the
+        commit barrier (the synchronous write-return) of a later run."""
+        from tram.connectors.rest.sink import RestSink
+
+        mock_resp = MagicMock()
+        mock_resp.status_code = 200
+        mock_resp.raise_for_status = MagicMock()
+
+        mock_client, mock_class, patcher, http_pool = self._patch_pool(mock_resp)
+        try:
+            sink_a = RestSink({"url": "http://example.com/a"})
+            sink_a.write(b"run1", {})
+            close = getattr(sink_a, "close", None)
+            assert callable(close)
+            close()  # per-sink close (idempotent no-op — no run-scoped resource)
+            # A "next run" sink keeps delivering on the SAME pooled client.
+            sink_b = RestSink({"url": "http://example.com/b"})
+            sink_b.write(b"run2", {})
+            close()
+            sink_b.close()
+        finally:
+            self._cleanup_pool(http_pool, patcher)
+
+        assert mock_client.request.call_count == 2
+        assert mock_class.call_count == 1

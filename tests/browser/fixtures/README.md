@@ -31,7 +31,20 @@ suite stays deterministic, fast, and focused on what the smoke covers:
 - `templates.json` — one curated `kafka-to-os` template (the checks seed the
   wizard from `#create?template=kafka-to-os`).
 - `runs.json` — two real runs (one success, one failed) with the `errors`
-  arrays trimmed; `runs_count.json` keeps the real captured total.
+  arrays trimmed; `runs_count.json` keeps the real captured total. Supplemented
+  (v1.8.0 states check) with a `partial` run (outcome `partial`, skipped
+  records) and an `aborted` run, plus the `outcome` field on every row.
+- `cluster_nodes.json` — one admitting worker plus two draining workers
+  (one with runs in flight, one fully `drained`) carrying the v1.8.0
+  `admission_state` / `drain` block shapes from `/agent/status`.
+- `operations.json` — synthetic `lifecycle_operations` rows (v1.8.0 /
+  V18-09): trigger/stop/boot_adopt/drain/restart kinds over
+  complete/pending/failed states, shaped per `docs/api.md`.
+- `checks/states.mjs` layers a `stopping` pipeline and a stopped `manual`
+  pipeline on top of the two-row `pipelines.json` per-route (wizard-ai pins
+  the shared list at two rows), overrides `POST /api/pipelines/{name}/run`
+  to return the 202 receipt (`run_id` + `operation_id`), and pins the
+  partial outcome toast via the run monitor.
 - `daemon_status.json`, `cluster_nodes.json`, `cluster_streams.json`,
   `pipelines.json`, `stats.json`, `schemas.json`, `mibs.json` — real shapes,
   trimmed to 1-3 representative entries.

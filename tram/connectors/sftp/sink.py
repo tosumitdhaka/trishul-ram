@@ -12,7 +12,12 @@ from tram.connectors.file_sink_common import (
     source_unit_key,
 )
 from tram.core.exceptions import SinkError
-from tram.interfaces.base_sink import BaseSink
+from tram.interfaces.base_sink import (
+    BaseSink,
+    DeliveryTier,
+    SinkCapability,
+    SinkCommitReceipt,
+)
 from tram.registry.registry import register_sink
 
 logger = logging.getLogger(__name__)
@@ -42,7 +47,17 @@ class SFTPSink(BaseSink):
     write failure on a stale connection triggers exactly one reconnect before
     surfacing the error (review D7). Rolling/staging/partition bookkeeping is
     shared with LocalSink via :class:`RollingWriter` (review E3).
+
+    Delivery capability (V18-01 contracts): ``fsynced_local`` — staged output
+    is published with an atomic rename (``posix_rename``) before the commit
+    receipt is confirmed. The SFTP protocol has no fsync, so server-side
+    durability of the rename is not asserted (see :class:`SftpRollingBackend`).
     """
+
+    # Frozen tier assignment (V18-01 §6): SFTP file publication is an atomic
+    # rename over the staged temp. Not replay-safe: re-running a source unit
+    # can emit a new file identity (e.g. timestamp tokens).
+    delivery_capability = SinkCapability(tier=DeliveryTier.FSYNCED_LOCAL, replay_safe=False)
 
     def __init__(self, config: dict) -> None:
         super().__init__(config)
@@ -71,6 +86,7 @@ class SFTPSink(BaseSink):
         self._transport = None
         self._sftp = None
         self._conn_lock = threading.Lock()
+        self._latched_error: Exception | None = None
 
     def _connect(self):
         """Return the pooled (transport, sftp) pair, creating it on first use.
@@ -165,6 +181,49 @@ class SFTPSink(BaseSink):
                 raise
             except Exception as exc2:
                 raise SinkError(f"Error finalizing SFTP sink output: {exc2}") from exc2
+
+    def commit(self, *, deadline: float | None = None) -> SinkCommitReceipt:
+        """Publish pending staged output (fsynced_local tier).
+
+        The commit barrier publishes every pending publication manifest with an
+        atomic rename before the receipt is confirmed. A publication failure is
+        latched for :meth:`latched_error` and returned as an unconfirmed
+        receipt; the manifest (with its confirmed finals and recoverable staged
+        temps) survives for a retry.
+        """
+        try:
+            _transport, sftp = self._connect()
+            self._writer.publish_all(backend=self._backend, handle=sftp)
+        except Exception as exc:
+            # Same stale-connection guard as write()/finalize_source().
+            logger.warning(
+                "SFTP commit failed; reconnecting once",
+                extra={"host": self.host, "error": str(exc)},
+            )
+            self._disconnect()
+            try:
+                _transport, sftp = self._connect()
+                self._writer.publish_all(backend=self._backend, handle=sftp)
+            except Exception as exc2:
+                self._latched_error = exc2
+                return SinkCommitReceipt(
+                    sink_key="sftp",
+                    tier=DeliveryTier.FSYNCED_LOCAL,
+                    confirmed=False,
+                    notes=f"publication failed: {exc2}",
+                )
+        return SinkCommitReceipt(
+            sink_key="sftp",
+            tier=DeliveryTier.FSYNCED_LOCAL,
+            confirmed=True,
+            notes="",
+        )
+
+    def latched_error(self) -> Exception | None:
+        """Return (and clear) the first publication failure since the last check."""
+        exc = self._latched_error
+        self._latched_error = None
+        return exc
 
     def close(self) -> None:
         """Release the pooled SFTP connection (review D7). Idempotent.

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hashlib
 import logging
 import shutil
 import time
@@ -10,7 +11,7 @@ from pathlib import Path
 
 from tram.connectors.config_utils import cfg_bool, cfg_int
 from tram.core.exceptions import SourceError
-from tram.interfaces.base_source import BaseSource
+from tram.interfaces.base_source import AckDisposition, BaseSource
 from tram.registry.registry import register_source
 
 logger = logging.getLogger(__name__)
@@ -100,6 +101,11 @@ class LocalSource(BaseSource):
                 yield content, {
                     "source_filename": self._strip_done_suffix(filepath.name),
                     "source_path": fp_str,
+                    # Content fingerprint captured at read time — the identity
+                    # of the unit actually processed. Same-path replacement
+                    # between read and ack is detected by a fingerprint change
+                    # (V18-01 §7 replay identity matrix).
+                    "source_fingerprint": hashlib.sha256(content).hexdigest(),
                 }
             except SourceError:
                 raise
@@ -154,23 +160,56 @@ class LocalSource(BaseSource):
         return name
 
     def finalize(self, meta: dict, *, success: bool) -> None:
-        """Move/delete and mark the file once its chunks were fully processed.
+        """Non-destructive compatibility hook (V18-01 §6).
 
-        Invoked by the executor after every chunk yielded for this file has
-        been drained from the worker pool, so the file is only moved/deleted/
-        marked after its data was actually written — never while writes are
-        still pending. On ``success=False`` the file is left untouched.
+        The destructive mark/move/delete moved to :meth:`ack`; ``finalize()``
+        is retained as a no-op so unmigrated executor paths can never destroy
+        input before a decided delivery outcome (plan C, R10). An incomplete
+        file at a ``batch_size`` boundary is therefore never marked done or
+        deleted.
         """
-        if not success:
+        return None
+
+    def source_unit_id(self, meta: dict) -> str | None:
+        """Stable replay identity: ``{source_namespace}:{fingerprint}:{unit_position}``.
+
+        Namespace is ``local:{path}`` (mirrors the file-tracker source key);
+        the fingerprint is the sha256 of the unit's file content captured at
+        read time (``meta["source_fingerprint"]``); the unit position is 0
+        because the batch local source reads each file as one unit. Returns
+        None when the unit has no readable file identity.
+        """
+        fp_str = str(meta.get("source_path", "") or "").strip()
+        if not fp_str:
+            return None
+        fingerprint = str(meta.get("source_fingerprint", "") or "").strip()
+        if not fingerprint:
+            return None
+        return f"local:{self.path}:{fingerprint}:0"
+
+    def ack(self, meta: dict, disposition: AckDisposition) -> None:
+        """Destructive mark/move/delete for a decided unit (V18-01 §6).
+
+        Called by the executor only for decided units (delivered/filtered/
+        dlq/dropped): the file is moved/deleted/marked here and nowhere else.
+        An undecided unit (abort, exhausted retry, failed DLQ) is never acked
+        and its input survives for replay.
+        """
+        if disposition not in {
+            AckDisposition.DELIVERED,
+            AckDisposition.FILTERED,
+            AckDisposition.DLQ,
+            AckDisposition.DROPPED,
+        }:
             return
-        fp_str = str(meta.get("source_path", ""))
+        fp_str = str(meta.get("source_path", "") or "")
         if not fp_str:
             return
         filepath = Path(fp_str)
         try:
             self._post_read(filepath)
         except Exception as exc:
-            raise SourceError(f"Error finalizing {fp_str}: {exc}") from exc
+            raise SourceError(f"Error acknowledging {fp_str}: {exc}") from exc
         if self.skip_processed and self._file_tracker:
             source_key = f"local:{self.path}"
             self._file_tracker.mark_processed(self._pipeline_name, source_key, fp_str)

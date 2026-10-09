@@ -1,10 +1,11 @@
 """SNMP trap sink connector — sends SNMP traps to a target NMS.
 
-v1.5.0 (GH #72): dual-stack. ``TRAM_SNMP_STACK=trishul`` sends via tsnmp
-(V1/V2c/V3 notifiers, full USM auth/priv matrix); the default ``legacy``
-path is the byte-identical pysnmp implementation. The varbind building and
-config surface are shared — only the wire layer differs, and the flag-off
-branch is deleted wholesale after the flag period.
+v1.5.0 (GH #72): dual-stack. ``TRAM_SNMP_STACK=trishul`` (the default since
+v1.8.0) sends via tsnmp (V1/V2c/V3 notifiers, full USM auth/priv matrix);
+the ``legacy`` escape hatch is the byte-identical pysnmp implementation
+(available through the v1.8.x releases). The varbind building and
+config surface are shared — only the wire layer differs, and the legacy
+branch is deleted wholesale in v1.9.0.
 """
 
 from __future__ import annotations

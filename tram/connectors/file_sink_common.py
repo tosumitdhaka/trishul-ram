@@ -3,9 +3,10 @@
 from __future__ import annotations
 
 import logging
+import os
 from abc import ABC, abstractmethod
 from collections.abc import Mapping
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from pathlib import Path
 from string import Formatter
@@ -29,6 +30,85 @@ class StagedFileTarget:
     state_key: tuple[tuple[str, str], ...]
     temp_path: str
     final_path: str
+
+
+@dataclass
+class PublicationManifest:
+    """Per-source-unit publication manifest (V18-01 §7 file publication).
+
+    Records the ordered list of staged targets for one source unit, each with
+    a stable final identity rendered at write time. ``publish`` is idempotent
+    (replace-or-verify): targets already confirmed are never re-renamed or
+    truncated, so a failed rename retains both the input and the recoverable
+    staged targets, and a retry resumes the partial publication exactly where
+    it stopped — accounting for rolling multiple parts of one unit.
+    """
+
+    source_key: tuple[str, str, str]
+    targets: list[StagedFileTarget] = field(default_factory=list)
+    confirmed: set[str] = field(default_factory=set)
+
+    def add_target(self, target: StagedFileTarget) -> None:
+        """Append *target* to the ordered list (dedup: the same part may be
+        registered more than once when its template renders an identical
+        final identity, e.g. a template without a rolling token)."""
+        for existing in self.targets:
+            if existing.temp_path == target.temp_path and existing.final_path == target.final_path:
+                return
+        self.targets.append(target)
+
+    @property
+    def state_keys(self) -> list[tuple[tuple[str, str], ...]]:
+        return [target.state_key for target in self.targets]
+
+    @property
+    def ordered_targets(self) -> list[StagedFileTarget]:
+        return list(self.targets)
+
+    @property
+    def complete(self) -> bool:
+        return all(target.final_path in self.confirmed for target in self.targets)
+
+    def publish(self, *, backend: RollingFileBackend, handle) -> None:
+        """Publish every not-yet-confirmed target in order.
+
+        Stops (raising) at the first failure; targets already confirmed are
+        skipped, so a retry resumes the partial publication.
+        """
+        for target in self.ordered_targets:
+            if target.final_path in self.confirmed:
+                continue
+            try:
+                _publish_staged_target(backend, handle, target)
+            except SinkError:
+                raise
+            except Exception as exc:
+                raise SinkError(f"Error publishing {target.final_path}: {exc}") from exc
+            self.confirmed.add(target.final_path)
+
+
+def _publish_staged_target(backend: RollingFileBackend, handle, target: StagedFileTarget) -> None:
+    """Publish one staged target durably and idempotently.
+
+    Replace-or-verify (fsynced_local tier): when the temp still exists, fsync
+    it, atomically rename it over the final path, then fsync the parent
+    directory so the rename is durable — all before the receipt is confirmed.
+    When only the final exists (a prior publish already renamed this temp), it
+    is verified and never truncated, preserving confirmed output.
+    """
+    final_exists = backend.exists(handle, target.final_path)
+    if backend.exists(handle, target.temp_path):
+        backend.fsync(handle, target.temp_path)
+        backend.replace(handle, target.temp_path, target.final_path)
+        backend.fsync_dir(handle, target.final_path)
+    elif final_exists:
+        backend.fsync(handle, target.final_path)
+        backend.fsync_dir(handle, target.final_path)
+    else:
+        raise SinkError(
+            f"Staged temp file {target.temp_path} is gone and final "
+            f"{target.final_path} does not exist — output cannot be recovered"
+        )
 
 
 def format_part_index(part_index: int, max_index: int) -> str:
@@ -341,6 +421,23 @@ class RollingFileBackend(ABC):
     def remove(self, handle, path: str) -> None:
         """Best-effort removal of *path* (missing file is a no-op)."""
 
+    @abstractmethod
+    def fsync(self, handle, path: str) -> None:
+        """Flush *path*'s data to durable storage.
+
+        Called on the staged temp immediately before the atomic rename
+        (fsynced_local tier). No-op where the transport cannot express fsync;
+        the durable-rename claim is then limited accordingly.
+        """
+
+    @abstractmethod
+    def fsync_dir(self, handle, path: str) -> None:
+        """Flush the directory containing *path* (durable rename entry).
+
+        Called after the atomic rename so the rename survives a crash. No-op
+        where the transport cannot express it.
+        """
+
 
 class LocalRollingBackend(RollingFileBackend):
     """Local-filesystem adapter for :class:`RollingWriter`."""
@@ -400,6 +497,21 @@ class LocalRollingBackend(RollingFileBackend):
             Path(path).unlink(missing_ok=True)
         except FileNotFoundError:
             pass
+
+    def fsync(self, handle, path: str) -> None:
+        fd = os.open(path, os.O_RDONLY)
+        try:
+            os.fsync(fd)
+        finally:
+            os.close(fd)
+
+    def fsync_dir(self, handle, path: str) -> None:
+        directory = os.path.dirname(path) or "."
+        fd = os.open(directory, os.O_RDONLY)
+        try:
+            os.fsync(fd)
+        finally:
+            os.close(fd)
 
 
 class SftpRollingBackend(RollingFileBackend):
@@ -481,6 +593,15 @@ class SftpRollingBackend(RollingFileBackend):
         except Exception:
             pass
 
+    def fsync(self, handle, path: str) -> None:
+        # The SFTP protocol has no fsync; paramiko cannot flush server-side
+        # caches. Publication stays atomic (posix_rename), but server-side
+        # durability is not asserted — the fsynced_local claim is limited.
+        return None
+
+    def fsync_dir(self, handle, path: str) -> None:
+        return None
+
 
 class RollingWriter:
     """Owns the roll/stage/partition state machine shared by LocalSink and
@@ -511,7 +632,7 @@ class RollingWriter:
         self._states: dict[tuple[tuple[str, str], ...], FilePartState] = {}
         self._current_paths: dict[tuple[tuple[str, str], ...], str] = {}
         self._part_counters: dict[tuple[tuple[str, str], ...], int] = {}
-        self._staged_targets: dict[tuple[str, str, str], dict[tuple[tuple[str, str], ...], StagedFileTarget]] = {}
+        self._manifests: dict[tuple[str, str, str], PublicationManifest] = {}
         # Fail-loud cap accounting (issue #77): per state key, how many past-cap
         # WRITE ATTEMPTS were counted (one 500-record flush past the cap counts
         # 1, not 500). Every past-cap write still raises so the executor never
@@ -644,11 +765,13 @@ class RollingWriter:
                         str(meta.get("run_id", "") or "run"),
                     )
                     backend.cleanup_stale_temp(handle, final_path, keep=current_path)
-                    staged_targets = self._staged_targets.setdefault(staged_source_key, {})
-                    staged_targets[state_key] = StagedFileTarget(
-                        state_key=state_key,
-                        temp_path=current_path,
-                        final_path=final_path,
+                    self._add_staged_target(
+                        staged_source_key,
+                        StagedFileTarget(
+                            state_key=state_key,
+                            temp_path=current_path,
+                            final_path=final_path,
+                        ),
                     )
                 self._current_paths[state_key] = current_path
                 self._states[state_key] = state
@@ -672,11 +795,13 @@ class RollingWriter:
             final_path = dest
             dest = backend.temp_path(final_path, str(meta.get("run_id", "") or "run"))
             backend.cleanup_stale_temp(handle, final_path, keep=dest)
-            staged_targets = self._staged_targets.setdefault(staged_source_key, {})
-            staged_targets[state_key] = StagedFileTarget(
-                state_key=state_key,
-                temp_path=dest,
-                final_path=final_path,
+            self._add_staged_target(
+                staged_source_key,
+                StagedFileTarget(
+                    state_key=state_key,
+                    temp_path=dest,
+                    final_path=final_path,
+                ),
             )
             existing = backend.exists(handle, dest)
             payload = prepare_payload_for_append(
@@ -697,10 +822,22 @@ class RollingWriter:
         self._current_paths[state_key] = dest
         return dest
 
+    def _add_staged_target(
+        self,
+        source_key: tuple[str, str, str],
+        target: StagedFileTarget,
+    ) -> None:
+        """Register *target* on the source unit's publication manifest."""
+        manifest = self._manifests.get(source_key)
+        if manifest is None:
+            manifest = PublicationManifest(source_key=source_key)
+            self._manifests[source_key] = manifest
+        manifest.add_target(target)
+
     def has_staged_targets(self, source_key: tuple[str, str, str]) -> bool:
         """True when *source_key* has pending staged temp files. Lets sinks
         with connection costs skip finalize entirely (review E3)."""
-        return bool(self._staged_targets.get(source_key))
+        return bool(self._manifests.get(source_key))
 
     def finalize_source(
         self,
@@ -710,26 +847,87 @@ class RollingWriter:
         handle,
         success: bool,
     ) -> None:
-        """Publish (or discard) all staged temp files for one source unit."""
-        staged_targets = self._staged_targets.pop(source_key, {})
-        for state_key, target in staged_targets.items():
-            temp_path = target.temp_path
-            final_path = target.final_path
+        """Publish (or discard) all staged temp files for one source unit.
+
+        On ``success=True`` the unit's manifest is published idempotently
+        (fsynced atomic rename, replace-or-verify). A failed rename raises and
+        retains the manifest — with its already-confirmed finals and the
+        recoverable staged temps — so a retry resumes the partial publication
+        without truncating confirmed output. On ``success=False`` (abort) the
+        unconfirmed staged temps are removed and the unit's bookkeeping is
+        cleared; confirmed finals are never truncated.
+        """
+        if not success:
+            self._discard_source(source_key, backend=backend, handle=handle)
+            return
+        self.publish_source(source_key, backend=backend, handle=handle)
+
+    def publish_source(
+        self,
+        source_key: tuple[str, str, str],
+        *,
+        backend: RollingFileBackend,
+        handle,
+    ) -> None:
+        """Publish one source unit's staged manifest (idempotent)."""
+        manifest = self._manifests.get(source_key)
+        if manifest is None:
+            return
+        try:
+            manifest.publish(backend=backend, handle=handle)
+        except SinkError:
+            raise
+        except Exception as exc:
+            raise SinkError(
+                f"Error publishing {self._sink_name.lower()} sink output "
+                f"for {source_key}: {exc}"
+            ) from exc
+        if manifest.complete:
+            self._manifests.pop(source_key, None)
+            self._clear_unit_bookkeeping(manifest)
+
+    def publish_all(self, *, backend: RollingFileBackend, handle) -> None:
+        """Publish every pending manifest — the sink commit barrier.
+
+        Stops at the first failure so the caller can latch it; already-
+        confirmed finals are never re-renamed or truncated, and manifests
+        after the failure stay recoverable for a retry. Finally fsyncs any
+        non-staged current output so the receipt is confirmed only after all
+        written data is durable (fsynced_local tier).
+        """
+        for source_key in list(self._manifests):
+            self.publish_source(source_key, backend=backend, handle=handle)
+        for path in list(self._current_paths.values()):
+            backend.fsync(handle, path)
+            backend.fsync_dir(handle, path)
+
+    def _discard_source(
+        self,
+        source_key: tuple[str, str, str],
+        *,
+        backend: RollingFileBackend,
+        handle,
+    ) -> None:
+        """Drop a source unit's staged temps (abort path). Confirmed finals
+        are left in place — recovery must never truncate published output."""
+        manifest = self._manifests.pop(source_key, None)
+        if manifest is None:
+            return
+        for target in manifest.ordered_targets:
+            if target.final_path in manifest.confirmed:
+                continue
             try:
-                if success:
-                    backend.replace(handle, temp_path, final_path)
-                else:
-                    backend.remove(handle, temp_path)
-                self._states.pop(state_key, None)
-                self._current_paths.pop(state_key, None)
-                self._part_counters.pop(state_key, None)
-                # Drop counter follows the part-counter lifecycle: a finalized
-                # source unit starts a fresh cap budget (issue #77).
-                self._dropped_after_cap.pop(state_key, None)
-            except SinkError:
-                raise
-            except Exception as exc:
-                raise SinkError(
-                    f"Error finalizing {self._sink_name.lower()} sink output "
-                    f"for {final_path}: {exc}"
-                ) from exc
+                backend.remove(handle, target.temp_path)
+            except Exception:
+                pass
+        self._clear_unit_bookkeeping(manifest)
+
+    def _clear_unit_bookkeeping(self, manifest: PublicationManifest) -> None:
+        """Reset per-state bookkeeping for a fully decided source unit."""
+        for state_key in manifest.state_keys:
+            self._states.pop(state_key, None)
+            self._current_paths.pop(state_key, None)
+            self._part_counters.pop(state_key, None)
+            # Drop counter follows the part-counter lifecycle: a finalized
+            # source unit starts a fresh cap budget (issue #77).
+            self._dropped_after_cap.pop(state_key, None)

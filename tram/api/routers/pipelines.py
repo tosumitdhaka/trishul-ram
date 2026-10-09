@@ -6,7 +6,6 @@ import logging
 
 from fastapi import APIRouter, HTTPException, Query, Request, Response, status
 from fastapi.concurrency import run_in_threadpool
-from fastapi.responses import JSONResponse
 from pydantic import BaseModel
 
 from tram.api.routers._errors import internal_error_detail
@@ -16,6 +15,7 @@ from tram.core.exceptions import (
     PipelineAlreadyExistsError,
     PipelineNotFoundError,
 )
+from tram.pipeline.controller import ExecutorOverloadError, QueueCapacityError
 from tram.pipeline.linter import lint
 from tram.pipeline.loader import load_pipeline_from_yaml, scan_pipeline_dir
 
@@ -399,7 +399,7 @@ async def restart_pipeline(name: str, request: Request) -> dict:
     return {"name": name, "status": "restarting"}
 
 
-@router.post("/{name}/run")
+@router.post("/{name}/run", status_code=status.HTTP_202_ACCEPTED)
 async def trigger_run(
     name: str,
     request: Request,
@@ -414,6 +414,14 @@ async def trigger_run(
 
     try:
         result = controller.trigger_run(name, flush=flush)
+    except QueueCapacityError as exc:
+        # V18-08 budget rejection: the E.2 queue is at its count/byte cap —
+        # capacity, not a client error or a server fault.
+        raise HTTPException(status_code=503, detail=str(exc))
+    except ExecutorOverloadError as exc:
+        # V18-08: the bounded management executor is saturated — explicit
+        # backpressure instead of unbounded accumulation.
+        raise HTTPException(status_code=503, detail=str(exc))
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc))
     except Exception as exc:
@@ -422,30 +430,77 @@ async def trigger_run(
             detail=internal_error_detail(logger, exc, message="Failed to trigger run"),
         )
 
+    # V18-09 (§8): every trigger receipt carries the lifecycle_operations row
+    # id — the audit/idempotency handle for the trigger operation (op_kind
+    # `trigger`). The controller no-ops (returns None) when persistence is not
+    # configured. The 202 receipt keeps the legacy `name`/`status` keys.
+    operation_id = controller._record_completed_lifecycle_operation(
+        name, "trigger", detail="manual run triggered"
+    )
+
     if isinstance(result, str):
         # Legacy/mocked path: a plain run_id means the run was submitted.
-        return {"name": name, "status": "triggered", "run_id": result}
+        return {
+            "name": name,
+            "status": "triggered",
+            "run_id": result,
+            "operation_id": operation_id,
+        }
 
     if result.disposition == "queued":
-        # E.2 (§8.1): 202 — the run is durably queued (or a dedupe-hit returning
-        # the existing run_id). expires_at is the absolute TTL deadline.
+        # E.2 (§8.1): the run is durably queued (or a dedupe-hit returning the
+        # existing run_id). expires_at is the absolute TTL deadline.
         expires_at = None
         db = getattr(request.app.state, "db", None)
         if db is not None:
             row = db.get_active_queued_run_for_pipeline(name)
             if row is not None:
                 expires_at = row["expires_at"].isoformat()
-        return JSONResponse(
-            status_code=status.HTTP_202_ACCEPTED,
-            content={
-                "name": name,
-                "status": "queued",
-                "run_id": result.run_id,
-                "expires_at": expires_at,
-            },
-        )
+        return {
+            "name": name,
+            "status": "queued",
+            "run_id": result.run_id,
+            "expires_at": expires_at,
+            "operation_id": operation_id,
+        }
 
-    return {"name": name, "status": "triggered", "run_id": result.run_id}
+    return {
+        "name": name,
+        "status": "triggered",
+        "run_id": result.run_id,
+        "operation_id": operation_id,
+    }
+
+
+@router.get("/{name}/operations")
+async def list_lifecycle_operations(
+    name: str,
+    request: Request,
+    limit: int = Query(50, ge=1, le=500, description="Maximum lifecycle-operation rows to return (newest first)"),
+    state: str | None = Query(None, description="Filter by operation state: pending | complete | failed"),
+    op_kind: str | None = Query(None, description="Filter by operation kind (stop, restart, update, delete, drain, force_release, boot_adopt, trigger)"),
+) -> list[dict]:
+    """List lifecycle_operations rows for a pipeline (V18-09 §8).
+
+    Reads through the controller's ``get_lifecycle_operations`` query — the
+    frozen op row shape is ``{operation_id, pipeline_name, op_kind, state,
+    attempt_id, detail, created_at, updated_at}``, newest first. The optional
+    ``state``/``op_kind`` filters are applied over the fetched page (the
+    controller query filters by pipeline + limit only); raise ``limit`` when
+    combining them with a deep history.
+    """
+    controller = request.app.state.controller
+    try:
+        controller.get(name)
+    except PipelineNotFoundError as exc:
+        raise HTTPException(status_code=404, detail=str(exc))
+
+    ops = controller.get_lifecycle_operations(pipeline_name=name, limit=limit)
+    if state is not None:
+        ops = [op for op in ops if op.get("state") == state]
+    if op_kind is not None:
+        ops = [op for op in ops if op.get("op_kind") == op_kind]
+    return ops
 
 
 # ── Reload ─────────────────────────────────────────────────────────────────

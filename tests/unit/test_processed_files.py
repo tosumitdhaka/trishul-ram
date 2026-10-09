@@ -296,3 +296,110 @@ class TestSFTPSourceSkipProcessed:
         results = list(source.read())
         source.finalize(results[0][1], success=False)
         mock_tracker.mark_processed.assert_not_called()
+
+
+# ── SFTPSource replay identity (V18-01 §7) ─────────────────────────────────
+
+
+class TestSFTPSourceIdentity:
+    """SFTPSource.source_unit_id: content fingerprint captured at read time,
+    ``{source_namespace}:{fingerprint}:{unit_position}`` namespace, stable
+    across calls, same-path replacement detected by fingerprint change."""
+
+    def _make_sftp_source(self, config_extras: dict, mock_sftp, mock_transport):
+        from tram.connectors.sftp.source import SFTPSource
+
+        config = {
+            "host": "test-host",
+            "port": 22,
+            "username": "user",
+            "password": "pass",
+            "remote_path": "/data",
+            "file_pattern": "*",
+            **config_extras,
+        }
+        source = SFTPSource(config)
+        source._connect = MagicMock(return_value=(mock_transport, mock_sftp))
+        return source
+
+    def _make_sftp_client(self, file_contents: dict[str, bytes]):
+        """Mock SFTP client whose reads support both whole-file and chunked
+        reads (byte-buffer based, like test_file_done_guards)."""
+        mock_sftp = MagicMock()
+        mock_transport = MagicMock()
+        mock_sftp.listdir.return_value = list(file_contents.keys())
+
+        def open_file(path, mode):
+            fname = path.rsplit("/", 1)[-1]
+            buf = bytearray(file_contents.get(fname, b""))
+            fh = MagicMock()
+            fh.__enter__ = MagicMock(return_value=fh)
+            fh.__exit__ = MagicMock(return_value=False)
+
+            def read(n=None):
+                if not buf:
+                    return b""
+                chunk = bytes(buf[:n])
+                del buf[:n]
+                return chunk
+
+            fh.read.side_effect = read
+            return fh
+
+        mock_sftp.open.side_effect = open_file
+        mock_sftp.close = MagicMock()
+        mock_transport.close = MagicMock()
+        return mock_sftp, mock_transport
+
+    def test_fingerprint_captured_at_read_time_and_unit_id_stable(self):
+        import hashlib
+
+        mock_sftp, mock_transport = self._make_sftp_client({"file.json": b'[{"x":1}]'})
+        source = self._make_sftp_source({}, mock_sftp, mock_transport)
+
+        results = list(source.read())
+        assert len(results) == 1
+        _, meta = results[0]
+
+        expected = hashlib.sha256(b'[{"x":1}]').hexdigest()
+        assert meta["source_fingerprint"] == expected
+
+        unit_id = source.source_unit_id(meta)
+        assert unit_id == f"sftp:test-host:/data:{expected}:0"
+        # Stable across calls (retries within a run must not change identity).
+        assert source.source_unit_id(meta) == unit_id
+
+    def test_same_path_replacement_detected_by_fingerprint_change(self):
+        mock_sftp, mock_transport = self._make_sftp_client({"file.json": b"v1"})
+        source = self._make_sftp_source({}, mock_sftp, mock_transport)
+        meta_v1 = list(source.read())[0][1]
+
+        mock_sftp, mock_transport = self._make_sftp_client({"file.json": b"v2"})
+        source = self._make_sftp_source({}, mock_sftp, mock_transport)
+        meta_v2 = list(source.read())[0][1]
+
+        # Same pathname — replacement file — but a different fingerprint, so
+        # the replay identity changes (pathname alone is insufficient).
+        assert meta_v1["source_path"] == meta_v2["source_path"] == "/data/file.json"
+        assert meta_v1["source_fingerprint"] != meta_v2["source_fingerprint"]
+        assert source.source_unit_id(meta_v2) != source.source_unit_id(meta_v1)
+
+    def test_source_unit_id_none_without_file_identity(self):
+        source = self._make_sftp_source({}, MagicMock(), MagicMock())
+        assert source.source_unit_id({}) is None
+        assert source.source_unit_id({"source_filename": "x.json"}) is None
+        assert source.source_unit_id({"source_path": "/data/x.json"}) is None
+
+    def test_chunked_units_fingerprinted_per_chunk(self):
+        import hashlib
+
+        mock_sftp, mock_transport = self._make_sftp_client({"file.json": b"0123456789"})
+        source = self._make_sftp_source({"read_chunk_bytes": 4}, mock_sftp, mock_transport)
+
+        results = list(source.read())
+        assert len(results) == 3
+        for content, meta in results:
+            assert meta["source_fingerprint"] == hashlib.sha256(content).hexdigest()
+            assert source.source_unit_id(meta) == (
+                f"sftp:test-host:/data:{meta['source_fingerprint']}:{meta['chunk_index']}"
+            )

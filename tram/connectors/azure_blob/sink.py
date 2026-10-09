@@ -5,7 +5,12 @@ import logging
 
 from tram.connectors.file_sink_common import render_filename, utc_now
 from tram.core.exceptions import SinkError
-from tram.interfaces.base_sink import BaseSink
+from tram.interfaces.base_sink import (
+    BaseSink,
+    DeliveryTier,
+    SinkCapability,
+    SinkCommitReceipt,
+)
 from tram.registry.registry import register_sink
 
 logger = logging.getLogger(__name__)
@@ -23,6 +28,16 @@ class AzureBlobSink(BaseSink):
         content_type        (str, default "application/json")
         overwrite           (bool, default True)
     """
+    # V18-01 frozen tier table, section 6 / disposition D1: remote_durable —
+    # each write() is a complete blocking server-confirmed upload_blob whose
+    # block-list commit completes server-side; blobs appear atomically and
+    # nothing is buffered. Not replay-safe: re-uploading a source unit
+    # duplicates blobs (or overwrites them when overwrite=True).
+    delivery_capability = SinkCapability(
+        tier=DeliveryTier.REMOTE_DURABLE,
+        replay_safe=False,
+    )
+
     def __init__(self, config: dict) -> None:
         super().__init__(config)
         self.connection_string: str | None = config.get("connection_string")
@@ -92,3 +107,18 @@ class AzureBlobSink(BaseSink):
         except Exception as exc:
             raise SinkError(f"Azure Blob upload failed for {self.container}/{blob_name}: {exc}") from exc
         logger.info("Wrote blob to Azure", extra={"container": self.container, "blob": blob_name, "bytes": len(data)})
+
+    def commit(self, *, deadline: float | None = None) -> SinkCommitReceipt:
+        """Delivery flush/commit barrier (V18-01 section 6).
+
+        Each ``write()`` is a complete blocking server-confirmed
+        ``upload_blob`` whose block-list commit completes before the call
+        returns, and nothing is buffered, so the barrier trivially confirms
+        the per-write confirmed-upload contract at ``remote_durable``.
+        """
+        return SinkCommitReceipt(
+            sink_key="azure_blob",
+            tier=DeliveryTier.REMOTE_DURABLE,
+            confirmed=True,
+            notes="per-write upload_blob block-list commit; nothing buffered",
+        )

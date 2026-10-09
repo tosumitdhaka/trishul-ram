@@ -1,6 +1,8 @@
 import { api } from './api.js'
 
-const TERMINAL_RUN_STATUSES = new Set(['success', 'failed', 'aborted'])
+// `partial` is terminal (v1.8.0): the run completed with losses under
+// continue-on-error — there is nothing left to wait for.
+const TERMINAL_RUN_STATUSES = new Set(['success', 'partial', 'failed', 'aborted'])
 
 function wait(ms) {
   return new Promise(resolve => setTimeout(resolve, ms))
@@ -46,10 +48,19 @@ export function runOutcomeToast(run, { name = '', genericLabel = 'Run' } = {}) {
   if (!run) return null
 
   const prefix = name ? `${name}: ` : `${genericLabel} `
-  if (run.status === 'success') {
+  const status = run.outcome || run.status
+  if (status === 'success') {
     return {
       message: `${prefix}success`,
       type: 'success',
+    }
+  }
+  if (status === 'partial') {
+    // Completed with losses (v1.8.0): a warning, not an error — the run
+    // finished, but records were lost or failed along the way.
+    return {
+      message: `${prefix}completed with losses (partial)`,
+      type: 'warning',
     }
   }
   if (run.error) {
@@ -59,7 +70,7 @@ export function runOutcomeToast(run, { name = '', genericLabel = 'Run' } = {}) {
     }
   }
   return {
-    message: `${prefix}${run.status}`,
-    type: run.status === 'aborted' ? 'warning' : 'error',
+    message: `${prefix}${status}`,
+    type: status === 'aborted' ? 'warning' : 'error',
   }
 }

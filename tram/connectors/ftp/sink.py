@@ -9,7 +9,12 @@ import threading
 from tram.connectors.config_utils import cfg_bool, cfg_int
 from tram.connectors.file_sink_common import render_filename, utc_now
 from tram.core.exceptions import SinkError
-from tram.interfaces.base_sink import BaseSink
+from tram.interfaces.base_sink import (
+    BaseSink,
+    DeliveryTier,
+    SinkCapability,
+    SinkCommitReceipt,
+)
 from tram.registry.registry import register_sink
 
 logger = logging.getLogger(__name__)
@@ -35,6 +40,17 @@ class FTPSink(BaseSink):
     A write failure on a stale connection triggers exactly one reconnect
     before surfacing the error (review D7).
     """
+
+    # V18-01 frozen tier table, section 6 / disposition D1: remote_accepted —
+    # each write() blocks on the STOR completion reply (synchronous server
+    # acceptance), but durability is not asserted (FTP has no client-observable
+    # fsync) and publication is not atomic (a failed mid-transfer STOR can
+    # leave a partial file at the final path, surfaced as a failed write).
+    # Not replay-safe: re-STORing a source unit duplicates files.
+    delivery_capability = SinkCapability(
+        tier=DeliveryTier.REMOTE_ACCEPTED,
+        replay_safe=False,
+    )
 
     def __init__(self, config: dict) -> None:
         super().__init__(config)
@@ -146,3 +162,25 @@ class FTPSink(BaseSink):
     def close(self) -> None:
         """Release the pooled FTP connection (review D7). Idempotent."""
         self._disconnect()
+
+    def commit(self, *, deadline: float | None = None) -> SinkCommitReceipt:
+        """Delivery flush/commit barrier (V18-01 section 6).
+
+        Trivial confirmed barrier: each ``write()`` is a synchronous STOR whose
+        completion reply confirms server acceptance, and nothing is buffered.
+        Declared limits (remote_accepted): acceptance is synchronous only — no
+        durability assertion (no client-observable fsync) — and publication is
+        not atomic, so a failed mid-transfer STOR can leave a partial file at
+        the final path, reported as a failed/unconfirmed write.
+        """
+        return SinkCommitReceipt(
+            sink_key="ftp",
+            tier=DeliveryTier.REMOTE_ACCEPTED,
+            confirmed=True,
+            notes=(
+                "synchronous STOR acceptance only; no durability assertion "
+                "(no client-observable fsync); publication not atomic — a "
+                "failed mid-transfer STOR can leave a partial file at the "
+                "final path"
+            ),
+        )

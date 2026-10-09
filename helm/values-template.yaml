@@ -5,7 +5,7 @@
 image:
   registry: ""               # e.g. ghcr.io
   repository: OWNER/tram     # replace OWNER with your registry namespace
-  tag: "1.7.0"
+  tag: "1.8.0"
   pullPolicy: IfNotPresent
 
 ## Standalone mode: single-replica StatefulSet (replicaCount=1).
@@ -54,6 +54,28 @@ worker:
     # limits:
     #   cpu: "1"
     #   memory: 1Gi
+  ## Worker journal persistence (v1.8.0, V18-07).
+  ## One SQLite journal file per worker at /var/lib/tram/worker/journal.db
+  ## (frozen TRAM_WORKER_JOURNAL_PATH default — mount parent, no env needed).
+  ##
+  ## enabled=false (DEFAULT in v1.8.0): emptyDir mounted at /var/lib/tram/worker
+  ## so the journal opens and the worker reports healthy, but contents are
+  ## ephemeral (lost on pod deletion). Enabling persistence is REQUIRED for the
+  ## durable worker guarantees.
+  ##
+  ## enabled=true: per-replica PVCs via volumeClaimTemplates — FRESH INSTALLS
+  ## only; the field is immutable and cannot be added to a live release by helm
+  ## upgrade. Existing releases must use existingClaim (a pre-provisioned PVC
+  ## mounted via plain volumes — the validated upgrade path; all replicas share
+  ## it, so prefer a ReadWriteMany claim on multi-node clusters) or recreate
+  ## the worker StatefulSet.
+  journal:
+    persistence:
+      enabled: false
+      size: 1Gi
+      storageClass: ""
+      accessMode: ReadWriteOnce
+      existingClaim: ""
   image:
     registry: ""
     repository: ""   # empty = fall back to .Values.image.repository

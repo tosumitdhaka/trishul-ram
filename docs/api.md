@@ -312,17 +312,53 @@ fresh start.
 ### POST /api/pipelines/{name}/run
 Trigger one immediate batch run (not valid for stream pipelines).
 
+**Response (v1.8.0 / V18-09):** `202 Accepted` with the stable `run_id` and the
+`operation_id` of the recorded `lifecycle_operations` row (op_kind `trigger`) —
+an audit/idempotency handle for the trigger. The legacy `name`/`status` keys
+are retained. `operation_id` is `null` when no persistence is configured.
+
 ```json
-{"name": "pm-ingest", "status": "triggered"}
+{"name": "pm-ingest", "status": "triggered", "run_id": "…", "operation_id": "…"}
 ```
 
-**Queued response (v1.4.0)** — in manager+worker mode with no healthy workers and queued runs enabled (`TRAM_QUEUE_MANUAL_RUNS=1`, the default), the run is durably queued instead of failing: it survives manager restarts and is dispatched automatically when worker capacity returns. The response is `202 Accepted` with the stable run_id and absolute TTL:
+**Queued response (v1.4.0)** — in manager+worker mode with no healthy workers and queued runs enabled (`TRAM_QUEUE_MANUAL_RUNS=1`, the default), the run is durably queued instead of failing: it survives manager restarts and is dispatched automatically when worker capacity returns. The response is `202 Accepted` with the stable run_id, the absolute TTL, and the same `operation_id`:
 
 ```json
-{"name": "pm-ingest", "status": "queued", "run_id": "…", "expires_at": "…"}
+{"name": "pm-ingest", "status": "queued", "run_id": "…", "expires_at": "…", "operation_id": "…"}
 ```
 
 **Flush runs (v1.4.0)** — `?flush=true` makes stateful transforms emit their open windows as partials (`window_complete: false`) and clear them from the saved state. The flag is not carried through the queue: a queued flush run executes as a normal run when capacity returns — re-issue `?flush=true` once capacity is back to flush.
+
+### GET /api/pipelines/{name}/operations
+List the pipeline's `lifecycle_operations` rows (v1.8.0 / V18-09) — the audit
+trail behind the operation receipts. Newest first.
+
+| Param | Default | Description |
+|-------|---------|-------------|
+| `limit` | 50 | Max rows to return (`1`–`500`) |
+| `state` | — | Filter by operation state: `pending` \| `complete` \| `failed` |
+| `op_kind` | — | Filter by operation kind: `stop`, `restart`, `update`, `delete`, `drain`, `force_release`, `boot_adopt`, `trigger` |
+
+`state`/`op_kind` filters are applied over the fetched page (the controller
+query filters by pipeline + limit only) — raise `limit` when combining them
+with a deep history.
+
+```json
+[
+  {
+    "operation_id": "…",
+    "pipeline_name": "pm-ingest",
+    "op_kind": "boot_adopt",
+    "state": "complete",
+    "attempt_id": "…",
+    "detail": "boot adoption: attempt resolved from journal completion record",
+    "created_at": "2026-10-08T12:00:00+00:00",
+    "updated_at": "2026-10-08T12:00:01+00:00"
+  }
+]
+```
+
+`404` when the pipeline does not exist.
 
 ### POST /api/pipelines/reload
 Re-scan `TRAM_PIPELINE_DIR`, reload all YAML files.
@@ -464,7 +500,7 @@ Run history. Query params:
 |-------|---------|-------------|
 | `pipeline` | — | Filter by pipeline name |
 | `limit` | 100 | Max records to return |
-| `status` | — | Filter: `success` \| `failed` \| `aborted` |
+| `status` | — | Filter: `success` \| `failed` \| `partial` \| `aborted` (v1.8.0 adds `partial`; queued rows merge under `queued`) |
 | `offset` | 0 | Pagination offset (v0.7.0) |
 | `from_dt` | — | ISO8601 lower bound on `started_at` (v0.7.0) |
 | `format` | — | Set to `csv` to get `text/csv` export (v1.0.0) |
@@ -478,6 +514,7 @@ With SQLite/DB persistence, run history survives daemon restarts.
     "pipeline": "pm-ingest",
     "node_id": "tram-0",
     "status": "success",
+    "outcome": "success",
     "started_at": "2026-03-03T12:00:00Z",
     "finished_at": "2026-03-03T12:00:05Z",
     "records_in": 1500,
@@ -494,9 +531,14 @@ With SQLite/DB persistence, run history survives daemon restarts.
 
 - `error` — top-level fatal error string if the whole run crashed; `null` on success
 - `errors` — per-record error/skip-reason messages accumulated during the run; non-empty even on `status: "success"` when individual records were skipped or failed with `on_error: continue`
+- `outcome` (v1.8.0) — the run-outcome domain value (`success` \| `partial` \| `failed` \| `aborted`), read from the run-history outcome column; falls back to the status-derived value when the column is absent (pre-v1.8 rows / in-memory mode). `partial` runs surface as their own status and outcome — never folded into `error`. Queued rows carry `null`
 
 ### GET /api/runs/{run_id}
-Get a single run result.
+Get a single run result. A `partial` run reports `status: "partial"` with
+`outcome: "partial"`. The v1.8.0 shape extends the legacy `RunResult` keys
+additively with `state`, `generation`, `attempts[]` (attempt_id, state,
+worker_id, started_at, finished_at), `outcome`, and `disposition`
+(per-sink/dlq/spool/failed counters where recorded).
 
 ### GET /api/runs/count (v1.4.3)
 Total run count for the current list filters — the honest-pagination
@@ -506,7 +548,7 @@ exact load-more). Query params mirror the listing:
 | Param | Default | Description |
 |-------|---------|-------------|
 | `pipeline` | — | Filter by pipeline name |
-| `status` | — | Filter: `success` \| `failed` \| `aborted` \| `queued` |
+| `status` | — | Filter: `success` \| `failed` \| `partial` \| `aborted` \| `queued` |
 | `from_dt` | — | ISO8601 lower bound on `started_at` |
 
 ```json
@@ -929,7 +971,7 @@ tram_chunk_duration_seconds_bucket{le="0.01",pipeline="pm-ingest"} 120.0
 
 ## SNMP MIBs (v1.0.3)
 
-Manages compiled pysnmp MIB `.py` files in `TRAM_MIB_DIR` (default `/mibs`).
+Manages the compiled MIB corpus in `TRAM_MIB_DIR` (default `/mibs`) — dual-format since v1.5.0: pysmi `.py` modules + tsmi JSON bundles (`manifest.json`/`oid_index.json` sidecars). The `trishul` stack (default since v1.8.0) compiles JSON; the `legacy` escape hatch compiles `.py`.
 Standard MIBs (`IF-MIB`, `ENTITY-MIB`, `HOST-RESOURCES-MIB`, `IP-MIB`, `TCP-MIB`, `UDP-MIB`, `IANAifType-MIB`) are pre-compiled in the Docker image.
 
 ### GET /api/mibs
@@ -937,13 +979,13 @@ List all compiled MIB modules in `TRAM_MIB_DIR`.
 
 ```json
 [
-  {"name": "IF-MIB", "file": "IF-MIB.py", "size_bytes": 14823},
-  {"name": "ENTITY-MIB", "file": "ENTITY-MIB.py", "size_bytes": 22104}
+  {"name": "IF-MIB", "file": "IF-MIB.py", "size_bytes": 14823, "compiled_formats": ["py", "json"]},
+  {"name": "ENTITY-MIB", "file": "ENTITY-MIB.py", "size_bytes": 22104, "compiled_formats": ["py", "json"]}
 ]
 ```
 
 ### POST /api/mibs/upload
-Upload a raw `.mib` text file and compile it. Requires `tram[mib]`; returns `501` if not installed.
+Upload a raw `.mib` text file and compile it. Requires the compile backend for the active stack (`tram[mib]` for `legacy`, `tram[snmp]` for `trishul`); returns `501` if not installed.
 
 ```bash
 curl -X POST http://localhost:8765/api/mibs/upload \
@@ -956,7 +998,7 @@ Response:
 ```
 
 ### POST /api/mibs/download
-Download and compile MIB modules by name from `mibs.pysnmp.com`. Requires internet access and `tram[mib]`.
+Download and compile MIB modules by name from `mibs.pysnmp.com`. Requires internet access and the compile backend for the active stack (`tram[mib]` for `legacy`, `tram[snmp]` for `trishul`).
 
 ```bash
 curl -X POST http://localhost:8765/api/mibs/download \

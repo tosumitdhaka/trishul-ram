@@ -9,11 +9,20 @@ Pydantic ``ValidationError`` in ``ConfigError``, so the tests assert on that.
 from __future__ import annotations
 
 import textwrap
+from contextlib import contextmanager
+from types import SimpleNamespace
 
 import pytest
 
 from tram.core.exceptions import ConfigError
+from tram.interfaces.base_sink import BaseSink, DeliveryTier, SinkCapability
+from tram.interfaces.base_source import BaseSource
+from tram.models.pipeline import (
+    _sink_delivery_capability,
+    _source_replay_identity_problem,
+)
 from tram.pipeline.loader import load_pipeline_from_yaml
+from tram.registry.registry import _sinks, _sources
 
 
 def _load(yaml_body: str):
@@ -267,3 +276,247 @@ pipeline:
             f"legacy/tsnmp priv mappings diverged: {legacy_keys} vs {tsnmp_keys}"
         )
         assert _SNMP_PRIV_PROTOCOL_VALUES | {"DES"} == legacy_keys
+
+
+# ── delivery.contract: strict (V18-01 §6/§7/§9) ────────────────────────────
+
+
+class _FakeUndeclaredSink(BaseSink):
+    """Custom sink that never declares a delivery_capability (V18-01 §6)."""
+
+    def write(self, data: bytes, meta: dict) -> None:
+        return None
+
+
+class _FakeDeclaredSink(BaseSink):
+    """Custom sink that declares a delivery_capability."""
+
+    delivery_capability = SinkCapability(
+        tier=DeliveryTier.FSYNCED_LOCAL, replay_safe=False
+    )
+
+    def write(self, data: bytes, meta: dict) -> None:
+        return None
+
+
+class _FakeSourceNoIdentity(BaseSource):
+    """Custom source that provides no source_unit_id-style identity."""
+
+    def read(self):
+        return iter(())
+        yield  # pragma: no cover
+
+
+class _FakeSourceWithIdentity(BaseSource):
+    """Custom source that implements source_unit_id()."""
+
+    def read(self):
+        return iter(())
+        yield  # pragma: no cover
+
+    def source_unit_id(self, meta: dict) -> str | None:
+        return "fake-ns/unit"
+
+
+@contextmanager
+def _registered(registry: dict, key: str, cls):
+    """Temporarily register a plugin class so strict-mode resolution sees it."""
+    registry[key] = cls
+    try:
+        yield
+    finally:
+        registry.pop(key, None)
+
+
+def _strict_pipeline_yaml(body: str, name: str = "strict-pipe") -> str:
+    """body holds pipeline-child keys at raw 6-space indent; the delivery
+    contract header (raw 4-space indent, same base as ``_BASE``) is
+    prepended and ``_load``'s dedent normalizes both together."""
+    return (
+        "    pipeline:\n"
+        f"      name: {name}\n"
+        "      delivery:\n"
+        "        contract: strict\n"
+    ) + body
+
+
+class TestDeliveryContract:
+    """delivery.contract strict-mode validation (V18-01 §6/§7/§9).
+
+    The frozen field defaults to ``legacy`` — exactly today's behavior with
+    zero new checks. ``strict`` requires every configured sink to declare a
+    ``delivery_capability`` and the source to provide durable replay identity
+    (AMQP additionally requiring ``require_message_id: true``). All checks
+    run at model validation, which ``tram validate`` and API registration
+    share.
+    """
+
+    _SOURCE_LOCAL = "      source:\n        type: local\n        path: /tmp/in\n"
+    _SOURCE_SFTP = (
+        "      source:\n        type: sftp\n        host: example.com\n"
+        "        username: u\n        password: p\n        remote_path: /in\n"
+    )
+    _SOURCE_AMQP = "      source:\n        type: amqp\n        queue: q\n"
+    _SOURCE_AMQP_REQUIRED = (
+        "      source:\n        type: amqp\n        queue: q\n"
+        "        require_message_id: true\n"
+    )
+    _SOURCE_KAFKA = (
+        "      source:\n        type: kafka\n"
+        "        brokers: [broker:9092]\n        topic: t\n"
+    )
+    _SOURCE_REST = "      source:\n        type: rest\n        url: http://example.com\n"
+    _SER = "      serializer_in:\n        type: json\n      serializer_out:\n        type: json\n"
+    _SINK_LOCAL = "      sink:\n        type: local\n        path: /tmp/out\n"
+    _SINK_SFTP = (
+        "      sink:\n        type: sftp\n        host: example.com\n"
+        "        username: u\n        password: p\n        remote_path: /out\n"
+    )
+    _SINK_REST = "      sink:\n        type: rest\n        url: http://example.com\n"
+    _SINK_S3 = "      sink:\n        type: s3\n        bucket: my-bucket\n        key_template: out.json\n"
+
+    def test_default_contract_is_legacy(self):
+        cfg = _load(_BASE.format(name="legacy-default"))
+        assert cfg.delivery.contract == "legacy"
+
+    def test_legacy_passes_pipeline_that_would_fail_strict(self):
+        """The canonical strict offender — AMQP without message-ID config, an
+        undeclared rest sink, threaded parallelism — loads fine under the
+        default legacy contract (zero behavior change)."""
+        yaml_body = (
+            "    pipeline:\n"
+            "      name: legacy-strict-offender\n"
+            + self._SOURCE_AMQP + self._SER + self._SINK_REST
+            + "      thread_workers: 4\n"
+        )
+        cfg = _load(yaml_body)
+        assert cfg.delivery.contract == "legacy"
+        assert cfg.source.type == "amqp"
+        assert cfg.thread_workers == 4
+
+    def test_strict_accepts_fully_declared_pipeline(self):
+        """Local source (fingerprint identity) + sftp sink (fsynced_local
+        capability) satisfy every strict requirement."""
+        cfg = _load(
+            _strict_pipeline_yaml(self._SOURCE_LOCAL + self._SER + self._SINK_SFTP)
+        )
+        assert cfg.delivery.contract == "strict"
+
+    def test_strict_accepts_sftp_source(self):
+        """SFTP source implements source_unit_id() (content-fingerprint
+        identity, V18-01 §7) — strict accepts it alongside the local source."""
+        cfg = _load(
+            _strict_pipeline_yaml(self._SOURCE_SFTP + self._SER + self._SINK_LOCAL)
+        )
+        assert cfg.delivery.contract == "strict"
+        assert cfg.source.type == "sftp"
+
+    def test_strict_rejects_undeclared_sink(self):
+        """rest is a built-in sink with no delivery_capability declaration —
+        strict rejects it with a documented capability error."""
+        with pytest.raises(ConfigError, match="delivery_capability"):
+            _load(_strict_pipeline_yaml(self._SOURCE_LOCAL + self._SER + self._SINK_REST))
+
+    def test_strict_rejects_amqp_without_message_id_config(self):
+        """AMQP identity is {queue}/{producer message ID}; without
+        require_message_id: true the connector returns None identity."""
+        with pytest.raises(ConfigError, match="require_message_id"):
+            _load(_strict_pipeline_yaml(self._SOURCE_AMQP + self._SER + self._SINK_LOCAL))
+
+    def test_strict_accepts_amqp_with_message_id_config(self):
+        cfg = _load(
+            _strict_pipeline_yaml(self._SOURCE_AMQP_REQUIRED + self._SER + self._SINK_LOCAL)
+        )
+        assert cfg.source.require_message_id is True
+
+    def test_strict_accepts_kafka_with_thread_workers_gt_one(self):
+        """Threaded Kafka frontiers are broker-proven (V18-10 gate) — strict
+        no longer rejects them (V18-01 §7)."""
+        cfg = _load(
+            _strict_pipeline_yaml(
+                self._SOURCE_KAFKA + self._SER + self._SINK_LOCAL + "      thread_workers: 2\n"
+            )
+        )
+        assert cfg.source.type == "kafka"
+        assert cfg.thread_workers == 2
+
+    def test_strict_accepts_kafka_single_threaded(self):
+        cfg = _load(_strict_pipeline_yaml(self._SOURCE_KAFKA + self._SER + self._SINK_LOCAL))
+        assert cfg.source.type == "kafka"
+        assert cfg.thread_workers == 1
+
+    def test_strict_rejects_stream_schedule(self):
+        """Stream dispatch carries no attempt identity — a strict stream run
+        could never checkpoint or acknowledge (units stay pending forever).
+        Rejected at validation instead of silently non-progressing."""
+        with pytest.raises(ConfigError, match="schedule.type 'stream' is not supported"):
+            _load(
+                _strict_pipeline_yaml(
+                    self._SOURCE_KAFKA
+                    + self._SER
+                    + self._SINK_LOCAL
+                    + "      schedule:\n        type: stream\n"
+                )
+            )
+
+    def test_strict_accepts_object_store_sink(self):
+        """s3 declares remote_durable (disposition D1) — strict accepts it
+        alongside the local source's fingerprint identity."""
+        cfg = _load(_strict_pipeline_yaml(self._SOURCE_LOCAL + self._SER + self._SINK_S3))
+        assert cfg.delivery.contract == "strict"
+        assert cfg.sinks[0].type == "s3"
+
+    def test_strict_rejects_source_without_replay_identity(self):
+        """rest source has no source_unit_id-style identity — rejected."""
+        with pytest.raises(ConfigError, match="replay identity"):
+            _load(_strict_pipeline_yaml(self._SOURCE_REST + self._SER + self._SINK_LOCAL))
+
+    def test_strict_lists_every_unmet_condition(self):
+        """The aggregated message names all problems, not just the first."""
+        with pytest.raises(ConfigError) as exc_info:
+            _load(_strict_pipeline_yaml(self._SOURCE_AMQP + self._SER + self._SINK_REST))
+        message = str(exc_info.value)
+        assert "delivery_capability" in message
+        assert "require_message_id" in message
+
+
+class TestDeliveryContractCustomPlugins:
+    """Registry resolution for custom plugins (V18-01 §6: an unknown custom
+    plugin with delivery_capability = None is rejected under strict).
+
+    Custom source/sink types cannot reach the strict validator through YAML
+    today (the discriminated SourceConfig/SinkConfig unions list only the
+    built-in types), so the resolution helpers are exercised directly against
+    the registry — the same code the validator calls.
+    """
+
+    def test_undeclared_custom_sink_is_undeclared(self):
+        with _registered(_sinks, "test_undeclared_sink", _FakeUndeclaredSink):
+            assert _sink_delivery_capability("test_undeclared_sink") is None
+
+    def test_declared_custom_sink_is_declared(self):
+        with _registered(_sinks, "test_declared_sink", _FakeDeclaredSink):
+            capability = _sink_delivery_capability("test_declared_sink")
+        assert capability is not None
+        assert capability.tier == DeliveryTier.FSYNCED_LOCAL
+
+    def test_unregistered_sink_type_is_undeclared(self):
+        assert _sink_delivery_capability("no_such_sink") is None
+
+    def test_custom_source_with_identity_is_ok(self):
+        pipeline = SimpleNamespace(source=SimpleNamespace(type="test_identity_src"))
+        with _registered(_sources, "test_identity_src", _FakeSourceWithIdentity):
+            assert _source_replay_identity_problem(pipeline) is None
+
+    def test_custom_source_without_identity_is_rejected(self):
+        pipeline = SimpleNamespace(source=SimpleNamespace(type="test_no_identity_src"))
+        with _registered(_sources, "test_no_identity_src", _FakeSourceNoIdentity):
+            problem = _source_replay_identity_problem(pipeline)
+        assert problem is not None
+        assert "source_unit_id" in problem
+
+    def test_unregistered_source_is_rejected(self):
+        pipeline = SimpleNamespace(source=SimpleNamespace(type="no_such_source"))
+        problem = _source_replay_identity_problem(pipeline)
+        assert problem is not None
+        assert "no_such_source" in problem

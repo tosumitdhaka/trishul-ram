@@ -147,6 +147,9 @@ export const api = {
     run:      (name)       => req(`/api/pipelines/${encodePathSegment(name)}/run`,     { method: 'POST' }),
     reload:   ()           => req('/api/pipelines/reload',          { method: 'POST' }),
     versions: (name)       => req(`/api/pipelines/${encodePathSegment(name)}/versions`),
+    // v1.8.0 (V18-09): lifecycle operation rows — the audit trail behind the
+    // 202 trigger receipts (op_kind/state/detail/timestamps, newest first).
+    operations: (name, params = {}) => req(`/api/pipelines/${encodePathSegment(name)}/operations${buildQuery(params)}`),
     rollback: (name, ver)  => req(`/api/pipelines/${encodePathSegment(name)}/rollback${buildQuery({ version: ver })}`, { method: 'POST' }),
   },
 

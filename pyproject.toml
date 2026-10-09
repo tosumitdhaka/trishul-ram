@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "tram"
-version = "1.7.0"
+version = "1.8.0"
 description = "Trishul Real-time Aggregation & Mediation — telecom data pipeline daemon"
 readme = "README.md"
 requires-python = ">=3.13"
@@ -57,8 +57,9 @@ amqp = ["pika>=1.0,<2.0"]
 nats = ["nats-py>=2.3,<3.0"]
 
 # ── Telemetry / network-management connectors ──────────────────────────────
-# Dual-stack during the v1.5.0 flag period (GH #72): pysnmp stays (default
-# TRAM_SNMP_STACK=legacy) while trishul-smi/trishul-snmp ride alongside.
+# Dual-stack during the escape-hatch period (GH #72): trishul-smi/trishul-snmp
+# is the default since v1.8.0; pysnmp rides alongside as the explicit
+# TRAM_SNMP_STACK=legacy escape hatch (removed in v1.9.0).
 # v1.5.1 pins (maintainer 2026-09-29): exact wire-validated versions
 # tsmi 0.5.3 / tsnmp 0.6.2.
 snmp = [

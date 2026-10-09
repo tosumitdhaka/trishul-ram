@@ -12,6 +12,7 @@ from tram.agent.stats_store import StatsStore
 from tram.api.routers.internal import PipelineStatsPayload
 from tram.api.routers.pipelines import router
 from tram.core.exceptions import PipelineAlreadyExistsError, PipelineNotFoundError
+from tram.pipeline.controller import ExecutorOverloadError, QueueCapacityError
 from tram.pipeline.loader import load_pipeline_from_yaml
 from tram.pipeline.manager import PipelineState
 
@@ -556,10 +557,20 @@ class TestLifecycle:
         app = _make_app()
         app.state.controller.get.return_value = state
         app.state.controller.trigger_run.return_value = "run-123"
+        app.state.controller._record_completed_lifecycle_operation.return_value = "op-123"
         client = TestClient(app)
         resp = client.post("/api/pipelines/test-pipe/run")
-        assert resp.status_code == 200
-        assert resp.json()["run_id"] == "run-123"
+        # V18-09: the trigger receipt is 202 with the lifecycle-operation id
+        # alongside the legacy name/status keys.
+        assert resp.status_code == 202
+        body = resp.json()
+        assert body["run_id"] == "run-123"
+        assert body["operation_id"] == "op-123"
+        assert body["name"] == "test-pipe"
+        assert body["status"] == "triggered"
+        app.state.controller._record_completed_lifecycle_operation.assert_called_once_with(
+            "test-pipe", "trigger", detail="manual run triggered"
+        )
 
     def test_trigger_run_with_flush_query(self):
         """?flush=true forwards the F.1 flush-run flag to the controller."""
@@ -567,12 +578,42 @@ class TestLifecycle:
         app = _make_app()
         app.state.controller.get.return_value = state
         app.state.controller.trigger_run.return_value = "run-flush-1"
+        app.state.controller._record_completed_lifecycle_operation.return_value = "op-1"
         client = TestClient(app)
         resp = client.post("/api/pipelines/test-pipe/run?flush=true")
-        assert resp.status_code == 200
+        assert resp.status_code == 202
         app.state.controller.trigger_run.assert_called_once_with(
             "test-pipe", flush=True
         )
+
+    def test_trigger_run_queue_capacity_maps_503(self):
+        """V18-08 budget rejection: the E.2 queue at its cap is capacity, not
+        a client error (400) or a server fault (500)."""
+        state = _make_state()
+        app = _make_app()
+        app.state.controller.get.return_value = state
+        app.state.controller.trigger_run.side_effect = QueueCapacityError(
+            "queue at capacity: 1000 rows"
+        )
+        client = TestClient(app)
+        resp = client.post("/api/pipelines/test-pipe/run")
+        assert resp.status_code == 503
+        assert "queue at capacity" in resp.json()["detail"]
+        app.state.controller._record_completed_lifecycle_operation.assert_not_called()
+
+    def test_trigger_run_executor_overload_maps_503(self):
+        """V18-08: bounded management executor saturation is explicit
+        backpressure (503), never unbounded accumulation or a 500."""
+        state = _make_state()
+        app = _make_app()
+        app.state.controller.get.return_value = state
+        app.state.controller.trigger_run.side_effect = ExecutorOverloadError(
+            "management executor saturated: ceiling 1000"
+        )
+        client = TestClient(app)
+        resp = client.post("/api/pipelines/test-pipe/run")
+        assert resp.status_code == 503
+        assert "saturated" in resp.json()["detail"]
 
     def test_trigger_run_flush_defaults_false(self):
         """Without ?flush, the run is a normal (non-flush) run."""
@@ -580,12 +621,85 @@ class TestLifecycle:
         app = _make_app()
         app.state.controller.get.return_value = state
         app.state.controller.trigger_run.return_value = "run-norm-1"
+        app.state.controller._record_completed_lifecycle_operation.return_value = "op-1"
         client = TestClient(app)
         resp = client.post("/api/pipelines/test-pipe/run")
-        assert resp.status_code == 200
+        assert resp.status_code == 202
         app.state.controller.trigger_run.assert_called_once_with(
             "test-pipe", flush=False
         )
+
+    def test_trigger_run_queued_receipt_has_operation_id(self):
+        """E.2 queued path: 202 already; V18-09 adds the operation_id."""
+        from tram.pipeline.controller import TriggerResult
+        state = _make_state()
+        app = _make_app()
+        app.state.controller.get.return_value = state
+        app.state.controller.trigger_run.return_value = TriggerResult("run-queued-1", "queued")
+        app.state.controller._record_completed_lifecycle_operation.return_value = "op-queued-1"
+        client = TestClient(app)
+        resp = client.post("/api/pipelines/test-pipe/run")
+        assert resp.status_code == 202
+        body = resp.json()
+        assert body["run_id"] == "run-queued-1"
+        assert body["status"] == "queued"
+        assert body["operation_id"] == "op-queued-1"
+        assert "expires_at" in body
+
+    def test_trigger_run_dispatched_receipt_is_202(self):
+        """The synchronous-submit path now returns 202 too (V18-09 §8)."""
+        from tram.pipeline.controller import TriggerResult
+        state = _make_state()
+        app = _make_app()
+        app.state.controller.get.return_value = state
+        app.state.controller.trigger_run.return_value = TriggerResult("run-dispatch-1", "dispatched")
+        app.state.controller._record_completed_lifecycle_operation.return_value = "op-dispatch-1"
+        client = TestClient(app)
+        resp = client.post("/api/pipelines/test-pipe/run")
+        assert resp.status_code == 202
+        body = resp.json()
+        assert body["run_id"] == "run-dispatch-1"
+        assert body["status"] == "triggered"
+        assert body["operation_id"] == "op-dispatch-1"
+
+    def test_trigger_records_lifecycle_operation_row(self, tmp_path):
+        """End to end: the trigger writes a lifecycle_operations row and the
+        receipt's operation_id resolves against it (real controller + DB)."""
+        from tram.persistence.db import TramDB
+        from tram.pipeline.controller import PipelineController, TriggerResult
+        db = TramDB(url=f"sqlite:///{tmp_path}/trigger-op-row.db")
+        ctrl = PipelineController(db=db, node_id="n0")
+        ctrl.manager.register(
+            load_pipeline_from_yaml(_MINIMAL_YAML), yaml_text=_MINIMAL_YAML
+        )
+        # Do not actually submit a batch run in a unit test.
+        ctrl.trigger_run = MagicMock(return_value=TriggerResult("run-real-1", "dispatched"))
+        app = _make_app(db=db)
+        app.state.controller = ctrl
+        client = TestClient(app)
+        resp = client.post("/api/pipelines/test-pipe/run")
+        assert resp.status_code == 202
+        operation_id = resp.json()["operation_id"]
+        assert operation_id is not None
+        ops = ctrl.get_lifecycle_operations(pipeline_name="test-pipe")
+        assert len(ops) == 1
+        assert ops[0]["operation_id"] == operation_id
+        assert ops[0]["op_kind"] == "trigger"
+        assert ops[0]["state"] == "complete"
+        assert ops[0]["pipeline_name"] == "test-pipe"
+
+    def test_trigger_no_db_returns_null_operation_id(self):
+        """Without persistence the controller records no operation row and the
+        receipt carries operation_id: null (honest, no fake id)."""
+        state = _make_state()
+        app = _make_app()
+        app.state.controller.get.return_value = state
+        app.state.controller.trigger_run.return_value = "run-nodb-1"
+        app.state.controller._record_completed_lifecycle_operation.return_value = None
+        client = TestClient(app)
+        resp = client.post("/api/pipelines/test-pipe/run")
+        assert resp.status_code == 202
+        assert resp.json()["operation_id"] is None
 
     def test_trigger_stream_pipeline_returns_400(self):
         app = _make_app()
@@ -594,6 +708,130 @@ class TestLifecycle:
         client = TestClient(app, raise_server_exceptions=False)
         resp = client.post("/api/pipelines/test-pipe/run")
         assert resp.status_code == 400
+
+
+class TestLifecycleOperations:
+    """GET /api/pipelines/{name}/operations (V18-09 §8)."""
+
+    _OP_ROWS = [
+        {
+            "operation_id": "op-1",
+            "pipeline_name": "test-pipe",
+            "op_kind": "boot_adopt",
+            "state": "complete",
+            "attempt_id": "run-1-a1",
+            "detail": "boot adoption: attempt resolved from journal completion record",
+            "created_at": "2026-10-08T12:00:00+00:00",
+            "updated_at": "2026-10-08T12:00:01+00:00",
+        },
+        {
+            "operation_id": "op-2",
+            "pipeline_name": "test-pipe",
+            "op_kind": "stop",
+            "state": "pending",
+            "attempt_id": None,
+            "detail": "pipeline stop requested",
+            "created_at": "2026-10-08T12:05:00+00:00",
+            "updated_at": "2026-10-08T12:05:00+00:00",
+        },
+        {
+            "operation_id": "op-3",
+            "pipeline_name": "other-pipe",
+            "op_kind": "delete",
+            "state": "complete",
+            "attempt_id": None,
+            "detail": None,
+            "created_at": "2026-10-08T12:06:00+00:00",
+            "updated_at": "2026-10-08T12:06:00+00:00",
+        },
+    ]
+
+    def _app(self, ops=_OP_ROWS):
+        app = _make_app()
+        app.state.controller.get.return_value = _make_state()
+        app.state.controller.get_lifecycle_operations.return_value = ops
+        return app
+
+    def test_lists_rows_scoped_to_pipeline(self):
+        client = TestClient(self._app())
+        r = client.get("/api/pipelines/test-pipe/operations")
+        assert r.status_code == 200
+        assert r.json() == self._OP_ROWS
+        client.app.state.controller.get_lifecycle_operations.assert_called_once_with(
+            pipeline_name="test-pipe", limit=50
+        )
+
+    def test_row_shape(self):
+        client = TestClient(self._app())
+        row = client.get("/api/pipelines/test-pipe/operations").json()[0]
+        assert set(row) == {
+            "operation_id", "pipeline_name", "op_kind", "state",
+            "attempt_id", "detail", "created_at", "updated_at",
+        }
+        assert row["op_kind"] == "boot_adopt"
+
+    def test_boot_adopt_kind_present(self):
+        client = TestClient(self._app())
+        kinds = {op["op_kind"] for op in client.get("/api/pipelines/test-pipe/operations").json()}
+        assert "boot_adopt" in kinds
+
+    def test_state_filter(self):
+        client = TestClient(self._app())
+        r = client.get("/api/pipelines/test-pipe/operations?state=pending")
+        assert r.status_code == 200
+        body = r.json()
+        assert [op["operation_id"] for op in body] == ["op-2"]
+        assert all(op["state"] == "pending" for op in body)
+
+    def test_op_kind_filter(self):
+        client = TestClient(self._app())
+        r = client.get("/api/pipelines/test-pipe/operations?op_kind=boot_adopt")
+        assert r.status_code == 200
+        body = r.json()
+        assert [op["operation_id"] for op in body] == ["op-1"]
+        assert all(op["op_kind"] == "boot_adopt" for op in body)
+
+    def test_limit_passed_through(self):
+        client = TestClient(self._app())
+        r = client.get("/api/pipelines/test-pipe/operations?limit=10")
+        assert r.status_code == 200
+        client.app.state.controller.get_lifecycle_operations.assert_called_once_with(
+            pipeline_name="test-pipe", limit=10
+        )
+
+    def test_missing_pipeline_returns_404(self):
+        from tram.core.exceptions import PipelineNotFoundError
+        app = self._app()
+        app.state.controller.get.side_effect = PipelineNotFoundError("nope")
+        client = TestClient(app, raise_server_exceptions=False)
+        r = client.get("/api/pipelines/test-pipe/operations")
+        assert r.status_code == 404
+
+    def test_operations_read_real_rows(self, tmp_path):
+        """End to end against a real controller + DB: recorded lifecycle rows
+        surface through the endpoint with the frozen column set."""
+        from tram.persistence.db import TramDB
+        from tram.pipeline.controller import PipelineController
+        db = TramDB(url=f"sqlite:///{tmp_path}/ops-real.db")
+        ctrl = PipelineController(db=db, node_id="n0")
+        ctrl.manager.register(
+            load_pipeline_from_yaml(_MINIMAL_YAML), yaml_text=_MINIMAL_YAML
+        )
+        op_id = ctrl._record_completed_lifecycle_operation(
+            "test-pipe", "boot_adopt", detail="boot adoption test"
+        )
+        app = _make_app(db=db)
+        app.state.controller = ctrl
+        client = TestClient(app)
+        r = client.get("/api/pipelines/test-pipe/operations")
+        assert r.status_code == 200
+        body = r.json()
+        assert len(body) == 1
+        assert body[0]["operation_id"] == op_id
+        assert body[0]["op_kind"] == "boot_adopt"
+        assert body[0]["state"] == "complete"
+        assert body[0]["detail"] == "boot adoption test"
+        assert body[0]["attempt_id"] is None
 
 
 class TestAlerts:

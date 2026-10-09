@@ -85,6 +85,23 @@ TRAM {{ .Chart.AppVersion }} has been deployed!
   kubectl scale statefulset {{ include "tram.fullname" . }}-worker \
     --namespace {{ .Release.Namespace }} --replicas=<N>
 
+   Worker journal persistence (v1.8.0): the journal at
+   /var/lib/tram/worker/journal.db is ephemeral by default
+   (worker.journal.persistence.enabled=false → emptyDir). Enable it for the
+   durable worker guarantees:
+   - Fresh install: worker.journal.persistence.enabled=true provisions one PVC
+     per replica via volumeClaimTemplates.
+   - Existing release: volumeClaimTemplates is immutable and CANNOT be added
+     by helm upgrade. Keep enabled=false and reuse a manually provisioned PVC
+     (each replica mounts its OWN subdirectory on it — per-worker
+     journal.db; RWO pins replicas to one node, RWX spreads them):
+  helm upgrade {{ .Release.Name }} tram/tram \
+    --set worker.journal.persistence.existingClaim=<pvc-name>
+     Or recreate the worker StatefulSet to gain per-replica PVCs:
+  kubectl delete statefulset {{ include "tram.fullname" . }}-worker --cascade=orphan
+  helm upgrade {{ .Release.Name }} tram/tram \
+    --set worker.journal.persistence.enabled=true
+
    Upgrading from v1.2.x (Deployment → StatefulSet)?
    If you had an existing manager-data PVC, reuse it:
   helm upgrade {{ .Release.Name }} tram/tram \

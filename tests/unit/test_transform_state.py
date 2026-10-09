@@ -140,8 +140,67 @@ class TestDbStateStore:
         assert isinstance(loaded, TransformState)
         assert loaded.state == {"counter_delta:0": {"k": {"v": 5}}}
         assert loaded.config_sha256 == "abc123"
+        # A plain PUT leaves the frozen §7 CAS identity at its defaults.
+        assert loaded.revision == 0
+        assert loaded.generation is None
         row = db.load_transform_state("p1")
         assert row["updated_by"] == "r9"
+
+    def test_save_rejected_at_cardinality_ceiling_with_reason(self, tmp_path, monkeypatch):
+        """V18-08 (plan F): a transform-state write whose top-level key
+        cardinality exceeds ``TRAM_TRANSFORM_MAX_CARDINALITY`` is REJECTED at
+        the state write with the reason — never silently evicted or stored."""
+        monkeypatch.setenv("TRAM_TRANSFORM_MAX_CARDINALITY", "2")
+        from tram.persistence.db import TransformStateBudgetExceeded
+
+        db = TramDB(url=f"sqlite:///{tmp_path}/state-card.db")
+        with pytest.raises(TransformStateBudgetExceeded, match="TRAM_TRANSFORM_MAX_CARDINALITY"):
+            db.save_transform_state("p1", {"a": 1, "b": 2, "c": 3}, "sha")
+        # Under the ceiling the write persists unchanged (no behavior change
+        # for pipelines within the budget).
+        db.save_transform_state("p1", {"a": 1, "b": 2}, "sha")
+        assert db.load_transform_state("p1")["state"] == {"a": 1, "b": 2}
+
+    def test_save_rejected_at_byte_ceiling_with_reason(self, tmp_path, monkeypatch):
+        """V18-08 (plan F): a transform-state write whose serialized size
+        exceeds ``TRAM_TRANSFORM_MAX_STATE_BYTES`` is REJECTED at the state
+        write with the reason — the row cannot grow without bound."""
+        monkeypatch.setenv("TRAM_TRANSFORM_MAX_STATE_BYTES", "64")
+        from tram.persistence.db import TransformStateBudgetExceeded
+
+        db = TramDB(url=f"sqlite:///{tmp_path}/state-bytes.db")
+        with pytest.raises(TransformStateBudgetExceeded, match="TRAM_TRANSFORM_MAX_STATE_BYTES"):
+            db.save_transform_state("p1", {"k": "x" * 500}, "sha")
+        db.close()
+
+    def test_checkpoint_advanced_row_exposes_revision_and_generation(self, tmp_path):
+        """A row advanced by the atomic checkpoint CAS surfaces its stored
+        revision/generation through the store — a run hydrating it adopts the
+        advanced revision as its checkpoint base, never 0."""
+        from tram.api.routers.internal import _commit_atomic_checkpoint
+
+        db = TramDB(url=f"sqlite:///{tmp_path}/state3.db")
+        _commit_atomic_checkpoint(
+            db._engine,
+            checkpoint_id="cp-1",
+            pipeline_name="p1",
+            generation=3,
+            attempt_id="a1",
+            run_id="r1",
+            source_unit="u1",
+            frontier_json='{"offset": 5}',
+            frontier_seq=5,
+            sink_receipts_json="[]",
+            state_json='{"counter_delta:0": {"k": {"v": 1}}}',
+            config_sha256="sha",
+            state_base_revision=0,
+        )
+        store = DbTransformStateStore(db)
+        loaded = store.get("p1")
+        assert loaded is not None
+        assert loaded.state == {"counter_delta:0": {"k": {"v": 1}}}
+        assert loaded.revision == 1
+        assert loaded.generation == 3
 
     def test_get_missing_returns_none(self, tmp_path):
         db = TramDB(url=f"sqlite:///{tmp_path}/state2.db")
@@ -326,6 +385,17 @@ class TestControllerStateRow:
         ctrl.delete("state-test")
         assert db.load_transform_state("state-test") is None
 
+    def test_standalone_executor_has_no_checkpoint_client(self, tmp_path):
+        """Standalone strict behavior is pinned fail-closed: the in-process
+        executor is built WITHOUT a checkpoint client (standalone never posts
+        to the manager API — run-complete is recorded in-process and the
+        transform-state store is DB-direct — and the checkpoint CAS needs a
+        ledger generation identity standalone does not have), so a strict
+        standalone pipeline keeps today's behavior: units stay pending and
+        the run reports PARTIAL instead of acking uncommitted."""
+        ctrl, _db = self._make_controller(tmp_path)
+        assert ctrl.executor._checkpoint_client is None
+
 
 # ── HTTP store (worker mode) ────────────────────────────────────────────────
 
@@ -339,13 +409,38 @@ class TestHttpStateStore:
             return httpx.Response(200, json={
                 "state": {"counter_delta:0": {"k": {"v": 1}}},
                 "config_sha256": "abc",
+                "revision": 4,
+                "generation": 2,
             })
 
         store = HttpTransformStateStore(
             "http://mgr:8765", "secret", transport=httpx.MockTransport(handler)
         )
         loaded = store.get("pipe")
-        assert loaded == TransformState({"counter_delta:0": {"k": {"v": 1}}}, "abc")
+        assert loaded == TransformState(
+            {"counter_delta:0": {"k": {"v": 1}}}, "abc", revision=4, generation=2
+        )
+        # The frozen §7 CAS identity is captured for the run's checkpoint base.
+        assert loaded.revision == 4
+        assert loaded.generation == 2
+
+    def test_get_without_cas_identity_defaults_to_revision_zero(self):
+        """A manager GET that predates the revision plumb (or a legacy blob)
+        simply omits the CAS fields — hydration degrades to base 0."""
+        import httpx
+
+        def handler(request: httpx.Request) -> httpx.Response:
+            return httpx.Response(200, json={
+                "state": {"counter_delta:0": {"k": {"v": 1}}},
+                "config_sha256": "abc",
+            })
+
+        store = HttpTransformStateStore(
+            "http://mgr:8765", "", transport=httpx.MockTransport(handler)
+        )
+        loaded = store.get("pipe")
+        assert loaded.revision == 0
+        assert loaded.generation is None
 
     def test_put_failure_logged_and_swallowed(self):
         import httpx

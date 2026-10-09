@@ -416,8 +416,8 @@ def get_mib(
     selects which is served — ``auto`` (default) prefers ``.py`` and falls
     back to the JSON bundle, ``py`` serves only the ``.py``, ``json`` only
     the bundle. Legacy callers (the web UI, older workers) use ``auto`` and
-    are unchanged; workers sync both formats explicitly during the flag
-    period.
+    are unchanged; workers sync both formats explicitly during the
+    escape-hatch period.
     """
     from fastapi.responses import PlainTextResponse
 

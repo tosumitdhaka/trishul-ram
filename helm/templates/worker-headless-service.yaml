@@ -12,6 +12,11 @@ metadata:
     app.kubernetes.io/component: worker
 spec:
   clusterIP: None
+  ## V18-07 (review finding "unready DNS"): keep pod DNS published while pods
+  ## report NotReady — during rollouts/warmup the manager's dispatch, probe,
+  ## and adoption queries must still resolve running-but-unready workers, or
+  ## readiness flapping translates into spurious probe failures.
+  publishNotReadyAddresses: true
   selector:
     {{- include "tram.selectorLabels" . | nindent 4 }}
     app.kubernetes.io/component: worker

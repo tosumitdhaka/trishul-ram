@@ -50,6 +50,10 @@ const FIXTURE_BY_PATH = {
   '/api/runs': 'runs',
 }
 
+// Fixtures without a fixed endpoint path — served by the dynamic handlers
+// below (per-pipeline lifecycle operations).
+const EXTRA_FIXTURES = ['operations']
+
 function decode(s) {
   try {
     return decodeURIComponent(s)
@@ -100,6 +104,7 @@ async function fulfillFromFixtures(route, pathname, fixtures) {
     }
     if (sub[0] === 'versions') return route.fulfill(json([]))
     if (sub[0] === 'alerts') return route.fulfill(json([]))
+    if (sub[0] === 'operations') return route.fulfill(json(fixtures.operations))
     if (sub[0] === 'dry-run') return route.fulfill(json({ valid: true, issues: [] }))
     return route.fulfill(json({ ok: true }))
   }
@@ -119,7 +124,7 @@ async function fulfillFromFixtures(route, pathname, fixtures) {
 // fixtures })` runs first; return truthy to short-circuit the default.
 export async function installFixtures(page, { onRoute } = {}) {
   const fixtures = {}
-  for (const name of new Set(Object.values(FIXTURE_BY_PATH))) {
+  for (const name of new Set([...Object.values(FIXTURE_BY_PATH), ...EXTRA_FIXTURES])) {
     fixtures[name] = await fixture(name)
   }
 

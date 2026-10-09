@@ -86,16 +86,25 @@ class TestRunsReadsController:
         controller.get_runs.assert_called_once()
         manager.get_runs.assert_not_called()
 
-    def test_get_run_uses_controller_get_run(self):
+    def test_get_run_uses_controller_get_run_detail(self):
+        """V18-06: the single-run route resolves through the controller's
+        get_run_detail (a locked read over manager.get_run + ledger) — never a
+        raw manager read."""
         app, manager, controller = _make_app(runs_router)
-        controller.get_run.return_value = _run_result(run_id="xyz")
+        controller.get_run_detail.return_value = {
+            "run_id": "xyz",
+            "pipeline": "my-pipe",
+            "status": "success",
+            "state": "terminal",
+            "attempts": [],
+        }
         client = TestClient(app)
 
         resp = client.get("/api/runs/xyz")
 
         assert resp.status_code == 200
         assert resp.json()["run_id"] == "xyz"
-        controller.get_run.assert_called_once_with("xyz")
+        controller.get_run_detail.assert_called_once_with("xyz")
         manager.get_run.assert_not_called()
 
 

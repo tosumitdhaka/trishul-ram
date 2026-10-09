@@ -51,16 +51,29 @@ async def liveness() -> dict:
 
 @router.get("/api/ready")
 async def readiness(request: Request) -> dict:
-    """Readiness probe — returns 200 when daemon is fully initialized and DB is reachable."""
+    """Readiness probe — returns 200 when daemon is fully initialized and DB is reachable.
+
+    R11 (plan D / frozen §8): manager mode requires a DB — an absent or
+    unreachable DB means NOT ready. Worker/standalone readiness keeps the
+    legacy behavior (an absent DB is fine; an unreachable configured DB is
+    not). Worker journal health is surfaced separately on /agent/status —
+    this endpoint reports only the manager's own readiness.
+    """
     from fastapi import HTTPException
 
     controller = request.app.state.controller
     scheduler = request.app.state.scheduler
     db = getattr(request.app.state, "db", None)
     started_at = getattr(request.app.state, "started_at", None)
+    config = getattr(request.app.state, "config", None)
+    mode = getattr(config, "tram_mode", "standalone") if config else "standalone"
+    is_manager = mode == "manager"
 
     # DB check
     db_status = "ok"
+    if is_manager and db is None:
+        # R11: manager mode cannot serve without its execution ledger.
+        raise HTTPException(status_code=503, detail="Database not configured (manager mode requires a DB)")
     if db is not None and not db.health_check():
         db_status = "unreachable"
         raise HTTPException(status_code=503, detail="Database unreachable")
@@ -87,8 +100,6 @@ async def readiness(request: Request) -> dict:
 
     # Cluster / mode
     worker_pool = getattr(request.app.state, "worker_pool", None)
-    config = getattr(request.app.state, "config", None)
-    mode = getattr(config, "tram_mode", "standalone") if config else "standalone"
     if worker_pool is not None:
         healthy = len(worker_pool.healthy_workers())
         total = len(worker_pool._workers)

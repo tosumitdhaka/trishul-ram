@@ -6,6 +6,8 @@ import queue
 import threading
 from collections.abc import Iterator
 
+from tram.connectors.bridge import BoundedBridgeQueue
+from tram.core.config import source_bridge_max_bytes, source_bridge_max_count
 from tram.core.exceptions import SourceError
 from tram.interfaces.base_source import BaseSource
 from tram.registry.registry import register_source
@@ -27,6 +29,11 @@ class MqttSource(BaseSource):
         password    (str, optional)
         tls         (bool, default False)
         keepalive   (int, default 60)
+
+    The internal producer→reader bridge is bounded by count and bytes
+    (``TRAM_SOURCE_BRIDGE_MAX_COUNT`` / ``TRAM_SOURCE_BRIDGE_MAX_BYTES``).
+    Overflow backpressures the paho network loop (cooperative put — the loop
+    stays responsive to heartbeats) and never drops a payload (V18-01 §9).
     """
 
     def __init__(self, config: dict) -> None:
@@ -41,7 +48,10 @@ class MqttSource(BaseSource):
         self.tls: bool = bool(config.get("tls", False))
         self.keepalive: int = int(config.get("keepalive", 60))
         self._stop_event = threading.Event()
-        self._queue: queue.SimpleQueue = queue.SimpleQueue()
+        self._queue: BoundedBridgeQueue = BoundedBridgeQueue(
+            max_count=source_bridge_max_count(),
+            max_bytes=source_bridge_max_bytes(),
+        )
 
     def _get_mqtt_client(self):
         try:
@@ -61,7 +71,9 @@ class MqttSource(BaseSource):
         client = self._get_mqtt_client()
 
         def on_message(client, userdata, msg):
-            self._queue.put((msg.payload, {"mqtt_topic": msg.topic, "mqtt_qos": msg.qos}))
+            self._queue.put_cooperative(
+                (msg.payload, {"mqtt_topic": msg.topic, "mqtt_qos": msg.qos})
+            )
 
         def on_connect(client, userdata, flags, rc):
             if rc == 0:

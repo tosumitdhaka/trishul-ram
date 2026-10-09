@@ -26,14 +26,18 @@ def _env_int(name: str, default: int) -> int:
 def _env_snmp_stack() -> str:
     """``TRAM_SNMP_STACK`` (v1.5.0, GH #72) — ``legacy`` (pysnmp) | ``trishul`` (tsmi/tsnmp).
 
-    Default ``legacy``. Invalid values fail loud (a ``ValueError`` naming the
-    variable) instead of silently picking a stack — the strictest pattern in
-    this module (``_env_int``), since silently flipping a deployment's SNMP
-    stack would be worse than a startup error. Manager and every worker must
-    agree on the value; mismatch handling ships with the flag reader in
-    v1.5.0 layer 3.
+    Default ``trishul`` (v1.8.0 — the flip; all upstream blockers closed at
+    the shipped pins, outputs byte-identical, 31×/1.26× perf). ``legacy`` is
+    the explicit escape hatch, available through the v1.8.x releases; the
+    legacy stack (pysnmp/pysmi branches, .py corpus serving, image extras)
+    is removed in v1.9.0. Invalid values fail loud (a
+    ``ValueError`` naming the variable) instead of silently picking a stack —
+    the strictest pattern in this module (``_env_int``), since silently
+    flipping a deployment's SNMP stack would be worse than a startup error.
+    Manager and every worker must agree on the value; mismatch handling ships
+    with the flag reader in v1.5.0 layer 3.
     """
-    raw = os.environ.get("TRAM_SNMP_STACK", "legacy").lower()
+    raw = os.environ.get("TRAM_SNMP_STACK", "trishul").lower()
     if raw not in ("legacy", "trishul"):
         raise ValueError(
             f"Environment variable TRAM_SNMP_STACK={raw!r} must be 'legacy' or 'trishul'"
@@ -198,6 +202,348 @@ def stream_flush_interval_seconds() -> float:
             raw,
         )
         return _STREAM_FLUSH_INTERVAL_DEFAULT
+
+
+# V18-01 §9 (frozen): bridge/buffer budgets for the internal source→executor
+# queues. Defaults frozen at 16 MiB / 10000; overflow pauses intake (blocking
+# put) or is rejected explicitly (webhook router 503) — never a silent drop
+# and never an early acknowledgement (plan F).
+_SOURCE_BRIDGE_MAX_BYTES_DEFAULT = 16 * 1024 * 1024
+_SOURCE_BRIDGE_MAX_COUNT_DEFAULT = 10000
+
+
+def source_bridge_max_bytes() -> int:
+    """``TRAM_SOURCE_BRIDGE_MAX_BYTES`` (V18-01 §9) — byte budget of the
+    internal source bridge queues (mqtt, websocket, nats, prometheus_rw,
+    syslog TCP; AMQP is bounded by broker prefetch instead).
+
+    ``0`` disables the byte bound. Invalid values are logged at WARNING and
+    fall back to the default (the webhook body-cap convention).
+    """
+    raw = os.environ.get("TRAM_SOURCE_BRIDGE_MAX_BYTES")
+    if raw is None:
+        return _SOURCE_BRIDGE_MAX_BYTES_DEFAULT
+    try:
+        return max(int(raw), 0)
+    except ValueError:
+        logger.warning(
+            "Invalid TRAM_SOURCE_BRIDGE_MAX_BYTES=%r — using default",
+            raw,
+        )
+        return _SOURCE_BRIDGE_MAX_BYTES_DEFAULT
+
+
+def source_bridge_max_count() -> int:
+    """``TRAM_SOURCE_BRIDGE_MAX_COUNT`` (V18-01 §9) — item-count budget of the
+    internal source bridge queues (same connectors as ``source_bridge_max_bytes``).
+
+    ``0`` disables the count bound. Invalid values are logged at WARNING and
+    fall back to the default (the webhook body-cap convention).
+    """
+    raw = os.environ.get("TRAM_SOURCE_BRIDGE_MAX_COUNT")
+    if raw is None:
+        return _SOURCE_BRIDGE_MAX_COUNT_DEFAULT
+    try:
+        return max(int(raw), 0)
+    except ValueError:
+        logger.warning(
+            "Invalid TRAM_SOURCE_BRIDGE_MAX_COUNT=%r — using default",
+            raw,
+        )
+        return _SOURCE_BRIDGE_MAX_COUNT_DEFAULT
+
+
+# V18-01 §4 (frozen): worker journal — one stdlib-sqlite journal per worker
+# at the frozen path, bounded by quota with admission headroom (admission
+# fails closed once size >= quota - headroom so in-flight completions and
+# outbox writes still commit).
+_WORKER_JOURNAL_PATH_DEFAULT = "/var/lib/tram/worker/journal.db"
+
+
+def worker_journal_path() -> str:
+    """``TRAM_WORKER_JOURNAL_PATH`` (V18-01 §4) — frozen worker journal path.
+
+    Dedicated PVC mount (``/var/lib/tram/worker``), separate from the
+    ``/data`` asset ``emptyDir``. Read each call so a re-exec'd worker picks
+    up the value the process was started with.
+    """
+    return os.environ.get("TRAM_WORKER_JOURNAL_PATH", _WORKER_JOURNAL_PATH_DEFAULT)
+
+
+def worker_journal_quota_mb() -> int:
+    """``TRAM_WORKER_JOURNAL_QUOTA_MB`` (V18-01 §4) — journal quota in MiB.
+
+    ``0`` disables the quota bound (tests and dev). Invalid values fail loud
+    via ``_env_int`` (the strictest pattern in this module).
+    """
+    return _env_int("TRAM_WORKER_JOURNAL_QUOTA_MB", 512)
+
+
+def worker_journal_headroom_mb() -> int:
+    """``TRAM_WORKER_JOURNAL_HEADROOM_MB`` (V18-01 §4) — admission headroom in MiB.
+
+    Admission fails closed once the journal size reaches ``quota - headroom``;
+    the headroom is the budget left for in-flight completions and outbox
+    writes to commit before the hard quota.
+    """
+    return _env_int("TRAM_WORKER_JOURNAL_HEADROOM_MB", 64)
+
+
+# V18-01 §4 (frozen): start-authorization token lifetimes for the
+# manager→worker /agent/run channel. Defaults frozen at 300 / 600 / 5;
+# the key-rotation overlap window is max TTL + skew (605 s at defaults).
+_AUTH_TOKEN_TTL_S_DEFAULT = 300
+_AUTH_MAX_TTL_S_DEFAULT = 600
+_AUTH_CLOCK_SKEW_S_DEFAULT = 5
+
+
+def auth_token_ttl_s() -> int:
+    """``TRAM_AUTH_TOKEN_TTL_S`` (V18-01 §4) — minted start-authorization TTL.
+
+    The manager stamps every start-authorization token with this lifetime.
+    Invalid values fail loud via ``_env_int`` (the strictest pattern in this
+    module).
+    """
+    return _env_int("TRAM_AUTH_TOKEN_TTL_S", _AUTH_TOKEN_TTL_S_DEFAULT)
+
+
+def auth_max_ttl_s() -> int:
+    """``TRAM_AUTH_MAX_TTL_S`` (V18-01 §4) — worker-side TTL acceptance cap.
+
+    The worker rejects any token whose TTL exceeds this, and keeps the
+    previous session secret valid for ``max_ttl + clock_skew`` after rotation.
+    """
+    return _env_int("TRAM_AUTH_MAX_TTL_S", _AUTH_MAX_TTL_S_DEFAULT)
+
+
+def auth_clock_skew_s() -> int:
+    """``TRAM_AUTH_CLOCK_SKEW_S`` (V18-01 §4) — manager/worker clock skew budget.
+
+    ``issued_at`` up to this many seconds in the future is accepted; beyond it
+    the token is rejected as future-issued.
+    """
+    return _env_int("TRAM_AUTH_CLOCK_SKEW_S", _AUTH_CLOCK_SKEW_S_DEFAULT)
+
+
+# V18-01 §9 (frozen): worker journal retention.  Audit retention (7 d) bounds
+# acked completion/outbox history; replay retention (1 d) bounds resolved
+# revocation tombstones.  Authorization validity is max TTL + skew (~10 min),
+# so ``gc_expired`` always outruns both — retention is the backstop sweep.
+_WORKER_JOURNAL_AUDIT_RETENTION_S_DEFAULT = 604800
+_WORKER_JOURNAL_REPLAY_RETENTION_S_DEFAULT = 86400
+
+
+def worker_journal_audit_retention_s() -> int:
+    """``TRAM_WORKER_JOURNAL_AUDIT_RETENTION_S`` (V18-01 §9) — audit retention
+    for acked completion/outbox rows, in seconds.
+
+    Invalid values fail loud via ``_env_int`` (the strictest pattern in this
+    module).
+    """
+    return _env_int("TRAM_WORKER_JOURNAL_AUDIT_RETENTION_S", _WORKER_JOURNAL_AUDIT_RETENTION_S_DEFAULT)
+
+
+def worker_journal_replay_retention_s() -> int:
+    """``TRAM_WORKER_JOURNAL_REPLAY_RETENTION_S`` (V18-01 §9) — replay
+    retention for resolved revocation tombstones, in seconds.
+
+    Invalid values fail loud via ``_env_int`` (the strictest pattern in this
+    module).
+    """
+    return _env_int("TRAM_WORKER_JOURNAL_REPLAY_RETENTION_S", _WORKER_JOURNAL_REPLAY_RETENTION_S_DEFAULT)
+
+
+# V18-01 §9 (frozen): the drain deadline — the ONE monotonic deadline of plan
+# E. The worker drain computes deadline = now + TRAM_DRAIN_TIMEOUT_S and
+# threads it to every in-flight run executor; batch runs finish the current
+# source unit, stream readers are interrupted at the deadline, and shutdown
+# proceeds regardless once it expires. Deliberately no independent second
+# timeout constant anywhere.
+_DRAIN_TIMEOUT_S_DEFAULT = 30
+
+
+def drain_timeout_s() -> int:
+    """``TRAM_DRAIN_TIMEOUT_S`` (V18-01 §9) — the single drain deadline in seconds.
+
+    Single source for the one monotonic deadline of plan E (matches the 30 s
+    cooperative drain / 45 s pod grace gate). Invalid values fail loud via
+    ``_env_int`` (the strictest pattern in this module).
+    """
+    return _env_int("TRAM_DRAIN_TIMEOUT_S", _DRAIN_TIMEOUT_S_DEFAULT)
+
+
+# V18-01 §9 (frozen): transform-state storage budgets. The state blob is
+# bounded twice: the PUT body cap (``TRAM_STATE_MAX_BYTES``, above) rejects
+# oversized HTTP bodies with 413, and these budgets bound what may actually be
+# STORED — serialized bytes and top-level key cardinality — enforced at the
+# state write with rejection (plan F: overflow pauses intake or fails
+# undecided; it never evicts un-emitted state).
+_TRANSFORM_MAX_STATE_BYTES_DEFAULT = 64 * 1024 * 1024
+_TRANSFORM_MAX_CARDINALITY_DEFAULT = 1_000_000
+
+
+def transform_max_state_bytes() -> int:
+    """``TRAM_TRANSFORM_MAX_STATE_BYTES`` (V18-01 §9, frozen default 64 MiB) —
+    byte budget of a pipeline's stored transform-state blob.
+
+    A state write whose serialized size exceeds this is REJECTED (the write
+    raises with the reason) instead of silently inflating the
+    ``transform_state`` row. ``0`` disables the byte bound. Invalid values
+    are logged at WARNING and fall back to the default (the webhook body-cap
+    convention, matching ``state_max_bytes``).
+    """
+    raw = os.environ.get("TRAM_TRANSFORM_MAX_STATE_BYTES")
+    if raw is None:
+        return _TRANSFORM_MAX_STATE_BYTES_DEFAULT
+    try:
+        return max(int(raw), 0)
+    except ValueError:
+        logger.warning(
+            "Invalid TRAM_TRANSFORM_MAX_STATE_BYTES=%r — using default",
+            raw,
+        )
+        return _TRANSFORM_MAX_STATE_BYTES_DEFAULT
+
+
+def transform_max_cardinality() -> int:
+    """``TRAM_TRANSFORM_MAX_CARDINALITY`` (V18-01 §9, frozen default
+    1,000,000) — key-cardinality budget of a pipeline's stored transform-state
+    blob (top-level state keys, e.g. counter/window identities).
+
+    A state write exceeding this is REJECTED with the reason, never silently
+    evicted. ``0`` disables the cardinality bound. Invalid values are logged
+    at WARNING and fall back to the default (the webhook body-cap convention).
+    """
+    raw = os.environ.get("TRAM_TRANSFORM_MAX_CARDINALITY")
+    if raw is None:
+        return _TRANSFORM_MAX_CARDINALITY_DEFAULT
+    try:
+        return max(int(raw), 0)
+    except ValueError:
+        logger.warning(
+            "Invalid TRAM_TRANSFORM_MAX_CARDINALITY=%r — using default",
+            raw,
+        )
+        return _TRANSFORM_MAX_CARDINALITY_DEFAULT
+
+
+# V18-01 §9 (frozen): manager→worker RPC deadlines and fan-out concurrency.
+# The read timeout (10 s) matches today's dispatch client (``worker_pool.py``
+# ``_dispatch_to_worker``); the connect timeout and the concurrency cap bound
+# the RPC fan-out (health probes, status sweeps) and the dispatch client.
+# V18-01 §9 (frozen): shared RPC deadlines and concurrency bound — used by
+# BOTH the manager→worker agent clients (dispatch/status/query fan-out) and
+# the worker's pooled manager↔worker / REST/VES sink HTTP clients (plan F:
+# "Pool worker RPC/REST sink clients and the parallel-sink executor; set
+# connect/read/write/pool deadlines and maximum concurrency"). Per-request
+# timeouts from pipeline config still override these as the user-facing
+# control; these are the pooled base deadlines.
+_RPC_CONNECT_TIMEOUT_S_DEFAULT = 5
+_RPC_READ_TIMEOUT_S_DEFAULT = 10
+_RPC_MAX_CONCURRENCY_DEFAULT = 32
+
+
+def rpc_connect_timeout_s() -> int:
+    """``TRAM_RPC_CONNECT_TIMEOUT_S`` (V18-01 §9, frozen default 5) — TCP/TLS
+    connect deadline for manager→worker agent calls.
+
+    Invalid values fail loud via ``_env_int`` (the strictest pattern in this
+    module — a silently-defaulted timeout would hide a pathological network).
+    """
+    return _env_int("TRAM_RPC_CONNECT_TIMEOUT_S", _RPC_CONNECT_TIMEOUT_S_DEFAULT)
+
+
+def rpc_read_timeout_s() -> int:
+    """``TRAM_RPC_READ_TIMEOUT_S`` (V18-01 §9, frozen default 10) — read
+    deadline for manager→worker agent calls (dispatch, status, query).
+
+    Matches today's dispatch client timeout so the default is behavior-
+    preserving. Invalid values fail loud via ``_env_int``.
+    """
+    return _env_int("TRAM_RPC_READ_TIMEOUT_S", _RPC_READ_TIMEOUT_S_DEFAULT)
+
+
+def rpc_max_concurrency() -> int:
+    """``TRAM_RPC_MAX_CONCURRENCY`` (V18-01 §9, frozen default 32) — ceiling on
+    concurrent manager→worker RPC calls (the per-pass probe/status fan-out).
+
+    A fleet larger than the cap probes in bounded waves instead of opening one
+    thread per worker. Invalid values fail loud via ``_env_int``; ``0`` is
+    clamped to 1 (a zero-worker fan-out would dispatch nothing).
+    """
+    return max(1, _env_int("TRAM_RPC_MAX_CONCURRENCY", _RPC_MAX_CONCURRENCY_DEFAULT))
+
+
+# E.2 queued-run admission budgets. Not named in the V18-01 §9 table (which
+# froze the bridge/transform/webhook budgets) but required by plan invariant 7
+# ("every admission queue ... has a count/byte/concurrency limit"): the durable
+# manual-run queue must reject at a ceiling instead of growing without bound.
+# Named after the frozen ``_MAX_COUNT``/``_MAX_BYTES`` convention.
+_QUEUE_MAX_COUNT_DEFAULT = 1000
+_QUEUE_MAX_BYTES_DEFAULT = 64 * 1024 * 1024
+
+
+def queue_max_count() -> int:
+    """``TRAM_QUEUE_MAX_COUNT`` — ceiling on active (status='queued') manual
+    runs across all pipelines.
+
+    Enforced at enqueue: a manual run whose admission would exceed the ceiling
+    is REJECTED with an explicit reason (never silently dropped). ``0``
+    disables the count bound. Invalid values are logged at WARNING and fall
+    back to the default (the webhook body-cap convention).
+    """
+    raw = os.environ.get("TRAM_QUEUE_MAX_COUNT")
+    if raw is None:
+        return _QUEUE_MAX_COUNT_DEFAULT
+    try:
+        return max(int(raw), 0)
+    except ValueError:
+        logger.warning(
+            "Invalid TRAM_QUEUE_MAX_COUNT=%r — using default",
+            raw,
+        )
+        return _QUEUE_MAX_COUNT_DEFAULT
+
+
+def queue_max_bytes() -> int:
+    """``TRAM_QUEUE_MAX_BYTES`` — byte ceiling on the queued YAML snapshots of
+    active (status='queued') manual runs.
+
+    Enforced at enqueue: the incoming snapshot counts toward the total, and an
+    admission that would exceed the ceiling is REJECTED with an explicit
+    reason. ``0`` disables the byte bound. Invalid values are logged at
+    WARNING and fall back to the default (the webhook body-cap convention).
+    """
+    raw = os.environ.get("TRAM_QUEUE_MAX_BYTES")
+    if raw is None:
+        return _QUEUE_MAX_BYTES_DEFAULT
+    try:
+        return max(int(raw), 0)
+    except ValueError:
+        logger.warning(
+            "Invalid TRAM_QUEUE_MAX_BYTES=%r — using default",
+            raw,
+        )
+        return _QUEUE_MAX_BYTES_DEFAULT
+
+
+def worker_legacy_admit() -> str:
+    """``TRAM_WORKER_LEGACY_ADMIT`` (V18-01 §5) — rollback-bridge gate.
+
+    ``auto`` (default) accepts a dispatch carrying no ``authorization`` field
+    (v1.7-shaped) exactly as today — explicit ``legacy`` marker in logs and
+    status, no fencing claimed — keeping v1.7 managers and the existing
+    dispatch path working during rollout. ``off`` rejects such dispatches with
+    400. Any other value fails loud via ``ValueError`` (the strictest pattern
+    in this module) so a typo'd deployment never silently flips between
+    rollback modes.
+    """
+    raw = os.environ.get("TRAM_WORKER_LEGACY_ADMIT", "auto").lower()
+    if raw not in ("auto", "off"):
+        raise ValueError(
+            f"Environment variable TRAM_WORKER_LEGACY_ADMIT={raw!r} must be 'auto' or 'off'"
+        )
+    return raw
 
 
 @dataclass(frozen=True)

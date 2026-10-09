@@ -9,6 +9,7 @@ from unittest.mock import MagicMock, patch
 
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
+from sqlalchemy import text
 
 from tram.agent.stats_store import StatsStore
 from tram.agent.worker_pool import WorkerPool
@@ -51,6 +52,9 @@ def _make_runs_app():
     app.state.manager = MagicMock()
     app.state.controller = MagicMock()
     app.state.controller.get_runs.return_value = []
+    # V18-06: the single-run route resolves through get_run_detail (history +
+    # ledger extension); default to "not found".
+    app.state.controller.get_run_detail.return_value = None
     mock_scheduler = MagicMock()
     mock_scheduler.get_scheduler_status.return_value = {
         "scheduler_running": True,
@@ -168,7 +172,12 @@ class TestReadiness:
         wp.status.return_value = []
         config = MagicMock()
         config.tram_mode = "manager"
-        app = _make_health_app(worker_pool=wp, config=config)
+        db = MagicMock()
+        db.health_check.return_value = True
+        db._engine.dialect.name = "sqlite"
+        db._engine.url = MagicMock()
+        db._engine.url.__str__ = lambda _: "sqlite:////data/tram.db"
+        app = _make_health_app(worker_pool=wp, config=config, db=db)
         client = TestClient(app)
         r = client.get("/api/ready")
         assert r.status_code == 200
@@ -180,6 +189,56 @@ class TestReadiness:
         r = client.get("/api/ready")
         assert r.status_code == 200
         assert r.json()["db_engine"] == "sqlite"
+
+    # ── R11 honest readiness (plan D / frozen §8) ─────────────────────────
+
+    def test_manager_mode_absent_db_is_not_ready(self):
+        """R11: manager mode requires a DB — an absent DB must fail readiness
+        (today it silently passed)."""
+        config = MagicMock()
+        config.tram_mode = "manager"
+        app = _make_health_app(config=config)
+        client = TestClient(app, raise_server_exceptions=False)
+        r = client.get("/api/ready")
+        assert r.status_code == 503
+        assert "Database not configured" in r.json()["detail"]
+
+    def test_manager_mode_unreachable_db_is_not_ready(self):
+        db = MagicMock()
+        db.health_check.return_value = False
+        config = MagicMock()
+        config.tram_mode = "manager"
+        app = _make_health_app(db=db, config=config)
+        client = TestClient(app, raise_server_exceptions=False)
+        r = client.get("/api/ready")
+        assert r.status_code == 503
+        assert r.json()["detail"] == "Database unreachable"
+
+    def test_manager_mode_healthy_db_is_ready(self):
+        db = MagicMock()
+        db.health_check.return_value = True
+        db._engine.dialect.name = "sqlite"
+        db._engine.url = MagicMock()
+        db._engine.url.__str__ = lambda _: "sqlite:////data/tram.db"
+        config = MagicMock()
+        config.tram_mode = "manager"
+        app = _make_health_app(db=db, config=config)
+        client = TestClient(app)
+        r = client.get("/api/ready")
+        assert r.status_code == 200
+        assert r.json()["status"] == "ready"
+        assert r.json()["db"] == "ok"
+
+    def test_worker_mode_absent_db_stays_ready(self):
+        """R11 preserves worker-mode readiness: an absent DB is not a failure
+        (standalone/worker keep the legacy behavior)."""
+        config = MagicMock()
+        config.tram_mode = "worker"
+        app = _make_health_app(config=config)
+        client = TestClient(app)
+        r = client.get("/api/ready")
+        assert r.status_code == 200
+        assert r.json()["status"] == "ready"
 
 
 class TestMeta:
@@ -538,6 +597,59 @@ class TestListRuns:
         call_kwargs = app.state.controller.get_runs.call_args.kwargs
         assert call_kwargs["status"] == "failed"
 
+    def test_partial_status_filter_passed_to_manager(self):
+        app = _make_runs_app()
+        client = TestClient(app)
+        r = client.get("/api/runs?status=partial")
+        assert r.status_code == 200
+        call_kwargs = app.state.controller.get_runs.call_args.kwargs
+        assert call_kwargs["status"] == "partial"
+
+    def test_partial_run_reports_partial_status_and_outcome(self, tmp_path):
+        """V18-09: a PARTIAL run surfaces as its own status in the listing —
+        never folded into 'error' — with the outcome field exposed."""
+        app = _make_runs_app()
+        db = TramDB(url=f"sqlite:///{tmp_path}/runs-partial.db")
+        db.save_run(_db_run("run-partial", pipeline_name="alpha", status="partial"))
+        app.state.db = db
+        # Route through the real DB read so the row is a real PARTIAL RunResult.
+        app.state.controller.get_runs.side_effect = db.get_runs
+        client = TestClient(app)
+        r = client.get("/api/runs")
+        assert r.status_code == 200
+        row = r.json()[0]
+        assert row["status"] == "partial"
+        assert row["outcome"] == "partial"
+
+    def test_listing_exposes_recorded_outcome_column(self, tmp_path):
+        """V18-09: the listing reads the recorded run_history.outcome column
+        directly — the recorded value takes precedence over the
+        status-derived fallback."""
+        app = _make_runs_app()
+        db = TramDB(url=f"sqlite:///{tmp_path}/runs-outcome-col.db")
+        db.save_run(_db_run("run-o", pipeline_name="alpha", status="success"))
+        with db._engine.begin() as conn:
+            conn.execute(
+                text("UPDATE run_history SET outcome = 'partial' WHERE run_id = 'run-o'")
+            )
+        app.state.db = db
+        app.state.controller.get_runs.side_effect = db.get_runs
+        client = TestClient(app)
+        row = client.get("/api/runs").json()[0]
+        assert row["status"] == "success"
+        assert row["outcome"] == "partial"
+
+    def test_no_db_listing_falls_back_to_status_outcome(self):
+        """Without persistence the outcome is derived from status (in-memory
+        mode) instead of being dropped."""
+        app = _make_runs_app()
+        mock_run = _run_result_mock(status="partial")
+        app.state.controller.get_runs.return_value = [mock_run]
+        client = TestClient(app)
+        row = client.get("/api/runs").json()[0]
+        assert row["status"] == "partial"
+        assert row["outcome"] == "partial"
+
     def test_limit_and_offset(self):
         app = _make_runs_app()
         client = TestClient(app)
@@ -734,19 +846,196 @@ class TestRunsPaginationWithQueued:
 class TestGetRun:
     def test_existing_run_returns_200(self):
         app = _make_runs_app()
-        mock_run = _run_result_mock(run_id="xyz789")
-        app.state.controller.get_run.return_value = mock_run
+        app.state.controller.get_run_detail.return_value = {
+            "run_id": "xyz789",
+            "pipeline": "my-pipe",
+            "status": "success",
+            "started_at": "2026-04-01T00:00:00+00:00",
+            "finished_at": "2026-04-01T00:01:00+00:00",
+            "records_in": 10,
+            "records_out": 10,
+            "records_skipped": 0,
+            "bytes_in": 0,
+            "bytes_out": 0,
+            "dlq_count": 0,
+            "error": None,
+            "errors": [],
+            "node": None,
+            "records_failed": 0,
+            "dlq_succeeded": 0,
+            "dlq_failed": 0,
+            "state": "terminal",
+            "generation": 1,
+            "attempts": [],
+            "outcome": "success",
+        }
         client = TestClient(app)
         r = client.get("/api/runs/xyz789")
         assert r.status_code == 200
         assert r.json()["run_id"] == "xyz789"
+        # legacy keys are untouched and the ledger extension is present
+        data = r.json()
+        assert data["status"] == "success"
+        assert data["state"] == "terminal"
+        assert data["attempts"] == []
 
     def test_missing_run_returns_404(self):
         app = _make_runs_app()
-        app.state.controller.get_run.return_value = None
+        app.state.controller.get_run_detail.return_value = None
         client = TestClient(app, raise_server_exceptions=False)
         r = client.get("/api/runs/nonexistent")
         assert r.status_code == 404
+
+
+class TestGetRunDetailAdditive:
+    """V18-06 §8: GET /runs/{run_id} is extended additively with state,
+    generation, attempts[] (attempt_id, state, worker_id, started/finished)
+    from the ledger, plus outcome and the per-sink/dlq/spool/failed counters
+    where recorded. Legacy keys are unchanged; the full API reshape is
+    V18-09."""
+
+    def _app(self, tmp_path, name="detail.db"):
+        from tram.pipeline.controller import PipelineController
+        db = TramDB(url=f"sqlite:///{tmp_path}/{name}")
+        ctrl = PipelineController(db=db, node_id="n0")
+        app = _make_runs_app()
+        app.state.controller = ctrl
+        app.state.db = db
+        return app, db, ctrl
+
+    def test_history_run_gets_ledger_extension(self, tmp_path):
+        app, db, ctrl = self._app(tmp_path)
+        db.save_run(_db_run("run-1", pipeline_name="alpha", status="success"))
+        now = datetime.now(UTC).isoformat()
+        with db._engine.begin() as conn:
+            conn.execute(text("""
+                INSERT INTO run_intents
+                    (run_id, pipeline_name, origin, flush, requested_at,
+                     requested_generation, final_outcome, final_attempt_id, resolved_at)
+                VALUES ('run-1', 'alpha', 'scheduled', 0, :now, 2, 'success',
+                        'run-1-a1', :now)
+            """), {"now": now})
+            conn.execute(text("""
+                INSERT INTO execution_attempts
+                    (attempt_id, run_id, pipeline_name, ordinal, generation, slot_id,
+                     fence_token, state, worker_id, started_at, finished_at)
+                VALUES ('run-1-a1', 'run-1', 'alpha', 1, 2, '', 'ft', 'terminal',
+                        'w0', :now, :now)
+            """), {"now": now})
+        client = TestClient(app)
+        r = client.get("/api/runs/run-1")
+        assert r.status_code == 200
+        data = r.json()
+        # legacy keys unchanged
+        assert data["status"] == "success"
+        assert data["records_in"] == 10
+        assert data["records_out"] == 10
+        assert data["finished_at"] is not None
+        # additive ledger keys
+        assert data["state"] == "terminal"
+        assert data["generation"] == 2
+        assert data["outcome"] == "success"
+        assert data["attempts"] == [{
+            "attempt_id": "run-1-a1",
+            "state": "terminal",
+            "worker_id": "w0",
+            "started_at": now,
+            "finished_at": now,
+        }]
+
+    def test_unknown_attempt_surfaces_state_and_guard(self, tmp_path):
+        """An unresolved run with an unknown attempt surfaces state=unknown
+        (guard retained); the recorded history status supplies the outcome."""
+        app, db, ctrl = self._app(tmp_path, "detail-unknown.db")
+        db.save_run(_db_run("run-unk", pipeline_name="alpha", status="failed"))
+        now = datetime.now(UTC).isoformat()
+        with db._engine.begin() as conn:
+            conn.execute(text("""
+                INSERT INTO run_intents
+                    (run_id, pipeline_name, origin, flush, requested_at,
+                     requested_generation)
+                VALUES ('run-unk', 'alpha', 'scheduled', 0, :now, 1)
+            """), {"now": now})
+            conn.execute(text("""
+                INSERT INTO execution_attempts
+                    (attempt_id, run_id, pipeline_name, ordinal, generation, slot_id,
+                     fence_token, state, worker_id)
+                VALUES ('run-unk-a1', 'run-unk', 'alpha', 1, 1, '', 'ft',
+                        'unknown', 'w0')
+            """))
+        client = TestClient(app)
+        r = client.get("/api/runs/run-unk")
+        assert r.status_code == 200
+        data = r.json()
+        assert data["state"] == "unknown"
+        assert data["attempts"][0]["attempt_id"] == "run-unk-a1"
+        assert data["outcome"] == "failed"  # recorded history status
+
+    def test_partial_history_run_surfaces_partial_status_and_outcome(self, tmp_path):
+        """V18-09: a PARTIAL run reports status/outcome 'partial' in the
+        detail — the controller's pipeline-level 'error' mapping never leaks
+        into the run detail surface."""
+        app, db, ctrl = self._app(tmp_path, "detail-partial.db")
+        db.save_run(_db_run("run-partial", pipeline_name="alpha", status="partial"))
+        now = datetime.now(UTC).isoformat()
+        with db._engine.begin() as conn:
+            conn.execute(
+                text("UPDATE run_history SET outcome = 'partial' WHERE run_id = 'run-partial'")
+            )
+            conn.execute(text("""
+                INSERT INTO run_intents
+                    (run_id, pipeline_name, origin, flush, requested_at,
+                     requested_generation, final_outcome, final_attempt_id, resolved_at)
+                VALUES ('run-partial', 'alpha', 'scheduled', 0, :now, 1, 'partial',
+                        'run-partial-a1', :now)
+            """), {"now": now})
+            conn.execute(text("""
+                INSERT INTO execution_attempts
+                    (attempt_id, run_id, pipeline_name, ordinal, generation, slot_id,
+                     fence_token, state, worker_id)
+                VALUES ('run-partial-a1', 'run-partial', 'alpha', 1, 1, '', 'ft',
+                        'terminal', 'w0')
+            """))
+        client = TestClient(app)
+        r = client.get("/api/runs/run-partial")
+        assert r.status_code == 200
+        data = r.json()
+        assert data["status"] == "partial"
+        assert data["outcome"] == "partial"
+        assert data["state"] == "terminal"
+
+    def test_queued_run_fallback_gets_ledger_context(self, tmp_path):
+        app, db, ctrl = self._app(tmp_path, "detail-queued.db")
+        now = datetime.now(UTC)
+        db.save_queued_run("q-run", "alpha", "yaml: 1", now, now + timedelta(minutes=15))
+        with db._engine.begin() as conn:
+            conn.execute(text("""
+                INSERT INTO run_intents
+                    (run_id, pipeline_name, origin, flush, requested_at,
+                     requested_generation, yaml_snapshot, schedule_type)
+                VALUES ('q-run', 'alpha', 'queued', 0, :now, 1, 'yaml', 'manual')
+            """), {"now": now.isoformat()})
+            conn.execute(text("""
+                INSERT INTO execution_attempts
+                    (attempt_id, run_id, pipeline_name, ordinal, generation, slot_id,
+                     fence_token, state, worker_id)
+                VALUES ('q-run-a1', 'q-run', 'alpha', 1, 1, '', 'ft', 'claimed', 'w0')
+            """))
+        client = TestClient(app)
+        r = client.get("/api/runs/q-run")
+        assert r.status_code == 200
+        data = r.json()
+        assert data["status"] == "queued"  # legacy queued shape
+        assert data["state"] == "queued"
+        assert data["generation"] == 1
+        assert data["outcome"] is None
+        assert data["attempts"] == [{
+            "attempt_id": "q-run-a1",
+            "state": "claimed",
+            "worker_id": "w0",
+            "started_at": None,
+            "finished_at": None,
+        }]
 
 
 class TestDaemonStatus:

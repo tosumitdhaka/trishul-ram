@@ -11,6 +11,8 @@
   </div>
 
   <div class="detail-queued-info d-none" id="detail-queued-info"></div>
+  <div class="detail-queued-info d-none" id="detail-lifecycle-info"></div>
+  <div class="detail-receipt-info d-none" id="detail-receipt-info"></div>
 
   <div class="detail-toolbar">
     <div class="detail-toolbar-group">
@@ -61,6 +63,7 @@
 
 <ul class="nav nav-tabs mb-3" id="detail-tabs">
   <li class="nav-item"><a class="nav-link active" href="#" data-tab="runs">Runs</a></li>
+  <li class="nav-item"><a class="nav-link" href="#" data-tab="operations">Operations</a></li>
   <li class="nav-item"><a class="nav-link" href="#" data-tab="config">Config</a></li>
   <li class="nav-item"><a class="nav-link" href="#" data-tab="versions">Versions</a></li>
   <li class="nav-item"><a class="nav-link" href="#" data-tab="alerts">Alerts</a></li>
@@ -88,6 +91,34 @@
           <tr><td colspan="12" class="text-secondary text-center py-4">Open the Runs tab to load history</td></tr>
         </tbody>
       </table>
+    </div>
+  </div>
+</div>
+
+<!-- Lifecycle operations panel (v1.8.0): the audit trail behind stop/restart/
+     update/delete/drain/trigger — every row carries the receipt id the 202
+     responses hand back. -->
+<div id="tab-panel-operations" class="tab-panel d-none">
+  <div class="table-wrap">
+    <div class="table-head-row">
+      <span class="table-head-title">Lifecycle Operations</span>
+      <span class="count-pill" id="detail-operations-count"></span>
+      <button class="btn-flat ms-auto" id="detail-operations-refresh-btn" type="button" title="Refresh operations" aria-label="Refresh operations">
+        <i class="bi bi-arrow-clockwise" id="detail-operations-refresh-icon"></i>
+      </button>
+    </div>
+    <div class="table-responsive">
+      <table class="table mb-0" id="detail-operations-table">
+        <thead><tr>
+          <th>When</th><th>Kind</th><th>State</th><th>Receipt</th><th>Detail</th>
+        </tr></thead>
+        <tbody id="detail-operations-body">
+          <tr><td colspan="5" class="text-secondary text-center py-4">Loading…</td></tr>
+        </tbody>
+      </table>
+    </div>
+    <div class="cluster-body-note px-2 pb-2">
+      Newest first · limit 50. Operations are recorded when persistence is configured; stop/restart/update/delete/drain/force_release/boot_adopt/trigger kinds.
     </div>
   </div>
 </div>

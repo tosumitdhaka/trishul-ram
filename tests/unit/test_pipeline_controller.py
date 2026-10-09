@@ -11,22 +11,31 @@ Verifies that after removing coordinator / rebalance / sync machinery:
 """
 from __future__ import annotations
 
+import os
 import threading
 import time
 import uuid
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from unittest.mock import MagicMock
 
 import pytest
+from sqlalchemy import text
 
 from tram.agent.worker_pool import (
     DISPATCH_ACCEPTED,
     DISPATCH_FAILED,
     DISPATCH_NO_CAPACITY,
     DispatchOutcome,
+    WorkerPool,
 )
 from tram.core.context import RunResult, RunStatus
-from tram.pipeline.controller import PipelineController
+from tram.persistence.db import TramDB
+from tram.persistence.ledger import CLAIMED, claim_run
+from tram.pipeline.controller import (
+    ExecutorOverloadError,
+    PipelineController,
+    QueueCapacityError,
+)
 from tram.pipeline.loader import load_pipeline_from_yaml
 from tram.pipeline.manager import PipelineManager
 
@@ -177,6 +186,7 @@ def _make_controller(
     manager_url="",
     kubernetes_service_manager=None,
     single_stream_placements=True,
+    **kwargs,
 ) -> PipelineController:
     """Build a controller with a patched BackgroundScheduler that doesn't start."""
     ctrl = PipelineController(
@@ -186,6 +196,7 @@ def _make_controller(
         manager_url=manager_url,
         kubernetes_service_manager=kubernetes_service_manager,
         single_stream_placements=single_stream_placements,
+        **kwargs,
     )
     return ctrl
 
@@ -195,6 +206,16 @@ def _started_controller(**kwargs) -> PipelineController:
     ctrl = _make_controller(**kwargs)
     ctrl.start()
     return ctrl
+
+
+def _accepted_worker_pool(worker_url: str = "http://worker-0:8766") -> MagicMock:
+    """MagicMock worker pool whose dispatch is always accepted."""
+    wp = MagicMock()
+    wp.healthy_workers.return_value = [worker_url]
+    wp.dispatch_with_result.return_value = DispatchOutcome(
+        worker_url=worker_url, outcome=DISPATCH_ACCEPTED,
+    )
+    return wp
 
 
 # ── Instantiation ──────────────────────────────────────────────────────────
@@ -1997,3 +2018,2342 @@ class TestStatefulBroadcastGuard:
         time.sleep(0.1)
         assert ctrl.executor.batch_run.call_args.kwargs["flush"] is False
         ctrl.stop()
+
+
+# ── V18-04: durable claim before dispatch ──────────────────────────────────
+
+
+class TestLedgerClaimBeforeDispatch:
+    """V18-04 §1: every batch trigger path inserts the run_intents row and
+    claims via ledger.claim_run BEFORE dispatching. A LOST claim (another
+    attempt holds the guard) surfaces today's already-running behavior."""
+
+    def _fetch(self, db, sql, params=None):
+        with db._engine.connect() as conn:
+            rows = conn.execute(text(sql), params or {}).mappings().fetchall()
+        return [dict(r) for r in rows]
+
+    def _started_with_db(self, tmp_path, wp=None):
+        from tram.persistence.db import TramDB
+        db = TramDB(url=f"sqlite:///{tmp_path}/v1804-claim.db")
+        ctrl = _started_controller(
+            worker_pool=wp or _accepted_worker_pool(),
+            db=db,
+            manager_url="http://manager:8765",
+        )
+        return db, ctrl
+
+    def _register_batch(self, ctrl, yaml_text):
+        # Register via the manager directly (not ctrl.register) so no interval
+        # job is scheduled — a started scheduler fires interval jobs at
+        # next_run_time=now and would race the synchronous _run_batch calls.
+        config = load_pipeline_from_yaml(yaml_text)
+        ctrl.manager.register(config, yaml_text=yaml_text)
+        ctrl.manager.set_status(config.name, "scheduled")
+
+    def test_manual_trigger_claims_before_dispatch(self, tmp_path):
+        db, ctrl = self._started_with_db(tmp_path)
+        self._register_batch(ctrl, _MANUAL_YAML)
+        try:
+            ctrl._run_batch("my-manual", run_id="r-manual", origin="manual")
+
+            intents = self._fetch(db, "SELECT final_outcome FROM run_intents WHERE run_id = 'r-manual'")
+            assert len(intents) == 1
+            assert intents[0]["final_outcome"] is None
+            guards = self._fetch(db, "SELECT attempt_id, generation FROM execution_guards WHERE guard_key = 'my-manual'")
+            assert guards[0]["attempt_id"] == "r-manual-a1"
+            assert guards[0]["generation"] == 1
+            attempts = self._fetch(db, "SELECT state, dispatch_sent_at FROM execution_attempts WHERE run_id = 'r-manual'")
+            assert attempts[0]["state"] == "running"  # 202 acceptance advanced it
+            assert attempts[0]["dispatch_sent_at"] is not None
+
+            kwargs = ctrl._worker_pool.dispatch_with_result.call_args.kwargs
+            assert kwargs["attempt_id"] == "r-manual-a1"
+            assert kwargs["generation"] == 1
+        finally:
+            ctrl.stop()
+
+    def test_scheduled_run_batch_claims_before_dispatch(self, tmp_path):
+        db, ctrl = self._started_with_db(tmp_path)
+        self._register_batch(ctrl, _INTERVAL_YAML)
+        try:
+            ctrl._run_batch("my-interval", run_id="r-sched")
+
+            guards = self._fetch(db, "SELECT attempt_id FROM execution_guards WHERE guard_key = 'my-interval'")
+            assert guards[0]["attempt_id"] == "r-sched-a1"
+            intents = self._fetch(db, "SELECT origin FROM run_intents WHERE run_id = 'r-sched'")
+            assert intents[0]["origin"] == "scheduled"
+            kwargs = ctrl._worker_pool.dispatch_with_result.call_args.kwargs
+            assert kwargs["attempt_id"] == "r-sched-a1"
+        finally:
+            ctrl.stop()
+
+    def test_lost_claim_surfaces_already_running_no_dispatch(self, tmp_path):
+        db, ctrl = self._started_with_db(tmp_path)
+        self._register_batch(ctrl, _INTERVAL_YAML)
+        try:
+            # Pre-claim the guard with a different run (stale in-memory status /
+            # another manager) — the ledger is the authoritative guard.
+            with db._engine.begin() as conn:
+                conn.execute(text("""
+                    INSERT INTO run_intents
+                        (run_id, pipeline_name, origin, flush, requested_at, expires_at,
+                         requested_generation)
+                    VALUES ('r-holder', 'my-interval', 'scheduled', 0, :now, NULL, 1)
+                """), {"now": datetime.now(UTC).isoformat()})
+            holder = claim_run(
+                db._engine, guard_key="my-interval", guard_kind="batch",
+                pipeline_name="my-interval", run_id="r-holder", generation=1,
+            )
+            assert holder.status == CLAIMED
+
+            ctrl._worker_pool.dispatch_with_result.reset_mock()
+            ctrl._run_batch("my-interval", run_id="r-loser", origin="manual")
+
+            # no dispatch, no attempt row for the loser
+            ctrl._worker_pool.dispatch_with_result.assert_not_called()
+            attempts = self._fetch(db, "SELECT run_id FROM execution_attempts WHERE run_id = 'r-loser'")
+            assert attempts == []
+            # the loser's run_id resolves as FAILED (manual origin — GH #47)
+            result = ctrl.manager.get_run("r-loser")
+            assert result is not None
+            assert result.status == RunStatus.FAILED
+            assert "guard" in (result.error or "")
+            # the winner's guard is untouched
+            guards = self._fetch(db, "SELECT attempt_id FROM execution_guards WHERE guard_key = 'my-interval'")
+            assert guards[0]["attempt_id"] == "r-holder-a1"
+        finally:
+            ctrl.stop()
+
+    def test_queued_drain_claim_acquires_guard(self, tmp_path):
+        """A queued request holds a reservation, not the guard; the drain claim
+        converts it (frozen §2) and registers the attempt for the dispatch."""
+        db, ctrl = self._started_with_db(tmp_path)
+        self._register_batch(ctrl, _MANUAL_YAML)
+        try:
+            ctrl._worker_pool.healthy_workers.return_value = []
+            triggered = ctrl.trigger_run("my-manual")
+            assert triggered.disposition == "queued"
+
+            # reservation only — no guard yet
+            guards = self._fetch(db, "SELECT attempt_id FROM execution_guards WHERE guard_key = 'my-manual'")
+            assert guards == []
+
+            claimed = ctrl.claim_queued_run(triggered.run_id)
+            assert claimed is not None
+            assert claimed["attempt_id"] == f"{triggered.run_id}-a1"
+
+            guards = self._fetch(db, "SELECT attempt_id FROM execution_guards WHERE guard_key = 'my-manual'")
+            assert guards[0]["attempt_id"] == f"{triggered.run_id}-a1"
+            attempts = self._fetch(db, "SELECT state FROM execution_attempts WHERE run_id = :r", {"r": triggered.run_id})
+            assert attempts[0]["state"] == "dispatching"
+            # the controller registered the attempt so the drain dispatch
+            # (which carries only the run_id) attaches the identity
+            ctrl._worker_pool.register_attempt.assert_called_once_with(
+                triggered.run_id, f"{triggered.run_id}-a1", 1, ""
+            )
+        finally:
+            ctrl.stop()
+
+    def test_no_capacity_enqueue_reenters_as_new_attempt(self, tmp_path):
+        """Frozen 503 rule: the attempt is terminal with a capacity reason, the
+        intent stays unresolved, and the queued re-entry dispatches as a NEW
+        attempt (N+1 under the same run_id)."""
+        db, ctrl = self._started_with_db(tmp_path)
+        wp = ctrl._worker_pool
+        self._register_batch(ctrl, _INTERVAL_YAML)
+        try:
+            wp.dispatch_with_result.return_value = DispatchOutcome(
+                worker_url=None, outcome=DISPATCH_NO_CAPACITY,
+            )
+            ctrl._run_batch("my-interval", run_id="r-cap", origin="manual")
+
+            attempts = self._fetch(db, "SELECT state FROM execution_attempts WHERE run_id = 'r-cap'")
+            assert attempts[0]["state"] == "terminal"
+            guards = self._fetch(db, "SELECT attempt_id FROM execution_guards WHERE guard_key = 'my-interval'")
+            assert guards[0]["attempt_id"] is None
+            intents = self._fetch(db, "SELECT final_outcome FROM run_intents WHERE run_id = 'r-cap'")
+            assert intents[0]["final_outcome"] is None
+            queued = db.get_active_queued_runs()
+            assert len(queued) == 1 and queued[0]["run_id"] == "r-cap"
+
+            wp.dispatch_with_result.return_value = DispatchOutcome(
+                worker_url="http://worker-0:8766", outcome=DISPATCH_ACCEPTED,
+            )
+            claimed = ctrl.claim_queued_run("r-cap")
+            assert claimed["attempt_id"] == "r-cap-a2"
+            attempts = self._fetch(
+                db, "SELECT attempt_id, state FROM execution_attempts WHERE run_id = 'r-cap' ORDER BY ordinal"
+            )
+            assert [a["attempt_id"] for a in attempts] == ["r-cap-a1", "r-cap-a2"]
+            assert attempts[1]["state"] == "dispatching"
+        finally:
+            ctrl.stop()
+
+
+# ── V18-04: identity-checked run-complete ───────────────────────────────────
+
+
+class TestAttemptRunComplete:
+    """V18-04 §3: the handler resolves conditionally on exact attempt_id +
+    generation — intent resolution idempotent for the winner, attempt →
+    terminal transition fenced, guard released by identity, ledger committed
+    before the response. Legacy callbacks (no attempt_id) keep today's path."""
+
+    def _fetch(self, db, sql, params=None):
+        with db._engine.connect() as conn:
+            rows = conn.execute(text(sql), params or {}).mappings().fetchall()
+        return [dict(r) for r in rows]
+
+    def _started_with_db(self, tmp_path, wp=None):
+        from tram.persistence.db import TramDB
+        db = TramDB(url=f"sqlite:///{tmp_path}/v1804-complete.db")
+        ctrl = _started_controller(
+            worker_pool=wp or _accepted_worker_pool(),
+            db=db,
+            manager_url="http://manager:8765",
+        )
+        return db, ctrl
+
+    def _register_batch(self, ctrl, yaml_text):
+        # Register via the manager directly (not ctrl.register) so no interval
+        # job is scheduled — a started scheduler fires interval jobs at
+        # next_run_time=now and would race the synchronous _run_batch calls.
+        config = load_pipeline_from_yaml(yaml_text)
+        ctrl.manager.register(config, yaml_text=yaml_text)
+        ctrl.manager.set_status(config.name, "scheduled")
+
+    def test_identity_match_resolves_intent_and_releases_guard(self, tmp_path):
+        db, ctrl = self._started_with_db(tmp_path)
+        self._register_batch(ctrl, _INTERVAL_YAML)
+        try:
+            ctrl._run_batch("my-interval", run_id="r-win")
+            attempts = self._fetch(db, "SELECT state FROM execution_attempts WHERE run_id = 'r-win'")
+            assert attempts[0]["state"] == "running"  # 202 acceptance advanced it
+
+            resp = ctrl.on_attempt_run_complete(
+                attempt_id="r-win-a1", generation=1, run_id="r-win",
+                pipeline_name="my-interval", worker_id="w0", status="success",
+                records_in=5, records_out=5,
+            )
+            assert resp == {"ok": True}
+
+            attempts = self._fetch(db, "SELECT state, finished_at FROM execution_attempts WHERE run_id = 'r-win'")
+            assert attempts[0]["state"] == "terminal"
+            assert attempts[0]["finished_at"] is not None
+            guards = self._fetch(db, "SELECT attempt_id FROM execution_guards WHERE guard_key = 'my-interval'")
+            assert guards[0]["attempt_id"] is None
+            intents = self._fetch(db, "SELECT final_outcome, final_attempt_id FROM run_intents WHERE run_id = 'r-win'")
+            assert intents == [{"final_outcome": "success", "final_attempt_id": "r-win-a1"}]
+            # the run-history row landed
+            result = ctrl.manager.get_run("r-win")
+            assert result is not None
+            assert result.status == RunStatus.SUCCESS
+        finally:
+            ctrl.stop()
+
+    def test_generation_mismatch_ignored_with_diagnostics(self, tmp_path):
+        db, ctrl = self._started_with_db(tmp_path)
+        self._register_batch(ctrl, _INTERVAL_YAML)
+        try:
+            ctrl._run_batch("my-interval", run_id="r-gen")
+            resp = ctrl.on_attempt_run_complete(
+                attempt_id="r-gen-a1", generation=99, run_id="r-gen",
+                pipeline_name="my-interval", worker_id="w0", status="success",
+                records_in=1, records_out=1,
+            )
+            assert resp == {"ok": True, "ignored": "identity_mismatch"}
+            # no ledger change, no history row, guard still held by the attempt
+            attempts = self._fetch(db, "SELECT state FROM execution_attempts WHERE run_id = 'r-gen'")
+            assert attempts[0]["state"] == "running"
+            guards = self._fetch(db, "SELECT attempt_id FROM execution_guards WHERE guard_key = 'my-interval'")
+            assert guards[0]["attempt_id"] == "r-gen-a1"
+            assert ctrl.manager.get_run("r-gen") is None
+        finally:
+            ctrl.stop()
+
+    def test_wrong_attempt_id_ignored(self, tmp_path):
+        db, ctrl = self._started_with_db(tmp_path)
+        self._register_batch(ctrl, _INTERVAL_YAML)
+        try:
+            ctrl._run_batch("my-interval", run_id="r-one")
+            resp = ctrl.on_attempt_run_complete(
+                attempt_id="r-two-a1", generation=1, run_id="r-one",
+                pipeline_name="my-interval", worker_id="w0", status="success",
+                records_in=1, records_out=1,
+            )
+            assert resp == {"ok": True, "ignored": "unknown_attempt"}
+            assert ctrl.manager.get_run("r-one") is None
+            guards = self._fetch(db, "SELECT attempt_id FROM execution_guards WHERE guard_key = 'my-interval'")
+            assert guards[0]["attempt_id"] == "r-one-a1"
+        finally:
+            ctrl.stop()
+
+    def test_duplicate_completion_is_idempotent(self, tmp_path):
+        db, ctrl = self._started_with_db(tmp_path)
+        self._register_batch(ctrl, _INTERVAL_YAML)
+        try:
+            ctrl._run_batch("my-interval", run_id="r-dup")
+            first = ctrl.on_attempt_run_complete(
+                attempt_id="r-dup-a1", generation=1, run_id="r-dup",
+                pipeline_name="my-interval", worker_id="w0", status="success",
+                records_in=3, records_out=3,
+            )
+            assert first == {"ok": True}
+            second = ctrl.on_attempt_run_complete(
+                attempt_id="r-dup-a1", generation=1, run_id="r-dup",
+                pipeline_name="my-interval", worker_id="w0", status="success",
+                records_in=3, records_out=3,
+            )
+            assert second == {"ok": True}
+            # the winner's intent row is untouched by the duplicate
+            intents = self._fetch(db, "SELECT final_outcome, final_attempt_id FROM run_intents WHERE run_id = 'r-dup'")
+            assert intents == [{"final_outcome": "success", "final_attempt_id": "r-dup-a1"}]
+            matches = [r for r in ctrl.manager.get("my-interval").run_history if r.run_id == "r-dup"]
+            assert len(matches) == 1
+        finally:
+            ctrl.stop()
+
+    def test_late_callback_cannot_clobber_newer_guard(self, tmp_path):
+        """A late callback for a retired attempt records diagnostics only and
+        cannot touch the newer run's guard, lease, status, or generation (the
+        name-keyed _active_batch_runs.pop is replaced)."""
+        db, ctrl = self._started_with_db(tmp_path)
+        self._register_batch(ctrl, _INTERVAL_YAML)
+        try:
+            # run 1 dispatched and completed (guard released)
+            ctrl._run_batch("my-interval", run_id="r-old")
+            ctrl.on_attempt_run_complete(
+                attempt_id="r-old-a1", generation=1, run_id="r-old",
+                pipeline_name="my-interval", worker_id="w0", status="success",
+                records_in=1, records_out=1,
+            )
+            # run 2 dispatched and still active
+            ctrl._worker_pool.dispatch_with_result.reset_mock()
+            ctrl._run_batch("my-interval", run_id="r-new")
+            assert ctrl.manager.get("my-interval").status == "running"
+            assert len(ctrl.get_active_batch_runs()) == 1
+            assert ctrl.get_active_batch_runs()[0]["run_id"] == "r-new"
+
+            # late duplicate callback for the retired attempt
+            ctrl.on_attempt_run_complete(
+                attempt_id="r-old-a1", generation=1, run_id="r-old",
+                pipeline_name="my-interval", worker_id="w0", status="success",
+                records_in=1, records_out=1,
+            )
+
+            # the newer run's guard, lease, and status are untouched
+            guards = self._fetch(db, "SELECT attempt_id, run_id FROM execution_guards WHERE guard_key = 'my-interval'")
+            assert guards[0] == {"attempt_id": "r-new-a1", "run_id": "r-new"}
+            assert len(ctrl.get_active_batch_runs()) == 1
+            assert ctrl.get_active_batch_runs()[0]["run_id"] == "r-new"
+            assert ctrl.manager.get("my-interval").status == "running"
+            # the old run still has exactly one history row
+            matches = [r for r in ctrl.manager.get("my-interval").run_history if r.run_id == "r-old"]
+            assert len(matches) == 1
+        finally:
+            ctrl.stop()
+
+    def test_legacy_completion_resolves_ledger_best_effort(self, tmp_path):
+        """A v1.7 worker's legacy-shaped completion (no attempt_id) still
+        resolves the ledger by run identity — the guard can never leak."""
+        db, ctrl = self._started_with_db(tmp_path)
+        self._register_batch(ctrl, _INTERVAL_YAML)
+        try:
+            ctrl._run_batch("my-interval", run_id="r-legacy")
+            ctrl.on_worker_run_complete(
+                run_id="r-legacy", pipeline_name="my-interval",
+                worker_id="w0", status="success", records_in=2, records_out=2,
+            )
+            attempts = self._fetch(db, "SELECT state FROM execution_attempts WHERE run_id = 'r-legacy'")
+            assert attempts[0]["state"] == "terminal"
+            guards = self._fetch(db, "SELECT attempt_id FROM execution_guards WHERE guard_key = 'my-interval'")
+            assert guards[0]["attempt_id"] is None
+            intents = self._fetch(db, "SELECT final_outcome FROM run_intents WHERE run_id = 'r-legacy'")
+            assert intents[0]["final_outcome"] == "success"
+        finally:
+            ctrl.stop()
+
+    def test_completion_before_dispatch_commit_is_tolerated(self, tmp_path):
+        """Fast-run race: a completion arriving while the attempt is still
+        'claimed' (before the dispatch commit) still terminalls it — the
+        frozen running→terminal fence is extended to the pre-acceptance
+        states; the identity/generation fence is unchanged."""
+        db, ctrl = self._started_with_db(tmp_path)
+        self._register_batch(ctrl, _INTERVAL_YAML)
+        try:
+            with db._engine.begin() as conn:
+                conn.execute(text("""
+                    INSERT INTO run_intents
+                        (run_id, pipeline_name, origin, flush, requested_at, expires_at,
+                         requested_generation)
+                    VALUES ('r-claimed', 'my-interval', 'manual', 0, :now, NULL, 1)
+                """), {"now": datetime.now(UTC).isoformat()})
+            claim = claim_run(
+                db._engine, guard_key="my-interval", guard_kind="batch",
+                pipeline_name="my-interval", run_id="r-claimed", generation=1,
+            )
+            assert claim.status == CLAIMED
+
+            resp = ctrl.on_attempt_run_complete(
+                attempt_id="r-claimed-a1", generation=1, run_id="r-claimed",
+                pipeline_name="my-interval", worker_id="w0", status="success",
+                records_in=0, records_out=0,
+            )
+            assert resp == {"ok": True}
+            attempts = self._fetch(db, "SELECT state FROM execution_attempts WHERE run_id = 'r-claimed'")
+            assert attempts[0]["state"] == "terminal"
+        finally:
+            ctrl.stop()
+
+
+# ── W3: worker-loss reap terminalization ──────────────────────────────────────
+
+
+class TestWorkerLossReapTerminalization:
+    """Live-found kind bug (2026-10-08): a worker deleted mid-run had the
+    manager write the FAILED run-history row WITHOUT terminalizing the ledger —
+    the attempt stayed 'running' and the guard stayed held, so every subsequent
+    trigger claim-LOST and the pipeline stayed wedged until a manager restart.
+
+    The reap (mark_active_batch_run_lost) now uses the same identity-checked
+    ``_terminalize_attempt`` pattern as on_attempt_run_complete: attempt →
+    terminal (failed, worker_lost), guard released by identity, intent
+    resolved — and the run-history FAILED row is only written in that same
+    path. The conditional fence pins the outbox-wins ordering (a journal
+    completion that commits first makes the reap a no-op) and resurrected-
+    worker late completions stay idempotent no-ops."""
+
+    def _fetch(self, db, sql, params=None):
+        with db._engine.connect() as conn:
+            rows = conn.execute(text(sql), params or {}).mappings().fetchall()
+        return [dict(r) for r in rows]
+
+    def _started_with_db(self, tmp_path, wp=None, name="w3-reap.db"):
+        from tram.persistence.db import TramDB
+        db = TramDB(url=f"sqlite:///{tmp_path}/{name}")
+        pool = wp or _accepted_worker_pool()
+        # The lost-run FAILED row binds node_id to the owning worker — a
+        # MagicMock value would fail the sqlite INSERT (same wiring as the
+        # existing mark-lost tests).
+        pool.worker_id_for_url.return_value = "w0"
+        ctrl = _started_controller(
+            worker_pool=pool,
+            db=db,
+            manager_url="http://manager:8765",
+        )
+        return db, ctrl
+
+    def _register_batch(self, ctrl, yaml_text):
+        # Register via the manager directly (not ctrl.register) so no interval
+        # job is scheduled — a started scheduler fires interval jobs at
+        # next_run_time=now and would race the synchronous _run_batch calls.
+        config = load_pipeline_from_yaml(yaml_text)
+        ctrl.manager.register(config, yaml_text=yaml_text)
+        ctrl.manager.set_status(config.name, "scheduled")
+
+    def test_worker_loss_terminalizes_attempt_and_next_trigger_claims(self, tmp_path):
+        """Regression pin (the live failure): worker dies mid-run → the reap
+        terminalls the attempt (failed, worker_lost), releases the guard, and
+        resolves the intent — and the NEXT trigger claims successfully instead
+        of claim-LOST."""
+        db, ctrl = self._started_with_db(tmp_path)
+        self._register_batch(ctrl, _MANUAL_YAML)
+        try:
+            ctrl._run_batch("my-manual", run_id="r-die", origin="manual")
+            attempts = self._fetch(db, "SELECT state FROM execution_attempts WHERE run_id = 'r-die'")
+            assert attempts[0]["state"] == "running"
+            guards = self._fetch(db, "SELECT attempt_id FROM execution_guards WHERE guard_key = 'my-manual'")
+            assert guards[0]["attempt_id"] == "r-die-a1"
+
+            # Worker pod deleted mid-run — the BatchReconciler reap fires.
+            assert ctrl.mark_active_batch_run_lost(
+                "my-manual",
+                error="worker-owned batch run disappeared before callback: r-die",
+                run_id="r-die",
+            ) is True
+
+            # Ledger terminal + guard released + intent resolved (atomically).
+            attempts = self._fetch(
+                db,
+                "SELECT state, cancel_reason FROM execution_attempts WHERE run_id = 'r-die'",
+            )
+            assert attempts[0] == {"state": "terminal", "cancel_reason": "worker_lost"}
+            guards = self._fetch(db, "SELECT attempt_id FROM execution_guards WHERE guard_key = 'my-manual'")
+            assert guards[0]["attempt_id"] is None
+            intents = self._fetch(
+                db,
+                "SELECT final_outcome, final_attempt_id FROM run_intents WHERE run_id = 'r-die'",
+            )
+            assert intents[0] == {"final_outcome": "failed", "final_attempt_id": "r-die-a1"}
+            # The FAILED run-history row still lands.
+            result = ctrl.manager.get_run("r-die")
+            assert result is not None
+            assert result.status == RunStatus.FAILED
+            assert "disappeared" in (result.error or "")
+            assert ctrl.manager.get("my-manual").status == "error"
+
+            # THE regression pin: the next trigger CLAIMS (guard is free) and
+            # dispatches — it no longer claim-LOSTs.
+            ctrl._worker_pool.dispatch_with_result.reset_mock()
+            ctrl._run_batch("my-manual", run_id="r-next", origin="manual")
+            guards = self._fetch(db, "SELECT attempt_id FROM execution_guards WHERE guard_key = 'my-manual'")
+            assert guards[0]["attempt_id"] == "r-next-a1"
+            kwargs = ctrl._worker_pool.dispatch_with_result.call_args.kwargs
+            assert kwargs["attempt_id"] == "r-next-a1"
+        finally:
+            ctrl.stop()
+
+    def test_worker_loss_reap_is_idempotent(self, tmp_path):
+        """A second reap (e.g. a racing reconciler pass with a stale lease
+        read) is a 0-row no-op: the ledger stays terminal, the history keeps
+        exactly one FAILED row, and the status is not re-flipped."""
+        db, ctrl = self._started_with_db(tmp_path)
+        self._register_batch(ctrl, _MANUAL_YAML)
+        try:
+            ctrl._run_batch("my-manual", run_id="r-twice", origin="manual")
+            assert ctrl.mark_active_batch_run_lost(
+                "my-manual",
+                error="worker-owned batch run disappeared before callback: r-twice",
+                run_id="r-twice",
+            ) is True
+            assert ctrl.mark_active_batch_run_lost(
+                "my-manual",
+                error="worker-owned batch run disappeared before callback: r-twice",
+                run_id="r-twice",
+            ) is True
+
+            attempts = self._fetch(db, "SELECT state FROM execution_attempts WHERE run_id = 'r-twice'")
+            assert attempts[0]["state"] == "terminal"
+            guards = self._fetch(db, "SELECT attempt_id FROM execution_guards WHERE guard_key = 'my-manual'")
+            assert guards[0]["attempt_id"] is None
+            intents = self._fetch(db, "SELECT final_outcome FROM run_intents WHERE run_id = 'r-twice'")
+            assert intents[0]["final_outcome"] == "failed"
+            matches = [r for r in ctrl.manager.get("my-manual").run_history if r.run_id == "r-twice"]
+            assert len(matches) == 1
+            assert matches[0].status == RunStatus.FAILED
+        finally:
+            ctrl.stop()
+
+    def test_outbox_completion_before_reap_wins(self, tmp_path):
+        """Outbox-wins ordering: a resurrected worker whose journal completion
+        lands BEFORE the reap fires commits the ledger + SUCCESS row; the
+        stale reap then no-ops — attempt stays terminal, the history row stays
+        SUCCESS, and the pipeline status is not clobbered to 'error'."""
+        db, ctrl = self._started_with_db(tmp_path)
+        self._register_batch(ctrl, _MANUAL_YAML)
+        try:
+            ctrl._run_batch("my-manual", run_id="r-outbox", origin="manual")
+            attempts = self._fetch(db, "SELECT state FROM execution_attempts WHERE run_id = 'r-outbox'")
+            assert attempts[0]["state"] == "running"
+
+            # The worker restarted and its outbox delivered the completion.
+            resp = ctrl.on_attempt_run_complete(
+                attempt_id="r-outbox-a1", generation=1, run_id="r-outbox",
+                pipeline_name="my-manual", worker_id="w0", status="success",
+                records_in=4, records_out=4,
+            )
+            assert resp == {"ok": True}
+            assert ctrl.manager.get_run("r-outbox").status == RunStatus.SUCCESS
+
+            # A stale reap (the reconciler read the lease before the pop) fires.
+            assert ctrl.mark_active_batch_run_lost(
+                "my-manual",
+                error="worker-owned batch run disappeared before callback: r-outbox",
+                run_id="r-outbox",
+            ) is True
+
+            # The reap no-ops: attempt already terminal, intent resolved by the
+            # completion (success), guard free, history unchanged, status
+            # untouched.
+            attempts = self._fetch(db, "SELECT state FROM execution_attempts WHERE run_id = 'r-outbox'")
+            assert attempts[0]["state"] == "terminal"
+            intents = self._fetch(
+                db,
+                "SELECT final_outcome, final_attempt_id FROM run_intents WHERE run_id = 'r-outbox'",
+            )
+            assert intents[0] == {"final_outcome": "success", "final_attempt_id": "r-outbox-a1"}
+            guards = self._fetch(db, "SELECT attempt_id FROM execution_guards WHERE guard_key = 'my-manual'")
+            assert guards[0]["attempt_id"] is None
+            matches = [r for r in ctrl.manager.get("my-manual").run_history if r.run_id == "r-outbox"]
+            assert len(matches) == 1
+            assert matches[0].status == RunStatus.SUCCESS
+            assert ctrl.manager.get("my-manual").status != "error"
+        finally:
+            ctrl.stop()
+
+    def test_resurrected_worker_late_completion_is_noop(self, tmp_path):
+        """A resurrected worker that delivers its journal completion AFTER the
+        reap committed is an idempotent no-op: the attempt stays terminal
+        (worker_lost), the intent stays failed, the guard stays free, and the
+        FAILED history row is not superseded."""
+        db, ctrl = self._started_with_db(tmp_path)
+        self._register_batch(ctrl, _MANUAL_YAML)
+        try:
+            ctrl._run_batch("my-manual", run_id="r-late", origin="manual")
+            assert ctrl.mark_active_batch_run_lost(
+                "my-manual",
+                error="worker-owned batch run disappeared before callback: r-late",
+                run_id="r-late",
+            ) is True
+            assert ctrl.manager.get_run("r-late").status == RunStatus.FAILED
+
+            resp = ctrl.on_attempt_run_complete(
+                attempt_id="r-late-a1", generation=1, run_id="r-late",
+                pipeline_name="my-manual", worker_id="w0", status="success",
+                records_in=1, records_out=1,
+            )
+            assert resp == {"ok": True}
+
+            attempts = self._fetch(
+                db,
+                "SELECT state, cancel_reason FROM execution_attempts WHERE run_id = 'r-late'",
+            )
+            assert attempts[0] == {"state": "terminal", "cancel_reason": "worker_lost"}
+            intents = self._fetch(db, "SELECT final_outcome FROM run_intents WHERE run_id = 'r-late'")
+            assert intents[0]["final_outcome"] == "failed"
+            guards = self._fetch(db, "SELECT attempt_id FROM execution_guards WHERE guard_key = 'my-manual'")
+            assert guards[0]["attempt_id"] is None
+            matches = [r for r in ctrl.manager.get("my-manual").run_history if r.run_id == "r-late"]
+            assert len(matches) == 1
+            assert matches[0].status == RunStatus.FAILED
+        finally:
+            ctrl.stop()
+
+    def test_dispatch_failure_leaves_ledger_terminal(self, tmp_path):
+        """Dispatch timeout/rejection path: DISPATCH_FAILED writes the FAILED
+        row AND terminalls the attempt / releases the guard / resolves the
+        intent (audit — already-correct path pinned)."""
+        db, ctrl = self._started_with_db(tmp_path)
+        self._register_batch(ctrl, _MANUAL_YAML)
+        try:
+            ctrl._worker_pool.dispatch_with_result.return_value = DispatchOutcome(
+                worker_url=None,
+                outcome=DISPATCH_FAILED,
+                error="HTTP 504 gateway timeout",
+            )
+            ctrl._run_batch("my-manual", run_id="r-timeout", origin="manual")
+
+            attempts = self._fetch(
+                db,
+                "SELECT state, cancel_reason FROM execution_attempts WHERE run_id = 'r-timeout'",
+            )
+            assert attempts[0]["state"] == "terminal"
+            guards = self._fetch(db, "SELECT attempt_id FROM execution_guards WHERE guard_key = 'my-manual'")
+            assert guards[0]["attempt_id"] is None
+            intents = self._fetch(db, "SELECT final_outcome FROM run_intents WHERE run_id = 'r-timeout'")
+            assert intents[0]["final_outcome"] == "failed"
+            result = ctrl.manager.get_run("r-timeout")
+            assert result is not None
+            assert result.status == RunStatus.FAILED
+            assert "504" in (result.error or "")
+        finally:
+            ctrl.stop()
+
+    def test_no_capacity_non_queue_leaves_ledger_terminal(self, tmp_path):
+        """DISPATCH_NO_CAPACITY without the queue fallback (scheduled origin —
+        only manual-origin runs are enqueued) writes the FAILED row AND
+        terminalls the attempt / releases the guard / resolves the intent
+        (audit — already-correct path pinned)."""
+        db, ctrl = self._started_with_db(tmp_path)
+        self._register_batch(ctrl, _MANUAL_YAML)
+        try:
+            ctrl._worker_pool.dispatch_with_result.return_value = DispatchOutcome(
+                worker_url=None,
+                outcome=DISPATCH_NO_CAPACITY,
+                error="No healthy workers available for dispatch",
+            )
+            ctrl._run_batch("my-manual", run_id="r-nocap")  # origin="scheduled"
+
+            attempts = self._fetch(db, "SELECT state FROM execution_attempts WHERE run_id = 'r-nocap'")
+            assert attempts[0]["state"] == "terminal"
+            guards = self._fetch(db, "SELECT attempt_id FROM execution_guards WHERE guard_key = 'my-manual'")
+            assert guards[0]["attempt_id"] is None
+            intents = self._fetch(db, "SELECT final_outcome FROM run_intents WHERE run_id = 'r-nocap'")
+            assert intents[0]["final_outcome"] == "failed"
+        finally:
+            ctrl.stop()
+
+    def test_stop_mid_run_completion_leaves_ledger_terminal(self, tmp_path):
+        """Stop-mid-run audit: stop_pipeline does not write a FAILED row for
+        the in-flight batch — the run completes on the worker and its
+        completion callback terminalls the attempt / releases the guard /
+        resolves the intent (already-correct path pinned)."""
+        db, ctrl = self._started_with_db(tmp_path)
+        self._register_batch(ctrl, _MANUAL_YAML)
+        try:
+            ctrl._run_batch("my-manual", run_id="r-stop", origin="manual")
+            guards = self._fetch(db, "SELECT attempt_id FROM execution_guards WHERE guard_key = 'my-manual'")
+            assert guards[0]["attempt_id"] == "r-stop-a1"
+
+            ctrl.stop_pipeline("my-manual")
+            assert ctrl.manager.get("my-manual").status == "stopped"
+
+            # The in-flight worker run completes after the stop.
+            resp = ctrl.on_attempt_run_complete(
+                attempt_id="r-stop-a1", generation=1, run_id="r-stop",
+                pipeline_name="my-manual", worker_id="w0", status="success",
+                records_in=2, records_out=2,
+            )
+            assert resp == {"ok": True}
+
+            attempts = self._fetch(db, "SELECT state FROM execution_attempts WHERE run_id = 'r-stop'")
+            assert attempts[0]["state"] == "terminal"
+            guards = self._fetch(db, "SELECT attempt_id FROM execution_guards WHERE guard_key = 'my-manual'")
+            assert guards[0]["attempt_id"] is None
+            intents = self._fetch(db, "SELECT final_outcome FROM run_intents WHERE run_id = 'r-stop'")
+            assert intents[0]["final_outcome"] == "success"
+            assert ctrl.manager.get_run("r-stop").status == RunStatus.SUCCESS
+        finally:
+            ctrl.stop()
+
+    def test_stop_mid_drain_dispatch_failure_retires_attempt(self, tmp_path):
+        """Stop-mid-drain race: a lifecycle stop cancels the queued row while
+        the drain's dispatch is in flight; the dispatch then fails and the
+        revert fence misses (row no longer 'dispatching'). The attempt is
+        retired — terminal, guard released, intent resolved — so stop-mid-run
+        leaves the ledger terminal instead of wedging the guard."""
+        db, ctrl = self._started_with_db(tmp_path)
+        self._register_batch(ctrl, _MANUAL_YAML)
+        try:
+            # Enqueue with zero healthy workers, then let the drain claim it.
+            ctrl._worker_pool.healthy_workers.return_value = []
+            triggered = ctrl.trigger_run("my-manual")
+            assert triggered.disposition == "queued"
+            run_id = triggered.run_id
+            ctrl._worker_pool.healthy_workers.return_value = ["http://worker-0:8766"]
+            claimed = ctrl.claim_queued_run(run_id)
+            assert claimed is not None
+            guards = self._fetch(db, "SELECT attempt_id FROM execution_guards WHERE guard_key = 'my-manual'")
+            assert guards[0]["attempt_id"] == f"{run_id}-a1"
+
+            # Stop cancels the queued row while the dispatch is in flight.
+            ctrl.stop_pipeline("my-manual")
+
+            # The dispatch fails — the revert fence misses (row is 'cancelled').
+            assert ctrl.revert_queued_claim(run_id, result="failed") is False
+
+            attempts = self._fetch(db, "SELECT state FROM execution_attempts WHERE run_id = :r", {"r": run_id})
+            assert attempts[0]["state"] == "terminal"
+            guards = self._fetch(db, "SELECT attempt_id FROM execution_guards WHERE guard_key = 'my-manual'")
+            assert guards[0]["attempt_id"] is None
+            intents = self._fetch(db, "SELECT final_outcome FROM run_intents WHERE run_id = :r", {"r": run_id})
+            assert intents[0]["final_outcome"] == "aborted"
+        finally:
+            ctrl.stop()
+
+
+# ── V18-04: boot adoption ───────────────────────────────────────────────────
+
+
+class TestBootAdoption:
+    """V18-04 §2 (frozen §2–3): at controller boot, before any scheduler fires,
+    every non-terminal ledger attempt is resolved — claimed-unsent aborts
+    locally (never unknown), dispatching/running resolve against the owning
+    worker's journal, and unreachable/no-evidence attempts go 'unknown' with
+    the guard RETAINED (operator force-release is a later lane)."""
+
+    def _fetch(self, db, sql, params=None):
+        with db._engine.connect() as conn:
+            rows = conn.execute(text(sql), params or {}).mappings().fetchall()
+        return [dict(r) for r in rows]
+
+    def _db(self, tmp_path, name="adopt.db"):
+        from tram.persistence.db import TramDB
+        return TramDB(url=f"sqlite:///{tmp_path}/{name}")
+
+    def _seed(
+        self,
+        db,
+        *,
+        run_id,
+        pipeline_name="my-interval",
+        state="dispatching",
+        generation=1,
+        ordinal=1,
+        worker_id="w0",
+        dispatch_sent_at=None,
+    ):
+        """Seed run_intents + execution_guards + execution_attempts (claimed)."""
+        attempt_id = f"{run_id}-a{ordinal}"
+        now = datetime.now(UTC).isoformat()
+        with db._engine.begin() as conn:
+            conn.execute(text("""
+                INSERT INTO run_intents
+                    (run_id, pipeline_name, origin, flush, requested_at, expires_at,
+                     requested_generation, yaml_snapshot, schedule_type)
+                VALUES (:r, :p, 'scheduled', 0, :now, NULL, :gen, 'yaml', 'interval')
+            """), {"r": run_id, "p": pipeline_name, "now": now, "gen": generation})
+            conn.execute(text("""
+                INSERT INTO execution_guards (guard_key, guard_kind, run_id, attempt_id, generation, acquired_at)
+                VALUES (:p, 'batch', :r, :a, :gen, :now)
+            """), {"p": pipeline_name, "r": run_id, "a": attempt_id, "gen": generation, "now": now})
+            conn.execute(text("""
+                INSERT INTO execution_attempts
+                    (attempt_id, run_id, pipeline_name, ordinal, generation, slot_id,
+                     fence_token, state, dispatch_sent_at, worker_id)
+                VALUES (:a, :r, :p, :ordinal, :gen, '', 'ft', :state, :dsp, :wid)
+            """), {
+                "a": attempt_id, "r": run_id, "p": pipeline_name, "ordinal": ordinal,
+                "gen": generation, "state": state, "dsp": dispatch_sent_at, "wid": worker_id,
+            })
+        return attempt_id
+
+    def _boot_controller(self, tmp_path, wp, name="adopt.db"):
+        db = self._db(tmp_path, name)
+        ctrl = _make_controller(db=db, worker_pool=wp, manager_url="http://manager:8765")
+        return db, ctrl
+
+    def test_claimed_unsent_aborts_locally_never_unknown(self, tmp_path):
+        wp = MagicMock()
+        db, ctrl = self._boot_controller(tmp_path, wp)
+        self._seed(db, run_id="r-claim", state="claimed", dispatch_sent_at=None)
+        try:
+            ctrl.start()
+            attempts = self._fetch(
+                db, "SELECT state, cancel_reason FROM execution_attempts WHERE run_id = 'r-claim'"
+            )
+            assert attempts[0]["state"] == "terminal"
+            assert attempts[0]["cancel_reason"] == "manager_lost_before_dispatch"
+            intents = self._fetch(db, "SELECT final_outcome FROM run_intents WHERE run_id = 'r-claim'")
+            assert intents[0]["final_outcome"] == "aborted"
+            guards = self._fetch(db, "SELECT attempt_id FROM execution_guards WHERE guard_key = 'my-interval'")
+            assert guards[0]["attempt_id"] is None  # guard released
+            # local resolution — never a worker query, never unknown
+            wp.query_attempt.assert_not_called()
+        finally:
+            ctrl.stop()
+
+    def test_dispatching_journal_completed_resolves(self, tmp_path):
+        wp = MagicMock()
+        wp.url_for_worker_id.return_value = "http://worker-0:8766"
+        wp.worker_urls.return_value = ["http://worker-0:8766"]
+        wp.query_attempt.return_value = {
+            "kind": "completion",
+            "result_json": {"status": "success", "records_in": 5},
+        }
+        db, ctrl = self._boot_controller(tmp_path, wp)
+        self._seed(db, run_id="r-done", state="dispatching", worker_id="w0")
+        try:
+            ctrl.start()
+            wp.query_attempt.assert_called_once_with("http://worker-0:8766", "r-done-a1")
+            attempts = self._fetch(db, "SELECT state FROM execution_attempts WHERE run_id = 'r-done'")
+            assert attempts[0]["state"] == "terminal"
+            intents = self._fetch(
+                db, "SELECT final_outcome, final_attempt_id FROM run_intents WHERE run_id = 'r-done'"
+            )
+            assert intents == [{"final_outcome": "success", "final_attempt_id": "r-done-a1"}]
+            guards = self._fetch(db, "SELECT attempt_id FROM execution_guards WHERE guard_key = 'my-interval'")
+            assert guards[0]["attempt_id"] is None
+        finally:
+            ctrl.stop()
+
+    def test_adoption_completion_writes_run_history_row(self, tmp_path):
+        """V18-06 task 1: an adoption-resolved journal completion is queryable
+        in run history like a normal completion — decoded outcome, counters,
+        and the V18 columns (attempt_id/generation/outcome/disposition_json)."""
+        import json as _json
+
+        wp = MagicMock()
+        wp.url_for_worker_id.return_value = "http://worker-0:8766"
+        wp.worker_urls.return_value = ["http://worker-0:8766"]
+        wp.query_attempt.return_value = {
+            "kind": "completion",
+            "result_json": {
+                "status": "success",
+                "records_in": 12,
+                "records_out": 12,
+                "records_skipped": 1,
+                "bytes_in": 100,
+                "bytes_out": 90,
+                "started_at": "2026-09-01T10:00:00+00:00",
+                "finished_at": "2026-09-01T10:00:05+00:00",
+                "worker_id": "w0",
+                "dlq_count": 2,
+                "records_failed": 0,
+                "dlq_succeeded": 2,
+                "dlq_failed": 0,
+            },
+        }
+        db, ctrl = self._boot_controller(tmp_path, wp)
+        self._seed(db, run_id="r-hist", state="dispatching", worker_id="w0")
+        try:
+            ctrl.start()
+            rows = self._fetch(
+                db,
+                "SELECT run_id, pipeline_name, status, records_in, records_out,"
+                " records_skipped, bytes_in, bytes_out, attempt_id, generation,"
+                " outcome, disposition_json"
+                " FROM run_history WHERE run_id = 'r-hist'",
+            )
+            assert len(rows) == 1
+            row = rows[0]
+            assert row["run_id"] == "r-hist"
+            assert row["pipeline_name"] == "my-interval"
+            assert row["status"] == "success"
+            assert row["records_in"] == 12
+            assert row["records_out"] == 12
+            assert row["records_skipped"] == 1
+            assert row["bytes_in"] == 100
+            assert row["bytes_out"] == 90
+            assert row["attempt_id"] == "r-hist-a1"
+            assert row["generation"] == 1
+            assert row["outcome"] == "success"
+            assert _json.loads(row["disposition_json"]) == {
+                "dlq_count": 2,
+                "records_failed": 0,
+                "dlq_succeeded": 2,
+                "dlq_failed": 0,
+            }
+            # The run resolves through the normal history lookup.
+            assert ctrl.get_run("r-hist") is not None
+        finally:
+            ctrl.stop()
+
+    def test_dispatching_journal_interrupted_terminates(self, tmp_path):
+        wp = MagicMock()
+        wp.url_for_worker_id.return_value = "http://worker-0:8766"
+        wp.worker_urls.return_value = ["http://worker-0:8766"]
+        wp.query_attempt.return_value = {"kind": "interrupted", "run_id": "r-int"}
+        db, ctrl = self._boot_controller(tmp_path, wp)
+        self._seed(db, run_id="r-int", state="dispatching", worker_id="w0")
+        try:
+            ctrl.start()
+            attempts = self._fetch(
+                db, "SELECT state, cancel_reason FROM execution_attempts WHERE run_id = 'r-int'"
+            )
+            assert attempts[0]["state"] == "terminal"
+            assert attempts[0]["cancel_reason"] == "boot_adoption_interrupted"
+            intents = self._fetch(db, "SELECT final_outcome FROM run_intents WHERE run_id = 'r-int'")
+            assert intents[0]["final_outcome"] == "aborted"
+            guards = self._fetch(db, "SELECT attempt_id FROM execution_guards WHERE guard_key = 'my-interval'")
+            assert guards[0]["attempt_id"] is None
+        finally:
+            ctrl.stop()
+
+    def test_dispatching_tombstone_terminates(self, tmp_path):
+        wp = MagicMock()
+        wp.url_for_worker_id.return_value = "http://worker-0:8766"
+        wp.worker_urls.return_value = ["http://worker-0:8766"]
+        wp.query_attempt.return_value = {"kind": "tombstone", "reason": "revoked"}
+        db, ctrl = self._boot_controller(tmp_path, wp)
+        self._seed(db, run_id="r-tomb", state="running", worker_id="w0")
+        try:
+            ctrl.start()
+            attempts = self._fetch(
+                db, "SELECT state, cancel_reason FROM execution_attempts WHERE run_id = 'r-tomb'"
+            )
+            assert attempts[0]["state"] == "terminal"
+            assert attempts[0]["cancel_reason"] == "boot_adoption_tombstone"
+            intents = self._fetch(db, "SELECT final_outcome FROM run_intents WHERE run_id = 'r-tomb'")
+            assert intents[0]["final_outcome"] == "aborted"
+        finally:
+            ctrl.stop()
+
+    def test_unreachable_worker_no_row_or_v17_endpoint_unknown_guard_retained(self, tmp_path):
+        """Unreachable worker / no journal row / v1.7 worker without the query
+        endpoint → 'unknown'; the guard is RETAINED (never auto-cleared — the
+        operator force-release lane is later)."""
+        wp = MagicMock()
+        wp.url_for_worker_id.return_value = "http://worker-0:8766"
+        wp.worker_urls.return_value = ["http://worker-0:8766"]
+        wp.query_attempt.return_value = None  # 404 / transport error / no endpoint
+        db, ctrl = self._boot_controller(tmp_path, wp)
+        self._seed(db, run_id="r-unk", state="dispatching", worker_id="w0")
+        try:
+            ctrl.start()
+            attempts = self._fetch(
+                db, "SELECT state, uncertainty_reason FROM execution_attempts WHERE run_id = 'r-unk'"
+            )
+            assert attempts[0]["state"] == "unknown"
+            assert attempts[0]["uncertainty_reason"] == "boot_adoption_no_journal_evidence"
+            guards = self._fetch(db, "SELECT attempt_id FROM execution_guards WHERE guard_key = 'my-interval'")
+            assert guards[0]["attempt_id"] == "r-unk-a1"  # guard retained
+            intents = self._fetch(db, "SELECT final_outcome FROM run_intents WHERE run_id = 'r-unk'")
+            assert intents[0]["final_outcome"] is None  # unresolved
+        finally:
+            ctrl.stop()
+
+    def test_missing_worker_id_falls_back_to_probing_all_workers(self, tmp_path):
+        """Pre-upgrade rows carry no worker_id — adoption fans out to every
+        configured worker; no evidence → unknown."""
+        wp = MagicMock()
+        wp.url_for_worker_id.return_value = None
+        wp.worker_urls.return_value = ["http://w0:8766", "http://w1:8766"]
+        wp.query_attempt.return_value = None
+        db, ctrl = self._boot_controller(tmp_path, wp)
+        self._seed(db, run_id="r-orphan", state="running", worker_id=None)
+        try:
+            ctrl.start()
+            assert wp.query_attempt.call_count == 2  # both workers probed
+            attempts = self._fetch(db, "SELECT state FROM execution_attempts WHERE run_id = 'r-orphan'")
+            assert attempts[0]["state"] == "unknown"
+        finally:
+            ctrl.stop()
+
+    def test_active_journal_row_adopts_lease(self, tmp_path):
+        """Journal reports the attempt still active on a reachable worker — the
+        lease is adopted (reconciler probes it), the guard stays held, and the
+        intent stays unresolved until the run-complete lands."""
+        wp = MagicMock()
+        wp.url_for_worker_id.return_value = "http://worker-0:8766"
+        wp.worker_urls.return_value = ["http://worker-0:8766"]
+        wp.query_attempt.return_value = {"kind": "active"}
+        db, ctrl = self._boot_controller(tmp_path, wp)
+        self._seed(db, run_id="r-live", state="running", worker_id="w0")
+        try:
+            ctrl.start()
+            attempts = self._fetch(db, "SELECT state FROM execution_attempts WHERE run_id = 'r-live'")
+            assert attempts[0]["state"] == "running"  # untouched — still live
+            lease = ctrl._active_batch_runs.get("my-interval")
+            assert lease is not None and lease.run_id == "r-live"
+            assert lease.attempt_id == "r-live-a1"
+            guards = self._fetch(db, "SELECT attempt_id FROM execution_guards WHERE guard_key = 'my-interval'")
+            assert guards[0]["attempt_id"] == "r-live-a1"  # still held
+        finally:
+            ctrl.stop()
+
+    def test_adoption_terminates_stuck_dispatching_queued_row(self, tmp_path):
+        """A queued_runs row stuck at 'dispatching' for a run whose ledger
+        attempt adoption resolves is terminal-cancelled with the reason."""
+        wp = MagicMock()
+        wp.url_for_worker_id.return_value = "http://worker-0:8766"
+        wp.worker_urls.return_value = ["http://worker-0:8766"]
+        wp.query_attempt.return_value = {
+            "kind": "completion", "result_json": {"status": "success"},
+        }
+        db, ctrl = self._boot_controller(tmp_path, wp)
+        self._seed(db, run_id="r-q", state="dispatching", worker_id="w0")
+        with db._engine.begin() as conn:
+            conn.execute(text("""
+                INSERT INTO queued_runs (run_id, pipeline_name, yaml_snapshot, status,
+                                         requested_at, expires_at)
+                VALUES ('r-q', 'my-interval', 'yaml', 'dispatching', :now, :now)
+            """), {"now": datetime.now(UTC).isoformat()})
+        try:
+            ctrl.start()
+            rows = self._fetch(
+                db, "SELECT status, terminal_reason FROM queued_runs WHERE run_id = 'r-q'"
+            )
+            assert rows[0]["status"] == "cancelled"
+            assert rows[0]["terminal_reason"] == "boot_adoption_completed"
+        finally:
+            ctrl.stop()
+
+    def test_adoption_completes_before_schedulers_fire(self, tmp_path, monkeypatch):
+        """Order pin (plan D / V18-06): desired-state load/backfill → boot
+        adoption → scheduler start. Adoption resolves every non-terminal
+        attempt before APScheduler fires, and the desired-state rows (M3
+        backfill) are loaded before adoption so both read the same durable
+        generation/desired_status source."""
+        from apscheduler.schedulers.background import BackgroundScheduler
+
+        wp = MagicMock()
+        wp.url_for_worker_id.return_value = "http://worker-0:8766"
+        wp.worker_urls.return_value = ["http://worker-0:8766"]
+        wp.query_attempt.return_value = {
+            "kind": "completion", "result_json": {"status": "success"},
+        }
+        db, ctrl = self._boot_controller(tmp_path, wp)
+        self._seed(db, run_id="r-pin", state="dispatching", worker_id="w0")
+        order: list[str] = []
+        orig_load = PipelineController._load_desired_state
+        orig_resolve = PipelineController._resolve_non_terminal_attempts_at_boot
+
+        def _load(self):
+            order.append("desired_state")
+            return orig_load(self)
+
+        def _resolve(self):
+            order.append("adoption")
+            return orig_resolve(self)
+
+        orig_sched_start = BackgroundScheduler.start
+
+        def _sched_start(self, *args, **kwargs):
+            order.append("scheduler_start")
+            return orig_sched_start(self, *args, **kwargs)
+
+        monkeypatch.setattr(PipelineController, "_load_desired_state", _load)
+        monkeypatch.setattr(
+            PipelineController, "_resolve_non_terminal_attempts_at_boot", _resolve
+        )
+        monkeypatch.setattr(BackgroundScheduler, "start", _sched_start)
+        try:
+            ctrl.start()
+            assert order == ["desired_state", "adoption", "scheduler_start"]
+        finally:
+            ctrl.stop()
+
+
+# ── V18-06: desired-state boot (plan D) ─────────────────────────────────────
+
+
+class TestDesiredStateBoot:
+    """V18-06 task 4 (plan D): boot reads pipeline_desired_state (M3 backfill
+    at schema init, kept current by lifecycle ops) for the stopped/running
+    decision, and stop/start keep the desired-status row current so a boot
+    never resurrects an operator stop or keeps a started pipeline stopped."""
+
+    def _fetch(self, db, sql, params=None):
+        with db._engine.connect() as conn:
+            rows = conn.execute(text(sql), params or {}).mappings().fetchall()
+        return [dict(r) for r in rows]
+
+    def test_desired_state_row_marks_pipeline_stopped_at_boot(self, tmp_path):
+        """A desired-state row with desired_status='stopped' (no legacy stopped
+        flag) is not scheduled at boot — the plan D load is authoritative."""
+        from tram.persistence.db import TramDB
+        db = TramDB(url=f"sqlite:///{tmp_path}/desired-boot.db")
+        db.save_pipeline("my-interval", _INTERVAL_YAML, source="api")
+        with db._engine.begin() as conn:
+            conn.execute(text("""
+                INSERT INTO pipeline_desired_state
+                    (pipeline_name, desired_status, generation, schedule_type,
+                     misfire_policy, deleted, updated_at)
+                VALUES ('my-interval', 'stopped', 1, 'interval',
+                        'coalesced_skip', 0, :now)
+            """), {"now": datetime.now(UTC).isoformat()})
+        ctrl = _make_controller(db=db)
+        try:
+            ctrl.start()
+            assert ctrl.manager.exists("my-interval")
+            assert ctrl.manager.get("my-interval").status == "stopped"
+            assert ctrl._scheduler.get_job("batch-my-interval") is None
+            assert ctrl._desired_state["my-interval"]["desired_status"] == "stopped"
+        finally:
+            ctrl.stop()
+
+    def test_stop_and_start_keep_desired_state_current(self, tmp_path):
+        """stop_pipeline/start_pipeline write both the legacy flag and the
+        desired-state row (plan D) — the next boot reads the same decision."""
+        from tram.persistence.db import TramDB
+        db = TramDB(url=f"sqlite:///{tmp_path}/desired-lifecycle.db")
+        config = load_pipeline_from_yaml(_MANUAL_YAML)
+        ctrl = _make_controller(db=db)
+        try:
+            ctrl.register(config, yaml_text=_MANUAL_YAML)
+            rows = self._fetch(
+                db, "SELECT desired_status FROM pipeline_desired_state WHERE pipeline_name = 'my-manual'"
+            )
+            assert rows[0]["desired_status"] == "running"
+            ctrl.stop_pipeline("my-manual")
+            rows = self._fetch(
+                db, "SELECT desired_status FROM pipeline_desired_state WHERE pipeline_name = 'my-manual'"
+            )
+            assert rows[0]["desired_status"] == "stopped"
+            flags = self._fetch(
+                db, "SELECT stopped FROM registered_pipelines WHERE name = 'my-manual'"
+            )
+            assert flags[0]["stopped"] == 1
+            ctrl.start_pipeline("my-manual")
+            rows = self._fetch(
+                db, "SELECT desired_status FROM pipeline_desired_state WHERE pipeline_name = 'my-manual'"
+            )
+            assert rows[0]["desired_status"] == "running"
+        finally:
+            ctrl.stop()
+
+
+# ── V18-06: M4 backfill generation reconciliation ───────────────────────────
+
+
+class TestM4BackfillGenerationReconciliation:
+    """V18-06 task 6: M4-backfilled run_intents carry requested_generation=1
+    (the migration artifact for legacy in-flight queued rows). At claim the
+    intent's generation is reconciled to the pipeline's current desired state;
+    resolution fences on the ATTEMPT's generation — never a stale backfilled
+    value — so a legitimate callback for the current generation is accepted."""
+
+    def _fetch(self, db, sql, params=None):
+        with db._engine.connect() as conn:
+            rows = conn.execute(text(sql), params or {}).mappings().fetchall()
+        return [dict(r) for r in rows]
+
+    def test_claim_reconciles_backfill_and_callback_resolves(self, tmp_path):
+        from tram.persistence.db import TramDB
+        db = TramDB(url=f"sqlite:///{tmp_path}/m4-reconcile.db")
+        wp = MagicMock()
+        ctrl = _make_controller(db=db, worker_pool=wp, manager_url="http://manager:8765")
+        config = load_pipeline_from_yaml(_INTERVAL_YAML)
+        ctrl.manager.register(config, yaml_text=_INTERVAL_YAML)
+        try:
+            # Desired state at generation 3 (two config updates).
+            ctrl._bump_pipeline_generation("my-interval")
+            ctrl._bump_pipeline_generation("my-interval")
+            assert ctrl._pipeline_generation("my-interval") == 3
+            run_id = "r-m4"
+            # M4 backfill artifact: legacy in-flight intent at generation 1.
+            with db._engine.begin() as conn:
+                conn.execute(text("""
+                    INSERT INTO run_intents
+                        (run_id, pipeline_name, origin, flush, requested_at,
+                         requested_generation, yaml_snapshot, schedule_type)
+                    VALUES (:r, 'my-interval', 'queued', 0, :now, 1, 'yaml', 'interval')
+                """), {"r": run_id, "now": datetime.now(UTC).isoformat()})
+            attempt = ctrl._claim_for_dispatch(
+                "my-interval", run_id, origin="queued", flush=False,
+                yaml_text="yaml", schedule_type="interval",
+            )
+            assert attempt is not None
+            assert attempt["generation"] == 3  # current generation, not the backfill
+            intents = self._fetch(
+                db, "SELECT requested_generation FROM run_intents WHERE run_id = :r",
+                {"r": run_id},
+            )
+            assert intents[0]["requested_generation"] == 3  # reconciled at claim
+            # The completion for the attempt (generation 3) resolves — the
+            # backfilled value never fences the callback.
+            resp = ctrl.on_attempt_run_complete(
+                attempt_id=attempt["attempt_id"], generation=3, run_id=run_id,
+                pipeline_name="my-interval", worker_id="w0", status="success",
+                records_in=1, records_out=1,
+            )
+            assert resp == {"ok": True}
+            intents = self._fetch(
+                db, "SELECT final_outcome FROM run_intents WHERE run_id = :r",
+                {"r": run_id},
+            )
+            assert intents[0]["final_outcome"] == "success"
+        finally:
+            ctrl.stop()
+
+    def test_resolved_backfill_intent_is_immutable_audit(self, tmp_path):
+        """A resolved intent's requested_generation is never refreshed by a
+        later claim attempt (immutable audit, frozen §3)."""
+        from tram.persistence.db import TramDB
+        db = TramDB(url=f"sqlite:///{tmp_path}/m4-immutable.db")
+        wp = MagicMock()
+        ctrl = _make_controller(db=db, worker_pool=wp, manager_url="http://manager:8765")
+        config = load_pipeline_from_yaml(_INTERVAL_YAML)
+        ctrl.manager.register(config, yaml_text=_INTERVAL_YAML)
+        try:
+            now = datetime.now(UTC).isoformat()
+            with db._engine.begin() as conn:
+                conn.execute(text("""
+                    INSERT INTO run_intents
+                        (run_id, pipeline_name, origin, flush, requested_at,
+                         requested_generation, yaml_snapshot, schedule_type,
+                         final_outcome, resolved_at)
+                    VALUES ('r-res', 'my-interval', 'queued', 0, :now, 1, 'yaml',
+                            'interval', 'success', :now)
+                """), {"now": now})
+            # Re-ensure the intent with the current generation — the resolved
+            # row must keep its recorded (backfilled) generation.
+            ctrl._ensure_run_intent(
+                run_id="r-res", pipeline_name="my-interval", origin="queued",
+                flush=False, requested_at=datetime.now(UTC),
+                requested_generation=7, yaml_snapshot="yaml", schedule_type="interval",
+            )
+            intents = self._fetch(
+                db, "SELECT requested_generation, final_outcome FROM run_intents WHERE run_id = 'r-res'"
+            )
+            assert intents[0]["requested_generation"] == 1
+            assert intents[0]["final_outcome"] == "success"
+        finally:
+            ctrl.stop()
+
+
+# ── V18-06: ledger audit retention (plan F) ─────────────────────────────────
+
+
+class TestLedgerAuditRetention:
+    """V18-06 task 5 (plan F): the periodic cleanup prunes terminal ledger
+    audit rows older than TRAM_AUDIT_RETENTION_DAYS — never non-terminal
+    attempts, unknown-state guards (retained until force-release), or
+    unresolved run intents. Queued-run audit rows follow their existing TTL
+    expiry path."""
+
+    def _fetch(self, db, sql, params=None):
+        with db._engine.connect() as conn:
+            rows = conn.execute(text(sql), params or {}).mappings().fetchall()
+        return [dict(r) for r in rows]
+
+    def _insert(self, db, sql, params):
+        with db._engine.begin() as conn:
+            conn.execute(text(sql), params)
+
+    def test_prunes_old_terminal_keeps_guards_and_live_rows(self, tmp_path, monkeypatch):
+        monkeypatch.setenv("TRAM_AUDIT_RETENTION_DAYS", "30")
+        from tram.persistence.db import TramDB
+        db = TramDB(url=f"sqlite:///{tmp_path}/retention.db")
+        ctrl = _make_controller(db=db)
+        old = (datetime.now(UTC) - timedelta(days=60)).isoformat()
+        fresh = datetime.now(UTC).isoformat()
+        now = datetime.now(UTC).isoformat()
+        # Old terminal attempt → pruned.
+        self._insert(db, """
+            INSERT INTO execution_attempts
+                (attempt_id, run_id, pipeline_name, ordinal, generation, slot_id,
+                 fence_token, state, finished_at)
+            VALUES ('a-old', 'r-old', 'p1', 1, 1, '', 'ft', 'terminal', :t)
+        """, {"t": old})
+        # Fresh terminal attempt → kept.
+        self._insert(db, """
+            INSERT INTO execution_attempts
+                (attempt_id, run_id, pipeline_name, ordinal, generation, slot_id,
+                 fence_token, state, finished_at)
+            VALUES ('a-fresh', 'r-fresh', 'p1', 1, 1, '', 'ft', 'terminal', :t)
+        """, {"t": fresh})
+        # Unknown-state attempt → NEVER pruned (guard retained until force-release).
+        self._insert(db, """
+            INSERT INTO execution_attempts
+                (attempt_id, run_id, pipeline_name, ordinal, generation, slot_id,
+                 fence_token, state, finished_at)
+            VALUES ('a-unk', 'r-unk', 'p1', 1, 1, '', 'ft', 'unknown', :t)
+        """, {"t": old})
+        # Non-terminal (running) attempt → kept.
+        self._insert(db, """
+            INSERT INTO execution_attempts
+                (attempt_id, run_id, pipeline_name, ordinal, generation, slot_id,
+                 fence_token, state)
+            VALUES ('a-run', 'r-run', 'p1', 1, 1, '', 'ft', 'running')
+        """, {})
+        # Old resolved intent → pruned.
+        self._insert(db, """
+            INSERT INTO run_intents
+                (run_id, pipeline_name, origin, flush, requested_at,
+                 requested_generation, final_outcome, resolved_at)
+            VALUES ('i-old', 'p1', 'manual', 0, :now, 1, 'success', :t)
+        """, {"now": now, "t": old})
+        # Unresolved intent → kept.
+        self._insert(db, """
+            INSERT INTO run_intents
+                (run_id, pipeline_name, origin, flush, requested_at,
+                 requested_generation)
+            VALUES ('i-open', 'p1', 'manual', 0, :now, 1)
+        """, {"now": now})
+        # Old complete lifecycle operation → pruned.
+        self._insert(db, """
+            INSERT INTO lifecycle_operations
+                (operation_id, pipeline_name, op_kind, state, created_at, updated_at)
+            VALUES ('op-old', 'p1', 'stop', 'complete', :t, :t)
+        """, {"t": old})
+        # Pending lifecycle operation → kept.
+        self._insert(db, """
+            INSERT INTO lifecycle_operations
+                (operation_id, pipeline_name, op_kind, state, created_at, updated_at)
+            VALUES ('op-pending', 'p1', 'stop', 'pending', :t, :t)
+        """, {"t": old})
+
+        counts = ctrl._prune_ledger_audit()
+
+        assert counts == {"attempts": 1, "intents": 1, "operations": 1}
+        remaining_attempts = self._fetch(db, "SELECT attempt_id FROM execution_attempts")
+        assert {r["attempt_id"] for r in remaining_attempts} == {"a-fresh", "a-unk", "a-run"}
+        remaining_intents = self._fetch(db, "SELECT run_id FROM run_intents")
+        assert {r["run_id"] for r in remaining_intents} == {"i-open"}
+        remaining_ops = self._fetch(db, "SELECT operation_id FROM lifecycle_operations")
+        assert {r["operation_id"] for r in remaining_ops} == {"op-pending"}
+
+    def test_retention_reader_fails_loud_on_bad_env(self, monkeypatch):
+        """The strictest env-reader convention: a typo'd TRAM_AUDIT_RETENTION_DAYS
+        fails at construction instead of silently changing retention."""
+        monkeypatch.setenv("TRAM_AUDIT_RETENTION_DAYS", "thirty")
+        from tram.pipeline.controller import _audit_retention_days
+        with pytest.raises(ValueError):
+            _audit_retention_days()
+
+
+# ── V18-04: queue terminal cancellation (R16) ───────────────────────────────
+
+
+class TestQueueTerminalCancellation:
+    """R16: stop/restart/update/delete terminal-cancel a pipeline's queued
+    (pending) run rows at action time with the recorded reason — instead of
+    waiting for TTL expiry — and the E.2 drain skips them."""
+
+    def _fetch(self, db, sql, params=None):
+        with db._engine.connect() as conn:
+            rows = conn.execute(text(sql), params or {}).mappings().fetchall()
+        return [dict(r) for r in rows]
+
+    def _started(self, tmp_path, name="queue-cancel.db"):
+        from tram.persistence.db import TramDB
+        db = TramDB(url=f"sqlite:///{tmp_path}/{name}")
+        wp = MagicMock()
+        wp.healthy_workers.return_value = []
+        ctrl = _make_controller(db=db, worker_pool=wp, manager_url="http://manager:8765")
+        ctrl.manager.register(load_pipeline_from_yaml(_MANUAL_YAML), yaml_text=_MANUAL_YAML)
+        return db, ctrl
+
+    def test_stop_terminal_cancels_queued_with_reason(self, tmp_path):
+        db, ctrl = self._started(tmp_path)
+        try:
+            triggered = ctrl.trigger_run("my-manual")
+            assert triggered.disposition == "queued"
+            ctrl.stop_pipeline("my-manual")
+            rows = self._fetch(
+                db, "SELECT status, terminal_reason FROM queued_runs WHERE run_id = :r",
+                {"r": triggered.run_id},
+            )
+            assert rows[0]["status"] == "cancelled"
+            assert rows[0]["terminal_reason"] == "pipeline_stopped"
+            assert ctrl.drainable_queued_runs() == []  # drain skips cancelled rows
+            intents = self._fetch(
+                db, "SELECT final_outcome FROM run_intents WHERE run_id = :r",
+                {"r": triggered.run_id},
+            )
+            assert intents[0]["final_outcome"] == "aborted"
+        finally:
+            ctrl.stop()
+
+    def test_delete_terminal_cancels_queued_with_reason(self, tmp_path):
+        db, ctrl = self._started(tmp_path)
+        try:
+            triggered = ctrl.trigger_run("my-manual")
+            assert triggered.disposition == "queued"
+            ctrl.delete("my-manual")
+            rows = self._fetch(
+                db, "SELECT status, terminal_reason FROM queued_runs WHERE run_id = :r",
+                {"r": triggered.run_id},
+            )
+            assert rows[0]["status"] == "cancelled"
+            assert rows[0]["terminal_reason"] == "pipeline_deleted"
+            assert ctrl.drainable_queued_runs() == []
+        finally:
+            ctrl.stop()
+
+    def test_update_terminal_cancels_queued_with_reason(self, tmp_path):
+        db, ctrl = self._started(tmp_path)
+        try:
+            triggered = ctrl.trigger_run("my-manual")
+            assert triggered.disposition == "queued"
+            v2 = _MANUAL_YAML + "description: updated-v2\n"
+            ctrl.update("my-manual", v2)
+            rows = self._fetch(
+                db, "SELECT status, terminal_reason FROM queued_runs WHERE run_id = :r",
+                {"r": triggered.run_id},
+            )
+            assert rows[0]["status"] == "cancelled"
+            assert rows[0]["terminal_reason"] == "pipeline_updated"
+            assert ctrl.drainable_queued_runs() == []
+        finally:
+            ctrl.stop()
+
+    def test_restart_terminal_cancels_queued_with_reason(self, tmp_path):
+        db, ctrl = self._started(tmp_path)
+        try:
+            triggered = ctrl.trigger_run("my-manual")
+            assert triggered.disposition == "queued"
+            ctrl.restart_pipeline("my-manual")
+            rows = self._fetch(
+                db, "SELECT status, terminal_reason FROM queued_runs WHERE run_id = :r",
+                {"r": triggered.run_id},
+            )
+            assert rows[0]["status"] == "cancelled"
+            assert rows[0]["terminal_reason"] == "pipeline_restarted"
+            assert ctrl.drainable_queued_runs() == []
+        finally:
+            ctrl.stop()
+
+    def test_delete_prunes_orphaned_unresolved_intents(self, tmp_path):
+        """Task 5: an unresolved intent whose run has only a terminal attempt
+        (no queued row) is resolved at delete — no orphaned rows linger."""
+        from tram.persistence.db import TramDB
+        db = TramDB(url=f"sqlite:///{tmp_path}/prune.db")
+        wp = MagicMock()
+        wp.healthy_workers.return_value = []
+        ctrl = _make_controller(db=db, worker_pool=wp, manager_url="http://manager:8765")
+        ctrl.manager.register(load_pipeline_from_yaml(_MANUAL_YAML), yaml_text=_MANUAL_YAML)
+        try:
+            now = datetime.now(UTC).isoformat()
+            with db._engine.begin() as conn:
+                conn.execute(text("""
+                    INSERT INTO run_intents
+                        (run_id, pipeline_name, origin, flush, requested_at, expires_at,
+                         requested_generation, yaml_snapshot, schedule_type)
+                    VALUES ('r-orphan', 'my-manual', 'manual', 0, :now, NULL, 1, 'yaml', 'manual')
+                """), {"now": now})
+                conn.execute(text("""
+                    INSERT INTO execution_attempts
+                        (attempt_id, run_id, pipeline_name, ordinal, generation, slot_id,
+                         fence_token, state)
+                    VALUES ('r-orphan-a1', 'r-orphan', 'my-manual', 1, 1, '', 'ft', 'terminal')
+                """))
+            ctrl.delete("my-manual")
+            intents = self._fetch(db, "SELECT final_outcome FROM run_intents WHERE run_id = 'r-orphan'")
+            assert intents[0]["final_outcome"] == "aborted"
+        finally:
+            ctrl.stop()
+
+
+# ── V18-04: lifecycle_operations wiring ─────────────────────────────────────
+
+
+class TestLifecycleOperationsWiring:
+    """V18-04: stop/restart/update/delete and the boot-adoption resolution
+    record rows in the frozen lifecycle_operations table (pending → complete
+    with detail). The 202+operation_id API shape is V18-09 — only the table
+    writes + internal queries live here."""
+
+    def _fetch(self, db, sql, params=None):
+        with db._engine.connect() as conn:
+            rows = conn.execute(text(sql), params or {}).mappings().fetchall()
+        return [dict(r) for r in rows]
+
+    def _started(self, tmp_path, name="lifecycle.db"):
+        from tram.persistence.db import TramDB
+        db = TramDB(url=f"sqlite:///{tmp_path}/{name}")
+        wp = MagicMock()
+        wp.healthy_workers.return_value = []
+        ctrl = _make_controller(db=db, worker_pool=wp, manager_url="http://manager:8765")
+        ctrl.manager.register(load_pipeline_from_yaml(_MANUAL_YAML), yaml_text=_MANUAL_YAML)
+        return db, ctrl
+
+    def _assert_single_complete(self, db, pipeline_name, op_kind):
+        rows = self._fetch(
+            db,
+            "SELECT op_kind, state, detail, attempt_id FROM lifecycle_operations "
+            "WHERE pipeline_name = :p",
+            {"p": pipeline_name},
+        )
+        assert len(rows) == 1
+        assert rows[0]["op_kind"] == op_kind
+        assert rows[0]["state"] == "complete"
+        assert rows[0]["detail"]
+        return rows[0]
+
+    def test_stop_records_lifecycle_operation(self, tmp_path):
+        db, ctrl = self._started(tmp_path)
+        try:
+            ctrl.stop_pipeline("my-manual")
+            self._assert_single_complete(db, "my-manual", "stop")
+        finally:
+            ctrl.stop()
+
+    def test_delete_records_lifecycle_operation(self, tmp_path):
+        db, ctrl = self._started(tmp_path)
+        try:
+            ctrl.delete("my-manual")
+            self._assert_single_complete(db, "my-manual", "delete")
+        finally:
+            ctrl.stop()
+
+    def test_update_records_lifecycle_operation(self, tmp_path):
+        db, ctrl = self._started(tmp_path)
+        try:
+            v2 = _MANUAL_YAML + "description: updated-v2\n"
+            ctrl.update("my-manual", v2)
+            self._assert_single_complete(db, "my-manual", "update")
+        finally:
+            ctrl.stop()
+
+    def test_restart_records_lifecycle_operation(self, tmp_path):
+        db, ctrl = self._started(tmp_path)
+        try:
+            ctrl.restart_pipeline("my-manual")
+            self._assert_single_complete(db, "my-manual", "restart")
+        finally:
+            ctrl.stop()
+
+    def test_boot_adoption_records_lifecycle_operation(self, tmp_path):
+        from tram.persistence.db import TramDB
+        db = TramDB(url=f"sqlite:///{tmp_path}/adopt-lifecycle.db")
+        wp = MagicMock()
+        wp.url_for_worker_id.return_value = "http://worker-0:8766"
+        wp.worker_urls.return_value = ["http://worker-0:8766"]
+        wp.query_attempt.return_value = None
+        ctrl = _make_controller(db=db, worker_pool=wp, manager_url="http://manager:8765")
+        now = datetime.now(UTC).isoformat()
+        with db._engine.begin() as conn:
+            conn.execute(text("""
+                INSERT INTO run_intents
+                    (run_id, pipeline_name, origin, flush, requested_at, expires_at,
+                     requested_generation, yaml_snapshot, schedule_type)
+                VALUES ('r-a', 'my-manual', 'manual', 0, :now, NULL, 1, 'yaml', 'manual')
+            """), {"now": now})
+            conn.execute(text("""
+                INSERT INTO execution_guards (guard_key, guard_kind, run_id, attempt_id, generation, acquired_at)
+                VALUES ('my-manual', 'batch', 'r-a', 'r-a-a1', 1, :now)
+            """), {"now": now})
+            conn.execute(text("""
+                INSERT INTO execution_attempts
+                    (attempt_id, run_id, pipeline_name, ordinal, generation, slot_id,
+                     fence_token, state, dispatch_sent_at, worker_id)
+                VALUES ('r-a-a1', 'r-a', 'my-manual', 1, 1, '', 'ft', 'dispatching', :now, 'w0')
+            """), {"now": now})
+        try:
+            ctrl.start()
+            rows = self._fetch(
+                db,
+                "SELECT op_kind, state, detail, attempt_id FROM lifecycle_operations "
+                "WHERE pipeline_name = 'my-manual'",
+            )
+            assert len(rows) == 1
+            assert rows[0]["op_kind"] == "boot_adopt"
+            assert rows[0]["state"] == "complete"
+            assert "boot adoption" in rows[0]["detail"]
+            assert rows[0]["attempt_id"] == "r-a-a1"
+        finally:
+            ctrl.stop()
+
+    def test_boot_adoption_unrecognized_reply_records_boot_adopt(self, tmp_path):
+        from tram.persistence.db import TramDB
+        db = TramDB(url=f"sqlite:///{tmp_path}/adopt-unrecognized.db")
+        wp = MagicMock()
+        wp.url_for_worker_id.return_value = "http://worker-0:8766"
+        wp.worker_urls.return_value = ["http://worker-0:8766"]
+        wp.query_attempt.return_value = {"kind": "not-a-known-kind"}
+        ctrl = _make_controller(db=db, worker_pool=wp, manager_url="http://manager:8765")
+        now = datetime.now(UTC).isoformat()
+        with db._engine.begin() as conn:
+            conn.execute(text("""
+                INSERT INTO run_intents
+                    (run_id, pipeline_name, origin, flush, requested_at, expires_at,
+                     requested_generation, yaml_snapshot, schedule_type)
+                VALUES ('r-u', 'my-manual', 'manual', 0, :now, NULL, 1, 'yaml', 'manual')
+            """), {"now": now})
+            conn.execute(text("""
+                INSERT INTO execution_guards (guard_key, guard_kind, run_id, attempt_id, generation, acquired_at)
+                VALUES ('my-manual', 'batch', 'r-u', 'r-u-a1', 1, :now)
+            """), {"now": now})
+            conn.execute(text("""
+                INSERT INTO execution_attempts
+                    (attempt_id, run_id, pipeline_name, ordinal, generation, slot_id,
+                     fence_token, state, dispatch_sent_at, worker_id)
+                VALUES ('r-u-a1', 'r-u', 'my-manual', 1, 1, '', 'ft', 'dispatching', :now, 'w0')
+            """), {"now": now})
+        try:
+            ctrl.start()
+            rows = self._fetch(
+                db,
+                "SELECT op_kind, state, detail, attempt_id FROM lifecycle_operations "
+                "WHERE pipeline_name = 'my-manual'",
+            )
+            assert len(rows) == 1
+            assert rows[0]["op_kind"] == "boot_adopt"
+            assert rows[0]["state"] == "complete"
+            assert "unrecognized journal reply" in rows[0]["detail"]
+            guards = self._fetch(
+                db, "SELECT guard_key FROM execution_guards WHERE attempt_id = 'r-u-a1'",
+            )
+            assert guards  # guard retained on unknown
+            attempts = self._fetch(
+                db, "SELECT state FROM execution_attempts WHERE attempt_id = 'r-u-a1'",
+            )
+            assert attempts[0]["state"] == "unknown"
+        finally:
+            ctrl.stop()
+
+    def test_get_lifecycle_operations_filters_by_pipeline(self, tmp_path):
+        db, ctrl = self._started(tmp_path)
+        try:
+            ctrl.stop_pipeline("my-manual")
+            ops = ctrl.get_lifecycle_operations(pipeline_name="my-manual")
+            assert len(ops) == 1 and ops[0]["op_kind"] == "stop"
+            assert ctrl.get_lifecycle_operations(pipeline_name="nope") == []
+        finally:
+            ctrl.stop()
+
+
+# ── V18-08: budgets, bounded executor, lock audit (plan F) ───────────────────
+
+
+class TestV1808Efficiency:
+    """V18-08 (plan F) manager-side capacity controls: queued-run admission
+    budgets rejected at enqueue, the bounded management executor rejecting past
+    its ceiling, and the lock audit pinning that the scheduler/drain dispatch
+    HTTP runs with the lifecycle lock released."""
+
+    def _queued_controller(self, tmp_path, wp, **kwargs):
+        db = TramDB(url=f"sqlite:///{tmp_path}/v1808.db", node_id="test-node")
+        ctrl = PipelineController(
+            db=db,
+            node_id="test-node",
+            worker_pool=wp,
+            manager_url="http://manager:8765",
+            queue_manual_runs=True,
+            **kwargs,
+        )
+        return db, ctrl
+
+    # ── Queue admission budgets ───────────────────────────────────────────
+
+    def test_enqueue_rejected_at_count_cap(self, tmp_path, monkeypatch):
+        monkeypatch.setenv("TRAM_QUEUE_MAX_COUNT", "1")
+        wp = MagicMock()
+        wp.healthy_workers.return_value = []
+        db, ctrl = self._queued_controller(tmp_path, wp)
+        try:
+            ctrl.manager.register(load_pipeline_from_yaml(_MANUAL_YAML), yaml_text=_MANUAL_YAML)
+            ctrl.manager.register(load_pipeline_from_yaml(_INTERVAL_YAML), yaml_text=_INTERVAL_YAML)
+            assert ctrl.trigger_run("my-manual").disposition == "queued"
+            with pytest.raises(QueueCapacityError, match="TRAM_QUEUE_MAX_COUNT"):
+                ctrl.trigger_run("my-interval")
+            # The rejected run left no row and no silent drop.
+            assert len(db.get_active_queued_runs()) == 1
+        finally:
+            ctrl.stop()
+            db.close()
+
+    def test_enqueue_rejected_at_byte_cap(self, tmp_path, monkeypatch):
+        monkeypatch.setenv("TRAM_QUEUE_MAX_BYTES", str(len(_MANUAL_YAML.encode("utf-8"))))
+        wp = MagicMock()
+        wp.healthy_workers.return_value = []
+        db, ctrl = self._queued_controller(tmp_path, wp)
+        try:
+            ctrl.manager.register(load_pipeline_from_yaml(_MANUAL_YAML), yaml_text=_MANUAL_YAML)
+            ctrl.manager.register(load_pipeline_from_yaml(_INTERVAL_YAML), yaml_text=_INTERVAL_YAML)
+            assert ctrl.trigger_run("my-manual").disposition == "queued"
+            with pytest.raises(QueueCapacityError, match="TRAM_QUEUE_MAX_BYTES"):
+                ctrl.trigger_run("my-interval")
+            assert len(db.get_active_queued_runs()) == 1
+        finally:
+            ctrl.stop()
+            db.close()
+
+    def test_enqueue_byte_cap_zero_disables_bound(self, tmp_path, monkeypatch):
+        monkeypatch.setenv("TRAM_QUEUE_MAX_COUNT", "0")
+        monkeypatch.setenv("TRAM_QUEUE_MAX_BYTES", "0")
+        wp = MagicMock()
+        wp.healthy_workers.return_value = []
+        db, ctrl = self._queued_controller(tmp_path, wp)
+        try:
+            ctrl.manager.register(load_pipeline_from_yaml(_MANUAL_YAML), yaml_text=_MANUAL_YAML)
+            assert ctrl.trigger_run("my-manual").disposition == "queued"
+            assert len(db.get_active_queued_runs()) == 1
+        finally:
+            ctrl.stop()
+            db.close()
+
+    # ── Bounded management executor ───────────────────────────────────────
+
+    def test_bounded_executor_rejects_past_ceiling(self, caplog):
+        ctrl = _make_controller(management_pool_workers=1, management_queue_ceiling=2)
+        gate = threading.Event()
+
+        def _block():
+            gate.wait(5)
+            return "done"
+
+        try:
+            assert ctrl._thread_pool.submit(_block) is not None
+            assert ctrl._thread_pool.submit(_block) is not None
+            with caplog.at_level("WARNING", logger="tram.pipeline.controller"):
+                rejected = ctrl._thread_pool.submit(_block)
+            assert rejected is None
+            assert any("at capacity" in r.message for r in caplog.records)
+            # Pending count stays at the ceiling — no unbounded accumulation.
+            assert ctrl._thread_pool._pending == 2
+        finally:
+            gate.set()
+            ctrl.stop()
+
+    def test_trigger_run_raises_overload_when_executor_saturated(self):
+        ctrl = _make_controller(management_pool_workers=1, management_queue_ceiling=1)
+        ctrl.manager.register(load_pipeline_from_yaml(_INTERVAL_YAML), yaml_text=_INTERVAL_YAML)
+        ctrl.manager.set_status("my-interval", "scheduled")
+        gate = threading.Event()
+        try:
+            assert ctrl._thread_pool.submit(lambda: gate.wait(5)) is not None
+            with pytest.raises(ExecutorOverloadError, match="saturated"):
+                ctrl.trigger_run("my-interval")
+        finally:
+            gate.set()
+            ctrl.stop()
+
+    # ── Lock audit (plan F: no network I/O under the lifecycle lock) ──────
+
+    def test_scheduler_dispatch_runs_with_lifecycle_lock_released(self):
+        """V18-08 lock audit: the scheduler/batch path performs its
+        manager→worker HTTP dispatch with the controller lifecycle lock
+        RELEASED (claim → network work → identity-checked commit). A dispatch
+        under the lock would serialize every worker HTTP call against
+        lifecycle ops and stall the scheduler."""
+        wp = MagicMock()
+        wp.healthy_workers.return_value = ["http://worker-0:8766"]
+        wp.dispatch_with_result.return_value = DispatchOutcome(
+            worker_url="http://worker-0:8766", outcome=DISPATCH_ACCEPTED,
+        )
+        ctrl = _make_controller(worker_pool=wp, manager_url="http://manager:8765")
+        config = load_pipeline_from_yaml(_INTERVAL_YAML)
+        ctrl.manager.register(config, yaml_text=_INTERVAL_YAML)
+        ctrl.manager.set_status("my-interval", "scheduled")
+
+        observed = {}
+        wp.dispatch_with_result.return_value = DispatchOutcome(
+            worker_url="http://worker-0:8766", outcome=DISPATCH_ACCEPTED,
+        )
+
+        def _probe_dispatch(**kwargs):
+            observed["lock_owned"] = ctrl._lock._is_owned()
+            return wp.dispatch_with_result.return_value
+
+        wp.dispatch_with_result.side_effect = _probe_dispatch
+        try:
+            ctrl._run_batch("my-interval", run_id="audit-r1")
+            assert observed["lock_owned"] is False
+        finally:
+            ctrl.stop()
+
+    def test_queued_drain_dispatch_runs_with_lifecycle_lock_released(self, tmp_path):
+        """V18-08 lock audit: the E.2 drain dispatches between the claim and
+        the commit — the claim/commit transitions each hold the RLock, but the
+        dispatch HTTP call itself runs with the lock released."""
+        wp = WorkerPool(workers=["http://w0:8766"], manager_url="http://manager:8765")
+        wp._health["http://w0:8766"]["ok"] = False  # force the enqueue path
+        db, ctrl = self._queued_controller(tmp_path, wp)
+        try:
+            ctrl.manager.register(load_pipeline_from_yaml(_MANUAL_YAML), yaml_text=_MANUAL_YAML)
+            result = ctrl.trigger_run("my-manual")
+            assert result.disposition == "queued"
+
+            wp._health["http://w0:8766"]["ok"] = True  # capacity returns
+            observed = {}
+
+            def _probe_dispatch(**kwargs):
+                observed["lock_owned"] = ctrl._lock._is_owned()
+                return DispatchOutcome(
+                    worker_url="http://w0:8766", outcome=DISPATCH_ACCEPTED,
+                )
+
+            wp.dispatch_with_result = _probe_dispatch
+            runs = ctrl.drainable_queued_runs()
+            assert len(runs) == 1
+            claimed = ctrl.claim_queued_run(runs[0]["run_id"])
+            assert claimed is not None
+            assert observed.get("lock_owned") is None  # claim returned, no dispatch yet
+            wp.dispatch_with_result(
+                run_id=claimed["run_id"],
+                pipeline_name=claimed["pipeline_name"],
+                yaml_text=claimed["yaml_snapshot"],
+                schedule_type=claimed["schedule_type"],
+                callback_url=claimed["callback_url"],
+            )
+            assert observed["lock_owned"] is False
+            assert ctrl.commit_queued_dispatch(claimed["run_id"], "http://w0:8766") is True
+        finally:
+            ctrl.stop()
+            db.close()
+
+
+# ── Live PostgreSQL mirror of the wave-2 gate scenarios ─────────────────────
+#
+# Same env-gating pattern as TestLivePostgres in test_execution_ledger.py:
+# the class skips entirely unless TRAM_TEST_POSTGRES_URL points at a live
+# server. Shared-database discipline: the PG database is shared across the
+# whole class, so every test mints a unique pipeline_name / run_id /
+# attempt_id namespace (uuid-suffixed) and a fresh guard_key (the pipeline
+# name); nothing is truncated or deleted, and other rows are never touched
+# by the tests themselves. Boot-adoption assertions are namespace-scoped
+# (filtered by our attempt_id) rather than global mock call-counts, because
+# a controller boot resolves EVERY non-terminal attempt in the shared DB —
+# including rows left by other tests.
+
+PG_URL = os.environ.get("TRAM_TEST_POSTGRES_URL", "")
+
+
+@pytest.mark.skipif(not PG_URL, reason="TRAM_TEST_POSTGRES_URL not set — no live PostgreSQL fixture")
+class TestLivePostgresGateScenarios:
+    """Wave-2 exit-gate scenarios mirrored against a real PostgreSQL server.
+
+    Covers the four gate-scenario groups: restart/boot adoption
+    (TestBootAdoption), uncertain dispatch (no-journal-evidence +
+    unrecognized-journal-reply variants), duplicate callbacks
+    (TestAttemptRunComplete identity/idempotency + late-foreign fences), and
+    queue identity (TestLedgerClaimBeforeDispatch drain claim + the R16
+    TestQueueTerminalCancellation stop/cancel/drain-skip).
+    """
+
+    @pytest.fixture
+    def pgdb(self):
+        from tram.persistence.db import TramDB
+        d = TramDB(url=PG_URL)
+        yield d
+        d.close()
+
+    def _fetch(self, db, sql, params=None):
+        with db._engine.connect() as conn:
+            rows = conn.execute(text(sql), params or {}).mappings().fetchall()
+        return [dict(r) for r in rows]
+
+    def _controller(self, pgdb, wp):
+        return _make_controller(db=pgdb, worker_pool=wp, manager_url="http://manager:8765")
+
+    def _started_controller(self, pgdb, wp):
+        """Controller with a running scheduler (the batch post-run transition
+        re-schedules interval pipelines via _do_schedule → _add_interval_job,
+        which needs a live BackgroundScheduler)."""
+        return _started_controller(db=pgdb, worker_pool=wp, manager_url="http://manager:8765")
+
+    def _ns(self, prefix: str) -> str:
+        """Unique namespace fragment for a shared-database test."""
+        return f"{prefix}-{uuid.uuid4().hex[:10]}"
+
+    def _interval_yaml(self, name: str) -> str:
+        return _INTERVAL_YAML.replace("name: my-interval", f"name: {name}")
+
+    def _manual_yaml(self, name: str) -> str:
+        return _MANUAL_YAML.replace("name: my-manual", f"name: {name}")
+
+    def _register_batch(self, ctrl, name, yaml_text):
+        # Register via the manager directly (no interval job is scheduled, and
+        # save_version=False keeps the shared PG database free of version rows).
+        config = load_pipeline_from_yaml(yaml_text)
+        ctrl.manager.register(config, yaml_text=yaml_text, save_version=False)
+        ctrl.manager.set_status(config.name, "scheduled")
+
+    def _seed_attempt(
+        self,
+        db,
+        *,
+        run_id,
+        pipeline_name,
+        state="dispatching",
+        generation=1,
+        ordinal=1,
+        worker_id="w0",
+        dispatch_sent_at=None,
+    ):
+        """Seed run_intents + execution_guards + execution_attempts (claimed)."""
+        attempt_id = f"{run_id}-a{ordinal}"
+        now = datetime.now(UTC).isoformat()
+        with db._engine.begin() as conn:
+            conn.execute(text("""
+                INSERT INTO run_intents
+                    (run_id, pipeline_name, origin, flush, requested_at, expires_at,
+                     requested_generation, yaml_snapshot, schedule_type)
+                VALUES (:r, :p, 'scheduled', 0, :now, NULL, :gen, 'yaml', 'interval')
+            """), {"r": run_id, "p": pipeline_name, "now": now, "gen": generation})
+            conn.execute(text("""
+                INSERT INTO execution_guards (guard_key, guard_kind, run_id, attempt_id, generation, acquired_at)
+                VALUES (:p, 'batch', :r, :a, :gen, :now)
+            """), {"p": pipeline_name, "r": run_id, "a": attempt_id, "gen": generation, "now": now})
+            conn.execute(text("""
+                INSERT INTO execution_attempts
+                    (attempt_id, run_id, pipeline_name, ordinal, generation, slot_id,
+                     fence_token, state, dispatch_sent_at, worker_id)
+                VALUES (:a, :r, :p, :ordinal, :gen, '', 'ft', :state, :dsp, :wid)
+            """), {
+                "a": attempt_id, "r": run_id, "p": pipeline_name, "ordinal": ordinal,
+                "gen": generation, "state": state, "dsp": dispatch_sent_at, "wid": worker_id,
+            })
+        return attempt_id
+
+    def _query_calls_for(self, wp, attempt_id):
+        """query_attempt calls whose second positional arg is *attempt_id*."""
+        return [
+            call
+            for call in wp.query_attempt.call_args_list
+            if call.args and call.args[1] == attempt_id
+        ]
+
+    # ── Group 1: restart / boot adoption ─────────────────────────────────
+
+    def test_boot_adoption_claimed_unsent_aborts_locally(self, pgdb):
+        """claimed + dispatch_sent_at IS NULL → terminal 'aborted' locally,
+        never a worker query, guard released (manager_lost_before_dispatch)."""
+        name = self._ns("pg-int")
+        run_id = self._ns("pg-run")
+        wp = MagicMock()
+        # Other tests' shared-DB attempts do fan out on boot; ours must not.
+        wp.query_attempt.return_value = None
+        ctrl = self._controller(pgdb, wp)
+        attempt_id = self._seed_attempt(
+            pgdb, run_id=run_id, pipeline_name=name,
+            state="claimed", dispatch_sent_at=None,
+        )
+        try:
+            ctrl.start()
+            attempts = self._fetch(
+                pgdb, "SELECT state, cancel_reason FROM execution_attempts WHERE run_id = :r",
+                {"r": run_id},
+            )
+            assert attempts[0]["state"] == "terminal"
+            assert attempts[0]["cancel_reason"] == "manager_lost_before_dispatch"
+            intents = self._fetch(
+                pgdb, "SELECT final_outcome FROM run_intents WHERE run_id = :r",
+                {"r": run_id},
+            )
+            assert intents[0]["final_outcome"] == "aborted"
+            guards = self._fetch(
+                pgdb, "SELECT attempt_id FROM execution_guards WHERE guard_key = :p",
+                {"p": name},
+            )
+            assert guards[0]["attempt_id"] is None  # guard released
+            # local resolution — this attempt is never sent to a worker query
+            assert self._query_calls_for(wp, attempt_id) == []
+        finally:
+            ctrl.stop()
+
+    def test_boot_adoption_dispatching_unreachable_worker_unknown_guard_retained(self, pgdb):
+        """dispatching + unreachable worker (query → None) → 'unknown' with the
+        guard RETAINED; intent unresolved; lifecycle row op_kind='boot_adopt'."""
+        name = self._ns("pg-int")
+        run_id = self._ns("pg-run")
+        wp = MagicMock()
+        wp.url_for_worker_id.return_value = "http://worker-0:8766"
+        wp.worker_urls.return_value = ["http://worker-0:8766"]
+        wp.query_attempt.return_value = None  # 404 / transport error / no endpoint
+        ctrl = self._controller(pgdb, wp)
+        attempt_id = self._seed_attempt(
+            pgdb, run_id=run_id, pipeline_name=name,
+            state="dispatching", worker_id="w0",
+        )
+        try:
+            ctrl.start()
+            attempts = self._fetch(
+                pgdb, "SELECT state, uncertainty_reason FROM execution_attempts WHERE run_id = :r",
+                {"r": run_id},
+            )
+            assert attempts[0]["state"] == "unknown"
+            assert attempts[0]["uncertainty_reason"] == "boot_adoption_no_journal_evidence"
+            guards = self._fetch(
+                pgdb, "SELECT attempt_id FROM execution_guards WHERE guard_key = :p",
+                {"p": name},
+            )
+            assert guards[0]["attempt_id"] == attempt_id  # guard RETAINED
+            intents = self._fetch(
+                pgdb, "SELECT final_outcome FROM run_intents WHERE run_id = :r",
+                {"r": run_id},
+            )
+            assert intents[0]["final_outcome"] is None  # unresolved
+            ops = self._fetch(
+                pgdb, "SELECT op_kind, state, attempt_id FROM lifecycle_operations WHERE pipeline_name = :p",
+                {"p": name},
+            )
+            assert len(ops) == 1
+            assert ops[0]["op_kind"] == "boot_adopt"
+            assert ops[0]["state"] == "complete"
+            assert ops[0]["attempt_id"] == attempt_id
+        finally:
+            ctrl.stop()
+
+    def test_boot_adoption_journal_completed_resolves_intent(self, pgdb):
+        """dispatching + journal-completion reply → intent resolved + terminal,
+        outcome decoded into run_history (success), guard released."""
+        name = self._ns("pg-int")
+        run_id = self._ns("pg-run")
+        wp = MagicMock()
+        wp.url_for_worker_id.return_value = "http://worker-0:8766"
+        wp.worker_urls.return_value = ["http://worker-0:8766"]
+        wp.query_attempt.return_value = {
+            "kind": "completion",
+            "result_json": {
+                "status": "success",
+                "records_in": 5,
+                "records_out": 5,
+                "records_skipped": 0,
+                "bytes_in": 100,
+                "bytes_out": 90,
+                "started_at": "2026-09-01T10:00:00+00:00",
+                "finished_at": "2026-09-01T10:00:05+00:00",
+            },
+        }
+        ctrl = self._controller(pgdb, wp)
+        attempt_id = self._seed_attempt(
+            pgdb, run_id=run_id, pipeline_name=name,
+            state="dispatching", worker_id="w0",
+        )
+        try:
+            ctrl.start()
+            # the owning worker's journal was consulted for THIS attempt
+            # (shared-DB leftovers may be probed too, hence assert_any_call)
+            wp.query_attempt.assert_any_call("http://worker-0:8766", attempt_id)
+            attempts = self._fetch(
+                pgdb, "SELECT state FROM execution_attempts WHERE run_id = :r",
+                {"r": run_id},
+            )
+            assert attempts[0]["state"] == "terminal"
+            intents = self._fetch(
+                pgdb, "SELECT final_outcome, final_attempt_id FROM run_intents WHERE run_id = :r",
+                {"r": run_id},
+            )
+            assert intents == [{"final_outcome": "success", "final_attempt_id": attempt_id}]
+            guards = self._fetch(
+                pgdb, "SELECT attempt_id FROM execution_guards WHERE guard_key = :p",
+                {"p": name},
+            )
+            assert guards[0]["attempt_id"] is None  # guard released
+            # outcome decoded into the run-history row (V18-06 task 1)
+            rows = self._fetch(
+                pgdb,
+                "SELECT run_id, status, records_in, records_out, outcome, attempt_id"
+                " FROM run_history WHERE run_id = :r",
+                {"r": run_id},
+            )
+            assert len(rows) == 1
+            assert rows[0]["status"] == "success"
+            assert rows[0]["outcome"] == "success"
+            assert rows[0]["attempt_id"] == attempt_id
+            assert rows[0]["records_in"] == 5
+            assert rows[0]["records_out"] == 5
+            assert ctrl.get_run(run_id) is not None
+        finally:
+            ctrl.stop()
+
+    def test_boot_adoption_order_desired_state_adoption_scheduler(self, pgdb, monkeypatch):
+        """Order pin (plan D / V18-06): desired-state load → boot adoption →
+        scheduler start — unchanged on PostgreSQL."""
+        from apscheduler.schedulers.background import BackgroundScheduler
+
+        name = self._ns("pg-int")
+        run_id = self._ns("pg-run")
+        wp = MagicMock()
+        wp.url_for_worker_id.return_value = "http://worker-0:8766"
+        wp.worker_urls.return_value = ["http://worker-0:8766"]
+        wp.query_attempt.return_value = {
+            "kind": "completion", "result_json": {"status": "success"},
+        }
+        ctrl = self._controller(pgdb, wp)
+        self._seed_attempt(
+            pgdb, run_id=run_id, pipeline_name=name,
+            state="dispatching", worker_id="w0",
+        )
+        order: list[str] = []
+        orig_load = PipelineController._load_desired_state
+        orig_resolve = PipelineController._resolve_non_terminal_attempts_at_boot
+
+        def _load(self):
+            order.append("desired_state")
+            return orig_load(self)
+
+        def _resolve(self):
+            order.append("adoption")
+            return orig_resolve(self)
+
+        orig_sched_start = BackgroundScheduler.start
+
+        def _sched_start(self, *args, **kwargs):
+            order.append("scheduler_start")
+            return orig_sched_start(self, *args, **kwargs)
+
+        monkeypatch.setattr(PipelineController, "_load_desired_state", _load)
+        monkeypatch.setattr(
+            PipelineController, "_resolve_non_terminal_attempts_at_boot", _resolve
+        )
+        monkeypatch.setattr(BackgroundScheduler, "start", _sched_start)
+        try:
+            ctrl.start()
+            assert order == ["desired_state", "adoption", "scheduler_start"]
+        finally:
+            ctrl.stop()
+
+    # ── Group 2: uncertain dispatch ──────────────────────────────────────
+
+    def test_uncertain_dispatch_unrecognized_journal_reply_unknown_guard_retained(self, pgdb):
+        """A journal reply that classifies as neither completed/interrupted/
+        tombstone/active → 'unknown', guard RETAINED, lifecycle row
+        op_kind='boot_adopt' with the unrecognized-reply detail."""
+        name = self._ns("pg-int")
+        run_id = self._ns("pg-run")
+        wp = MagicMock()
+        wp.url_for_worker_id.return_value = "http://worker-0:8766"
+        wp.worker_urls.return_value = ["http://worker-0:8766"]
+        wp.query_attempt.return_value = {"kind": "not-a-known-kind"}
+        ctrl = self._controller(pgdb, wp)
+        attempt_id = self._seed_attempt(
+            pgdb, run_id=run_id, pipeline_name=name,
+            state="dispatching", worker_id="w0",
+        )
+        try:
+            ctrl.start()
+            attempts = self._fetch(
+                pgdb, "SELECT state, uncertainty_reason FROM execution_attempts WHERE run_id = :r",
+                {"r": run_id},
+            )
+            assert attempts[0]["state"] == "unknown"
+            assert attempts[0]["uncertainty_reason"] == "boot_adoption_unrecognized_journal_reply"
+            guards = self._fetch(
+                pgdb, "SELECT attempt_id FROM execution_guards WHERE guard_key = :p",
+                {"p": name},
+            )
+            assert guards[0]["attempt_id"] == attempt_id  # guard RETAINED
+            ops = self._fetch(
+                pgdb, "SELECT op_kind, state, attempt_id, detail FROM lifecycle_operations WHERE pipeline_name = :p",
+                {"p": name},
+            )
+            assert len(ops) == 1
+            assert ops[0]["op_kind"] == "boot_adopt"
+            assert ops[0]["state"] == "complete"
+            assert ops[0]["attempt_id"] == attempt_id
+            assert "unrecognized journal reply" in ops[0]["detail"]
+        finally:
+            ctrl.stop()
+
+    # ── Group 3: duplicate callback ──────────────────────────────────────
+
+    def test_duplicate_identity_matched_completion_is_idempotent(self, pgdb):
+        """Identity-matched run-complete resolves once; a second delivery is a
+        no-op — no state corruption in the intent/attempt/guard or history."""
+        name = self._ns("pg-int")
+        run_id = self._ns("pg-dup")
+        wp = _accepted_worker_pool()
+        ctrl = self._started_controller(pgdb, wp)
+        self._register_batch(ctrl, name, self._interval_yaml(name))
+        attempt_id = f"{run_id}-a1"
+        try:
+            ctrl._run_batch(name, run_id=run_id, origin="manual")
+            attempts = self._fetch(
+                pgdb, "SELECT state FROM execution_attempts WHERE run_id = :r",
+                {"r": run_id},
+            )
+            assert attempts[0]["state"] == "running"  # 202 acceptance advanced it
+
+            first = ctrl.on_attempt_run_complete(
+                attempt_id=attempt_id, generation=1, run_id=run_id,
+                pipeline_name=name, worker_id="w0", status="success",
+                records_in=3, records_out=3,
+            )
+            assert first == {"ok": True}
+            second = ctrl.on_attempt_run_complete(
+                attempt_id=attempt_id, generation=1, run_id=run_id,
+                pipeline_name=name, worker_id="w0", status="success",
+                records_in=3, records_out=3,
+            )
+            assert second == {"ok": True}
+
+            # the winner's intent/attempt/guard are untouched by the duplicate
+            intents = self._fetch(
+                pgdb, "SELECT final_outcome, final_attempt_id FROM run_intents WHERE run_id = :r",
+                {"r": run_id},
+            )
+            assert intents == [{"final_outcome": "success", "final_attempt_id": attempt_id}]
+            attempts = self._fetch(
+                pgdb, "SELECT state, finished_at FROM execution_attempts WHERE run_id = :r",
+                {"r": run_id},
+            )
+            assert attempts[0]["state"] == "terminal"
+            assert attempts[0]["finished_at"] is not None
+            guards = self._fetch(
+                pgdb, "SELECT attempt_id FROM execution_guards WHERE guard_key = :p",
+                {"p": name},
+            )
+            assert guards[0]["attempt_id"] is None
+            matches = [r for r in ctrl.manager.get(name).run_history if r.run_id == run_id]
+            assert len(matches) == 1
+            assert ctrl.get_run(run_id) is not None
+            assert ctrl.get_run(run_id).status == RunStatus.SUCCESS
+        finally:
+            ctrl.stop()
+
+    def test_late_callback_cannot_clobber_newer_attempt(self, pgdb):
+        """A late callback for a retired attempt records diagnostics only and
+        cannot touch the newer run's lease, guard, status, or history."""
+        name = self._ns("pg-int")
+        old_run = self._ns("pg-old")
+        new_run = self._ns("pg-new")
+        wp = _accepted_worker_pool()
+        ctrl = self._started_controller(pgdb, wp)
+        self._register_batch(ctrl, name, self._interval_yaml(name))
+        try:
+            # run 1 dispatched and completed (guard released)
+            ctrl._run_batch(name, run_id=old_run, origin="manual")
+            ctrl.on_attempt_run_complete(
+                attempt_id=f"{old_run}-a1", generation=1, run_id=old_run,
+                pipeline_name=name, worker_id="w0", status="success",
+                records_in=1, records_out=1,
+            )
+            # run 2 dispatched and still active
+            ctrl._worker_pool.dispatch_with_result.reset_mock()
+            ctrl._run_batch(name, run_id=new_run, origin="manual")
+            assert ctrl.manager.get(name).status == "running"
+            assert len(ctrl.get_active_batch_runs()) == 1
+            assert ctrl.get_active_batch_runs()[0]["run_id"] == new_run
+
+            # late duplicate callback for the retired attempt
+            late = ctrl.on_attempt_run_complete(
+                attempt_id=f"{old_run}-a1", generation=1, run_id=old_run,
+                pipeline_name=name, worker_id="w0", status="success",
+                records_in=1, records_out=1,
+            )
+            assert late == {"ok": True}
+
+            # the newer run's guard, lease, and status are untouched
+            guards = self._fetch(
+                pgdb, "SELECT attempt_id, run_id FROM execution_guards WHERE guard_key = :p",
+                {"p": name},
+            )
+            assert guards[0] == {"attempt_id": f"{new_run}-a1", "run_id": new_run}
+            assert len(ctrl.get_active_batch_runs()) == 1
+            assert ctrl.get_active_batch_runs()[0]["run_id"] == new_run
+            assert ctrl.manager.get(name).status == "running"
+            matches = [r for r in ctrl.manager.get(name).run_history if r.run_id == old_run]
+            assert len(matches) == 1
+        finally:
+            ctrl.stop()
+
+    # ── Group 4: queue identity ──────────────────────────────────────────
+
+    def test_queued_drain_claim_acquires_guard_exactly_once(self, pgdb):
+        """A queued-run claim at drain acquires the guard exactly once; a
+        second claim loses (the queued fence is consumed) and the guard stays
+        with the first attempt."""
+        name = self._ns("pg-man")
+        wp = MagicMock()
+        wp.healthy_workers.return_value = []
+        ctrl = self._controller(pgdb, wp)
+        self._register_batch(ctrl, name, self._manual_yaml(name))
+        try:
+            triggered = ctrl.trigger_run(name)
+            assert triggered.disposition == "queued"
+
+            # reservation only — no guard yet
+            guards = self._fetch(
+                pgdb, "SELECT attempt_id FROM execution_guards WHERE guard_key = :p",
+                {"p": name},
+            )
+            assert guards == []
+
+            claimed = ctrl.claim_queued_run(triggered.run_id)
+            assert claimed is not None
+            assert claimed["attempt_id"] == f"{triggered.run_id}-a1"
+
+            guards = self._fetch(
+                pgdb, "SELECT attempt_id FROM execution_guards WHERE guard_key = :p",
+                {"p": name},
+            )
+            assert guards[0]["attempt_id"] == f"{triggered.run_id}-a1"
+            attempts = self._fetch(
+                pgdb, "SELECT state FROM execution_attempts WHERE run_id = :r",
+                {"r": triggered.run_id},
+            )
+            assert attempts[0]["state"] == "dispatching"
+            ctrl._worker_pool.register_attempt.assert_called_once_with(
+                triggered.run_id, f"{triggered.run_id}-a1", 1, ""
+            )
+
+            # a second drain claim loses — the guard is already held and the
+            # queued fence was consumed by the first claim
+            second = ctrl.claim_queued_run(triggered.run_id)
+            assert second is None
+            guards = self._fetch(
+                pgdb, "SELECT attempt_id FROM execution_guards WHERE guard_key = :p",
+                {"p": name},
+            )
+            assert guards[0]["attempt_id"] == f"{triggered.run_id}-a1"
+            attempts = self._fetch(
+                pgdb, "SELECT COUNT(*) AS c FROM execution_attempts WHERE run_id = :r",
+                {"r": triggered.run_id},
+            )
+            assert attempts[0]["c"] == 1
+        finally:
+            ctrl.stop()
+
+    def test_stop_terminal_cancels_queued_row_and_drain_skips(self, pgdb):
+        """Pipeline stop terminal-cancels the queued row with the recorded
+        reason and the drain skips it; the run intent resolves 'aborted'."""
+        name = self._ns("pg-man")
+        wp = MagicMock()
+        wp.healthy_workers.return_value = []
+        ctrl = self._controller(pgdb, wp)
+        self._register_batch(ctrl, name, self._manual_yaml(name))
+        try:
+            triggered = ctrl.trigger_run(name)
+            assert triggered.disposition == "queued"
+            ctrl.stop_pipeline(name)
+            rows = self._fetch(
+                pgdb, "SELECT status, terminal_reason FROM queued_runs WHERE run_id = :r",
+                {"r": triggered.run_id},
+            )
+            assert rows[0]["status"] == "cancelled"
+            assert rows[0]["terminal_reason"] == "pipeline_stopped"
+            assert ctrl.drainable_queued_runs() == []  # drain skips cancelled rows
+            intents = self._fetch(
+                pgdb, "SELECT final_outcome FROM run_intents WHERE run_id = :r",
+                {"r": triggered.run_id},
+            )
+            assert intents[0]["final_outcome"] == "aborted"
+        finally:
+            ctrl.stop()

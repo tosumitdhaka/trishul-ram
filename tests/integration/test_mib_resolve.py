@@ -67,8 +67,13 @@ class TestMibResolveIntegration:
 
         assert result == "sysDescr"
 
-    def test_get_mib_view_caching(self):
-        """get_mib_view returns the same object for identical parameters."""
+    def test_get_mib_view_caching(self, monkeypatch):
+        """get_mib_view returns the same object for identical parameters.
+
+        Legacy (pysnmp) view path — v1.8.0 flipped the default to trishul,
+        so the legacy path is pinned explicitly (the tsnmp bundle path has
+        its own caching tests)."""
+        monkeypatch.setenv("TRAM_SNMP_STACK", "legacy")
         from tram.connectors.snmp import mib_utils
 
         mib_utils._cached_mib_view.cache_clear()

@@ -10,6 +10,7 @@ import pytest
 from tram.connectors.s3.sink import S3Sink
 from tram.connectors.s3.source import S3Source
 from tram.core.exceptions import SinkError, SourceError
+from tram.interfaces.base_sink import DeliveryTier
 
 
 def _make_boto3_mock(keys: list[str], contents: dict[str, bytes]) -> MagicMock:
@@ -173,3 +174,36 @@ class TestS3Sink:
 
         key = mock_client.put_object.call_args[1]["Key"]
         assert key == "input.csv"
+
+    def test_delivery_capability_declared_remote_durable(self):
+        """V18-01 §6 / disposition D1: per-write server-confirmed PUT."""
+        cap = S3Sink.delivery_capability
+        assert cap is not None
+        assert cap.tier == DeliveryTier.REMOTE_DURABLE
+        assert cap.replay_safe is False
+
+    def test_commit_confirms_remote_durable(self):
+        sink = S3Sink({"bucket": "my-bucket"})
+        receipt = sink.commit()
+        assert receipt.sink_key == "s3"
+        assert receipt.tier == DeliveryTier.REMOTE_DURABLE
+        assert receipt.confirmed is True
+        assert "put_object" in receipt.notes
+        assert "nothing buffered" in receipt.notes
+
+    def test_commit_stateless_before_and_after_writes(self):
+        """The barrier carries no state: confirmed before any write and again
+        after a write, with no latched error."""
+        mock_client = MagicMock()
+        mock_boto3 = MagicMock()
+        mock_boto3.client.return_value = mock_client
+
+        sink = S3Sink({"bucket": "my-bucket", "key_template": "output/data.json"})
+        assert sink.commit().confirmed is True
+        assert sink.latched_error() is None
+        with patch.dict(sys.modules, {"boto3": mock_boto3}):
+            sink.write(b"data", {"pipeline_name": "test"})
+        receipt = sink.commit()
+        assert receipt.confirmed is True
+        assert receipt.tier == DeliveryTier.REMOTE_DURABLE
+        assert sink.latched_error() is None

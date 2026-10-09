@@ -2,7 +2,11 @@
 from __future__ import annotations
 
 import threading
+import time
 from unittest.mock import MagicMock, patch
+
+import httpx
+import pytest
 
 from tram.agent.worker_pool import (
     DISPATCH_ACCEPTED,
@@ -16,6 +20,22 @@ from tram.agent.worker_pool import (
 
 def _pool(*urls, manager_url="http://manager"):
     return WorkerPool(workers=list(urls), manager_url=manager_url, poll_interval=60)
+
+
+def _capturing_client(captured: dict):
+    """Return a mock httpx client whose POST records kwargs['json'] into *captured*."""
+    mock_client = MagicMock()
+    mock_client.__enter__ = lambda s: mock_client
+    mock_client.__exit__ = MagicMock(return_value=False)
+
+    def _post(url, **kwargs):
+        captured["json"] = kwargs.get("json", {})
+        resp = MagicMock()
+        resp.raise_for_status = MagicMock()
+        return resp
+
+    mock_client.post.side_effect = _post
+    return mock_client
 
 
 def _gated_fanout_client(urls: list[str], gate: threading.Event):
@@ -272,6 +292,77 @@ class TestHealthPolling:
         assert pool.least_loaded() is None
 
 
+# ── V18-08: fair placement (plan F) ──────────────────────────────────────────
+
+
+class TestFairPlacement:
+    """V18-08 (plan F): placement stays least-loaded-first, but a healthy
+    worker skipped for ``fair_placement_threshold`` consecutive selection
+    decisions is *starved* and promoted — a cold worker is never perpetually
+    deprioritized by a slightly-less-loaded sibling."""
+
+    def _pool_with_loads(self, loads: dict[str, int]):
+        pool = _pool(*loads.keys())
+        for url, active in loads.items():
+            pool._health[url] = {"ok": True, "active_runs": active}
+        return pool
+
+    def test_least_loaded_still_preferred_before_starvation(self):
+        pool = self._pool_with_loads({
+            "http://w0:8766": 5, "http://w1:8766": 1, "http://w2:8766": 3,
+        })
+        # Nobody is starved yet → pure least-loaded (existing semantics).
+        assert pool.least_loaded() == "http://w1:8766"
+        assert pool.least_loaded() == "http://w1:8766"
+
+    def test_starved_worker_promoted_after_threshold(self):
+        pool = self._pool_with_loads({
+            "http://w0:8766": 5, "http://w1:8766": 1,
+        })
+        # w1 is least-loaded: it wins the first two decisions while w0's
+        # starvation counter climbs (default threshold 2).
+        assert pool.least_loaded() == "http://w1:8766"
+        assert pool.least_loaded() == "http://w1:8766"
+        # w0 is now starved (skipped twice while healthy) → promoted even
+        # though it is more loaded, then the counter resets and least-loaded
+        # preference resumes.
+        assert pool.least_loaded() == "http://w0:8766"
+        assert pool.least_loaded() == "http://w1:8766"
+
+    def test_resolve_count1_shares_fair_selection(self):
+        from tram.models.pipeline import WorkersConfig
+
+        pool = self._pool_with_loads({
+            "http://w0:8766": 5, "http://w1:8766": 1,
+        })
+        assert pool.resolve(WorkersConfig(count=1)) == ["http://w1:8766"]
+        assert pool.resolve(WorkersConfig(count=1)) == ["http://w1:8766"]
+        assert pool.resolve(WorkersConfig(count=1)) == ["http://w0:8766"]
+        assert pool.resolve(WorkersConfig(count=1)) == ["http://w1:8766"]
+
+    def test_resolve_count_n_keeps_least_loaded_order(self):
+        from tram.models.pipeline import WorkersConfig
+
+        pool = self._pool_with_loads({
+            "http://w0:8766": 5, "http://w1:8766": 1, "http://w2:8766": 3,
+        })
+        # Broadcast selection is still pure least-loaded when nobody starves.
+        assert pool.resolve(WorkersConfig(count=2)) == ["http://w1:8766", "http://w2:8766"]
+
+    def test_broadcast_promotes_starved_worker(self):
+        from tram.models.pipeline import WorkersConfig
+
+        pool = self._pool_with_loads({
+            "http://w0:8766": 5, "http://w1:8766": 1, "http://w2:8766": 2,
+        })
+        pool._starvation["http://w0:8766"] = 2  # starved
+        # The starved worker leads the broadcast tier (by load within tier),
+        # then the least-loaded rest — and resets its counter.
+        assert pool.resolve(WorkersConfig(count=2)) == ["http://w0:8766", "http://w1:8766"]
+        assert pool._starvation["http://w0:8766"] == 0
+        assert pool._starvation["http://w2:8766"] == 1
+
+
 # ── D.6: per-worker probes run concurrently ────────────────────────────────
 
 
@@ -498,6 +589,41 @@ class TestDispatch:
         assert outcome.worker_url == "http://w0:8766"
         assert outcome.outcome == DISPATCH_ACCEPTED
         assert outcome.error is None
+
+    def test_dispatch_with_result_never_parses_completion_from_response(self):
+        """V18-08 audit: TRAM dispatch is async 202 — the worker's dispatch
+        response body is never read, so completion information can never ride
+        the dispatch response into manager state. Even a worker that echoes a
+        completion ``result`` body (the already-admitted replay shape) leaves
+        ``DispatchOutcome`` with only worker_url/outcome/error."""
+        pool = _pool("http://w0:8766")
+        mock_client = MagicMock()
+        mock_client.__enter__ = lambda s: mock_client
+        mock_client.__exit__ = MagicMock(return_value=False)
+
+        def _post(url, **kwargs):
+            resp = MagicMock()
+            resp.raise_for_status = MagicMock()
+            # A hostile/buggy worker 202s with a completion-shaped body.
+            resp.json.return_value = {
+                "accepted": True,
+                "run_id": "r10",
+                "attempt_id": "r10-a1",
+                "result": {"status": "success", "records_in": 99},
+            }
+            return resp
+
+        mock_client.post.side_effect = _post
+        with patch("httpx.Client", return_value=mock_client):
+            outcome = pool.dispatch_with_result("r10", "p", "yaml", "batch")
+
+        assert outcome.worker_url == "http://w0:8766"
+        assert outcome.outcome == DISPATCH_ACCEPTED
+        assert outcome.error is None
+        # No completion information is surfaced anywhere in the outcome.
+        assert not hasattr(outcome, "result")
+        assert not hasattr(outcome, "status")
+        assert not hasattr(outcome, "attempt_id")
 
     def test_dispatch_with_result_labels_no_capacity(self):
         pool = _pool("http://w0:8766")
@@ -750,7 +876,12 @@ class TestManagerToWorkerAuthHeader:
         with patch("httpx.Client", side_effect=factory):
             pool.dispatch("r1", "p", "yaml", "batch")
         assert captured[0]["headers"] == {"X-API-Key": "manager-key"}
-        assert captured[0]["timeout"] == 10
+        # V18-08 (plan F): the RPC client carries the frozen §9 deadlines — the
+        # read/total timeout is today's dispatch timeout (10 s) and the TCP/TLS
+        # connect deadline is the frozen 5 s (TRAM_RPC_CONNECT_TIMEOUT_S).
+        timeout = captured[0]["timeout"]
+        assert timeout.read == 10
+        assert timeout.connect == 5
 
     def test_stop_run_carries_api_key_header_when_configured(self, monkeypatch):
         pool = self._pool_with_env_key(monkeypatch)
@@ -949,6 +1080,41 @@ class TestStatusQueries:
             "streams": [{"run_id": "s1", "pipeline": "pipe-a", "started_at": "now"}],
             "assigned_pipelines": ["pipe-a"],
         }]
+
+    def test_status_carries_worker_admission_state(self):
+        """V18-09 drain-runbook visibility: the worker's admission_state and
+        drain block ride through the status row when reported (absent on
+        v1.7 workers — the exact-equality test above pins the absence)."""
+        pool = _pool("http://w0:8766")
+        pool._health["http://w0:8766"] = {
+            "ok": True,
+            "active_runs": 0,
+            "running_pipelines": [],
+        }
+
+        def _get(url, **kwargs):
+            resp = MagicMock()
+            resp.raise_for_status = MagicMock()
+            resp.json.return_value = {
+                "worker_id": "w0",
+                "active_runs": 0,
+                "running": [],
+                "streams": [],
+                "admission_state": "draining",
+                "drain": {"draining": True, "idle": True, "drained": True},
+            }
+            return resp
+
+        mock_client = MagicMock()
+        mock_client.__enter__ = lambda s: mock_client
+        mock_client.__exit__ = MagicMock(return_value=False)
+        mock_client.get.side_effect = _get
+
+        with patch("httpx.Client", return_value=mock_client):
+            rows = pool.status()
+
+        assert rows[0]["admission_state"] == "draining"
+        assert rows[0]["drain"] == {"draining": True, "idle": True, "drained": True}
 
     def test_live_streams_returns_normalized_stream_entries(self):
         pool = _pool("http://w0:8766")
@@ -1347,3 +1513,357 @@ class TestReapOnWorkerDown:
             )
         assert pool._assignments["r2"] == "http://w0:8766"
         assert pool.workers_for_pipeline("pipe-a") == ["http://w0:8766"]
+
+
+# ── V18-04: dispatch payload (attempt identity + authorization) ──────────────
+
+
+class TestDispatchPayload:
+    """V18-04 §2: the /agent/run dispatch request carries the ledger attempt
+    identity, plus a minted start authorization only when a manager↔worker
+    session secret exists for that worker (none exist yet, so the default
+    dispatch stays legacy-shaped with no authorization field)."""
+
+    def test_payload_carries_attempt_id_and_generation(self):
+        pool = _pool("http://w0:8766")
+        captured = {}
+        with patch("httpx.Client", return_value=_capturing_client(captured)):
+            pool.dispatch_with_result(
+                "r1", "p", "yaml", "batch",
+                attempt_id="r1-a1", generation=3,
+            )
+        assert captured["json"]["attempt_id"] == "r1-a1"
+        assert captured["json"]["generation"] == 3
+        assert "slot_id" not in captured["json"]  # batches carry no slot
+        assert "authorization" not in captured["json"]  # no session secret yet
+        assert captured["json"]["run_id"] == "r1"
+
+    def test_payload_stays_legacy_shaped_when_attempt_unknown(self):
+        pool = _pool("http://w0:8766")
+        captured = {}
+        with patch("httpx.Client", return_value=_capturing_client(captured)):
+            pool.dispatch_with_result("r2", "p", "yaml", "batch")
+        assert "attempt_id" not in captured["json"]
+        assert "generation" not in captured["json"]
+        assert "authorization" not in captured["json"]
+        assert captured["json"]["run_id"] == "r2"
+
+    def test_registered_attempt_resolved_by_run_id(self):
+        """The queued drain dispatches with only a run_id; the registry fills
+        in the attempt identity."""
+        pool = _pool("http://w0:8766")
+        pool.register_attempt("r3", "r3-a1", 2)
+        captured = {}
+        with patch("httpx.Client", return_value=_capturing_client(captured)):
+            pool.dispatch_with_result("r3", "p", "yaml", "batch")
+        assert captured["json"]["attempt_id"] == "r3-a1"
+        assert captured["json"]["generation"] == 2
+
+    def test_authorization_minted_only_with_injected_session_secret(self):
+        pool = _pool("http://w0:8766")
+        pool.register_worker_session(
+            "http://w0:8766", session_id="w0-boot1234abcd", secret="s3cret!",
+        )
+        captured = {}
+        with patch("httpx.Client", return_value=_capturing_client(captured)):
+            pool.dispatch_with_result(
+                "r4", "p", "yaml", "batch",
+                attempt_id="r4-a1", generation=1,
+            )
+        token = captured["json"].get("authorization")
+        assert token is not None
+        from tram.agent.auth_tokens import validate_start_authorization
+        result = validate_start_authorization(
+            token,
+            worker_session="w0-boot1234abcd",
+            current_secret="s3cret!",
+            max_ttl_s=600,
+            clock_skew_s=5,
+            now_unix=int(time.time()),
+        )
+        assert result.valid
+        assert result.attempt_id == "r4-a1"
+        assert result.run_id == "r4"
+        assert result.generation == 1
+        assert result.slot_id == ""
+
+    def test_no_authorization_without_secret_even_with_attempt(self):
+        pool = _pool("http://w0:8766")
+        captured = {}
+        with patch("httpx.Client", return_value=_capturing_client(captured)):
+            pool.dispatch_with_result(
+                "r5", "p", "yaml", "batch",
+                attempt_id="r5-a1", generation=1,
+            )
+        assert "authorization" not in captured["json"]
+        assert captured["json"]["attempt_id"] == "r5-a1"
+
+    def test_authorization_scoped_to_the_secreted_worker(self):
+        pool = _pool("http://w0:8766", "http://w1:8766")
+        pool.register_worker_session(
+            "http://w1:8766", session_id="w1-session", secret="w1-secret",
+        )
+        captured = {}
+        with patch("httpx.Client", return_value=_capturing_client(captured)):
+            pool.dispatch_with_result(
+                "r7", "p", "yaml", "batch",
+                attempt_id="r7-a1", generation=1,
+            )
+        # least-loaded dispatch targets w0, which has no session secret
+        assert captured["json"]["attempt_id"] == "r7-a1"
+        assert "authorization" not in captured["json"]
+
+    def test_on_run_complete_clears_attempt_registry(self):
+        pool = _pool("http://w0:8766")
+        pool.register_attempt("r6", "r6-a1", 1)
+        assert pool._attempts_by_run["r6"]["attempt_id"] == "r6-a1"
+        pool.on_run_complete("r6")
+        assert "r6" not in pool._attempts_by_run
+
+    def test_register_worker_session_supersedes_old_secret(self):
+        pool = _pool("http://w0:8766")
+        pool.register_worker_session("http://w0:8766", session_id="s1", secret="old")
+        pool.register_worker_session("http://w0:8766", session_id="s2", secret="new")
+        record = pool._worker_sessions["http://w0:8766"]
+        assert record["session_id"] == "s2"
+        assert record["secret"] == "new"
+        # rotation overlap: the previous secret is retained for max TTL + skew
+        assert record["previous_secret"] == "old"
+        assert record["previous_secret_until"] > time.time() + 600
+        assert record["previous_secret_until"] < time.time() + 610
+
+
+def _handshake_client(
+    captured: dict,
+    *,
+    session_id: str = "w0-boot1234abcd",
+    session_secret: str | None = "w0-session-secret-1",
+    handshake_error: Exception | None = None,
+    attempt_status: int = 200,
+    attempt_reply: dict | None = None,
+):
+    """Mock httpx client for the handshake/query tests.
+
+    GET /agent/health → healthy; GET /agent/attempts/{id} → attempt_status /
+    attempt_reply; POST /agent/handshake → session_id + session_secret (D2:
+    the worker mints and returns the secret; ``session_secret=None`` omits
+    it, or handshake_error when set); other POSTs (dispatch) → 200. Every
+    POST's (url, body) is recorded into ``captured["posts"]``.
+    """
+    mock_client = MagicMock()
+    mock_client.__enter__ = lambda s: mock_client
+    mock_client.__exit__ = MagicMock(return_value=False)
+
+    def _get(url, **kwargs):
+        if "/agent/attempts/" in url:
+            resp = MagicMock()
+            resp.status_code = attempt_status
+            if attempt_status == 200:
+                resp.json.return_value = attempt_reply or {"kind": "active"}
+            return resp
+        resp = MagicMock()
+        resp.status_code = 200
+        resp.json.return_value = {
+            "ok": True,
+            "active_runs": 0,
+            "worker_id": url.rsplit("/", 1)[-1],
+            "running_pipelines": [],
+        }
+        return resp
+
+    def _post(url, **kwargs):
+        captured.setdefault("posts", []).append((url, kwargs.get("json", {})))
+        resp = MagicMock()
+        if handshake_error is not None and url.endswith("/agent/handshake"):
+            resp.raise_for_status.side_effect = handshake_error
+        elif url.endswith("/agent/handshake"):
+            resp.status_code = 200
+            resp.raise_for_status = MagicMock()
+            reply: dict = {"session_id": session_id}
+            if session_secret is not None:
+                reply["session_secret"] = session_secret
+            resp.json.return_value = reply
+        else:
+            resp.status_code = 200
+            resp.raise_for_status = MagicMock()
+            resp.json.return_value = {"session_id": session_id}
+        return resp
+
+    mock_client.get.side_effect = _get
+    mock_client.post.side_effect = _post
+    return mock_client
+
+
+# ── V18-04: manager↔worker handshake client ─────────────────────────────────
+
+
+class TestHandshakeClient:
+    """V18-01 §5: the manager establishes the session secret at worker
+    registration (POST /agent/handshake), making _mint_authorization live. A
+    worker without the endpoint (v1.7) or a failing handshake records no
+    session — dispatches to it stay legacy-shaped. Rotation retains the
+    previous secret for the overlap window."""
+
+    def test_start_handshakes_healthy_workers_and_stores_secret(self):
+        captured = {}
+        pool = _pool("http://w0:8766")
+        with patch("httpx.Client", return_value=_handshake_client(captured)):
+            pool.start()
+        try:
+            record = pool._worker_sessions["http://w0:8766"]
+            assert record["session_id"] == "w0-boot1234abcd"
+            assert record["secret"] == "w0-session-secret-1"
+            handshake_posts = [
+                p for p in captured["posts"] if p[0].endswith("/agent/handshake")
+            ]
+            assert len(handshake_posts) == 1
+            body = handshake_posts[0][1]
+            assert body["protocol_version"] == "1.8"
+            assert "fencing" in body["capabilities"]
+            assert "secret" not in body  # D2: the worker mints; the manager never sends one
+        finally:
+            pool.stop()
+
+    def test_handshake_reply_without_secret_records_no_session(self):
+        captured = {}
+        pool = _pool("http://w0:8766")
+        with patch("httpx.Client", return_value=_handshake_client(captured, session_secret=None)):
+            pool.start()
+            try:
+                assert "http://w0:8766" not in pool._worker_sessions
+                pool.dispatch_with_result(
+                    "r1", "p", "yaml", "batch", attempt_id="r1-a1", generation=1,
+                )
+                body = captured["posts"][-1][1]
+                assert body["attempt_id"] == "r1-a1"
+                assert "authorization" not in body  # legacy-shaped: no session
+            finally:
+                pool.stop()
+
+    def test_handshake_enables_authorized_dispatch(self):
+        captured = {}
+        pool = _pool("http://w0:8766")
+        with patch("httpx.Client", return_value=_handshake_client(captured)):
+            pool.start()
+            try:
+                pool.dispatch_with_result(
+                    "r1", "p", "yaml", "batch", attempt_id="r1-a1", generation=1,
+                )
+                body = captured["posts"][-1][1]
+                token = body.get("authorization")
+                assert token is not None
+                from tram.agent.auth_tokens import validate_start_authorization
+                result = validate_start_authorization(
+                    token,
+                    worker_session="w0-boot1234abcd",
+                    current_secret=pool._worker_sessions["http://w0:8766"]["secret"],
+                    max_ttl_s=600,
+                    clock_skew_s=5,
+                    now_unix=int(time.time()),
+                )
+                assert result.valid
+                assert result.attempt_id == "r1-a1"
+                assert result.run_id == "r1"
+            finally:
+                pool.stop()
+
+    def test_v17_worker_without_handshake_endpoint_stays_legacy_shaped(self):
+        captured = {}
+        pool = _pool("http://w0:8766")
+        error = httpx.ConnectError("no /agent/handshake on v1.7 worker")
+        with patch("httpx.Client", return_value=_handshake_client(captured, handshake_error=error)):
+            pool.start()
+            try:
+                assert "http://w0:8766" not in pool._worker_sessions
+                pool.dispatch_with_result(
+                    "r1", "p", "yaml", "batch", attempt_id="r1-a1", generation=1,
+                )
+                body = captured["posts"][-1][1]
+                assert body["attempt_id"] == "r1-a1"
+                assert "authorization" not in body  # legacy-shaped
+            finally:
+                pool.stop()
+
+    def test_failing_handshake_records_no_session(self):
+        captured = {}
+        pool = _pool("http://w0:8766")
+        request = httpx.Request("POST", "http://w0:8766/agent/handshake")
+        error = httpx.HTTPStatusError(
+            "Internal Server Error",
+            request=request,
+            response=httpx.Response(500, request=request),
+        )
+        with patch("httpx.Client", return_value=_handshake_client(captured, handshake_error=error)):
+            pool.start()
+            try:
+                assert "http://w0:8766" not in pool._worker_sessions
+                pool.dispatch_with_result(
+                    "r1", "p", "yaml", "batch", attempt_id="r1-a1", generation=1,
+                )
+                assert "authorization" not in captured["posts"][-1][1]
+            finally:
+                pool.stop()
+
+    def test_recovered_worker_rehandshakes(self):
+        pool = _pool("http://w0:8766")
+        captured = {}
+        client = _handshake_client(captured)
+        healthy_get = client.get.side_effect
+        state = {"down": True}
+
+        def _get(url, **kwargs):
+            if "/agent/health" in url and state["down"]:
+                resp = MagicMock()
+                resp.status_code = 503
+                return resp
+            return healthy_get(url, **kwargs)
+
+        client.get.side_effect = _get
+        with patch("httpx.Client", return_value=client):
+            pool._poll_all(initial_scan=True)
+            assert "http://w0:8766" not in pool._worker_sessions
+            state["down"] = False
+            pool._poll_all()
+            assert "http://w0:8766" in pool._worker_sessions
+        pool.stop()
+
+    def test_rotation_retains_previous_secret_for_overlap(self):
+        pool = _pool("http://w0:8766")
+        pool.register_worker_session("http://w0:8766", session_id="s1", secret="old")
+        pool.register_worker_session("http://w0:8766", session_id="s2", secret="new")
+        record = pool._worker_sessions["http://w0:8766"]
+        assert record["previous_secret"] == "old"
+        assert record["previous_secret_until"] - time.time() == pytest.approx(605, abs=5)
+
+
+class TestQueryAttempt:
+    """V18-01 §5 GET /agent/attempts/{attempt_id} manager-side client."""
+
+    def test_query_attempt_returns_parsed_journal_reply(self):
+        pool = _pool("http://w0:8766")
+        captured = {}
+        client = _handshake_client(captured, attempt_reply={"kind": "completion", "result_json": "{}"})
+        with patch("httpx.Client", return_value=client):
+            reply = pool.query_attempt("http://w0:8766", "r1-a1")
+        assert reply == {"kind": "completion", "result_json": "{}"}
+        get_urls = [call.args[0] for call in client.get.call_args_list]
+        assert "http://w0:8766/agent/attempts/r1-a1" in get_urls
+
+    def test_query_attempt_none_on_404(self):
+        pool = _pool("http://w0:8766")
+        captured = {}
+        with patch("httpx.Client", return_value=_handshake_client(captured, attempt_status=404)):
+            assert pool.query_attempt("http://w0:8766", "r1-a1") is None
+
+    def test_query_attempt_none_on_transport_error(self):
+        pool = _pool("http://w0:8766")
+
+        def _get(url, **kwargs):
+            raise httpx.ConnectError("worker unreachable")
+
+        client = MagicMock()
+        client.__enter__ = lambda s: client
+        client.__exit__ = MagicMock(return_value=False)
+        client.get.side_effect = _get
+        with patch("httpx.Client", return_value=client):
+            assert pool.query_attempt("http://w0:8766", "r1-a1") is None

@@ -8,6 +8,8 @@ import queue
 import threading
 from collections.abc import Generator
 
+from tram.connectors.bridge import BoundedBridgeQueue
+from tram.core.config import source_bridge_max_bytes, source_bridge_max_count
 from tram.core.exceptions import SourceError
 from tram.interfaces.base_source import BaseSource
 from tram.registry.registry import register_source
@@ -25,6 +27,12 @@ class WebSocketSource(BaseSource):
         ping_interval (int): Seconds between keep-alive pings. Default 20.
         reconnect (bool): Auto-reconnect on disconnect. Default True.
         reconnect_delay (int): Seconds to wait before reconnecting. Default 5.
+
+    The internal producer→reader bridge is bounded by count and bytes
+    (``TRAM_SOURCE_BRIDGE_MAX_COUNT`` / ``TRAM_SOURCE_BRIDGE_MAX_BYTES``).
+    Overflow backpressures the asyncio loop cooperatively (the loop stays
+    responsive to stop signals and pings) and never drops a payload
+    (V18-01 §9).
     """
 
     def __init__(self, config: dict) -> None:
@@ -63,7 +71,10 @@ class WebSocketSource(BaseSource):
                 "WebSocket source requires websockets — install with: pip install tram[websocket]"
             ) from exc
 
-        bridge: queue.SimpleQueue = queue.SimpleQueue()
+        bridge: BoundedBridgeQueue = BoundedBridgeQueue(
+            max_count=source_bridge_max_count(),
+            max_bytes=source_bridge_max_bytes(),
+        )
         stop_flag = threading.Event()
 
         def _run_loop():
@@ -92,7 +103,7 @@ class WebSocketSource(BaseSource):
         finally:
             stop_flag.set()
 
-    async def _ws_loop(self, bridge: queue.SimpleQueue, stop_flag: threading.Event):
+    async def _ws_loop(self, bridge: BoundedBridgeQueue, stop_flag: threading.Event):
         import websockets
 
         while not stop_flag.is_set():
@@ -110,10 +121,20 @@ class WebSocketSource(BaseSource):
                             data = message.encode("utf-8")
                         else:
                             data = bytes(message)
-                        bridge.put((data, {"source": "websocket", "url": self.url}))
+                        await bridge.put_cooperative_async(
+                            (data, {"source": "websocket", "url": self.url})
+                        )
             except Exception as exc:
                 logger.warning("WebSocket error: %s", exc)
-                bridge.put(None)  # signal disconnect
+                # Disconnect signal: never block the event loop on the bound —
+                # poll put_nowait and honour stop so a closed generator cannot
+                # strand the loop thread behind a full bridge.
+                while not stop_flag.is_set():
+                    try:
+                        bridge.put_nowait(None)
+                        break
+                    except queue.Full:
+                        await asyncio.sleep(0.05)
 
             if not self.reconnect or stop_flag.is_set():
                 break

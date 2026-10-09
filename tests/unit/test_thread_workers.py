@@ -19,6 +19,7 @@ import pytest
 from tram.connectors.local.source import LocalSource
 from tram.core.context import PipelineRunContext, RunStatus
 from tram.core.exceptions import TramError
+from tram.interfaces.base_source import AckDisposition
 from tram.pipeline.executor import PipelineExecutor, _batch_inflight_cap
 
 # ── PipelineRunContext thread-safety ──────────────────────────────────────
@@ -500,6 +501,15 @@ class TestRunBatchChunksMultiThreaded:
             config, source, sinks, mock_ser_in, mock_ser_out, [], None, ctx
         )
 
+        # Destructive finalize is ack-gated (V18-01 §6): the executor's
+        # finalize() hook is a no-op; the units are consumed only when the
+        # executor ack()s the decided files.
+        for name in ("a.json", "b.json"):
+            source.ack(
+                {"source_path": str(src / name), "source_filename": name},
+                AckDisposition.DELIVERED,
+            )
+
         assert sorted(p.name for p in dst.iterdir()) == ["a.json", "b.json"]
         assert sorted(p.name for p in src.iterdir()) == []
         assert sorted(tracker.marked) == sorted([
@@ -549,9 +559,14 @@ class TestRunBatchChunksMultiThreaded:
                 config, source, sinks, mock_ser_in, mock_ser_out, [], None, ctx
             )
 
-        # a.json was fully drained before b.json failed → moved + marked.
-        # b.json (failed) and c.json (cancelled) stay in the source dir,
-        # unmarked and unmoved, so a retry can reprocess them.
+        # ack() consumes only decided units (V18-01 §6): a.json was fully
+        # drained before b.json failed → acked (moved + marked). b.json
+        # (failed) and c.json (cancelled) are never acked — they stay in the
+        # source dir, unmarked and unmoved, so a retry can reprocess them.
+        source.ack(
+            {"source_path": str(src / "a.json"), "source_filename": "a.json"},
+            AckDisposition.DELIVERED,
+        )
         assert sorted(p.name for p in dst.iterdir()) == ["a.json"]
         assert sorted(p.name for p in src.iterdir()) == ["b.json", "c.json"]
         assert tracker.marked == [str(src / "a.json")]

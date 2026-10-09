@@ -5,9 +5,15 @@ import json
 import logging
 import re
 import threading
+import time
 
 from tram.core.exceptions import SinkError
-from tram.interfaces.base_sink import BaseSink
+from tram.interfaces.base_sink import (
+    BaseSink,
+    DeliveryTier,
+    SinkCapability,
+    SinkCommitReceipt,
+)
 from tram.registry.registry import register_sink
 
 logger = logging.getLogger(__name__)
@@ -40,7 +46,26 @@ class ClickHouseSink(BaseSink):
         batch_size            (int,   default 5000)         Flush when buffer reaches N rows
         batch_timeout_seconds (float, default 2.0)          Flush every N seconds regardless
         batch_flush_on_stop   (bool,  default True)         Flush remaining rows on close
+
+    Delivery (R1 fix, V18-01 section 6): rows are retained until the insert is
+    confirmed — the buffer clears only after a successful bulk insert, never
+    before. Timer / foreground (``write``) / close flushes are serialized so no
+    two inserts interleave. Background (timer) failures are latched and surface
+    via ``latched_error()`` and ``commit()``, which is the delivery barrier the
+    executor calls before source acknowledgement. Cancellation/stop never
+    erases the pending buffer: a failed or skipped final flush leaves the rows
+    buffered for replay/retry. The synchronous insert return is the
+    confirmation the clickhouse-driver client provides — that is the frozen
+    tier boundary; no stronger durability is invented.
     """
+
+    # V18-01 frozen tier table, section 6: remote_durable (confirmed insert,
+    # retained buffer, serialized flushes — R1 fix). Not replay-safe: a replay
+    # re-inserts the same rows (duplicates).
+    delivery_capability = SinkCapability(
+        tier=DeliveryTier.REMOTE_DURABLE,
+        replay_safe=False,
+    )
 
     def __init__(self, config: dict) -> None:
         super().__init__(config)
@@ -65,6 +90,10 @@ class ClickHouseSink(BaseSink):
 
         self._buffer: list[dict] = []
         self._buffer_lock = threading.Lock()
+        # Serializes timer / foreground (write) / close flushes: one bulk
+        # insert at a time, never interleaved (plan C, R1 fix).
+        self._flush_lock = threading.Lock()
+        self._latched_error: Exception | None = None
         self._closed = False
         self._flush_timer: threading.Timer | None = None
         self._schedule_flush()
@@ -82,6 +111,9 @@ class ClickHouseSink(BaseSink):
         try:
             self._flush()
         except Exception as exc:
+            # _flush() already latched the failure; log it here so the
+            # background path is observable and commit() will refuse to
+            # report a clean success.
             logger.error("ClickHouse timer flush failed", extra={"table": self.table, "error": str(exc)})
         if not self._closed:
             self._schedule_flush()
@@ -89,15 +121,35 @@ class ClickHouseSink(BaseSink):
     # ── Buffer management ──────────────────────────────────────────────────
 
     def _flush(self) -> None:
-        with self._buffer_lock:
-            if not self._buffer:
-                return
-            rows = self._buffer[:]
-            self._buffer.clear()
-        self._insert_rows(rows)
+        """Deliver buffered rows as one bulk INSERT.
+
+        Serialized by ``_flush_lock`` so concurrent timer/foreground/close
+        flushes never interleave. The buffer is cleared ONLY after the insert
+        is confirmed — a failed insert keeps the rows buffered for
+        retry/replay (R1 fix).
+        """
+        with self._flush_lock:
+            with self._buffer_lock:
+                if not self._buffer:
+                    return
+                rows = self._buffer[:]
+            try:
+                self._insert_rows(rows)
+            except Exception as exc:
+                self._latched_error = exc
+                raise
+            with self._buffer_lock:
+                # Drop only the rows that were just confirmed; records appended
+                # by write() while the insert was in flight stay buffered.
+                del self._buffer[: len(rows)]
 
     def close(self) -> None:
-        """Flush remaining buffer and stop the timer. Idempotent — safe to call twice."""
+        """Flush remaining buffer and stop the timer. Idempotent — safe to call twice.
+
+        Cancellation/stop never erases the pending buffer: a failed final
+        flush (or ``batch_flush_on_stop=False``) leaves the rows buffered so
+        replay or retry can re-drive them — no false clean success.
+        """
         if self._closed:
             return
         self._closed = True
@@ -108,7 +160,39 @@ class ClickHouseSink(BaseSink):
             try:
                 self._flush()
             except Exception as exc:
+                # _flush() already latched the failure; log it here.
                 logger.error("ClickHouse close flush failed", extra={"table": self.table, "error": str(exc)})
+
+    # ── Delivery barrier ───────────────────────────────────────────────────
+
+    def commit(self, *, deadline: float | None = None) -> SinkCommitReceipt:
+        """Delivery flush/commit barrier (V18-01 section 6).
+
+        Flushes buffered rows and confirms the insert. Raises ``SinkError``
+        when a background flush has latched a failure or the final flush fails
+        — the executor must not acknowledge the source in that case. The
+        synchronous insert return is the confirmation the current client
+        provides (frozen tier boundary); it is reported at ``remote_durable``.
+        """
+        latched = self._latched_error
+        if latched is not None:
+            self._latched_error = None
+            raise SinkError(f"ClickHouse sink has a latched delivery failure: {latched}") from latched
+        if deadline is not None and time.monotonic() >= deadline:
+            raise SinkError("ClickHouse commit deadline exceeded before flush")
+        self._flush()
+        return SinkCommitReceipt(
+            sink_key=self.__class__.__name__,
+            tier=DeliveryTier.REMOTE_DURABLE,
+            confirmed=True,
+            notes="synchronous insert confirmed; clickhouse-driver exposes no stronger receipt",
+        )
+
+    def latched_error(self) -> Exception | None:
+        """Return the first unobserved flush failure, clearing it on read."""
+        exc = self._latched_error
+        self._latched_error = None
+        return exc
 
     # ── Transport ──────────────────────────────────────────────────────────
 

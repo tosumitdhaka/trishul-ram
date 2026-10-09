@@ -174,9 +174,9 @@ def _write_bundle(tmp_path: Path) -> Path:
 
 
 class TestSnmpStackFlag:
-    def test_defaults_to_legacy(self, monkeypatch):
+    def test_defaults_to_trishul(self, monkeypatch):
         monkeypatch.delenv("TRAM_SNMP_STACK", raising=False)
-        assert snmp_stack() == "legacy"
+        assert snmp_stack() == "trishul"
 
     def test_trishul_env(self, monkeypatch):
         monkeypatch.setenv("TRAM_SNMP_STACK", "trishul")
@@ -236,9 +236,17 @@ class TestTsmiMibResolve:
         assert symbolic_to_oid(view, "ifOperStatus.3") == (1, 3, 6, 1, 2, 1, 2, 2, 1, 8, 3)
         assert symbolic_to_oid(view, "noSuchObject.1") is None
 
-    def test_legacy_flag_off_unchanged(self, tmp_path, monkeypatch):
-        """Flag off: get_mib_view returns the pysnmp MibViewController."""
+    def test_default_uses_tsnmp_view(self, tmp_path, monkeypatch):
+        """Default (v1.8.0 flip): no bundles → None (the tsnmp path), not the
+        pysnmp MibViewController."""
         monkeypatch.delenv("TRAM_SNMP_STACK", raising=False)
+        view = get_mib_view([str(tmp_path)], ["SNMPv2-MIB"])
+        assert view is None
+
+    def test_explicit_legacy_returns_pysnmp_view(self, tmp_path, monkeypatch):
+        """Explicit escape hatch: TRAM_SNMP_STACK=legacy keeps the pysnmp
+        MibViewController (available through the v1.8.x releases)."""
+        monkeypatch.setenv("TRAM_SNMP_STACK", "legacy")
         view = get_mib_view([str(tmp_path)], ["SNMPv2-MIB"])
         assert type(view).__name__ == "MibViewController"
 
@@ -1086,8 +1094,10 @@ class TestWorkerStatsSnmpStack:
             mock_client_cls.return_value = mock_client
             _emit_stats_once(state)
 
+        # V18-08: the periodic payload is one batched snapshot per worker —
+        # snmp_stack rides the batch envelope, run stats ride in ``runs``.
         assert captured["json"]["snmp_stack"] == "trishul"
-        assert captured["json"]["records_in"] == 5
+        assert captured["json"]["runs"][0]["records_in"] == 5
 
     def test_worker_app_selects_stack_from_settings(self, monkeypatch):
         monkeypatch.setenv("TRAM_SNMP_STACK", "trishul")
@@ -1095,11 +1105,11 @@ class TestWorkerStatsSnmpStack:
         app = create_worker_app(worker_id="w9", manager_url="http://mgr")
         assert app.state.worker.snmp_stack == "trishul"
 
-    def test_worker_app_default_legacy(self, monkeypatch):
+    def test_worker_app_default_trishul(self, monkeypatch):
         monkeypatch.delenv("TRAM_SNMP_STACK", raising=False)
         from tram.agent.server import create_worker_app
         app = create_worker_app(worker_id="w8", manager_url="http://mgr")
-        assert app.state.worker.snmp_stack == "legacy"
+        assert app.state.worker.snmp_stack == "trishul"
 
     def test_worker_app_invalid_stack_fails_loud(self, monkeypatch):
         monkeypatch.setenv("TRAM_SNMP_STACK", "bogus")

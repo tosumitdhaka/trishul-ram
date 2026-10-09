@@ -20,6 +20,7 @@ from __future__ import annotations
 import logging
 import os
 import threading
+import time
 from collections.abc import Callable
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass
@@ -51,6 +52,30 @@ DISPATCH_ACCEPTED = "accepted"
 DISPATCH_NO_CAPACITY = "no_capacity"
 DISPATCH_FAILED = "dispatch_failed"
 
+# V18-01 §5: the manager-side protocol version and capability set reported at
+# /agent/handshake. The capability list is the frozen protocol set the manager
+# offers; a v1.7 worker without the endpoint simply never replies.
+_PROTOCOL_VERSION = "1.8"
+_MANAGER_CAPABILITIES = [
+    "fencing",
+    "commit_receipts",
+    "admission_limits",
+    "durable_completion",
+    "query_replay",
+    "drain",
+    "status_snapshot",
+]
+_HANDSHAKE_TIMEOUT_S = 5
+
+# V18-08 (plan F): fair-placement anti-starvation threshold. A healthy worker
+# skipped by this many consecutive single-slot selection decisions is
+# *starved* and is promoted ahead of less-starved peers for the next
+# selection (still ordered by load within the starved tier), so a cold
+# worker/pipeline is never perpetually deprioritized by a slightly-less-loaded
+# sibling. Not a frozen V18-01 §9 name — exposed as the constructor kwarg
+# ``fair_placement_threshold``.
+_FAIR_PLACEMENT_STARVATION_DEFAULT = 2
+
 
 @dataclass
 class DispatchOutcome:
@@ -78,6 +103,7 @@ class WorkerPool:
         stats_interval: int = 30,
         health_failures_to_down: int = 2,
         on_health_restored: Callable[[], None] | None = None,
+        fair_placement_threshold: int = _FAIR_PLACEMENT_STARVATION_DEFAULT,
     ) -> None:
         self._workers = list(workers)
         self._manager_url = manager_url
@@ -87,6 +113,9 @@ class WorkerPool:
         # Number of consecutive failed health probes before a worker is marked
         # down (health debounce / hysteresis).
         self._health_failures_to_down = max(1, health_failures_to_down)
+        # V18-08 (plan F): consecutive selection decisions a healthy worker may
+        # be skipped before it is promoted for the next single-slot placement.
+        self._fair_placement_threshold = max(1, fair_placement_threshold)
         # E.2 (§6.5): optional hook fired when a worker transitions down→up in
         # the poll loop. The app wires it to the BatchReconciler's drain nudge
         # event so a restored worker wakes the drain immediately. Public
@@ -111,8 +140,22 @@ class WorkerPool:
         self._worker_ids: dict[str, str] = {}
         # {worker_url: worker_id}
         self._url_to_worker_id: dict[str, str] = {}
+        # V18-04 §2: {run_id: {"attempt_id", "generation", "slot_id"}} — the
+        # ledger claim identity the controller registers so dispatches that
+        # carry only a run_id (the E.2 queued drain path) still attach the
+        # attempt fields to /agent/run. Popped by on_run_complete (D8 bound).
+        self._attempts_by_run: dict[str, dict] = {}
+        # V18-04 §2: {worker_url: {"session_id", "secret"}} — manager↔worker
+        # session secrets established at /agent/handshake. Empty until the
+        # handshake lane lands, so dispatches stay legacy-shaped with no
+        # authorization field.
+        self._worker_sessions: dict[str, dict] = {}
         # Round-robin counter for tie-breaking equally-loaded workers
         self._rr_counter: int = 0
+        # V18-08 (plan F): consecutive selection decisions each healthy worker
+        # has been skipped (anti-starvation). Advanced on every selection
+        # decision; a selected worker resets to 0.
+        self._starvation: dict[str, int] = {url: 0 for url in workers}
         self._last_healthy_count: int = -1
         self._lock = threading.Lock()
 
@@ -133,9 +176,20 @@ class WorkerPool:
         goes through this helper so the shared machine key is attached as
         ``X-API-Key`` whenever ``TRAM_API_KEY`` is set. Without a key the
         client carries no header, matching the agent server's behavior.
+
+        V18-08 (plan F): the read/total deadline is the caller's ``timeout``
+        argument (the frozen §9 read timeout for dispatch/query/status calls),
+        and the TCP/TLS connect deadline is the frozen §9 connect timeout
+        (``TRAM_RPC_CONNECT_TIMEOUT_S``, default 5) — a separate bound so a
+        hung connect cannot consume the whole read budget.
         """
+        from tram.core.config import rpc_connect_timeout_s
+
         headers = {"X-API-Key": self._api_key} if self._api_key else None
-        return httpx.Client(timeout=timeout, headers=headers)
+        return httpx.Client(
+            timeout=httpx.Timeout(timeout, connect=rpc_connect_timeout_s()),
+            headers=headers,
+        )
 
     # ── Discovery ──────────────────────────────────────────────────────────
 
@@ -193,6 +247,12 @@ class WorkerPool:
         """Probe all workers once, then launch background health-poll thread."""
         self._poll_stop.clear()
         self._poll_all(initial_scan=True)  # boot scan: first-probe failures mark workers down
+        # V18-01 §5: establish manager↔worker session secrets at worker
+        # registration (POST /agent/handshake). Workers without the endpoint
+        # (v1.7) or a failing handshake record no session — dispatches to them
+        # stay legacy-shaped with no authorization field (frozen compatibility
+        # bridge). Recovered workers are re-handshaken by the poll loop.
+        self._handshake_healthy_workers()
         self._poll_thread = threading.Thread(
             target=self._poll_loop,
             name="tram-worker-health",
@@ -253,7 +313,13 @@ class WorkerPool:
         window, plan B.6).
         """
         probes: dict[str, dict] = {}
-        with ThreadPoolExecutor(max_workers=len(self._workers) or 1) as executor:
+        # V18-08 (plan F): the probe fan-out is bounded by the frozen §9 RPC
+        # concurrency cap (``TRAM_RPC_MAX_CONCURRENCY``, default 32) — a fleet
+        # larger than the cap probes in bounded waves instead of opening one
+        # thread per worker.
+        from tram.core.config import rpc_max_concurrency
+        fan_out = min(len(self._workers) or 1, rpc_max_concurrency())
+        with ThreadPoolExecutor(max_workers=fan_out) as executor:
             futures = {executor.submit(self._probe_health, url): url for url in self._workers}
             for future in as_completed(futures):
                 url = futures[future]
@@ -309,6 +375,9 @@ class WorkerPool:
 
             if ok and not prev_ok:
                 logger.info("Worker came back up", extra={"worker": url})
+                # V18-01 §5: a recovered worker re-registers — re-establish the
+                # session secret (a process restart mints a new session_id).
+                self._handshake_worker(url)
                 if self.on_health_restored is not None:
                     try:
                         self.on_health_restored()
@@ -344,6 +413,71 @@ class WorkerPool:
                 extra={"healthy": healthy, "total": total},
             )
 
+    # ── Manager↔worker handshake (V18-01 §5) ───────────────────────────────
+
+    def _handshake_worker(self, worker_url: str) -> bool:
+        """POST /agent/handshake and register the manager↔worker session secret.
+
+        Amended §5 exchange (disposition D2): the worker serves the endpoint
+        and mints the session secret; the manager posts its protocol/caps and
+        registers the returned ``session_secret`` via
+        :meth:`register_worker_session` (which retains the previous secret for
+        the 605 s rotation overlap), making :meth:`_mint_authorization` live
+        for that worker.
+
+        A worker without the endpoint (v1.7) or a failing handshake records no
+        session — dispatches to it stay legacy-shaped with no ``authorization``
+        field (frozen compatibility bridge; strict dispatch does not exist yet,
+        so no drain-only strictness is needed).
+        """
+        try:
+            with self._agent_client(_HANDSHAKE_TIMEOUT_S) as client:
+                resp = client.post(
+                    f"{worker_url}/agent/handshake",
+                    json={
+                        "protocol_version": _PROTOCOL_VERSION,
+                        "capabilities": _MANAGER_CAPABILITIES,
+                    },
+                )
+                resp.raise_for_status()
+                data = resp.json()
+        except Exception as exc:
+            logger.warning(
+                "Worker handshake failed",
+                extra={"worker": worker_url, "error": str(exc)},
+            )
+            return False
+        data = data or {}
+        session_id = str(data.get("session_id", "")).strip()
+        if not session_id:
+            logger.warning(
+                "Worker handshake reply missing session_id",
+                extra={"worker": worker_url},
+            )
+            return False
+        # The worker mints and returns the session secret (D2) — a reply
+        # without one is not implementing the amended handshake.
+        session_secret = str(data.get("session_secret", "")).strip()
+        if not session_secret:
+            logger.warning(
+                "Worker handshake reply missing session_secret",
+                extra={"worker": worker_url},
+            )
+            return False
+        self.register_worker_session(
+            worker_url, session_id=session_id, secret=session_secret,
+        )
+        logger.info(
+            "Worker handshake established",
+            extra={"worker": worker_url, "session_id": session_id},
+        )
+        return True
+
+    def _handshake_healthy_workers(self) -> None:
+        """Establish sessions for every currently-healthy worker (boot path)."""
+        for worker_url in self.healthy_workers():
+            self._handshake_worker(worker_url)
+
     # ── Queries ────────────────────────────────────────────────────────────
 
     def healthy_workers(self) -> list[str]:
@@ -351,20 +485,77 @@ class WorkerPool:
         with self._lock:
             return [url for url, h in self._health.items() if h["ok"]]
 
-    def least_loaded(self) -> str | None:
-        """Return a healthy worker URL, using least-loaded + round-robin tiebreaker."""
-        with self._lock:
-            healthy_urls = [url for url, h in self._health.items() if h["ok"]]
+    def _select_placements(self, healthy_urls: list[str], count: int) -> list[str]:
+        """V18-08 (plan F): fair placement — least-loaded first, anti-starvation.
+
+        ``count == 1`` (single-slot placement: batch dispatch and count=1
+        streams): the least-loaded healthy worker wins with the round-robin
+        tie-break, UNLESS a healthy worker is *starved* — skipped for
+        ``fair_placement_threshold`` consecutive selection decisions — in
+        which case the least-loaded starved worker is promoted so a cold
+        worker/pipeline is never perpetually deprioritized. ``count > 1``
+        (broadcast) keeps today's pure least-loaded order; "all" selects every
+        healthy worker. Selection counters always advance: selected workers
+        reset, healthy non-selected workers count one more skip.
+
+        Caller must NOT hold ``self._lock`` (``load_score`` takes it).
+        """
+        if not healthy_urls:
+            return []
         candidates = [(url, self.load_score(url)) for url in healthy_urls]
         with self._lock:
-            if not candidates:
-                return None
-            min_score = min(score for _, score in candidates)
-            min_workers = [url for url, score in candidates if score == min_score]
-            # Round-robin among equally loaded workers to spread pipelines evenly
-            idx = self._rr_counter % len(min_workers)
-            self._rr_counter += 1
-        return min_workers[idx]
+            scores = {url: score for url, score in candidates}
+            selected: list[str]
+            if count == 1:
+                if any(
+                    self._starvation.get(url, 0) >= self._fair_placement_threshold
+                    for url, _ in candidates
+                ):
+                    # Anti-starvation tier: promote the least-loaded starved
+                    # worker (round-robin among tied starved workers).
+                    pool = [
+                        url
+                        for url, _ in candidates
+                        if self._starvation.get(url, 0) >= self._fair_placement_threshold
+                    ]
+                else:
+                    pool = [url for url, _ in candidates]
+                min_score = min(scores[url] for url in pool)
+                tied = sorted(url for url in pool if scores[url] == min_score)
+                idx = self._rr_counter % len(tied)
+                self._rr_counter += 1
+                selected = [tied[idx]]
+            else:
+                # Broadcast tiers: starved workers first (by load), then the
+                # rest (by load) — still least-loaded within each tier.
+                starved = sorted(
+                    (
+                        url
+                        for url, _ in candidates
+                        if self._starvation.get(url, 0) >= self._fair_placement_threshold
+                    ),
+                    key=lambda url: scores[url],
+                )
+                rest = sorted(
+                    (url for url, _ in candidates if url not in starved),
+                    key=lambda url: scores[url],
+                )
+                ordered = starved + rest
+                selected = ordered[:count] if count < len(ordered) else ordered
+            for url, _ in candidates:
+                self._starvation[url] = 0 if url in selected else self._starvation.get(url, 0) + 1
+            return list(selected)
+
+    def least_loaded(self) -> str | None:
+        """Return a healthy worker URL, using least-loaded + round-robin
+        tiebreaker with V18-08 anti-starvation (a starved worker is promoted
+        ahead of less-starved peers)."""
+        with self._lock:
+            healthy_urls = [url for url, h in self._health.items() if h["ok"]]
+        if not healthy_urls:
+            return None
+        selected = self._select_placements(healthy_urls, 1)
+        return selected[0] if selected else None
 
     def load_score(self, worker_url: str) -> float:
         """Return a sortable load score for a worker."""
@@ -386,7 +577,14 @@ class WorkerPool:
             return float(self._health.get(worker_url, {}).get("active_runs", 0)) * 1_000_000.0
 
     def resolve(self, workers_cfg: WorkersConfig) -> list[str]:
-        """Return worker URLs selected by the workers config."""
+        """Return worker URLs selected by the workers config.
+
+        V18-08 (plan F): selection is least-loaded first with anti-starvation
+        (``_select_placements``) — a healthy worker skipped for
+        ``fair_placement_threshold`` consecutive decisions is promoted so it is
+        never perpetually deprioritized. Pinned ``worker_ids`` selection is
+        unchanged (explicit pinning is not fair-placement territory).
+        """
         if workers_cfg.worker_ids is not None:
             resolved: list[str] = []
             with self._lock:
@@ -399,13 +597,13 @@ class WorkerPool:
             return resolved
         with self._lock:
             healthy_urls = [url for url, h in self._health.items() if h["ok"]]
-        candidates = [(url, self.load_score(url)) for url in healthy_urls]
-        candidates.sort(key=lambda item: item[1])
+        if not healthy_urls:
+            return []
         if isinstance(workers_cfg.count, int) and workers_cfg.count > 1:
-            return [url for url, _ in candidates[:workers_cfg.count]]
+            return self._select_placements(healthy_urls, workers_cfg.count)
         if workers_cfg.count == "all":
-            return [url for url, _ in candidates]
-        return [candidates[0][0]] if candidates else []
+            return self._select_placements(healthy_urls, len(healthy_urls))
+        return self._select_placements(healthy_urls, 1)
 
     def workers_for_pipeline(self, pipeline_name: str) -> list[str]:
         with self._lock:
@@ -465,7 +663,7 @@ class WorkerPool:
                     for item in running_items + stream_items
                     if item.get("pipeline")
                 })
-            rows.append({
+            row = {
                 "url": url,
                 "worker_id": worker_id,
                 "ok": h["ok"],
@@ -475,7 +673,17 @@ class WorkerPool:
                 "running": running_items,
                 "streams": stream_items,
                 "assigned_pipelines": sorted(worker_pipelines.get(url, [])),
-            })
+            }
+            if live_status is not None:
+                # V18-09 drain-runbook visibility: the worker's admission
+                # state and drain block ride through so the UI's restart
+                # gate lights up (absent on v1.7 workers — the UI hides
+                # the column when no worker reports it).
+                if live_status.get("admission_state"):
+                    row["admission_state"] = live_status["admission_state"]
+                if live_status.get("drain"):
+                    row["drain"] = live_status["drain"]
+            rows.append(row)
         return rows
 
     def assignment_for_run(self, run_id: str) -> str | None:
@@ -495,7 +703,7 @@ class WorkerPool:
             )
             return None
 
-        return {
+        status = {
             "worker_id": data.get("worker_id"),
             "active_runs": int(
                 data.get("active_runs", len(data.get("running", [])) + len(data.get("streams", []))) or 0
@@ -504,6 +712,14 @@ class WorkerPool:
             "running": list(data.get("running", [])),
             "streams": list(data.get("streams", [])),
         }
+        # V18-09 drain-runbook visibility: pass through when the worker
+        # reports them (v1.7 workers omit both fields; consumers treat a
+        # missing key as absent and degrade).
+        if data.get("admission_state"):
+            status["admission_state"] = data["admission_state"]
+        if data.get("drain"):
+            status["drain"] = data["drain"]
+        return status
 
     def _worker_statuses(self, worker_urls: list[str]) -> dict[str, dict | None]:
         """Probe /agent/status on several workers concurrently.
@@ -515,7 +731,11 @@ class WorkerPool:
         in the worst case, inside async API handlers).
         """
         results: dict[str, dict | None] = {}
-        with ThreadPoolExecutor(max_workers=len(worker_urls) or 1) as executor:
+        # V18-08 (plan F): bounded by the frozen §9 RPC concurrency cap —
+        # same rationale as the health-probe fan-out in ``_poll_all``.
+        from tram.core.config import rpc_max_concurrency
+        fan_out = min(len(worker_urls) or 1, rpc_max_concurrency())
+        with ThreadPoolExecutor(max_workers=fan_out) as executor:
             futures = {executor.submit(self.worker_status, url): url for url in worker_urls}
             for future in as_completed(futures):
                 results[futures[future]] = future.result()
@@ -607,6 +827,114 @@ class WorkerPool:
 
     # ── Dispatch ───────────────────────────────────────────────────────────
 
+    def register_attempt(self, run_id: str, attempt_id: str, generation: int, slot_id: str = "") -> None:
+        """Record the ledger attempt identity for a run.
+
+        The controller registers the claim outcome so dispatches that carry
+        only a run_id (the E.2 queued drain path) still attach
+        attempt_id/generation to the /agent/run request. Cleared by
+        :meth:`on_run_complete`.
+        """
+        with self._lock:
+            self._attempts_by_run[run_id] = {
+                "attempt_id": attempt_id,
+                "generation": generation,
+                "slot_id": slot_id,
+            }
+
+    def register_worker_session(self, worker_url: str, *, session_id: str, secret: str) -> None:
+        """Register the manager↔worker session secret (established at handshake).
+
+        A newer session for the same worker supersedes the old secret (frozen
+        §5: proof of process termination for release decisions). The previous
+        secret is retained for the rotation overlap (max TTL + clock skew,
+        605 s at the frozen defaults) so tokens minted under it keep validating
+        worker-side during the window; it is dropped lazily once the overlap
+        elapses.
+        """
+        with self._lock:
+            existing = self._worker_sessions.get(worker_url)
+            now = time.time()
+            previous_secret: str | None = None
+            previous_secret_until: float | None = None
+            if existing is not None and existing.get("secret") != secret:
+                from tram.core.config import auth_clock_skew_s, auth_max_ttl_s
+                overlap = auth_max_ttl_s() + auth_clock_skew_s()
+                previous_secret = existing["secret"]
+                previous_secret_until = now + overlap
+                # A still-valid older secret survives a second rotation inside
+                # the overlap window (keep the longest-lived previous secret).
+                older = existing.get("previous_secret")
+                if older and (existing.get("previous_secret_until") or 0) > now:
+                    previous_secret = older
+                    previous_secret_until = existing["previous_secret_until"]
+            self._worker_sessions[worker_url] = {
+                "session_id": session_id,
+                "secret": secret,
+                "previous_secret": previous_secret,
+                "previous_secret_until": previous_secret_until,
+            }
+
+    def query_attempt(self, worker_url: str, attempt_id: str) -> dict | None:
+        """GET /agent/attempts/{attempt_id} — worker-journal replay query.
+
+        V18-01 §5: returns the completion record, active reservation state,
+        interrupted marker, or revocation tombstone. Returns None when the
+        worker is unreachable or has no journal row for the attempt (transport
+        error, non-200, or HTTP 404 — frozen §5: 404 is neither revocation nor
+        quiescence; the manager classifies it as insufficient evidence). A v1.7
+        worker without the endpoint also returns None.
+        """
+        try:
+            with self._agent_client(10) as client:
+                resp = client.get(f"{worker_url}/agent/attempts/{attempt_id}")
+                if resp.status_code != 200:
+                    return None
+                return resp.json()
+        except Exception as exc:
+            logger.warning(
+                "Attempt query failed",
+                extra={"worker": worker_url, "attempt_id": attempt_id, "error": str(exc)},
+            )
+            return None
+
+    def worker_urls(self) -> list[str]:
+        """All configured worker URLs (boot adoption's owner-resolution fallback)."""
+        with self._lock:
+            return list(self._workers)
+
+    def _mint_authorization(
+        self,
+        worker_url: str,
+        *,
+        attempt_id: str,
+        run_id: str,
+        generation: int,
+        slot_id: str,
+    ) -> str | None:
+        """Mint a start-authorization token when a session secret exists.
+
+        Returns None when no manager↔worker session has been established for
+        the worker (no handshake / v1.7 worker / failed handshake) — the
+        dispatch then stays legacy-shaped with no ``authorization`` field
+        (frozen §5 compatibility bridge).
+        """
+        session = self._worker_sessions.get(worker_url)
+        if session is None:
+            return None
+        from tram.agent.auth_tokens import mint_start_authorization
+        from tram.core.config import auth_token_ttl_s
+        return mint_start_authorization(
+            attempt_id=attempt_id,
+            run_id=run_id,
+            generation=generation,
+            slot_id=slot_id,
+            worker_session=session["session_id"],
+            ttl_s=auth_token_ttl_s(),
+            secret=session["secret"],
+            issued_at_unix=int(time.time()),
+        )
+
     def _dispatch_to_worker(
         self,
         worker_url: str,
@@ -616,14 +944,42 @@ class WorkerPool:
         schedule_type: str,
         callback_url: str = "",
         flush: bool = False,
+        attempt_id: str | None = None,
+        generation: int | None = None,
+        slot_id: str = "",
     ) -> str | None:
         """POST a run to a specific worker.
 
         Returns ``None`` on success, or the failure detail string when the
         HTTP dispatch attempt raised or returned a non-2xx status.
+
+        The dispatch response body is deliberately NEVER read: TRAM dispatch
+        is async (the worker 202s with ``accepted`` and nothing more), and no
+        completion information is parsed from it — completions arrive
+        exclusively via the worker's journal/outbox → ``/api/internal/
+        run-complete`` (identity-checked and idempotent). ``DispatchOutcome``
+        therefore carries only ``worker_url``/``outcome``/``error``.
+
+        V18-04 §2: when ``attempt_id`` is not supplied, the ledger attempt
+        registered for ``run_id`` (via :meth:`register_attempt`, the queued
+        drain path) is resolved so the request still carries the attempt
+        identity. The request carries ``attempt_id``/``generation``/``slot_id``
+        when known, plus an ``authorization`` start token minted via
+        ``auth_tokens`` when a manager↔worker session secret exists for the
+        worker (established at /agent/handshake; absent for v1.7 workers or a
+        failed handshake — the dispatch then stays legacy-shaped with no
+        authorization field). v1.7 workers ignore the unknown fields
+        (Pydantic ignores extras).
         """
         if not callback_url and self._manager_url:
             callback_url = f"{self._manager_url}/api/internal/run-complete"
+
+        if attempt_id is None:
+            registered = self._attempts_by_run.get(run_id)
+            if registered is not None:
+                attempt_id = registered["attempt_id"]
+                generation = registered["generation"]
+                slot_id = registered.get("slot_id", "")
 
         payload = {
             "pipeline_name": pipeline_name,
@@ -633,6 +989,21 @@ class WorkerPool:
             "callback_url": callback_url,
             "flush": flush,  # F.1 §5: manual flush run flag
         }
+        if attempt_id is not None:
+            payload["attempt_id"] = attempt_id
+            if generation is not None:
+                payload["generation"] = generation
+            if slot_id:
+                payload["slot_id"] = slot_id
+            authorization = self._mint_authorization(
+                worker_url,
+                attempt_id=attempt_id,
+                run_id=run_id,
+                generation=generation if generation is not None else 1,
+                slot_id=slot_id,
+            )
+            if authorization is not None:
+                payload["authorization"] = authorization
         try:
             with self._agent_client(10) as client:
                 resp = client.post(f"{worker_url}/agent/run", json=payload)
@@ -673,6 +1044,9 @@ class WorkerPool:
         schedule_type: str,
         callback_url: str = "",
         flush: bool = False,
+        attempt_id: str | None = None,
+        generation: int | None = None,
+        slot_id: str = "",
     ) -> BroadcastResult:
         """POST a run to one or more selected workers."""
         worker_urls = self.resolve(workers_cfg)
@@ -724,6 +1098,9 @@ class WorkerPool:
                     schedule_type=schedule_type,
                     callback_url=callback_url,
                     flush=flush,
+                    attempt_id=attempt_id,
+                    generation=generation,
+                    slot_id=slot_id,
                 )
                 if dispatch_error is None:
                     accepted.append(worker_url)
@@ -766,6 +1143,9 @@ class WorkerPool:
         yaml_text: str,
         schedule_type: str,
         callback_url: str = "",
+        attempt_id: str | None = None,
+        generation: int | None = None,
+        slot_id: str = "",
     ) -> str | None:
         """POST a run to the least-loaded healthy worker.
 
@@ -780,6 +1160,9 @@ class WorkerPool:
             yaml_text=yaml_text,
             schedule_type=schedule_type,
             callback_url=callback_url,
+            attempt_id=attempt_id,
+            generation=generation,
+            slot_id=slot_id,
         ).worker_url
 
     def dispatch_with_result(
@@ -790,6 +1173,9 @@ class WorkerPool:
         schedule_type: str,
         callback_url: str = "",
         flush: bool = False,
+        attempt_id: str | None = None,
+        generation: int | None = None,
+        slot_id: str = "",
     ) -> DispatchOutcome:
         """POST a run to the least-loaded healthy worker, labeling the outcome.
 
@@ -797,6 +1183,10 @@ class WorkerPool:
         workers" (``DISPATCH_NO_CAPACITY``, a capacity condition) from "a
         healthy worker was selected but the dispatch attempt failed"
         (``DISPATCH_FAILED``, an error) so the real cause can reach run history.
+
+        ``attempt_id``/``generation``/``slot_id`` are the V18-04 ledger attempt
+        identity (``slot_id`` is empty for batches); when omitted, the attempt
+        registered for ``run_id`` (the queued drain path) is attached instead.
         """
         from tram.models.pipeline import WorkersConfig
 
@@ -808,6 +1198,9 @@ class WorkerPool:
             schedule_type=schedule_type,
             callback_url=callback_url,
             flush=flush,
+            attempt_id=attempt_id,
+            generation=generation,
+            slot_id=slot_id,
         )
         if result.accepted:
             return DispatchOutcome(worker_url=result.accepted[0], outcome=DISPATCH_ACCEPTED)
@@ -831,6 +1224,9 @@ class WorkerPool:
         yaml_text: str,
         schedule_type: str,
         callback_url: str = "",
+        attempt_id: str | None = None,
+        generation: int | None = None,
+        slot_id: str = "",
     ) -> bool:
         if not self.is_worker_healthy(worker_url):
             return False
@@ -841,6 +1237,9 @@ class WorkerPool:
             yaml_text=yaml_text,
             schedule_type=schedule_type,
             callback_url=callback_url,
+            attempt_id=attempt_id,
+            generation=generation,
+            slot_id=slot_id,
         ) is None
 
     def stop_run(self, run_id: str, pipeline_name: str) -> bool:
@@ -928,6 +1327,7 @@ class WorkerPool:
         with self._lock:
             worker_url = self._assignments.pop(run_id, None)
             pipeline_name = self._run_pipelines.pop(run_id, None)
+            self._attempts_by_run.pop(run_id, None)  # V18-04: attempt identity cleared with the run
             if worker_url and worker_url in self._health:
                 self._health[worker_url]["active_runs"] = max(
                     0, self._health[worker_url]["active_runs"] - 1
@@ -958,6 +1358,7 @@ class WorkerPool:
         ]
         for run_id in reaped:
             self._assignments.pop(run_id, None)
+            self._attempts_by_run.pop(run_id, None)  # V18-04: down worker's attempts are reaped too
             pipeline_name = self._run_pipelines.pop(run_id, None)
             if pipeline_name is None:
                 continue

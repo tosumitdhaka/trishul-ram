@@ -7,6 +7,7 @@ from unittest.mock import MagicMock
 
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
+from sqlalchemy import text
 
 from tram.api.routers.internal import router
 from tram.persistence.db import TramDB
@@ -122,6 +123,102 @@ class TestRunCompleteEndpoint:
         assert "/api/internal/run-complete" not in paths
         assert "/api/internal/pipeline-stats" not in paths
 
+    def test_attempt_payload_uses_identity_checked_path(self):
+        """V18-04 §3: a payload carrying attempt_id/generation goes through
+        the identity-checked controller path (the ledger commit precedes the
+        200)."""
+        app, ctrl, _ = _make_app()
+        ctrl.on_attempt_run_complete.return_value = {"ok": True}
+        client = TestClient(app)
+
+        resp = client.post("/api/internal/run-complete", json={
+            "run_id": "r1",
+            "pipeline_name": "p",
+            "worker_id": "w0",
+            "status": "success",
+            "records_in": 1,
+            "records_out": 1,
+            "attempt_id": "r1-a1",
+            "generation": 3,
+        })
+
+        assert resp.status_code == 200
+        assert resp.json() == {"ok": True}
+        ctrl.on_attempt_run_complete.assert_called_once_with(
+            attempt_id="r1-a1",
+            generation=3,
+            run_id="r1",
+            pipeline_name="p",
+            worker_id="w0",
+            status="success",
+            records_in=1,
+            records_out=1,
+            records_skipped=0,
+            bytes_in=0,
+            bytes_out=0,
+            error=None,
+            errors=[],
+            started_at=None,
+            finished_at=None,
+        )
+        ctrl.on_worker_run_complete.assert_not_called()
+
+    def test_legacy_payload_keeps_legacy_path(self):
+        """A payload without attempt_id keeps today's path — the controller's
+        legacy completion method is the only call."""
+        app, ctrl, _ = _make_app()
+        client = TestClient(app)
+
+        client.post("/api/internal/run-complete", json={
+            "run_id": "r2",
+            "pipeline_name": "p",
+            "worker_id": "w0",
+            "status": "success",
+        })
+
+        ctrl.on_worker_run_complete.assert_called_once()
+        ctrl.on_attempt_run_complete.assert_not_called()
+
+    def test_empty_string_attempt_id_keeps_legacy_path(self):
+        """V18-08: an empty-string attempt_id is legacy — the worker's own
+        convention (ActiveRun.attempt_id == "" means a legacy dispatch), so a
+        legacy-shaped outbox payload can never route into the identity-checked
+        ledger path (which would resolve a bogus '' attempt)."""
+        app, ctrl, _ = _make_app()
+        client = TestClient(app)
+
+        client.post("/api/internal/run-complete", json={
+            "run_id": "r-legacy-1",
+            "pipeline_name": "p",
+            "worker_id": "w0",
+            "status": "success",
+            "attempt_id": "",
+        })
+
+        ctrl.on_worker_run_complete.assert_called_once()
+        ctrl.on_attempt_run_complete.assert_not_called()
+
+    def test_attempt_payload_propagates_ignored_ack(self):
+        """A mismatched/unknown attempt is acked with an 'ignored' marker (the
+        worker stops retrying) without any ledger commit."""
+        app, ctrl, _ = _make_app()
+        ctrl.on_attempt_run_complete.return_value = {
+            "ok": True, "ignored": "identity_mismatch",
+        }
+        client = TestClient(app)
+
+        resp = client.post("/api/internal/run-complete", json={
+            "run_id": "r3",
+            "pipeline_name": "p",
+            "status": "success",
+            "attempt_id": "other-a1",
+            "generation": 1,
+        })
+
+        assert resp.status_code == 200
+        assert resp.json() == {"ok": True, "ignored": "identity_mismatch"}
+        ctrl.on_worker_run_complete.assert_not_called()
+
 
 class TestPipelineStatsEndpoint:
     def test_updates_stats_store_for_periodic_report(self):
@@ -166,6 +263,80 @@ class TestPipelineStatsEndpoint:
         store.update.assert_not_called()
         app.state.controller.on_pipeline_stats.assert_not_called()
 
+    def test_accepts_batched_worker_snapshot(self):
+        """V18-08: one POST per worker per interval with all runs — each run
+        report processed exactly like a single-run post."""
+        app, _, store = _make_app()
+        client = TestClient(app)
+
+        resp = client.post("/api/internal/pipeline-stats", json={
+            "worker_id": "w0",
+            "timestamp": "2026-10-08T16:00:00+00:00",
+            "snmp_stack": "legacy",
+            "runs": [
+                {
+                    "pipeline_name": "pipe-a",
+                    "run_id": "run-1",
+                    "schedule_type": "stream",
+                    "uptime_seconds": 10.5,
+                    "records_in": 5,
+                    "records_out": 4,
+                },
+                {
+                    "pipeline_name": "pipe-b",
+                    "run_id": "run-2",
+                    "schedule_type": "batch",
+                    "uptime_seconds": 3.0,
+                    "records_in": 2,
+                },
+            ],
+        })
+
+        assert resp.status_code == 200
+        assert resp.json() == {"ok": True}
+        assert store.update.call_count == 2
+        store.remove.assert_not_called()
+        assert app.state.controller.on_pipeline_stats.call_count == 2
+        # The envelope's worker identity lands on every merged report.
+        updated_workers = [
+            call.args[0].worker_id for call in store.update.call_args_list
+        ]
+        assert updated_workers == ["w0", "w0"]
+        updated_runs = [call.args[0].run_id for call in store.update.call_args_list]
+        assert updated_runs == ["run-1", "run-2"]
+
+    def test_batched_snapshot_processes_per_item_final(self):
+        """A batched snapshot may carry final items (e.g. a run that finished
+        between the worker's snapshot and the post) — per-item is_final
+        keeps the remove semantics, not the whole-batch behavior."""
+        app, _, store = _make_app()
+        client = TestClient(app)
+
+        resp = client.post("/api/internal/pipeline-stats", json={
+            "worker_id": "w0",
+            "timestamp": "2026-10-08T16:00:00+00:00",
+            "runs": [
+                {
+                    "pipeline_name": "pipe-a",
+                    "run_id": "run-1",
+                    "schedule_type": "batch",
+                    "uptime_seconds": 3.0,
+                    "is_final": True,
+                },
+                {
+                    "pipeline_name": "pipe-b",
+                    "run_id": "run-2",
+                    "schedule_type": "stream",
+                    "uptime_seconds": 7.0,
+                },
+            ],
+        })
+
+        assert resp.status_code == 200
+        store.remove.assert_called_once_with("run-1")
+        store.update.assert_called_once()
+        app.state.controller.on_pipeline_stats.assert_called_once()
+
 
 # ── Transform-state endpoints (F.1 §3.2b) ───────────────────────────────────
 
@@ -195,8 +366,38 @@ class TestTransformStateEndpoints:
         body = resp.json()
         assert body["state"] == {"counter_delta:0": {"k": {"v": 42}}}
         assert body["config_sha256"] == "abc123"
+        # V18-06: the GET exposes the frozen §7 CAS identity additively — a
+        # plain PUT row sits at revision 0 with a NULL generation.
+        assert body["revision"] == 0
+        assert body["generation"] is None
         # run_id lands in the audit column
         assert client.app.state.db.load_transform_state("pipe-a")["updated_by"] == "r1"
+
+    def test_get_exposes_revision_advanced_by_checkpoint(self, tmp_path):
+        """A row advanced by the checkpoint CAS is read back with the stored
+        revision/generation — a worker hydrating it sends the advanced base
+        instead of 0, so the fence no longer rejects a legitimate writer."""
+        client = self._make_app(tmp_path)
+        cp = client.post("/api/internal/checkpoint", json={
+            "pipeline_name": "pipe-a",
+            "generation": 3,
+            "attempt_id": "run-1-a1",
+            "run_id": "run-1",
+            "source_unit": "local:/in/f.json:<fp>:0",
+            "frontier": {"offset": 5},
+            "frontier_seq": 5,
+            "sink_receipts": [],
+            "state": {"counter_delta:0": {"k": {"v": 1}}},
+            "config_sha256": "abc123",
+            "state_base_revision": 0,
+        })
+        assert cp.status_code == 200
+        assert cp.json()["state_revision"] == 1
+
+        body = client.get("/api/internal/transform-state/pipe-a").json()
+        assert body["revision"] == 1
+        assert body["generation"] == 3
+        assert body["state"] == {"counter_delta:0": {"k": {"v": 1}}}
 
     def test_get_missing_returns_404(self, tmp_path):
         client = self._make_app(tmp_path)
@@ -376,3 +577,225 @@ class TestProcessedFilesEndpoints:
         paths = client.get("/openapi.json").json().get("paths", {})
         assert "/api/internal/processed-files/check" not in paths
         assert "/api/internal/processed-files/mark" not in paths
+
+
+# ── Delivery-checkpoint endpoint (V18-06 / frozen V18-01 §7) ────────────────
+
+
+class TestCheckpointEndpoint:
+    """POST /api/internal/checkpoint — the atomic delivery checkpoint.
+
+    One manager-DB transaction writes the delivery_checkpoints row (monotonic
+    frontier upsert) AND the generation-/revision-fenced transform_state CAS.
+    """
+
+    def _make_app(self, tmp_path):
+        app = FastAPI()
+        app.include_router(router)
+        app.state.controller = MagicMock()
+        app.state.stats_store = MagicMock()
+        app.state.db = TramDB(url=f"sqlite:///{tmp_path}/internal.db")
+        return TestClient(app)
+
+    @staticmethod
+    def _payload(
+        pipeline="pipe-a",
+        unit="local:/in/f.json:<fp>:0",
+        seq=5,
+        base_rev=0,
+        gen=1,
+        attempt="run-1-a1",
+        run_id="run-1",
+        state=None,
+        frontier=None,
+    ):
+        return {
+            "pipeline_name": pipeline,
+            "generation": gen,
+            "attempt_id": attempt,
+            "run_id": run_id,
+            "source_unit": unit,
+            "frontier": frontier if frontier is not None else {"offset": seq},
+            "frontier_seq": seq,
+            "sink_receipts": [
+                {"sink_key": "sftp", "tier": "fsynced_local", "confirmed": True},
+            ],
+            "state": state if state is not None else {"t:0": {"k": "v"}},
+            "config_sha256": "abc123",
+            "state_base_revision": base_rev,
+        }
+
+    @staticmethod
+    def _fetch(db, sql, params=None):
+        with db._engine.connect() as conn:
+            row = conn.execute(text(sql), params or {}).mappings().fetchone()
+        return dict(row) if row is not None else None
+
+    def test_first_commit_writes_checkpoint_and_state_together(self, tmp_path):
+        """A fresh pipeline's first checkpoint commits BOTH the
+        delivery_checkpoints row and the transform_state row (revision 1,
+        generation adopted) in one place."""
+        client = self._make_app(tmp_path)
+        resp = client.post("/api/internal/checkpoint", json=self._payload())
+        assert resp.status_code == 200
+        body = resp.json()
+        assert body["already_committed"] is False
+        assert body["state_revision"] == 1
+        assert body["checkpoint_id"]
+
+        db = client.app.state.db
+        cp = self._fetch(
+            db,
+            "SELECT checkpoint_id, pipeline_name, generation, source_unit, "
+            "frontier_seq, state_revision FROM delivery_checkpoints "
+            "WHERE pipeline_name = 'pipe-a' AND source_unit = :source_unit",
+            {"source_unit": "local:/in/f.json:<fp>:0"},
+        )
+        assert cp is not None
+        assert cp["checkpoint_id"] == body["checkpoint_id"]
+        assert cp["generation"] == 1
+        assert cp["frontier_seq"] == 5
+        assert cp["state_revision"] == 1
+        ts = self._fetch(
+            db,
+            "SELECT generation, revision, config_sha256 FROM transform_state "
+            "WHERE pipeline_name = 'pipe-a'",
+        )
+        assert ts == {"generation": 1, "revision": 1, "config_sha256": "abc123"}
+
+    def test_repeat_returns_already_committed_with_committed_revision(self, tmp_path):
+        """A repeat for the same (pipeline_name, source_unit) with an
+        older/equal frontier returns the stored id, already_committed: true,
+        and the committed state revision — without advancing the state."""
+        client = self._make_app(tmp_path)
+        first = client.post("/api/internal/checkpoint", json=self._payload()).json()
+        second = client.post("/api/internal/checkpoint", json=self._payload())
+
+        assert second.status_code == 200
+        body = second.json()
+        assert body["already_committed"] is True
+        assert body["checkpoint_id"] == first["checkpoint_id"]
+        assert body["state_revision"] == 1
+
+        db = client.app.state.db
+        ts = self._fetch(db, "SELECT revision FROM transform_state WHERE pipeline_name = 'pipe-a'")
+        assert ts == {"revision": 1}  # a duplicate never advances the revision
+
+    def test_advancing_frontier_keeps_identity_and_bumps_revision(self, tmp_path):
+        """A higher frontier_seq upserts in place: the first-minted
+        checkpoint_id survives and the state revision advances (base 1 → 2)."""
+        client = self._make_app(tmp_path)
+        first = client.post("/api/internal/checkpoint", json=self._payload()).json()
+        # An older frontier is rejected as already-committed.
+        stale = client.post(
+            "/api/internal/checkpoint",
+            json=self._payload(seq=3, frontier={"offset": 3}),
+        ).json()
+        assert stale["already_committed"] is True
+        assert stale["checkpoint_id"] == first["checkpoint_id"]
+        # The writer knows revision 1 now; advancing the frontier commits.
+        advanced = client.post(
+            "/api/internal/checkpoint",
+            json=self._payload(seq=9, frontier={"offset": 9}, base_rev=1),
+        )
+        assert advanced.status_code == 200
+        body = advanced.json()
+        assert body["already_committed"] is False
+        assert body["checkpoint_id"] == first["checkpoint_id"]
+        assert body["state_revision"] == 2
+
+        db = client.app.state.db
+        cp = self._fetch(
+            db,
+            "SELECT frontier_seq, state_revision FROM delivery_checkpoints "
+            "WHERE pipeline_name = 'pipe-a' AND source_unit = :source_unit",
+            {"source_unit": "local:/in/f.json:<fp>:0"},
+        )
+        assert cp == {"frontier_seq": 9, "state_revision": 2}
+
+    def test_stale_revision_writer_rejected_atomically(self, tmp_path):
+        """A writer whose state fence fails is rejected with 409 and BOTH the
+        checkpoint row and the state advance roll back (atomicity)."""
+        client = self._make_app(tmp_path)
+        assert client.post("/api/internal/checkpoint", json=self._payload()).status_code == 200
+        # A NEW unit with a stale base revision: the checkpoint upsert would
+        # insert, but the CAS fence (revision 1 != base 0) rejects it.
+        resp = client.post(
+            "/api/internal/checkpoint",
+            json=self._payload(unit="local:/in/g.json:<fp2>:0", seq=7, base_rev=0),
+        )
+        assert resp.status_code == 409
+
+        db = client.app.state.db
+        # The new unit's checkpoint row was rolled back.
+        assert self._fetch(
+            db,
+            "SELECT 1 AS x FROM delivery_checkpoints "
+            "WHERE pipeline_name = 'pipe-a' AND source_unit = :source_unit",
+            {"source_unit": "local:/in/g.json:<fp2>:0"},
+        ) is None
+        # The committed unit's row is untouched.
+        cp = self._fetch(
+            db,
+            "SELECT frontier_seq, state_revision FROM delivery_checkpoints "
+            "WHERE pipeline_name = 'pipe-a' AND source_unit = :source_unit",
+            {"source_unit": "local:/in/f.json:<fp>:0"},
+        )
+        assert cp == {"frontier_seq": 5, "state_revision": 1}
+        # The transform_state revision did not advance.
+        ts = self._fetch(db, "SELECT revision FROM transform_state WHERE pipeline_name = 'pipe-a'")
+        assert ts == {"revision": 1}
+
+    def test_foreign_generation_writer_rejected(self, tmp_path):
+        """A writer under a different generation is rejected by the CAS fence
+        ((generation IS NULL OR generation = :gen) fails) and nothing is
+        written."""
+        client = self._make_app(tmp_path)
+        assert client.post("/api/internal/checkpoint", json=self._payload()).status_code == 200
+        resp = client.post(
+            "/api/internal/checkpoint",
+            json=self._payload(unit="local:/in/h.json:<fp3>:0", gen=2, base_rev=1),
+        )
+        assert resp.status_code == 409
+
+        db = client.app.state.db
+        assert self._fetch(
+            db,
+            "SELECT 1 AS x FROM delivery_checkpoints "
+            "WHERE pipeline_name = 'pipe-a' AND source_unit = :source_unit",
+            {"source_unit": "local:/in/h.json:<fp3>:0"},
+        ) is None
+        ts = self._fetch(db, "SELECT generation, revision FROM transform_state WHERE pipeline_name = 'pipe-a'")
+        assert ts == {"generation": 1, "revision": 1}
+
+    def test_legacy_generation_null_row_adopted_by_first_checkpoint(self, tmp_path):
+        """M5 legacy transform_state rows (generation NULL, revision 0) are
+        adopted by the first generation-identified checkpoint writer."""
+        client = self._make_app(tmp_path)
+        db = client.app.state.db
+        db.save_transform_state("pipe-a", {"old": "blob"}, "legacy-sha", updated_by="r0")
+
+        resp = client.post("/api/internal/checkpoint", json=self._payload())
+        assert resp.status_code == 200
+        assert resp.json()["state_revision"] == 1
+
+        ts = self._fetch(db, "SELECT generation, revision FROM transform_state WHERE pipeline_name = 'pipe-a'")
+        assert ts == {"generation": 1, "revision": 1}
+
+    def test_db_unavailable_503(self, tmp_path):
+        app = FastAPI()
+        app.include_router(router)
+        app.state.controller = MagicMock()
+        app.state.stats_store = MagicMock()
+        app.state.db = None
+        client = TestClient(app)
+        assert client.post("/api/internal/checkpoint", json=self._payload()).status_code == 503
+
+    def test_missing_body_422(self, tmp_path):
+        client = self._make_app(tmp_path)
+        assert client.post("/api/internal/checkpoint", content=b"").status_code == 422
+
+    def test_not_in_openapi_schema(self, tmp_path):
+        client = self._make_app(tmp_path)
+        paths = client.get("/openapi.json").json().get("paths", {})
+        assert "/api/internal/checkpoint" not in paths

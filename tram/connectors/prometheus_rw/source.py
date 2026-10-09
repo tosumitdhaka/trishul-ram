@@ -6,6 +6,8 @@ import json
 import logging
 from collections.abc import Generator
 
+from tram.connectors.bridge import BoundedBridgeQueue
+from tram.core.config import source_bridge_max_bytes, source_bridge_max_count
 from tram.core.exceptions import SourceError
 from tram.interfaces.base_source import BaseSource
 from tram.registry.registry import register_source
@@ -24,6 +26,11 @@ class PrometheusRWSource(BaseSource):
     Config:
         path (str): URL path segment. Default "prom-rw".
         secret (str, optional): Bearer token for auth.
+
+    The registered registry queue is bounded by count and bytes
+    (``TRAM_SOURCE_BRIDGE_MAX_COUNT`` / ``TRAM_SOURCE_BRIDGE_MAX_BYTES``);
+    the webhook router's ``put_nowait`` turns overflow into an explicit
+    HTTP 503 — never a silent drop (V18-01 §9 / plan F).
     """
 
     def __init__(self, config: dict) -> None:
@@ -149,7 +156,10 @@ message WriteRequest { repeated TimeSeries timeseries = 1; }
 
         from tram.connectors.webhook.source import _REGISTRY_LOCK, _WEBHOOK_REGISTRY
 
-        q: queue.SimpleQueue = queue.SimpleQueue()
+        q: BoundedBridgeQueue = BoundedBridgeQueue(
+            max_count=source_bridge_max_count(),
+            max_bytes=source_bridge_max_bytes(),
+        )
         with _REGISTRY_LOCK:
             _WEBHOOK_REGISTRY[self.path] = q
 

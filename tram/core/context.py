@@ -15,6 +15,10 @@ class RunStatus(StrEnum):
     SUCCESS = "success"
     FAILED = "failed"
     ABORTED = "aborted"
+    # V18-01 §8 / plan C: a run that delivered part of its records and lost
+    # the rest (on_error: continue) reports `partial` — never clean success
+    # for failed records. Filtering stays success.
+    PARTIAL = "partial"
 
 
 @dataclass
@@ -115,6 +119,18 @@ class RunResult:
     dlq_count: int = 0
     node_id: str = ""
     errors: list = field(default_factory=list)  # per-record error strings
+    # V18-01 §7 / plan C — run-level delivery loss accounting (minimal
+    # representation; per-sink disposition surfacing is V18-09). The batch
+    # executor fills these from its run-scoped delivery accounting.
+    records_failed: int = 0    # records lost (not delivered, filtered, or DLQ'd)
+    dlq_succeeded: int = 0     # records durably delivered to the DLQ/spool
+    dlq_failed: int = 0        # records whose DLQ delivery failed
+    # V18-06: per-sink delivery disposition ({sink_key: {delivered, failed,
+    # dlq}}) and DLQ disk-spool outcome ({spooled, failed}) — the maps the
+    # worker's completion payload carries so the manager's run-history decode
+    # records them. Empty when the run did not deliver/fail/DLQ anything.
+    disposition: dict = field(default_factory=dict)
+    spool: dict = field(default_factory=dict)
 
     @classmethod
     def from_context(
@@ -155,4 +171,9 @@ class RunResult:
             "error": self.error,
             "errors": self.errors,
             "node": self.node_id or None,
+            "records_failed": self.records_failed,
+            "dlq_succeeded": self.dlq_succeeded,
+            "dlq_failed": self.dlq_failed,
+            "disposition": self.disposition,
+            "spool": self.spool,
         }

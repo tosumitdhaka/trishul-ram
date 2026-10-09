@@ -6,7 +6,12 @@ import logging
 
 from tram.connectors.file_sink_common import render_filename, utc_now
 from tram.core.exceptions import SinkError
-from tram.interfaces.base_sink import BaseSink
+from tram.interfaces.base_sink import (
+    BaseSink,
+    DeliveryTier,
+    SinkCapability,
+    SinkCommitReceipt,
+)
 from tram.registry.registry import register_sink
 
 logger = logging.getLogger(__name__)
@@ -36,6 +41,15 @@ class S3Sink(BaseSink):
         aws_secret_access_key (str, optional)
         content_type        (str, default "application/json")
     """
+
+    # V18-01 frozen tier table, section 6 / disposition D1: remote_durable —
+    # each write() is a complete blocking server-confirmed put_object; objects
+    # appear atomically and nothing is buffered. Not replay-safe: re-uploading
+    # a source unit duplicates objects.
+    delivery_capability = SinkCapability(
+        tier=DeliveryTier.REMOTE_DURABLE,
+        replay_safe=False,
+    )
 
     def __init__(self, config: dict) -> None:
         super().__init__(config)
@@ -122,4 +136,18 @@ class S3Sink(BaseSink):
                 "key": key,
                 "bytes": len(data),
             },
+        )
+
+    def commit(self, *, deadline: float | None = None) -> SinkCommitReceipt:
+        """Delivery flush/commit barrier (V18-01 section 6).
+
+        Each ``write()`` is a complete blocking server-confirmed
+        ``put_object`` and nothing is buffered, so the barrier trivially
+        confirms the per-write confirmed-PUT contract at ``remote_durable``.
+        """
+        return SinkCommitReceipt(
+            sink_key="s3",
+            tier=DeliveryTier.REMOTE_DURABLE,
+            confirmed=True,
+            notes="per-write put_object server-confirmed; nothing buffered",
         )

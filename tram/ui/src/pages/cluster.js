@@ -188,6 +188,10 @@ function renderWorkers(workers) {
     return
   }
 
+  // v1.8.0: the Admission column appears once the manager's worker status
+  // aggregation reports admission_state (older managers hide it cleanly).
+  const anyAdmission = workers.some(worker => worker.admission_state)
+
   container.innerHTML = `
     <div class="table-responsive">
       <table class="table mb-0">
@@ -195,6 +199,7 @@ function renderWorkers(workers) {
           <tr>
             <th>Worker</th>
             <th>Status</th>
+            ${anyAdmission ? '<th>Admission</th>' : ''}
             <th>Active Runs</th>
             <th>Active Streams</th>
             <th>Records Processed</th>
@@ -205,7 +210,7 @@ function renderWorkers(workers) {
           </tr>
         </thead>
         <tbody>
-          ${workers.map(worker => renderWorkerRow(worker)).join('')}
+          ${workers.map(worker => renderWorkerRow(worker, anyAdmission)).join('')}
         </tbody>
       </table>
     </div>`
@@ -310,7 +315,52 @@ function renderStreams(streams, mode) {
     </div>`
 }
 
-function renderWorkerRow(worker) {
+// v1.8.0 worker admission (V18-07 drain surface): `admitting` = open for new
+// dispatch; `draining` = winding down with in-flight runs finishing under a
+// single deadline. `drain.drained` is the release/restart runbook gate.
+function renderAdmissionCell(worker) {
+  const state = worker.admission_state
+  if (!state) return '<td class="text-secondary">—</td>'
+  if (state === 'draining') {
+    const drain = worker.drain || {}
+    const note = drain.drained
+      ? '<div class="cluster-drain-note cluster-drain-note-safe"><i class="bi bi-check-circle"></i>drained — safe to restart</div>'
+      : drain.deadline_expired
+        ? '<div class="cluster-drain-note cluster-drain-note-deadline"><i class="bi bi-exclamation-triangle"></i>drain deadline expired</div>'
+        : '<div class="cluster-drain-note"><i class="bi bi-hourglass-split"></i>in-flight runs finishing</div>'
+    return `<td><span class="tram-badge badge-draining has-dot draining">draining</span>${note}</td>`
+  }
+  return '<td><span class="tram-badge badge-admitting has-dot admitting">admitting</span></td>'
+}
+
+// The expanded drain block: the restart runbook. `drained` (draining AND
+// in-flight finished or deadline passed) is the safe-to-restart gate; a
+// deadline that expired with runs still active is the loudest line on the
+// page because it is the one state that needs human attention.
+function renderDrainBlock(worker) {
+  if (worker.admission_state !== 'draining') return ''
+  const drain = worker.drain || {}
+  const chip = (label, cls) => `<span class="tram-badge ${cls}">${label}</span>`
+  const chips = [
+    chip('draining', 'badge-stopping has-dot stopping'),
+    drain.deadline_expired ? chip('deadline expired', 'badge-failed has-dot failed') : null,
+    drain.idle ? chip('no active runs', 'badge-stopped has-dot stopped') : null,
+    drain.drained ? chip('drained', 'badge-success has-dot success') : null,
+  ].filter(Boolean).join('')
+  const verdict = drain.drained
+    ? '<div class="cluster-drain-note cluster-drain-note-safe"><i class="bi bi-check-circle"></i>Safe to restart — in-flight work has finished (or the drain deadline passed).</div>'
+    : drain.deadline_expired
+      ? '<div class="cluster-drain-note cluster-drain-note-deadline"><i class="bi bi-exclamation-triangle"></i>Drain deadline expired with runs still active — check in-flight attempts before restarting.</div>'
+      : '<div class="cluster-drain-note"><i class="bi bi-hourglass-split"></i>Not safe to restart yet — in-flight runs are still finishing.</div>'
+  return `
+    <div class="cluster-drain-block">
+      <div class="cluster-node-meta-label">Drain status (restart runbook)</div>
+      <div class="cluster-drain-chips">${chips}</div>
+      ${verdict}
+    </div>`
+}
+
+function renderWorkerRow(worker, anyAdmission = false) {
   const assigned = worker.assigned_pipelines || []
   const running = new Set(worker.running_pipelines || [])
   const load = summarizeWorkerLoad(worker)
@@ -319,6 +369,7 @@ function renderWorkerRow(worker) {
   const open = _openWorkers[rowKey] ?? false
   const toggleLabel = open ? 'Collapse worker details' : 'Expand worker details'
   const stateBadge = `<span class="badge ${worker.ok ? 'bg-success' : 'bg-danger'}">${worker.ok ? 'online' : 'offline'}</span>`
+  const colspan = anyAdmission ? 10 : 9
   return `
     <tr>
       <td>
@@ -326,6 +377,7 @@ function renderWorkerRow(worker) {
         <div class="cluster-worker-url">${esc(worker.url || '—')}</div>
       </td>
       <td>${stateBadge}</td>
+      ${anyAdmission ? renderAdmissionCell(worker) : ''}
       <td class="text-secondary">${fmtNum(worker.active_runs ?? 0)}</td>
       <td class="text-secondary">${fmtNum(worker.active_streams ?? load.activeStreams)}</td>
       <td class="text-secondary">${fmtNum(load.recordsProcessed)}</td>
@@ -344,7 +396,7 @@ function renderWorkerRow(worker) {
       </td>
     </tr>
     ${open ? `<tr class="cluster-worker-detail-row">
-      <td colspan="9">
+      <td colspan="${colspan}">
         ${renderWorkerExpanded(worker, assigned, running, load)}
       </td>
     </tr>` : ''}`
@@ -381,7 +433,14 @@ function renderWorkerExpanded(worker, assigned, running, load) {
         <div class="cluster-node-meta-label">Live Errors</div>
         <div>${fmtNum(load.errors)}</div>
       </div>
+      ${worker.admission_state ? `<div>
+        <div class="cluster-node-meta-label">Admission</div>
+        <div>${worker.admission_state === 'draining'
+          ? '<span class="tram-badge badge-draining has-dot draining">draining</span>'
+          : '<span class="tram-badge badge-admitting has-dot admitting">admitting</span>'}</div>
+      </div>` : ''}
     </div>
+    ${renderDrainBlock(worker)}
     <div class="cluster-worker-expanded-stats mt-3">
       <div>
         <div class="cluster-node-meta-label">Records Processed</div>

@@ -50,6 +50,16 @@ class VESSink(BaseSink):
         self.password: str = config.get("password", "")
         self.token: str = config.get("token", "")
         self.expected_status: list[int] = config.get("expected_status", [202])
+        # V18-08: pooled client reference (see tram.connectors.http_pool) —
+        # the write hot path resolves it once per sink instance, then reuses
+        # the process-lifetime shared client across requests and runs.
+        self._client = None
+
+    def _get_client(self):
+        if self._client is None:
+            from tram.connectors.http_pool import shared_http_client
+            self._client = shared_http_client(verify_ssl=True)
+        return self._client
 
     def _build_headers(self) -> dict:
         headers = {"Content-Type": "application/json"}
@@ -112,11 +122,6 @@ class VESSink(BaseSink):
             raise RuntimeError(f"HTTP {e.code}: {e.reason}")
 
     def write(self, data: bytes, meta: dict) -> None:
-        try:
-            import httpx
-        except ImportError as exc:
-            raise SinkError("VES sink requires httpx (already a TRAM dependency)") from exc
-
         # Parse data as JSON — expect list of dicts or a single dict
         try:
             payload = json.loads(data)
@@ -136,8 +141,7 @@ class VESSink(BaseSink):
             kwargs["auth"] = auth
 
         try:
-            with httpx.Client() as client:
-                resp = client.post(self.url, **kwargs)
+            resp = self._get_client().post(self.url, **kwargs)
         except Exception as exc:
             raise SinkError(f"VES sink request failed: {exc}") from exc
 

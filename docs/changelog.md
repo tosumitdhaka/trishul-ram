@@ -5,6 +5,43 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ---
 
+## [1.8.0] - 2026-10-09
+
+### Breaking changes
+- **MySQL/MariaDB is no longer supported.** A v1.7 MySQL deployment now fails at manager startup with an actionable error pointing at the migration runbook in `docs/deployment.md`. SQLite and PostgreSQL are the supported engines; PostgreSQL 12+ is recommended for the durability core (all wave-2 gate scenarios verified against live PostgreSQL 16)
+- **`POST /api/pipelines/{name}/run` returns 202 (Accepted) for every successful trigger** (previously 200 on the non-queued path). The body carries `run_id` plus `operation_id` — the lifecycle receipt, queryable via the new `GET /api/pipelines/{name}/operations` endpoint
+
+### Changed
+- **`TRAM_SNMP_STACK` default flipped to `trishul`** (the trishul-smi / trishul-snmp stack): all upstream blockers closed at the shipped pins, outputs byte-identical, GET 31× / walk-1000 1.26× (`docs/snmp-polling-performance.md`). Deployments that never set the flag switch stacks on upgrade; `legacy` (pysnmp) remains the explicit escape hatch through the v1.8.x releases, removed in v1.9.0 (roadmap). Both stacks ship in `tram[snmp]` during the escape-hatch period; mixed-fleet behavior keeps the documented WARNING semantics
+
+### Added — delivery contracts (V18-02/03)
+- Opt-in `delivery.contract: strict` per pipeline: tier-declared sinks only, durable source replay identity required (Kafka epoch-fenced `{cluster}/{topic}/{partition}` identity; AMQP requires `require_message_id: true`), batch schedules only (stream dispatch carries no attempt identity yet — rejected at validation with the reason). `legacy` (default) is exactly today's behavior
+- Per-sink confirmation tiers with per-unit commit barriers (`remote_durable`/`remote_accepted`/`fsynced_local`); every built-in sink declares its tier. Kafka sink requires `acks=all` (weaker levels rejected at construction); ClickHouse `batch_flush_on_stop=false` now retains the unflushed buffer; AMQP sink uses publisher confirms and the source no longer early-acks; `on_error: continue` yields `PARTIAL` with per-sink loss accounting — retry-with-loss never reports success
+- Manifest-based file publication (serial/threaded/incremental/passthrough) with fsync; ack-gated local/SFTP sources (ack only for decided dispositions); bounded source bridges and idle-source stop
+
+### Added — durable manager ledger and worker journal (V18-04/05/06)
+- Manager execution ledger: conditional-UPDATE claims (single-claim enforced), identity-checked run-complete (attempt + generation fenced), late/duplicate callback fencing, boot adoption resolving crashed attempts from worker journals, queue terminal cancellation, lifecycle operations audit (`trigger`/`stop`/`restart`/`update`/`delete`/`drain`/`force_release`/`boot_adopt`)
+- Worker-side SQLite journal (WAL, single-owner) with HMAC start-authorization tokens, admission watermark + GC, and an outbox — the single completion channel (at-least-once, retried until the manager acks; run-complete offloaded from the dispatch path). Journal persistence via `worker.journal.persistence` chart values: per-replica PVCs on fresh installs, `existingClaim` upgrade path with per-replica subdirectories
+- Atomic checkpoints (delivery frontier + transform-state CAS in one transaction), adoption-resolved run history, honest manager readiness (absent/unreachable DB ⇒ not ready)
+
+### Added — operations and efficiency (V18-07/08/09)
+- Worker drain lifecycle: `POST /agent/drain`, single `TRAM_DRAIN_TIMEOUT_S` deadline, SIGTERM supervision, terminal aborted completions; per-worker admission state surfaced in the UI with a safe-to-restart gate
+- Manager efficiency: fair placement, queue/transform-state byte+cardinality budgets with 503 backpressure, bounded management executor, pooled RPC/sink clients, batched per-worker telemetry
+- UI: PARTIAL as a distinct status, aborted ≠ failed, stopping/draining transition badges, Operations audit view, trigger receipts. Browser smoke extended (`states` check)
+- Optional NetworkPolicy template (`networkPolicy.enabled`, default off) restricting worker ingress to manager pods; `publishNotReadyAddresses` on headless services (rollout DNS stability)
+
+### Fixed
+- Worker death mid-run no longer wedges the pipeline: the failure path terminalizes the ledger attempt and releases the guard (live-found on kind)
+- AMQP source shutdown is thread-safe (pika blocking adapter cancel marshalled via `add_callback_threadsafe`; the executor stop-watcher now unblocks idle reads)
+- Chart survives `helm upgrade --reuse-values` from pre-v1.8 releases (nil-safe `worker.journal` template guards)
+- Outbox drain runs its first pass immediately at loop start (faster crash-recovery delivery; load-induced flake removed)
+
+### Campaign evidence
+- Live-broker gates (env-gated, skip without env vars): Kafka threaded frontiers broker-proven (the strict + `thread_workers > 1` stopgap is removed), AMQP + ClickHouse tier verification
+- Durable-contract cells measured: per-record `commit()` barrier 1.06× (nearly free — the ack wait lives in `write()`); synchronous-durable sink 5.7× vs a pipelined producer — recorded in `docs/reviews/v1.8.0-v18-10-campaign-evidence.md` with the full R1–R16 evidence ledger
+
+---
+
 ## [1.7.0] - 2026-10-07
 
 ### Added

@@ -12,7 +12,12 @@ from tram.connectors.file_sink_common import (
     source_unit_key,
 )
 from tram.core.exceptions import SinkError
-from tram.interfaces.base_sink import BaseSink
+from tram.interfaces.base_sink import (
+    BaseSink,
+    DeliveryTier,
+    SinkCapability,
+    SinkCommitReceipt,
+)
 from tram.registry.registry import register_sink
 
 logger = logging.getLogger(__name__)
@@ -33,7 +38,17 @@ class LocalSink(BaseSink):
                                              consume one part per flush; writes past
                                              the cap fail loudly (run error + skipped
                                              count) instead of silently dropping.
+
+    Delivery capability (V18-01 contracts): ``fsynced_local`` — staged output
+    is published with an atomic rename plus file and parent-directory fsync
+    before the commit receipt is confirmed.
     """
+
+    # Frozen tier assignment (V18-01 §6): local file publication is an atomic
+    # rename with file/dir fsync. Not replay-safe: re-running a source unit can
+    # emit a new file identity (e.g. timestamp tokens), so strict stateful
+    # retention must not treat the sink as deduplicating.
+    delivery_capability = SinkCapability(tier=DeliveryTier.FSYNCED_LOCAL, replay_safe=False)
 
     def __init__(self, config: dict) -> None:
         super().__init__(config)
@@ -55,6 +70,7 @@ class LocalSink(BaseSink):
         # Legacy attribute the executor's partition logic reads; reflects the
         # writer's effective template (review E3).
         self.filename_template = self._writer.filename_template
+        self._latched_error: Exception | None = None
 
     def write(self, data: bytes, meta: dict) -> None:
         try:
@@ -81,6 +97,38 @@ class LocalSink(BaseSink):
             raise
         except Exception as exc:
             raise SinkError(f"Error finalizing local sink output: {exc}") from exc
+
+    def commit(self, *, deadline: float | None = None) -> SinkCommitReceipt:
+        """Publish pending staged output durably (fsynced_local tier).
+
+        The commit barrier publishes every pending publication manifest with an
+        atomic rename plus file and parent-directory fsync before the receipt
+        is confirmed. A publication failure is latched for :meth:`latched_error`
+        and returned as an unconfirmed receipt; the manifest (with its
+        confirmed finals and recoverable staged temps) survives for a retry.
+        """
+        try:
+            self._writer.publish_all(backend=self._backend, handle=None)
+        except Exception as exc:
+            self._latched_error = exc
+            return SinkCommitReceipt(
+                sink_key="local",
+                tier=DeliveryTier.FSYNCED_LOCAL,
+                confirmed=False,
+                notes=f"publication failed: {exc}",
+            )
+        return SinkCommitReceipt(
+            sink_key="local",
+            tier=DeliveryTier.FSYNCED_LOCAL,
+            confirmed=True,
+            notes="",
+        )
+
+    def latched_error(self) -> Exception | None:
+        """Return (and clear) the first publication failure since the last check."""
+        exc = self._latched_error
+        self._latched_error = None
+        return exc
 
     def close(self) -> None:
         """Log the run's past-cap dropped total loudly (issue #77 fail-loud).

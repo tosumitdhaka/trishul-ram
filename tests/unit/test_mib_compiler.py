@@ -93,7 +93,9 @@ def _mock_pysmi_modules(
     }
 
 
-def test_compile_mibs_uses_local_sources_and_remote_cache():
+def test_compile_mibs_uses_local_sources_and_remote_cache(monkeypatch):
+    # Legacy (pysmi) backend test — v1.8.0 flipped the default to trishul.
+    monkeypatch.setenv("TRAM_SNMP_STACK", "legacy")
     mock_codegen = MagicMock()
     mock_codegen.baseMibs = ("SNMPv2-SMI",)
     mock_codegen.fakeMibs = ("__FAKE__",)
@@ -170,13 +172,17 @@ def test_caching_reader_exposes_both_method_names_for_actual_pysmi_reader():
     assert hasattr(wrapped, "get_data")
 
 
-def test_compile_mibs_raises_support_unavailable_when_pysmi_missing():
+def test_compile_mibs_raises_support_unavailable_when_pysmi_missing(monkeypatch):
+    # Legacy (pysmi) backend test — v1.8.0 flipped the default to trishul.
+    monkeypatch.setenv("TRAM_SNMP_STACK", "legacy")
     with patch.dict(sys.modules, {"pysmi": None, "pysmi.compiler": None}):
         with pytest.raises(MibSupportUnavailable):
             compile_mibs(["TEST-MIB"], "/tmp/compiled")
 
 
-def test_compile_mibs_wraps_compile_errors():
+def test_compile_mibs_wraps_compile_errors(monkeypatch):
+    # Legacy (pysmi) backend test — v1.8.0 flipped the default to trishul.
+    monkeypatch.setenv("TRAM_SNMP_STACK", "legacy")
     mock_codegen = MagicMock()
     mock_codegen.baseMibs = ("SNMPv2-SMI",)
     mock_codegen.fakeMibs = ("__FAKE__",)
