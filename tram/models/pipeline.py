@@ -1856,8 +1856,6 @@ class PipelineConfig(BaseModel):
           connectors implementing ``source_unit_id()`` do; AMQP additionally
           requires ``require_message_id: true``; sources where identity is
           demonstrably absent are rejected);
-        - Kafka sources must run single-threaded (``thread_workers == 1``) —
-          threaded frontiers are not yet broker-proven.
 
         Every unmet condition is listed in the error.
         """
@@ -1878,13 +1876,6 @@ class PipelineConfig(BaseModel):
         identity_problem = _source_replay_identity_problem(self)
         if identity_problem is not None:
             problems.append(identity_problem)
-
-        if self.source.type == "kafka" and self.thread_workers > 1:
-            problems.append(
-                "kafka source with thread_workers > 1 is not supported under "
-                "delivery.contract: strict — threaded frontiers are not yet "
-                "broker-proven (V18-01 §7)"
-            )
 
         if problems:
             raise ValueError(

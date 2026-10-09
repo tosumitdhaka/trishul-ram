@@ -113,7 +113,10 @@ class KafkaSink(BaseSink):
     every send future, and ``commit()`` drains the producer via ``flush()``
     before reporting ``remote_durable``. kafka-python exposes no separate
     delivery-callback error buffer that this path can miss, so
-    ``latched_error()`` keeps the base-class ``None`` default.
+    ``latched_error()`` keeps the base-class ``None`` default. Real broker
+    durability (acks=all honored, flush drains) is provable against a live
+    broker via the env-gated live suite
+    (``tests/unit/test_kafka_live_broker.py``, V18-10 broker-test gate).
     """
 
     # V18-01 frozen tier table, section 6: remote_durable (acks=all). Not

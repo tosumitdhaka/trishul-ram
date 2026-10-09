@@ -75,10 +75,11 @@ class KafkaSource(BaseSource):
     completions from the old epoch are ignored — they can never advance a new
     assignment's frontier. Revocation drops the revoked partition's frontier,
     out-of-order, tombstone, and pending-commit tracking, and a new consumer
-    session resets the whole set. ``thread_workers > 1`` under
-    ``delivery.contract: strict`` remains rejected at validation until the
-    gap-aware threaded frontier implementation passes broker tests (plan C);
-    the per-record path is exercised by deterministic unit tests.
+    session resets the whole set. The gap-aware threaded frontier
+    implementation is broker-proven (V18-10 live-broker gate) and is
+    exercised end to end by the env-gated live suite
+    (``tests/unit/test_kafka_live_broker.py``) alongside the deterministic
+    unit tests.
 
     Under stream micro-batching (GH #78) the last message of each poll batch
     carries ``source_batch_end: true`` in its meta; the executor flushes its

@@ -345,10 +345,10 @@ class TestDeliveryContract:
 
     The frozen field defaults to ``legacy`` — exactly today's behavior with
     zero new checks. ``strict`` requires every configured sink to declare a
-    ``delivery_capability``, the source to provide durable replay identity
-    (AMQP additionally requiring ``require_message_id: true``), and Kafka
-    sources to run single-threaded. All checks run at model validation, which
-    ``tram validate`` and API registration share.
+    ``delivery_capability`` and the source to provide durable replay identity
+    (AMQP additionally requiring ``require_message_id: true``). All checks
+    run at model validation, which ``tram validate`` and API registration
+    share.
     """
 
     _SOURCE_LOCAL = "      source:\n        type: local\n        path: /tmp/in\n"
@@ -429,15 +429,16 @@ class TestDeliveryContract:
         )
         assert cfg.source.require_message_id is True
 
-    def test_strict_rejects_kafka_with_thread_workers_gt_one(self):
-        """Threaded frontiers are not yet broker-proven — rejected, not
-        silently weakened (V18-01 §7)."""
-        with pytest.raises(ConfigError, match="thread_workers"):
-            _load(
-                _strict_pipeline_yaml(
-                    self._SOURCE_KAFKA + self._SER + self._SINK_LOCAL + "      thread_workers: 2\n"
-                )
+    def test_strict_accepts_kafka_with_thread_workers_gt_one(self):
+        """Threaded Kafka frontiers are broker-proven (V18-10 gate) — strict
+        no longer rejects them (V18-01 §7)."""
+        cfg = _load(
+            _strict_pipeline_yaml(
+                self._SOURCE_KAFKA + self._SER + self._SINK_LOCAL + "      thread_workers: 2\n"
             )
+        )
+        assert cfg.source.type == "kafka"
+        assert cfg.thread_workers == 2
 
     def test_strict_accepts_kafka_single_threaded(self):
         cfg = _load(_strict_pipeline_yaml(self._SOURCE_KAFKA + self._SER + self._SINK_LOCAL))
