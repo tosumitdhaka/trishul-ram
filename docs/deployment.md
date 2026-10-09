@@ -444,9 +444,10 @@ v1.8.0 delivery guarantees (frozen V18-01 §9):
     every other source must implement `source_unit_id()` itself. Sources where
     identity is demonstrably absent are rejected (identity-less
     sources cannot provide replay without duplicate risk).
-  - **Single-threaded Kafka** — a Kafka source with `thread_workers > 1` is
-    rejected until the threaded frontier implementation passes broker tests.
-    Rejection, never silent weakness.
+  - **Threaded Kafka** — `thread_workers > 1` Kafka sources run under strict
+    delivery contracts: the gap-aware per-partition frontiers (tombstone
+    bridging, reader-thread-owned commit serialization) are broker-proven by
+    the env-gated live suite (tests/unit/test_kafka_live_broker.py, V18-10).
   - Every unmet condition is listed in the validation error.
 
 **Confirmation tiers (frozen V18-01 §6).** Each built-in sink declares the
