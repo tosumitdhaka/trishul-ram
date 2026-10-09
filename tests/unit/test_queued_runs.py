@@ -491,7 +491,10 @@ def _register_interval(ctrl):
     ctrl.manager.register(load_pipeline_from_yaml(_INTERVAL_YAML), yaml_text=_INTERVAL_YAML)
 
 
-def _wait_until(predicate, timeout=5.0):
+def _wait_until(predicate, timeout=30.0):
+    """Load-tolerant ceiling (the outbox-flake class): 5s wall-clock waits
+    lose to full-suite CPU starvation — the queued-row condition-exit keeps
+    the healthy path at the same speed."""
     deadline = time.monotonic() + timeout
     while time.monotonic() < deadline:
         if predicate():

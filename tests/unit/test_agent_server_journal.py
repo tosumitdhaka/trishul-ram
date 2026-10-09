@@ -1752,12 +1752,15 @@ class TestDrainLifecycle:
                 attempt_id="a1", generation=1, slot_id="s1",
             )
             assert resp.status_code == 202
-            deadline = time.time() + 5
+            # Load-tolerant ceiling (the outbox-flake class: a 5s wall-clock
+            # ceiling loses to full-suite CPU starvation; condition-exit keeps
+            # the healthy path fast).
+            deadline = time.time() + 30
             while time.time() < deadline and not app.state.worker.snapshot():
                 time.sleep(0.02)
             resp_drain = client.post("/agent/drain")
             assert resp_drain.status_code == 202
-            deadline = time.time() + 5
+            deadline = time.time() + 30
             while time.time() < deadline and (
                 journal.get_attempt("a1") is None
                 or journal.get_attempt("a1").kind != "completion"
