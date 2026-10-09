@@ -27,7 +27,12 @@ class AmqpSource(BaseSource):
     ``amqp_delivery_tag`` and acknowledged only when the executor calls
     ``ack(meta, disposition)``; the ack/nack is marshalled onto the pika
     connection thread (``add_callback_threadsafe`` — the connection is not
-    thread-safe). The broker prefetch (``basic_qos``) bounds how many unacked
+    thread-safe). Shutdown is marshalled the same way: ``stop()`` sets the
+    intake stop event, and the generator's finally cancels the consumer via
+    ``add_callback_threadsafe`` and waits for the connection to close on the
+    connection thread — never touching the channel/connection from the
+    reader thread (a live-broker shutdown race). The broker prefetch
+    (``basic_qos``) bounds how many unacked
     deliveries can be outstanding, which is the backpressure that bounds the
     internal bridge: a slow sink fills the prefetch window and the broker
     stops delivering, never growing memory without bound. Unacked tags are
@@ -76,6 +81,16 @@ class AmqpSource(BaseSource):
                 return {"ok": True, "latency_ms": latency, "detail": f"TCP {host}:{port} OK"}
         except Exception as exc:
             raise RuntimeError(f"AMQP TCP probe failed: {exc}")
+
+    def stop(self) -> None:
+        """Unblock a blocking read() (executor stop-watcher).
+
+        Sets the intake stop event so the generator loop exits within one
+        bridge poll; the consumer cancel is then marshalled onto the pika
+        connection thread by the generator's finally block, which also waits
+        for the connection to close (thread-safe shutdown).
+        """
+        self._stop_event.set()
 
     def read(self) -> Iterator[tuple[bytes, dict]]:
         try:
@@ -153,6 +168,13 @@ class AmqpSource(BaseSource):
                 channel.start_consuming()
             except Exception:
                 pass
+            finally:
+                # The connection is closed on the thread that owns the I/O
+                # loop — never from the reader thread (see the read() finally).
+                try:
+                    connection.close()
+                except Exception:
+                    pass
 
         t = threading.Thread(target=consume_thread, daemon=True)
         t.start()
@@ -167,9 +189,23 @@ class AmqpSource(BaseSource):
                         break
                     continue
         finally:
+            # The pika blocking adapter is not thread-safe: the consumer
+            # cancel must run on the connection thread (consume_thread is
+            # spinning inside start_consuming). Calling stop_consuming() or
+            # close() from this thread while consume_thread drives the ioloop
+            # races the transport — observed on a live broker as "IndexError:
+            # pop from an empty deque" transport aborts and shutdowns that
+            # hang for seconds. start_consuming() returns once the consumer
+            # is cancelled, consume_thread closes the connection in its own
+            # finally, and this join waits for that to finish.
             try:
-                channel.stop_consuming()
-                connection.close()
+                connection.add_callback_threadsafe(
+                    lambda: channel.stop_consuming()
+                )
+            except Exception:
+                pass
+            try:
+                t.join(timeout=10)
             except Exception:
                 pass
             self._connection = None
