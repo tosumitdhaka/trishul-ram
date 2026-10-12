@@ -827,12 +827,10 @@ def _completion_payload(*, attempt_id="a1", run_id="r1", status="success"):
 
 
 def _seed_completion_outbox(journal, attempt_id="a1", run_id="r1"):
-    """Journal-first completion + outbox backup row, exactly as the run
-    threads record them — then a crash before the direct post."""
+    """Atomic completion + outbox entry, as recorded before worker delivery."""
     _admit_direct(journal, attempt_id=attempt_id, run_id=run_id)
     payload = _completion_payload(attempt_id=attempt_id, run_id=run_id)
-    journal.record_completion(attempt_id, payload)
-    journal.enqueue_outbox(attempt_id, "run-complete", payload)
+    journal.record_completion_and_enqueue(attempt_id, payload)
 
 
 class FakeManager:
@@ -907,7 +905,7 @@ class TestHandshake:
             "drain",
         ]
         # Not claimed (not implemented): admission_limits, status_snapshot.
-        for absent in ("admission_limits", "status_snapshot"):
+        for absent in ("admission_limits", "status_snapshot", "revocation", "tombstones"):
             assert absent not in body["capabilities"]
         assert body["session_id"] == app.state.worker_session
         assert body["session_id"].startswith("w0-")
@@ -1158,14 +1156,20 @@ class TestOutboxDrain:
         finally:
             j2.close()
 
-    def test_drain_thread_delivers_under_lifespan(self, tmp_path, auth_env):
+    @pytest.mark.parametrize("stranded", [False, True])
+    def test_drain_thread_delivers_under_lifespan(self, tmp_path, auth_env, stranded):
         """The background drain loop (started by the app lifespan) picks up
         a pre-existing unacked completion and acks it without any direct
         post — the crash-recovery path."""
         clock = FakeClock()
         j = WorkerJournal(tmp_path / "journal.db", clock=clock)
         try:
-            _seed_completion_outbox(j)
+            if stranded:
+                # v1.8.0 crashed between its two completion transactions.
+                j.record_completion("a1", _completion_payload(), run_id="r1")
+                assert j.fetch_due_outbox() == []
+            else:
+                _seed_completion_outbox(j)
             manager = FakeManager()
             app = create_worker_app(
                 worker_id="w0", manager_url="http://manager", journal=j
@@ -1207,11 +1211,7 @@ class TestRunCompleteOffload:
         return journal.get_attempt(attempt_id)
 
     def _wait_outbox_row(self, journal, attempt_id, timeout=10.0):
-        """Wait for the outbox row — ``record_completion`` and
-        ``enqueue_outbox`` are two journal transactions, so the completion row
-        can be visible a hair before the outbox row lands. A single-shot
-        ``_drain_outbox_once`` must never race that window (the real
-        background drain loops, so production is unaffected)."""
+        """Wait for an undrained atomic completion/outbox commit."""
         deadline = time.time() + timeout
         while time.time() < deadline:
             if any(r.attempt_id == attempt_id for r in journal.fetch_due_outbox()):
@@ -1976,3 +1976,33 @@ class TestOutboxLoopBackoff:
         # After recovery the loop resumed the base cadence: a subsequent ERROR
         # (if any) would start from the base interval again.
         assert result["errors"][-1]["backoff_seconds"] == 0.02  # 2nd failure
+
+def test_lost_manager_ack_replays_same_result_without_manager_restart(journal):
+    payload = _completion_payload()
+    journal.record_completion_and_enqueue('a1', payload, run_id='r1')
+    commits = set()
+    requests = []
+
+    def manager(request):
+        body = json.loads(request.content)
+        requests.append(body)
+        commits.add(body['attempt_id'])
+        if len(requests) == 1:
+            raise httpx.ReadTimeout('response lost after ledger commit', request=request)
+        return httpx.Response(200, json={'ok': True, 'ignored': 'duplicate'})
+
+    with httpx.Client(transport=httpx.MockTransport(manager)) as client:
+        assert _drain_outbox_once(journal, 'http://manager', client=client) == 1
+        assert not journal.get_attempt('a1').acked
+        path = journal._path
+        journal.close()
+        with WorkerJournal(path) as recovered:
+            assert recovered.respool_unacked_completions() == 0
+            # Advance eligibility without removing the recorded retry state.
+            recovered._conn.execute("UPDATE outbox SET next_attempt_at = '2000-01-01'")
+            assert _drain_outbox_once(recovered, 'http://manager', client=client) == 1
+            assert recovered.get_attempt('a1').acked
+            assert recovered.fetch_due_outbox() == []
+    assert len(requests) == 2
+    assert requests[0] == requests[1]
+    assert commits == {'a1'}

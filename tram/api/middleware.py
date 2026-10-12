@@ -14,6 +14,7 @@ from fastapi.responses import JSONResponse
 from starlette.middleware.base import BaseHTTPMiddleware
 
 from tram.core.config import AppConfig
+from tram.metrics.registry import INTERNAL_AUTH_TOTAL
 
 if TYPE_CHECKING:
     from starlette.requests import Request
@@ -78,6 +79,14 @@ class APIKeyMiddleware(BaseHTTPMiddleware):
             extra={"path": path, "remote": remote},
         )
 
+    def _record_internal_auth(self, verdict: str) -> None:
+        if self._mode == "off":
+            return
+        action = "allowed" if verdict == "valid" else (
+            "rejected" if self._mode == "enforce" else "warned"
+        )
+        INTERNAL_AUTH_TOTAL.labels(mode=self._mode, verdict=verdict, action=action).inc()
+
     async def dispatch(self, request: Request, call_next):
         settings = self._settings
 
@@ -101,8 +110,11 @@ class APIKeyMiddleware(BaseHTTPMiddleware):
             # encodes any str). A non-ASCII header therefore yields a clean
             # 401 instead of a TypeError/500.
             if key and hmac.compare_digest(key.encode("latin-1"), settings.api_key.encode()):
+                if is_internal:
+                    self._record_internal_auth("valid")
                 return await call_next(request)
             if is_internal:
+                self._record_internal_auth("invalid" if key else "missing")
                 # Internal surfaces respect the auth-mode knob so deployments
                 # can roll out keys first and flip to enforcement later.
                 if self._mode == "enforce":
@@ -116,8 +128,13 @@ class APIKeyMiddleware(BaseHTTPMiddleware):
             from tram.api.auth import extract_bearer, verify_token
             token = extract_bearer(request)
             if token and verify_token(token):
+                if is_internal:
+                    self._record_internal_auth("valid")
                 return await call_next(request)
             if is_internal:
+                self._record_internal_auth(
+                    "invalid" if request.headers.get("Authorization") else "missing"
+                )
                 # No machine key configured (auth_users-only deployment):
                 # internal surfaces fall back to the bearer check and still
                 # honor the auth-mode knob for rollout semantics — enforce

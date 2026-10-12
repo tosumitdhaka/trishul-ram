@@ -64,6 +64,7 @@ def test_mgr_series_are_noop_when_prometheus_absent():
         registry = _reload_registry()
 
     # Should not raise; no-op objects silently accept calls
+    registry.INTERNAL_AUTH_TOTAL.labels(mode="warn", verdict="missing", action="warned").inc()
     registry.MGR_DISPATCH_TOTAL.labels(pipeline="p", result="accepted").inc()
     registry.MGR_REDISPATCH_TOTAL.labels(pipeline="p").inc()
     registry.MGR_RECONCILE_ACTION_TOTAL.labels(pipeline="p", action="mark_stale").inc()

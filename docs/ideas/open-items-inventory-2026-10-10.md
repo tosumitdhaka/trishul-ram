@@ -8,6 +8,10 @@ Collected 2026-10-09T15:19:41+00:00. Repository: `tosumitdhaka/trishul-ram`; loc
 
 Updated 2026-10-10: every B001–B090 item now has a resolution target and a scope/package. The source collection counts above remain the dated inventory snapshot, not implementation progress.
 
+Added 2026-10-12: B091 (GH #91, v1.8.1 recovery correctness) and B092
+(approved v1.8.2 ten-IP SNMP pilot; v1.8.3 capacity verification). The original
+collection remains a 90-item snapshot; the current tracker has 92 items.
+
 - `v1.8.1`, `v1.8.2`, `v1.8.3` and `v1.9.0` are the agreed release assignments. Verification targets mean a finding must be reproduced and fixed or closed with evidence; they do not assert that an old defect still exists.
 - `residual TBD` assigns only the named hardening slice of a broad item; it does not promise complete connector parity.
 - `TBD after v1.8.3` keeps an item tracked while preserving the agreed feature deferral. It is an explicit unscheduled target, not an invented commitment to a future release.
@@ -19,7 +23,7 @@ Plans: [v1.8.1](../plans/v1.8.1-hardening-plan.md), [v1.8.2](../plans/v1.8.2-con
 
 Read the current roadmap, release/changelog records, plans, review follow-ups, design/feasibility notes, archived inventories and performance evidence. Fetched all issue states (67 issues) and bodies/comments for all 17 open issues. Current roadmap and release evidence override historical plan checkboxes. Generic contribution/release checklists, completed releases and deliberately rejected architecture proposals are not counted as backlog. No actionable TODO/FIXME/HACK markers were found in application code; textual matches are retained in the evidence export.
 
-Published documentation export: [all 90 items with resolution targets](backlog-resolution-targets-2026-10-10.csv). Local collection evidence remains in `artifacts/backlog/`: all issue states, open-issue snapshots/comments, local source matches and JSON/CSV exports. These artifacts are local research files and are not part of the documentation commit. GitHub issue states were not changed.
+Published documentation export: [all 92 tracked items with resolution targets](backlog-resolution-targets-2026-10-10.csv), including the two 2026-10-12 additions. Local collection evidence remains in `artifacts/backlog/`: all issue states, open-issue snapshots/comments, local source matches and JSON/CSV exports. These artifacts are local research files and are not part of the documentation commit. GitHub issue states were not changed.
 
 ## Open GitHub issue index
 
@@ -114,14 +118,21 @@ All open issues have no milestone and no assignee. #42 has no label; #70 is `cho
 | B063 | AI and authoring UX | C.1: plugin detail cards, described fields, examples, usage counts and copy skeleton | Backlog | TBD after v1.8.3 | Deferred / unscheduled<br>Tracked for post-cycle prioritization; no resolution release is approved. | [docs/plans/ai-expansion-plan.md:1](../../docs/plans/ai-expansion-plan.md) · [#42](https://github.com/tosumitdhaka/trishul-ram/issues/42)<br>Authoring-UX Wave C; distinct from the AI integration names used elsewhere. |
 | B064 | AI and authoring UX | C.2: editor reference search, intent grouping, insert-at-cursor and mini-cards | Backlog | TBD after v1.8.3 | Deferred / unscheduled<br>Tracked for post-cycle prioritization; no resolution release is approved. | [docs/plans/ai-expansion-plan.md:1](../../docs/plans/ai-expansion-plan.md) · [#42](https://github.com/tosumitdhaka/trishul-ram/issues/42) |
 | B065 | AI and authoring UX | C.3: schema-aware editor autocomplete | Optional; after C.1/C.2 | TBD after v1.8.3 | Deferred / unscheduled<br>Tracked for post-cycle prioritization; no resolution release is approved. | [docs/plans/ai-expansion-plan.md:1](../../docs/plans/ai-expansion-plan.md) · [#42](https://github.com/tosumitdhaka/trishul-ram/issues/42) |
-| B066 | Test quality | Assert pending confirmAction promise resolves as cancellation on navigation | Backlog | v1.8.1 | H181-04<br>Targeted test-quality gaps. | [#70](https://github.com/tosumitdhaka/trishul-ram/issues/70) |
-| B067 | Test quality | Extend or document schema-description coverage guard for externally registered plugins | Backlog | v1.8.1 | H181-04<br>Targeted test-quality gaps. | [#70](https://github.com/tosumitdhaka/trishul-ram/issues/70) |
-| B068 | Security metrics | Prometheus counters for internal-plane warn-mode key misses and enforce-mode rejects; document enforce-flip procedure | Backlog | v1.8.1 | H181-05<br>Auth counters and enforcement/rollback runbook. | [#73](https://github.com/tosumitdhaka/trishul-ram/issues/73) |
-| B069 | v1.8.0 post-release review | Make completion recording and outbox enqueue atomic, or respool completions at worker boot | Local follow-up | v1.8.1 | H181-01<br>Atomic completion/outbox, pre-existing stranded-result recovery and replay evidence. | [docs/reviews/v1.8.0-full-diff-independent-review.md:44](../../docs/reviews/v1.8.0-full-diff-independent-review.md)<br>Current server still calls record_completion and enqueue_outbox in separate transactions (tram/agent/server.py:586–587 and :649–650). Narrow recoverable crash window. |
-| B070 | v1.8.0 post-release review | Wire the worker tombstone/revocation lane or narrow the advertised capability | Local follow-up | v1.8.1 | H181-02<br>Truthful capability declarations; preserve mixed-v1.8.x contracts. | [docs/reviews/v1.8.0-full-diff-independent-review.md:50](../../docs/reviews/v1.8.0-full-diff-independent-review.md)<br>record_tombstone has no production caller; current callers are tests. |
-| B071 | v1.8.0 post-release review | Replace router access to a private controller method with a supported controller interface | Local follow-up | v1.8.1 | H181-03<br>Supported controller interface with unchanged lifecycle/API behavior. | [docs/reviews/v1.8.0-full-diff-independent-review.md:57](../../docs/reviews/v1.8.0-full-diff-independent-review.md)<br>Style follow-up, not a release blocker. |
+| B066 | Test quality | Assert pending confirmAction promise resolves as cancellation on navigation | Implemented; release acceptance pending | v1.8.1 | H181-04<br>Targeted test-quality gaps. | [#70](https://github.com/tosumitdhaka/trishul-ram/issues/70) |
+| B067 | Test quality | Extend or document schema-description coverage guard for externally registered plugins | Implemented; release acceptance pending | v1.8.1 | H181-04<br>Targeted test-quality gaps. | [#70](https://github.com/tosumitdhaka/trishul-ram/issues/70) |
+| B068 | Security metrics | Prometheus counters for internal-plane warn-mode key misses and enforce-mode rejects; document enforce-flip procedure | Implemented; release acceptance pending | v1.8.1 | H181-05<br>Auth counters and enforcement/rollback runbook. | [#73](https://github.com/tosumitdhaka/trishul-ram/issues/73) |
+| B069 | v1.8.0 post-release review | Make completion recording and outbox enqueue atomic, or respool completions at worker boot | Implemented; release acceptance pending | v1.8.1 | H181-01<br>Atomic completion/outbox, pre-existing stranded-result recovery and replay evidence. | [docs/reviews/v1.8.0-full-diff-independent-review.md:44](../../docs/reviews/v1.8.0-full-diff-independent-review.md)<br>Current server still calls record_completion and enqueue_outbox in separate transactions (tram/agent/server.py:586–587 and :649–650). Narrow recoverable crash window. |
+| B070 | v1.8.0 post-release review | Wire the worker tombstone/revocation lane or narrow the advertised capability | Implemented; release acceptance pending | v1.8.1 | H181-02<br>Truthful capability declarations; preserve mixed-v1.8.x contracts. | [docs/reviews/v1.8.0-full-diff-independent-review.md:50](../../docs/reviews/v1.8.0-full-diff-independent-review.md)<br>record_tombstone has no production caller; current callers are tests. |
+| B071 | v1.8.0 post-release review | Replace router access to a private controller method with a supported controller interface | Implemented; release acceptance pending | v1.8.1 | H181-03<br>Supported controller interface with unchanged lifecycle/API behavior. | [docs/reviews/v1.8.0-full-diff-independent-review.md:57](../../docs/reviews/v1.8.0-full-diff-independent-review.md)<br>Style follow-up, not a release blocker. |
 
-## Additional proposals and trigger-gated work
+## Scope additions — 2026-10-12
+
+| ID | Area | Item | Status | Planned resolution | Release scope | Sources / notes |
+|---|---|---|---|---|---|---|
+| B091 | Recovery correctness | Short batch falsely marked lost before success callback | Implemented; release acceptance pending | v1.8.1 | H181-07<br>Deterministic race reproduction, authoritative completion recovery and bounded genuine-loss detection. | [#91](https://github.com/tosumitdhaka/trishul-ram/issues/91) |
+| B092 | SNMP polling | One pipeline polling ten distinct IPs concurrently | Approved; implementation pending | v1.8.2 pilot; v1.8.3 verification | H182-07<br>Bounded target concurrency, device identity, isolated failures, truthful results and five-minute SFTP demo; sustained capacity/fault evidence follows in v1.8.3. | [v1.8.2 plan](../plans/v1.8.2-connector-hardening-plan.md)<br>A 100-IP commitment requires separate evidence and scope admission. |
+
+## Additional proposals and trigger-gated work (original inventory)
 
 | ID | Area | Item | Status | Planned resolution | Release scope | Sources / notes |
 |---|---|---|---|---|---|---|

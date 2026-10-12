@@ -7,6 +7,14 @@
 > **Status of this document:** plan — every "Verified" line was checked against
 > current HEAD (`main` @ 38ed1b7, post-v1.4.5) on 2026-09-23.
 
+> Scope reconciliation 2026-10-12: the verified table below is a historical
+> v1.4.5 snapshot. A6/A7/B1 and A.4 shipped v1.4.7; A.1 shipped v1.4.8.
+> Provider vendoring (#71) remains pending with A9/B3–B6 (#41); its old
+> v1.5.0 assignment was superseded by the SNMP-only release scope.
+> Remaining authoring work is A.2/A.3/C.1–C.3 (#42), unscheduled during
+> the v1.8.x hardening cycle. Use the [current inventory](../ideas/open-items-inventory-2026-10-10.md)
+> and [roadmap](../roadmap.md) for present assignments.
+
 ---
 
 ## 0. Verified state — done vs pending (HEAD @ 38ed1b7)

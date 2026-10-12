@@ -68,8 +68,10 @@ _CONSECUTIVE_STATS_MISSES: dict[str, int] = {}
 # V18-01 §5 (frozen): the manager↔worker protocol version and the capability
 # set this worker branch ACTUALLY implements (declared truthfully at
 # /agent/handshake — never claim a capability the branch does not honor):
-#   fencing            — worker_session-fenced admission, revocation
-#                        tombstones, clock watermark (V18-05, landed);
+#   fencing            — session/token-fenced admission and clock watermark;
+#                        manager identity checks fence stale completion/stats.
+#                        No worker revocation RPC is implemented or negotiated;
+#                        local journal tombstones are not a remote capability.
 #   commit_receipts    — sink commit barrier + latched_error + tier
 #                        declarations (V18-01 §6/§7, landed in this release);
 #   durable_completion — journal-first completions + outbox redelivery
@@ -404,6 +406,10 @@ def _run_complete_payload(
     finished_at: str | None,
     disposition: dict | None = None,
     spool: dict | None = None,
+    dlq_count: int = 0,
+    records_failed: int = 0,
+    dlq_succeeded: int = 0,
+    dlq_failed: int = 0,
 ) -> dict:
     """The legacy-shaped run-complete payload (no attempt identity).
 
@@ -436,6 +442,10 @@ def _run_complete_payload(
         "finished_at": finished_at,
         "disposition": disposition,
         "spool": spool,
+        "dlq_count": dlq_count,
+        "records_failed": records_failed,
+        "dlq_succeeded": dlq_succeeded,
+        "dlq_failed": dlq_failed,
     }
 
 
@@ -458,6 +468,10 @@ def _post_run_complete(
     client: httpx.Client | None = None,
     disposition: dict | None = None,
     spool: dict | None = None,
+    dlq_count: int = 0,
+    records_failed: int = 0,
+    dlq_succeeded: int = 0,
+    dlq_failed: int = 0,
 ) -> None:
     """POST run-complete to the manager with bounded retry (review D2).
 
@@ -498,6 +512,8 @@ def _post_run_complete(
         finished_at=finished_at,
         disposition=disposition,
         spool=spool,
+        dlq_count=dlq_count, records_failed=records_failed,
+        dlq_succeeded=dlq_succeeded, dlq_failed=dlq_failed,
     )
     headers = {"X-API-Key": api_key} if api_key else None
     last_exc: Exception | None = None
@@ -583,8 +599,7 @@ def _journal_legacy_completion(
     """
     key = _legacy_outbox_key(run_id)
     try:
-        journal.record_completion(key, result_json, run_id=run_id)
-        journal.enqueue_outbox(key, "run-complete", result_json)
+        journal.record_completion_and_enqueue(key, result_json, run_id=run_id)
     except JournalUnavailableError:
         logger.warning(
             "legacy completion cannot be journaled (journal unavailable) — "
@@ -618,12 +633,16 @@ def _commit_completion(
     client: httpx.Client | None = None,
     disposition: dict | None = None,
     spool: dict | None = None,
+    dlq_count: int = 0,
+    records_failed: int = 0,
+    dlq_succeeded: int = 0,
+    dlq_failed: int = 0,
 ) -> None:
     """V18-08: the ONE thread-side completion commit — journal-first, outbox-only.
 
     The run/dispatch thread NEVER posts run-complete directly; the outbox
     background drain (and the shutdown final pass) are the ONLY posters.
-    Ordering guarantee preserved: ``record_completion`` commits BEFORE the
+    Ordering guarantee preserved: ``record_completion_and_enqueue`` commits BEFORE the
     caller's ``state.remove`` (the run leaves WorkerState only in the
     ``finally``), so a crash between the journal commit and the drain's
     delivery redelivers via the outbox on restart (at-least-once; the
@@ -646,8 +665,7 @@ def _commit_completion(
     the legacy paths as the authorized attempt-identity path.
     """
     if attempt_id:
-        journal.record_completion(attempt_id, result_json or "")
-        journal.enqueue_outbox(attempt_id, "run-complete", result_json or "")
+        journal.record_completion_and_enqueue(attempt_id, result_json or "")
         return
     legacy_json = json.dumps(
         _run_complete_payload(
@@ -666,6 +684,8 @@ def _commit_completion(
             finished_at=finished_at,
             disposition=disposition,
             spool=spool,
+            dlq_count=dlq_count, records_failed=records_failed,
+            dlq_succeeded=dlq_succeeded, dlq_failed=dlq_failed,
         )
     )
     if _journal_legacy_completion(journal, run_id, legacy_json):
@@ -676,6 +696,8 @@ def _commit_completion(
         records_in, records_out, bytes_in, bytes_out, error, records_skipped,
         errors, started_at=started_at, finished_at=finished_at, api_key=api_key,
         client=client, disposition=disposition, spool=spool,
+        dlq_count=dlq_count, records_failed=records_failed,
+        dlq_succeeded=dlq_succeeded, dlq_failed=dlq_failed,
     )
 
 
@@ -1143,11 +1165,13 @@ def create_worker_app(
 
         # V18-01 §4: mark reserved/running rows from a previous process boot as
         # interrupted — never silently re-executed before the manager resolves
-        # ownership. Best-effort at boot: a corrupt/unavailable journal must
+        # ownership. Also repair old unacked results missing a replay entry.
+        # Best-effort at boot: a corrupt/unavailable journal must
         # not block worker startup (status reports it distinctly) and
         # admission stays closed until recovery.
         try:
             interrupted = journal.mark_interrupted_on_boot()
+            journal.respool_unacked_completions()
         except JournalUnavailableError as exc:
             logger.error(
                 "worker journal unavailable at boot — admission closed, "
@@ -1829,6 +1853,10 @@ def create_worker_app(
                         finished_at=datetime.now(UTC).isoformat(),
                         api_key=state.api_key,
                         client=state.rpc_client,
+                        dlq_count=int(stats_snapshot.get("dlq_count") or 0),
+                        records_failed=stream_records_failed,
+                        dlq_succeeded=stream_dlq_succeeded,
+                        dlq_failed=stream_dlq_failed,
                         disposition=stream_disposition,
                         spool=stream_spool,
                     )
@@ -1989,6 +2017,10 @@ def create_worker_app(
                         finished_at=result.finished_at.isoformat(),
                         api_key=state.api_key,
                         client=state.rpc_client,
+                        dlq_count=result.dlq_count,
+                        records_failed=result.records_failed,
+                        dlq_succeeded=result.dlq_succeeded,
+                        dlq_failed=result.dlq_failed,
                         # V18-09: the legacy fallback payload (fatal journal →
                         # direct post, and the legacy outbox payload) carries
                         # the same per-sink disposition/spool maps the

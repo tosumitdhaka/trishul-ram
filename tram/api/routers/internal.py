@@ -35,6 +35,12 @@ class RunCompletePayload(BaseModel):
     errors: list[str] = Field(default_factory=list)
     started_at: datetime | None = None
     finished_at: datetime | None = None
+    dlq_count: int = 0
+    records_failed: int = 0
+    dlq_succeeded: int = 0
+    dlq_failed: int = 0
+    disposition: dict | None = None
+    spool: dict | None = None
     # V18-04: ledger attempt identity. Present ⇒ the identity-checked
     # run-complete path (frozen §5 protocol table); absent ⇒ legacy path.
     attempt_id: str | None = None
@@ -203,6 +209,9 @@ async def run_complete(payload: RunCompletePayload, request: Request) -> dict:
             errors=payload.errors,
             started_at=payload.started_at,
             finished_at=payload.finished_at,
+            dlq_count=payload.dlq_count, records_failed=payload.records_failed,
+            dlq_succeeded=payload.dlq_succeeded, dlq_failed=payload.dlq_failed,
+            disposition=payload.disposition, spool=payload.spool,
         )
 
     controller.on_worker_run_complete(
@@ -219,6 +228,9 @@ async def run_complete(payload: RunCompletePayload, request: Request) -> dict:
         errors=payload.errors,
         started_at=payload.started_at,
         finished_at=payload.finished_at,
+        dlq_count=payload.dlq_count, records_failed=payload.records_failed,
+        dlq_succeeded=payload.dlq_succeeded, dlq_failed=payload.dlq_failed,
+        disposition=payload.disposition, spool=payload.spool,
     )
     return {"ok": True}
 

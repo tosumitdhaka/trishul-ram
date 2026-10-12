@@ -89,9 +89,15 @@ def test_schema_version_changes_when_schema_changes(monkeypatch):
 
 
 def test_every_schema_field_has_a_description():
-    """A.1: every field descriptor in SCHEMA_FIELDS carries a non-empty,
+    """A.1: every built-in field descriptor in SCHEMA_FIELDS carries a non-empty,
     operator-facing description (the wizard's form help text and the AI
-    schema consumers rely on it; gaps fail loudly at import already)."""
+    schema consumers rely on it; gaps fail loudly at import already).
+
+    Boundary: this cache is built from the pipeline model unions at import,
+    not the runtime plugin registry. External plugin registration does not
+    add model descriptors here; this guard makes no claim about external
+    plugin help text or configuration fields.
+    """
     total = 0
     missing: list[str] = []
     for category, types in cs.SCHEMA_FIELDS.items():

@@ -4357,3 +4357,186 @@ class TestLivePostgresGateScenarios:
             assert intents[0]["final_outcome"] == "aborted"
         finally:
             ctrl.stop()
+
+
+class TestShortBatchReconciliation:
+    @pytest.mark.parametrize("origin", ["manual", "scheduled"])
+    def test_reconcile_during_dispatch_does_not_invent_failure(self, origin):
+        from tram.agent.reconciler import BatchReconciler
+
+        wp = _accepted_worker_pool()
+        wp.find_pipeline_runs.return_value = []
+        wp.is_run_active.return_value = False
+        wp.worker_id_for_url.return_value = "w0"
+        ctrl = _started_controller(worker_pool=wp)
+        ctrl.manager.register(load_pipeline_from_yaml(_MANUAL_YAML), yaml_text=_MANUAL_YAML)
+        ctrl.manager.set_status("my-manual", "stopped")
+        reconciler = BatchReconciler(ctrl, wp)
+
+        def dispatch(**kwargs):
+            # Worker has completed writes, but neither HTTP acceptance nor
+            # callback has reached the manager. The active worker list is empty.
+            reconciler.run_once()
+            assert ctrl.get("my-manual").status == "running"
+            assert not ctrl.get("my-manual").run_history
+            ctrl.on_worker_run_complete(
+                run_id=kwargs["run_id"], pipeline_name="my-manual", worker_id="w0",
+                status="success", records_in=9, records_out=9,
+            )
+            return DispatchOutcome(worker_url="http://w0:8766", outcome=DISPATCH_ACCEPTED)
+
+        wp.dispatch_with_result.side_effect = dispatch
+        try:
+            ctrl._run_batch("my-manual", "short-dispatch", origin=origin)
+            assert ctrl.get_active_batch_runs() == []
+            assert len(ctrl.get("my-manual").run_history) == 1
+            assert ctrl.manager.get_run("short-dispatch").records_out == 9
+        finally:
+            ctrl.stop()
+
+    @pytest.mark.parametrize("ledger_enabled, legacy_admission", [(True, False), (False, True),
+                                                               (True, True)])
+    def test_completed_journal_wins_before_delayed_callback(
+        self, tmp_path, ledger_enabled, legacy_admission
+    ):
+        from fastapi.testclient import TestClient
+
+        from tram.agent.journal import WorkerJournal
+        from tram.agent.reconciler import BatchReconciler
+        from tram.agent.server import _commit_completion, _completion_result_json, create_worker_app
+
+        wp = _accepted_worker_pool()
+        wp.worker_id_for_url.return_value = "w0"
+        wp.is_run_active.return_value = False
+        db = TramDB(url=f"sqlite:///{tmp_path}/short.db") if ledger_enabled else None
+        ctrl = _started_controller(worker_pool=wp, db=db)
+        ctrl.manager.register(load_pipeline_from_yaml(_MANUAL_YAML), yaml_text=_MANUAL_YAML)
+        ctrl.manager.set_status("my-manual", "stopped")
+        journal = WorkerJournal(tmp_path / "worker.db")
+        client = TestClient(create_worker_app(worker_id="w0", manager_url="", journal=journal))
+        try:
+            ctrl._run_batch("my-manual", "short-journal", origin="manual")
+            attempt = ctrl._active_attempt_for_run("short-journal")
+            query_id = attempt["attempt_id"] if not legacy_admission else "legacy:short-journal"
+            result_json = _completion_result_json(
+                attempt_id=query_id, generation=attempt["generation"] if attempt else None,
+                run_id="short-journal", pipeline_name="my-manual", worker_id="w0",
+                status="partial", records_in=9, records_out=8, bytes_out=321,
+                dlq_count=1, records_failed=1, dlq_succeeded=2, dlq_failed=3,
+                disposition={"sftp": {"delivered": 8, "failed": 1}},
+                spool={"spooled": 2, "failed": 3}, legacy=legacy_admission,
+            )
+            import json
+            commit_fields = json.loads(result_json)
+            commit_fields.pop("legacy")
+            commit_fields.pop("generation")
+            commit_fields["attempt_id"] = query_id if not legacy_admission else ""
+            if not legacy_admission:
+                journal.record_completion_and_enqueue(query_id, result_json, run_id="short-journal")
+            else:
+                _commit_completion(journal, result_json=result_json, **commit_fields)
+            # Use the actual endpoint response, including its result envelope.
+            def query(worker_url, attempt_id):
+                response = client.get(f"/agent/attempts/{attempt_id}")
+                if response.status_code == 404:
+                    return None
+                assert response.status_code == 200
+                assert response.json()["kind"] == "completion"
+                return response.json()
+            wp.query_attempt.side_effect = query
+            BatchReconciler(ctrl, wp).run_once()
+            wp.query_attempt.assert_any_call("http://worker-0:8766", query_id)
+            assert wp.query_attempt.call_count == (2 if ledger_enabled and legacy_admission else 1)
+            result = ctrl.manager.get_run("short-journal")
+            assert result.status == RunStatus.PARTIAL
+            assert (result.records_out, result.bytes_out) == (8, 321)
+            assert (result.dlq_count, result.records_failed, result.dlq_succeeded,
+                    result.dlq_failed) == (1, 1, 2, 3)
+            assert result.disposition == {"sftp": {"delivered": 8, "failed": 1}}
+            assert result.spool == {"spooled": 2, "failed": 3}
+            if db:
+                # Fresh DB read proves accounting survives manager memory loss.
+                saved = db.get_run("short-journal")
+                assert saved.records_failed == 1
+                assert saved.dlq_succeeded == 2
+                assert saved.dlq_failed == 3
+                assert saved.disposition == result.disposition
+                assert saved.spool == result.spool
+            payload = query("unused", query_id)["result"]
+            payload.pop("legacy", None)
+            if legacy_admission:
+                payload.pop("attempt_id", None)
+                payload.pop("generation", None)
+            callback = ctrl.on_worker_run_complete if legacy_admission else ctrl.on_attempt_run_complete
+            callback(**payload)
+            assert len(ctrl.get("my-manual").run_history) == 1
+            assert ctrl.get_active_batch_runs() == []
+        finally:
+            client.close()
+            ctrl.stop()
+            journal.close()
+
+    def test_terminal_ledger_and_history_are_serialized_against_reap(self, tmp_path):
+        wp = _accepted_worker_pool()
+        wp.worker_id_for_url.return_value = "w0"
+        db = TramDB(url=f"sqlite:///{tmp_path}/callback-race.db")
+        ctrl = _started_controller(worker_pool=wp, db=db)
+        ctrl.manager.register(load_pipeline_from_yaml(_MANUAL_YAML), yaml_text=_MANUAL_YAML)
+        ctrl.manager.set_status("my-manual", "stopped")
+        ledger_done, release_history, reap_started, reap_done = (
+            threading.Event() for _ in range(4)
+        )
+        original = ctrl._terminalize_attempt
+        errors = []
+        def terminalize(**kwargs):
+            original(**kwargs)
+            ledger_done.set()
+            assert release_history.wait(5)
+        def callback():
+            try:
+                ctrl.on_attempt_run_complete(
+                    attempt_id=attempt["attempt_id"], generation=attempt["generation"], run_id="race",
+                    pipeline_name="my-manual", worker_id="w0", status="success",
+                    records_in=9, records_out=9,
+                )
+            except BaseException as exc:
+                errors.append(exc)
+        def reap():
+            reap_started.set()
+            ctrl.mark_active_batch_run_lost("my-manual", run_id="race", error="lost")
+            reap_done.set()
+        try:
+            ctrl._run_batch("my-manual", "race", origin="manual")
+            attempt = ctrl._active_attempt_for_run("race")
+            ctrl._terminalize_attempt = terminalize
+            completion_thread = threading.Thread(target=callback)
+            completion_thread.start()
+            assert ledger_done.wait(5)
+            reap_thread = threading.Thread(target=reap)
+            reap_thread.start()
+            assert reap_started.wait(5)
+            assert not reap_done.wait(0.1)
+            release_history.set()
+            completion_thread.join(5)
+            reap_thread.join(5)
+            assert not errors
+            assert reap_done.is_set()
+            assert ctrl.manager.get_run("race").status == RunStatus.SUCCESS
+            assert ctrl.manager.get_run("race").records_out == 9
+            assert len(ctrl.get("my-manual").run_history) == 1
+        finally:
+            release_history.set()
+            ctrl.stop()
+
+    def test_stale_reap_cannot_remove_newer_lease(self):
+        wp = _accepted_worker_pool()
+        ctrl = _started_controller(worker_pool=wp)
+        ctrl.manager.register(load_pipeline_from_yaml(_MANUAL_YAML), yaml_text=_MANUAL_YAML)
+        try:
+            ctrl.adopt_active_batch_run(
+                pipeline_name="my-manual", run_id="new", worker_url="http://w0:8766",
+            )
+            assert not ctrl.mark_active_batch_run_lost("my-manual", run_id="old", error="lost")
+            assert ctrl.get_active_batch_runs()[0]["run_id"] == "new"
+        finally:
+            ctrl.stop()

@@ -39,6 +39,12 @@ class _NoOpGauge:
 try:
     from prometheus_client import Counter, Gauge, Histogram
 
+    INTERNAL_AUTH_TOTAL = Counter(
+        "tram_internal_auth_total",
+        "Internal authentication decisions (excludes off, disabled auth and exempt paths)",
+        ["mode", "verdict", "action"],
+    )
+
     # ── Manager operational metrics ────────────────────────────────────────
     # These series are process-local to the manager. Worker-side execution
     # metrics (tram_records_*, tram_chunk_duration_seconds, etc.) require
@@ -195,6 +201,7 @@ try:
     _PROMETHEUS_AVAILABLE = True
 
 except ImportError:
+    INTERNAL_AUTH_TOTAL = _NoOpCounter()  # type: ignore[assignment]
     MGR_DISPATCH_TOTAL = _NoOpCounter()  # type: ignore[assignment]
     MGR_REDISPATCH_TOTAL = _NoOpCounter()  # type: ignore[assignment]
     MGR_RECONCILE_ACTION_TOTAL = _NoOpCounter()  # type: ignore[assignment]

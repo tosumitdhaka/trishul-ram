@@ -11,9 +11,12 @@ preserves earlier grouping decisions and links to the current release scope.
 
 Agreed 2026-10-10: take v1.8.1 → v1.8.2 → v1.8.3 in sequence, focusing on
 data integrity, failure recovery and sustained operational evidence. Scope and
-acceptance are in the three linked plans below; implementation is pending.
+acceptance are in the three linked plans below; v1.8.1 implementation started
+on 2026-10-12. The same-day scope amendment admits GH #91 into v1.8.1 and a
+bounded ten-IP concurrent SNMP polling pilot into v1.8.2.
 The [2026-10-10 inventory](ideas/open-items-inventory-2026-10-10.md) tracks all
-90 collected items with a planned-resolution field and release-package scope.
+90 originally collected items plus B091–B092, added 2026-10-12, with a
+planned-resolution field and release-package scope.
 It is the complete per-item tracker, not a commitment to implement every
 proposal. [CSV export](ideas/backlog-resolution-targets-2026-10-10.csv).
 
@@ -164,11 +167,15 @@ review and all 11 release-gate checks green before tagging; dates follow gates.
 
 > Scope-defining decision 2026-09-25 (option C); gate MET 2026-09-28 (tsmi 0.5.2 / tsnmp 0.6.1 wire-proven, trishul-snmp #28 + #29 resolved — addenda §12–13 in `docs/ideas/trishul-smi-snmp-migration-feasibility.md`); re-scoped 2026-09-28 after the independent plan review: swap only, the AI layer becomes a post-v1.5.0 design question. Known limitation: 3DES-EDE interop with draft-reeder-compliant peers pending upstream #31 — moot for TRAM, which drops 3DES entirely (below). [3DES restored in v1.5.1 after upstream #31 was wire-fixed in tsnmp 0.6.2.]
 
-- [ ] **Packaging & pins (GH #72)** — both stacks in `tram[snmp]` during the flag period; dev extras install both; pin `trishul-smi==0.5.2` / `trishul-snmp==0.6.1` (the wire-validated versions); Docker image implications written down
-- [ ] **DES + 3DES rejection at validation (GH #72)** — Pydantic validators on the three config classes + lint rule + migration note naming AES128 (DES obsoleted, RFC 8996 lineage; 3DES never standardized — expired draft — and upstream #31 makes it a silent-data-loss trap on the target stack; zero in-repo usage)
-- [ ] **Swap core behind a feature flag, default off (GH #72)** — poll + trap paths + sink, v3 USM crypto matrix via tsmp; MIB compile/resolve via tsmi JSON IR incl. the full serving/sync chain: dual-format corpus, `routers/mibs` JSON serving, `agent/assets` worker JSON sync, Docker `/mibs` layout
-- [ ] **Worker-mode flag consistency (GH #72)** — helm values on manager + worker planes, startup mismatch warning, deployment.md note
-- [ ] **Test hardening (GH #72)** — existing SNMP suite green unmodified (the flag-off proof); dual-stack decode fixtures (same BER bytes both stacks); env-gated in-process pysnmp-peer wire suite (catches the #28 defect class in CI); live kind verification incl. worker MIB sync → `docs/reviews/`
+> Historical scope completed in v1.5.0 (GH #72 closed). v1.5.1 refreshed
+> the pins and restored 3DES; v1.8.0 enabled the new stack by default.
+> These original criteria are retained for provenance.
+
+- [x] **Packaging & pins (GH #72)** — both stacks in `tram[snmp]` during the flag period; dev extras install both; pin `trishul-smi==0.5.2` / `trishul-snmp==0.6.1` (the wire-validated versions); Docker image implications written down
+- [x] **DES + 3DES rejection at validation (GH #72)** — Pydantic validators on the three config classes + lint rule + migration note naming AES128 (DES obsoleted, RFC 8996 lineage; 3DES never standardized — expired draft — and upstream #31 makes it a silent-data-loss trap on the target stack; zero in-repo usage)
+- [x] **Swap core behind a feature flag, default off (GH #72)** — poll + trap paths + sink, v3 USM crypto matrix via tsmp; MIB compile/resolve via tsmi JSON IR incl. the full serving/sync chain: dual-format corpus, `routers/mibs` JSON serving, `agent/assets` worker JSON sync, Docker `/mibs` layout
+- [x] **Worker-mode flag consistency (GH #72)** — helm values on manager + worker planes, startup mismatch warning, deployment.md note
+- [x] **Test hardening (GH #72)** — existing SNMP suite green unmodified (the flag-off proof); dual-stack decode fixtures (same BER bytes both stacks); env-gated in-process pysnmp-peer wire suite (catches the #28 defect class in CI); live kind verification incl. worker MIB sync → `docs/reviews/`
 
 ## v1.6.0 — Performance & Integrity (capacity-study follow-up)
 
@@ -210,7 +217,7 @@ review and all 11 release-gate checks green before tagging; dates follow gates.
 - [x] **V18-07 — lifecycle and deployment**: actual batch cancellation, observable asynchronous stop/update/restart/delete, main-thread SIGTERM supervision, authenticated worker drain, one global deadline, persistent worker journal/DLQ storage, internal DNS reachable when unready, and StatefulSet upgrade/rollback rehearsal — landed; drain lifecycle + chart journal storage + unready-DNS fix + drain-first upgrade/rollback rehearsal executed live ([record](reviews/v1.8.0-v18-07-upgrade-rollback-rehearsal.md), which also caught and fixed two live chart bugs: nil-safe `--reuse-values` upgrade, and the manual-mount validation record)
 - [x] **V18-08 — capacity and control-plane efficiency**: worker-enforced slots plus atomic manager reservations, fair placement, queue/buffer and transform-state byte/cardinality budgets, bounded management executor, network calls outside lifecycle locks/event loop, pooled RPC/REST/sink execution, and worker-level batched telemetry — landed (fair placement, transform/queue budgets with 503 mapping, bounded executor, pooled REST/VES + worker RPC clients, pooled parallel-sink executor, one batched stats snapshot per worker per interval with manager-side batch acceptance)
 - [x] **V18-09 — operational contracts**: visible partial/unknown/stopping/draining/capacity states, per-sink disposition, bounded errors/stats and safe audit retention; API/UI/browser fixtures, configuration/schema, Helm and migration documentation — landed (202 trigger receipts + operations view, PARTIAL/aborted as first-class statuses, drain runbook in the UI with fixtures, delivery.contract + env/MySQL-unsupported docs; remaining UI polish tracked in the release checklist)
-- [x] **V18-10 — fault and performance campaign**: real manager/worker/broker/ClickHouse failure oracles, process SIGTERM, partition/uncertain ownership, SQLite/PostgreSQL migration, overload and sustained durable-throughput measurements; all R1–R16 have recorded evidence — campaign complete (docs/reviews/v1.8.0-v18-10-campaign-evidence.md): Kafka/AMQP/ClickHouse live-broker gates (threaded Kafka frontiers broker-proven, strict stopgap removed; live AMQP shutdown defect found+fixed), durable-contract cells measured (commit() barrier 1.06×, synchronous-durable 5.7× vs pipelined), all fault oracles recorded; release gate + independent full-diff review remain as release-prep
+- [x] **V18-10 — fault and performance campaign**: real manager/worker/broker/ClickHouse failure oracles, process SIGTERM, partition/uncertain ownership, SQLite/PostgreSQL migration, overload and sustained durable-throughput measurements; all R1–R16 have recorded evidence — campaign complete (docs/reviews/v1.8.0-v18-10-campaign-evidence.md): Kafka/AMQP/ClickHouse live-broker gates (threaded Kafka frontiers broker-proven, strict stopgap removed; live AMQP shutdown defect found+fixed), durable-contract cells measured (commit() barrier 1.06×, synchronous-durable 5.7× vs pipelined), all fault oracles recorded; release gate + independent full-diff review completed (see release closure below)
 - [x] **Release closure**: independent review of the full implementation diff and self-review in the release PR; version alignment/changelog; all 11 mandatory release checks green before tagging `v1.8.0` — independent review APPROVE WITH FIXES, four should-fixes applied before the tag ([record](reviews/v1.8.0-full-diff-independent-review.md)); gate 11/11 at `9f99e47` (flake ceilings pinned after the two gate-flake tests were identified); PR #90 merged (`4b6f34f`), tag `v1.8.0` on the merge commit, release workflow all green; post-merge CI fixed (kafka frontier tests without the extra `72fd0d5`, Playwright installer pin `d46cfd9`)
 
 The critical path is delivery → durable ownership/journal → recovery/drain →
@@ -231,6 +238,7 @@ contracts. No universal exactly-once or blind partition-failover guarantee.
 - [ ] **H181-04 — targeted test gaps (GH #70)** — modal-navigation promise cancellation and external-plugin schema-description guard boundary
 - [ ] **H181-05 — internal-auth counters (GH #73)** — bounded labels, warn misses/enforce rejects, probe exemptions and enforce/rollback runbook; deployment flip remains an operations task
 - [ ] **H181-06 — tracking reconciliation** — distinguish shipped portions and remaining requirements in GH #41/#42/#58–#62/#65/#68/#71 and stale local release records
+- [ ] **H181-07 — short-batch recovery race (GH #91)** — preserve authoritative completion results when reconciliation overlaps dispatch/callback delivery; prove genuine lost-run recovery remains bounded
 - [ ] **Release closure** — linked crash/replay evidence, self-review, independent full-diff review and all 11 release checks green
 
 ## v1.8.2 — Connector Correctness Under Failure (planned)
@@ -245,6 +253,7 @@ contracts. No universal exactly-once or blind partition-failover guarantee.
 - [ ] **H182-04 — SNMP traps (remaining GH #65)** — community verification and visible v3 privacy failures; retain valid-trap/Counter64 behavior
 - [ ] **H182-05 — file finalization** — verify historical threaded stream/staged-batch residuals and the PGW ASN.1 memory case; fix reproduced violations before destructive source actions
 - [ ] **H182-06 — evidence and issue scope** — deterministic regressions plus required live Kafka/AMQP/ClickHouse/SNMP/file evidence; already-covered and deferred requirements recorded separately
+- [ ] **H182-07 — ten-IP SNMP polling pilot** — approved scope exception: one pipeline, bounded concurrent targets, device attribution, isolated failures and truthful results; five-minute demo with SFTP readback, preserving single-host YAML
 - [ ] **Release closure** — selected live faults repeated at least three times, reconciled output/acknowledgement evidence, independent full-diff review and all release checks green
 
 ## v1.8.3 — Operational Confidence & Bounded Capacity (planned)
@@ -259,6 +268,7 @@ contracts. No universal exactly-once or blind partition-failover guarantee.
 - [ ] **H183-04 — per-sink accounting (scoped GH #62)** — close verified omissions in existing API/UI disposition views without adding new operations pages
 - [ ] **H183-05 — accelerated HTTP overload** — kind verification of both runtime paths, accepted/refused inputs and sink completion before fleet-wide enablement
 - [ ] **H183-06 — controlled measurements** — Parquet re-measure, saturation-capable Kafka producer, clean scheduler and accurate pod/latency/accounting telemetry
+- [ ] **Multi-target SNMP pilot follow-up** — soak/fault verification of the v1.8.2 ten-IP pilot and measured capacity; a 100-IP commitment requires evidence and separate scope admission
 - [ ] **Release closure** — campaign records, recovery-budget compliance, independent full-diff review and all release checks green
 
 ## v1.9.0 (planned)

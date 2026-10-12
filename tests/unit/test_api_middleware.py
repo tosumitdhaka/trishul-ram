@@ -418,3 +418,66 @@ class TestAppFactory:
         assert any(
             "TRAM_INTERNAL_AUTH_MODE=enforce" in rec.getMessage() for rec in caplog.records
         )
+
+
+class TestInternalAuthMetrics:
+    """Pin exported names, bounded labels and one decision per checked request."""
+
+    def test_decisions_and_exemptions(self, monkeypatch):
+        from prometheus_client import REGISTRY
+
+        from tram.metrics.registry import INTERNAL_AUTH_TOTAL
+
+        assert INTERNAL_AUTH_TOTAL._labelnames == ("mode", "verdict", "action")
+        for prefix in ("/api/internal/", "/agent/"):
+            for mode in ("warn", "enforce", "off"):
+                monkeypatch.setenv("TRAM_API_KEY", "secret")
+                monkeypatch.setenv("TRAM_AUTH_USERS", "")
+                monkeypatch.setenv("TRAM_INTERNAL_AUTH_MODE", mode)
+                app = _make_base_app()
+                app.add_api_route(prefix + "test", lambda: {"ok": True})
+                app.add_middleware(APIKeyMiddleware, internal_prefixes=(prefix,))
+                client = TestClient(app)
+                for key, verdict in ((None, "missing"), ("wrong", "invalid"), ("secret", "valid")):
+                    action = "allowed" if verdict == "valid" else (
+                        "rejected" if mode == "enforce" else "warned"
+                    )
+                    labels = {"mode": mode, "verdict": verdict, "action": action}
+                    before = REGISTRY.get_sample_value("tram_internal_auth_total", labels) or 0
+                    response = client.get(prefix + "test", headers={"X-API-Key": key} if key else {})
+                    assert response.status_code == (
+                        401 if mode == "enforce" and verdict != "valid" else 200
+                    )
+                    after = REGISTRY.get_sample_value("tram_internal_auth_total", labels) or 0
+                    assert after - before == (0 if mode == "off" else 1)
+                with patch("tram.api.middleware.INTERNAL_AUTH_TOTAL") as metric:
+                    for path in ("/api/health", "/api/ready", "/agent/health", "/metrics"):
+                        assert client.get(path).status_code in (200, 404)
+                    client.get("/api/data")
+                    metric.labels.assert_not_called()
+
+    def test_bearer_fallback_and_disabled_auth(self, monkeypatch):
+        from prometheus_client import REGISTRY
+
+        for mode in ("warn", "enforce", "off"):
+            client = _client_with_auth(monkeypatch, auth_users="admin:pass", mode=mode)
+            for header, verdict in ((None, "missing"), ("Basic wrong", "invalid"),
+                                    ("Bearer wrong", "invalid"), ("Bearer good", "valid")):
+                action = "allowed" if verdict == "valid" else (
+                    "rejected" if mode == "enforce" else "warned"
+                )
+                labels = {"mode": mode, "verdict": verdict, "action": action}
+                before = REGISTRY.get_sample_value("tram_internal_auth_total", labels) or 0
+                with patch("tram.api.auth.verify_token", side_effect=lambda token: token == "good"):
+                    response = client.get(
+                        "/api/internal/test", headers={"Authorization": header} if header else {}
+                    )
+                assert response.status_code == (
+                    401 if mode == "enforce" and verdict != "valid" else 200
+                )
+                after = REGISTRY.get_sample_value("tram_internal_auth_total", labels) or 0
+                assert after - before == (0 if mode == "off" else 1)
+        client = _client_with_auth(monkeypatch, mode="enforce")
+        with patch("tram.api.middleware.INTERNAL_AUTH_TOTAL") as metric:
+            assert client.get("/api/internal/test").status_code == 200
+            metric.labels.assert_not_called()

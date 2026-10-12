@@ -600,6 +600,44 @@ Per-pipeline aggregated stats for the last hour (records in/out, error rate, avg
 
 ---
 
+## Worker protocol capabilities (v1.8.x)
+
+`POST /agent/handshake` reports protocol `1.8` and the capabilities `fencing`,
+`commit_receipts`, `durable_completion`, `query_replay`, and `drain`.
+`fencing` means that authorized admission validates the worker session, signed
+start token, session epoch and clock watermark; the manager checks attempt,
+generation identity on completion and stats. It does not promise a
+remote worker revocation or tombstone installation endpoint. Journal tombstones
+are a local admission guard, and `/agent/stop` cooperatively signals the active
+run rather than installing a durable revocation. A stop does not fence sink
+side effects from a still-draining executor.
+
+The capability names and protocol version remain compatible with v1.8.0 peers.
+The manager obtains session secrets through the handshake and preserves its
+legacy admission bridge for older peers. No peer must negotiate a revocation
+capability to dispatch or replay a result.
+
+Worker completion callbacks and journal replay preserve `dlq_count`,
+`records_failed`, `dlq_succeeded`, `dlq_failed`, per-sink `disposition`, and
+`spool` accounting alongside the record and byte totals. These fields are
+optional for older workers; missing counters default to zero and missing maps
+to empty maps. History persists this accounting in the same insert as the run result.
+
+Worker completion and its `run-complete` outbox entry commit atomically. At boot,
+the worker also respools pre-existing unacknowledged completions with no replay
+entry, retaining the original result and retry state. Delivery retries continue
+until the manager acknowledges, without requiring a manager restart. Already
+acknowledged results remain subject to the existing audit retention policy.
+
+Batch reconciliation suppresses loss recovery while its dispatch RPC is in
+flight. For an accepted lease missing from the active-run list, it queries the
+worker journal before finalizing loss, including the synthetic legacy key when
+the admission bridge was used. Journal queries retain their ten-second request
+deadline (the bridge fallback can require two queries). A valid completion is
+replayed through the existing identity-checked callback; active evidence retains
+the lease. Unavailable/no-query peers retain the existing worker-loss policy;
+this change does not infer delivery success without terminal evidence.
+
 ## Authentication (v1.0.0)
 
 When `TRAM_API_KEY` is set (or `apiKey` in Helm values), all protected `/api/*` requests must include the key via the `X-API-Key` header:

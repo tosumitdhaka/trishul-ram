@@ -5,6 +5,23 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ---
 
+## [1.8.1] - 2026-10-12
+
+### Fixed
+- Worker completion and its replayable outbox event now commit atomically. Worker boot restores missing outbox events for pre-existing unacknowledged completions without changing their recorded results or existing retry state.
+- Short batch runs are protected while dispatch registers their lease. Recovery consults the worker completion journal before declaring a tracked run lost and fences stale probes against newer leases (GH #91).
+- Pipeline lifecycle routers use a supported controller interface with unchanged operation responses.
+
+### Added
+- Bounded internal-auth decision counters for manager and worker warn/enforce modes, with missing/invalid credential distinctions and an observation/rollback runbook (GH #73). The default remains `warn`.
+- Browser regression asserts that navigation resolves the pending confirmation promise as cancellation; schema-description coverage explicitly documents its built-in-only boundary (GH #70).
+
+### Documentation
+- Worker `fencing` capability describes implemented session/token and manager identity checks; remote worker revocation is not advertised as supported.
+- Reconcile historical release/issue scope and record the agreed ten-IP concurrent SNMP polling pilot for v1.8.2, followed by sustained-capacity verification in v1.8.3.
+
+---
+
 ## [1.8.0] - 2026-10-09
 
 ### Breaking changes
@@ -1763,7 +1780,8 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 ---
 
 <!-- Comparison links -->
-[Unreleased]: https://github.com/tosumitdhaka/trishul-ram/compare/v1.4.0...HEAD
+[Unreleased]: https://github.com/tosumitdhaka/trishul-ram/compare/v1.8.1...HEAD
+[1.8.1]: https://github.com/tosumitdhaka/trishul-ram/compare/v1.8.0...v1.8.1
 [1.4.0]: https://github.com/tosumitdhaka/trishul-ram/compare/v1.3.3...v1.4.0
 [1.3.3]: https://github.com/tosumitdhaka/trishul-ram/compare/v1.3.2...v1.3.3
 [1.3.2]: https://github.com/tosumitdhaka/trishul-ram/compare/v1.3.1...v1.3.2
