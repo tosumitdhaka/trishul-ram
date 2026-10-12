@@ -1,6 +1,6 @@
 # AI pipeline generation reality review
 
-Scope: 1.8.2 hardening work; no release publication. Reviewed 2026-10-12 against
+Scope: 1.8.2 hardening work; historical dev verification before release publication. Reviewed 2026-10-12 against
 deployed manager source candidate `604c1bd`, schema identity `a59d0f62a810`.
 
 Six live generation requests used the configured Bedrock provider and
@@ -82,7 +82,7 @@ independently passed. That baseline probe made no application fixes or release m
 
 ## Implementation and verification
 
-The unreleased patch uses the server registry as the authoritative inventory and
+The patch uses the server registry as the authoritative inventory and
 a shared descriptor for UI and AI schemas, including nested fields, enum choices,
 defaults and descriptions. Generated YAML must pass configuration loading, real
 constructor/wiring checks and lint before `valid: true`. These checks do not
@@ -120,7 +120,8 @@ identity: `a41e45651d38`; runtime-module SHA256:
 The local image derives from the existing dependency-complete dev manager and
 changes four Python modules; existing UI assets remain. Only the manager was
 rolled out. The existing SNMP-to-SFTP demo remains enabled on its 300-second
-schedule. No public image, version or tag was published.
+schedule. No public image, version or tag was published during this dev verification.
+Subsequent release status is recorded in the [v1.8.2 release review](v1.8.2-release-review.md).
 
 Final affected suites: **327 passed**. Ruff and `git diff --check` passed.
 The final backend snapshot, including the real aggregation regression, passed

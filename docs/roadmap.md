@@ -24,8 +24,8 @@ proposal. [CSV export](ideas/backlog-resolution-targets-2026-10-10.csv).
 
 | Release | Objective | Plan |
 |---|---|---|
-| v1.8.1 | Journal integrity, truthful capabilities and security readiness | [Scoped plan](plans/v1.8.1-hardening-plan.md) |
-| v1.8.2 | UI and AI pipeline correctness | [Scoped plan](plans/v1.8.2-ui-ai-correctness-plan.md) |
+| v1.8.1 (unpublished; included in 1.8.2) | Journal integrity, truthful capabilities and security readiness | [Scoped plan](plans/v1.8.1-hardening-plan.md) |
+| v1.8.2 (released) | UI and AI pipeline correctness | [Scoped plan](plans/v1.8.2-ui-ai-correctness-plan.md) |
 | v1.8.3 | Existing connector correctness under failure | [Scoped plan](plans/v1.8.3-connector-hardening-plan.md) |
 | v1.8.4 | Recovery, bounded capacity and operational confidence | [Scoped plan](plans/v1.8.4-operational-confidence-plan.md) |
 
@@ -245,7 +245,7 @@ contracts. No universal exactly-once or blind partition-failover guarantee.
 - [ ] **H181-07 — short-batch recovery race (GH #91)** — preserve authoritative completion results when reconciliation overlaps dispatch/callback delivery; prove genuine lost-run recovery remains bounded
 - [ ] **Release closure** — linked crash/replay evidence, self-review, independent full-diff review and all 11 release checks green
 
-## v1.8.2 — UI and AI Pipeline Correctness
+## v1.8.2 — UI and AI Pipeline Correctness (released)
 
 > Full plan: [v1.8.2 UI and AI correctness](plans/v1.8.2-ui-ai-correctness-plan.md).
 > Baseline: published v1.8.0 plus prepared, unpublished v1.8.1 recovery/auth fixes.
@@ -253,7 +253,7 @@ contracts. No universal exactly-once or blind partition-failover guarantee.
 
 - [x] **H182-08 — AI pipeline correctness** — implemented and dev-verified 2026-10-12: repaired schema omissions and incorrect cron guidance, added source-record and transform semantics, and validated generated wiring before reporting success; six repeated live generation probes, deployed dry-runs and fixture behavior checks pass ([review](reviews/ai-pipeline-reality-review.md)). The separate wizard/editor toolbar patch also belongs to this 1.8.2 scope.
 - [x] **Wizard/editor toolbar correction** — included with the existing authoring workflow fixes.
-- [ ] **Release closure** — self-review, independent full-diff review and all 11 release checks green before tagging.
+- [x] **Release closure** — self-review and independent full-diff review approved; all 11 release checks and PR CI green. [PR #93](https://github.com/tosumitdhaka/trishul-ram/pull/93) merged; `v1.8.2` tagged on `f14b560`. [Release workflow](https://github.com/tosumitdhaka/trishul-ram/actions/runs/38265973209) succeeded; all three image tags and the Helm chart independently verified. [Release notes](https://github.com/tosumitdhaka/trishul-ram/releases/tag/v1.8.2).
 
 ## v1.8.3 — Connector Correctness Under Failure (planned)
 
@@ -402,6 +402,7 @@ assigned to those packages.
 
 | Version | Theme |
 |---------|-------|
+| v1.8.2 | UI wizard/editor entrypoints and AI pipeline correctness; includes unpublished 1.8.1 recovery/auth fixes; full gate 11/11, independent full-diff review approved, published images/chart verified — PR #93, tag `v1.8.2` |
 | v1.8.0 | Reliability & bounded capacity (all R1–R16 resolved, evidence ledger in `reviews/v1.8.0-v18-10-campaign-evidence.md`): strict/legacy delivery contracts with per-sink confirmation tiers, ack frontiers (Kafka epochs + threaded per-partition frontiers, AMQP tag retention) and PARTIAL accounting; manager execution ledger (conditional-UPDATE claims, identity-checked completions, boot adoption) + worker SQLite journal with HMAC dispatch authorization and at-least-once outbox replay (persistent-mount validated live on kind, boot adoption proven across a mid-run kill); atomic checkpointing (strict fail-closed, batch-only until stream attempt identity); drain lifecycle with one `TRAM_DRAIN_TIMEOUT_S` deadline + chart journal persistence (per-replica subpaths on shared claims) + live upgrade/rollback rehearsal; efficiency batch (fair placement, admission/queue/transform-state budgets, pooled RPC/REST sink clients, batched telemetry); UI PARTIAL/aborted/stopping/draining surfaces + operations audit; `TRAM_SNMP_STACK` default flipped to `trishul` (legacy escape hatch through v1.8.x, removal scheduled v1.9.0); independent full-diff review APPROVE WITH FIXES, all pre-tag fixes applied — PR #90, tag `v1.8.0` |
 | v1.7.0 | Measured performance pilots (reviewed plan, default-off opt-in): `TRAM_HTTP_ACCELERATED` uvloop/httptools runtime with explicit asyncio/h11 baseline pin and startup runtime reporting (kind 500m: webhook p95 3.05→1.76 ms −42%, p50 −30%, plateau unchanged — ≥25% not met, bottleneck downstream of HTTP parsing) + `protobuf_passthrough` validated same-schema batch transport (registration eligibility incl. `TRAM_SCHEMA_REGISTRY_URL` env default, per-frame validation, original-byte preservation, runtime fallback; kind 500m: 333,333 rec/s = 30× the fresh v1.6.1 anchor 11,111, byte-identical, peak RSS 151 vs 247 Mi); evidence in `scripts/perf/results/v170-*`; independent review APPROVE WITH FIXES (all pre-tag fixes applied) — PR #89, tag `v1.7.0` |
 | v1.6.1 | Targeted performance follow-up: ISO-first timestamp parsing (byte-identical output, 176-case golden corpus pinned) + compile-once sink conditions (thread-local evaluators, empty-batch parity) + keyless in-cap Kafka fast path (near-cap batches sized by actual payload length; acks/retry/at-least-once unchanged); kind A/B evidence on version images at equal CPU (t4 2.39×, t6 3.94×, kafka keyed control 0.97×, keyless 0.95× — ack-latency-bound, analysis in `scripts/perf/results/v161-ab-campaign/RESULTS.md`) — PR #88, tag `v1.6.1` |
