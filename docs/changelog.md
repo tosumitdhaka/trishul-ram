@@ -8,6 +8,7 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 ## [1.8.1] - 2026-10-12
 
 ### Fixed
+- Manager health polling refreshes worker authorization after a process restart even when every health probe succeeds. Workers with a changed session remain unavailable until the handshake succeeds.
 - Worker completion and its replayable outbox event now commit atomically. Worker boot restores missing outbox events for pre-existing unacknowledged completions without changing their recorded results or existing retry state.
 - Short batch runs are protected while dispatch registers their lease. Recovery consults the worker completion journal before declaring a tracked run lost and fences stale probes against newer leases (GH #91).
 - Pipeline lifecycle routers use a supported controller interface with unchanged operation responses.

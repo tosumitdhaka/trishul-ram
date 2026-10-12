@@ -910,6 +910,9 @@ class TestHandshake:
         assert body["session_id"] == app.state.worker_session
         assert body["session_id"].startswith("w0-")
         assert body["worker_id"] == "w0"
+        health = client.get("/agent/health").json()
+        assert health["session_id"] == body["session_id"]
+        assert "session_secret" not in health
         assert body["slot_capacity"] == {"batch": 2, "stream": 4}
         assert body["journal_health"]["state"] == "ok"
         # Secret state: env bootstrap became the retained previous.

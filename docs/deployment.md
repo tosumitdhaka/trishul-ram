@@ -393,6 +393,15 @@ the `apiKey` Helm value or `envSecret.TRAM_API_KEY`, and set `TRAM_INTERNAL_AUTH
 after the rollout window. Workers automatically receive the same key from the chart
 (`worker-statefulset.yaml` injects `.Values.apiKey` as `TRAM_API_KEY`).
 
+Worker health replies include a nonsecret `session_id` identifying the current process.
+The manager refreshes authorization when that identity changes, including restarts that
+remain healthy between polls. A changed worker session stays unavailable for dispatch
+until its handshake succeeds; older workers without this health field retain the
+existing compatibility behavior.
+If the worker restarts after the manager's local token mint, dispatch can still
+fail cleanly; this refresh does not automatically replay that dispatch or downgrade
+it to legacy admission.
+
 **Production posture (v1.8.0 — expanded internal surface):** v1.8 adds state-changing
 internal endpoints (the checkpoint endpoint writes `delivery_checkpoints` + `transform_state`;
 the identity-checked run-complete terminalizes ledger attempts), and the worker

@@ -1296,6 +1296,7 @@ def create_worker_app(
             "ok": ingress_alive,
             "worker_id": worker_id,
             "active_runs": len(active),
+            "session_id": worker_session,
             "running_pipelines": list({r.pipeline_name for r in active}),
             "ingress_up": ingress_alive,
         }
