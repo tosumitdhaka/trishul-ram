@@ -855,12 +855,31 @@ Generate, explain, fix, or modify pipeline YAML. Returns `503` when AI is not
 configured, `502` when the provider call fails, and `400` for an unknown mode.
 
 For `generate`/`fix`/`modify`, the response carries `valid` and `issues` in
-addition to the YAML: the model output is validated server-side with the same
-`yaml.safe_load` + `load_pipeline_from_yaml` check the dry-run endpoint uses.
-`valid` is `false` when the YAML fails to parse/validate (errors in `issues`),
+addition to the YAML: the model output is validated server-side against the
+configuration models, dry-run wiring (including transform construction
+and filename tokens), and lint errors. `valid` is `false` when any of these
+checks fail (errors in `issues`),
 or when the provider reported output truncation (`stop_reason`/`finish_reason`
 of `max_tokens`/`length` — a warning is appended to `issues`). The raw YAML is
 always returned so the editor can still show it.
+
+These modes allow at most one additional provider call when validation fails or
+output is truncated, with a 4096-token output budget per call. The retry includes
+a safely redacted previous candidate and validation feedback; malformed output
+that cannot be safely redacted is omitted. Responses also include `retried` and
+`attempts`. Passing validation establishes configuration and wiring validity;
+it does not prove connectivity, data shape or compliance with every user intent.
+Validation does not connect to data sources or write sink records. Constructors
+may read configured local assets, such as an enrichment lookup file, as in the
+existing dry-run endpoint.
+
+Schema context comes from the server's registered plugins and configuration
+models, including enum choices, nested definitions and field descriptions.
+Client-supplied plugin inventories cannot hide available plugin schemas.
+Task guidance covers matching items, null defaults, counting records, SNMP MIB
+readiness and aggregation placement. Top-level transforms run per record;
+sink transforms operate on the surviving parsed chunk. Sink aggregation therefore
+groups within each chunk/file, not across an entire multi-file run.
 
 For `explain`/`fix`/`modify`, secret fields in the incoming YAML (per the
 schema metadata: field names containing `password`/`token`/`secret`) are masked
@@ -875,7 +894,7 @@ Create a new pipeline from a description.
 |-------|-------------|
 | `mode` | `"generate"` |
 | `prompt` | Natural-language description of the pipeline |
-| `plugins` | Optional `{sources, sinks, transforms, serializers}` type lists to scope the schema context |
+| `plugins` | Optional legacy inventory accepted for compatibility; availability is resolved server-side |
 
 ```bash
 curl -X POST http://localhost:8765/api/ai/suggest \

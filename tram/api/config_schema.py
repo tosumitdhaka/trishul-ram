@@ -2,14 +2,16 @@
 
 from __future__ import annotations
 
-import re
+import json
+import types as _types
 import typing
 from typing import get_args, get_origin
 
+from pydantic import BaseModel
 from pydantic_core import PydanticUndefined
 
-# Fields that appear on every model and carry no connector-specific meaning
-_SKIP_FIELDS = {"type", "condition", "transforms", "serializer_out"}
+# Sink plumbing has dedicated UI controls and is documented separately for AI.
+_SINK_COMMON_FIELDS = {"condition", "transforms", "serializer_out"}
 
 # Fields that are internal plumbing injected by the executor at runtime
 _INTERNAL_PREFIX = "_"
@@ -24,7 +26,7 @@ def _type_name(annotation) -> str:
     """Return a compact human-readable type string for a Pydantic field annotation."""
     origin = get_origin(annotation)
     args = get_args(annotation)
-    union_type = getattr(typing, "UnionType", None)
+    union_type = _types.UnionType
 
     if origin is typing.Union or (
         union_type is not None and isinstance(annotation, union_type)
@@ -43,59 +45,47 @@ def _type_name(annotation) -> str:
         v = _type_name(args[1]) if len(args) > 1 else "any"
         return f"dict[{k}, {v}]"
 
+    if origin is typing.Literal:
+        return " | ".join(repr(a) for a in args)
+
     if hasattr(annotation, "__name__"):
         name = annotation.__name__
         return {"str": "str", "int": "int", "float": "float", "bool": "bool"}.get(name, name)
 
-    if origin is typing.Literal:
-        return str(args[0]) if len(args) == 1 else "|".join(str(a) for a in args)
-
     return str(annotation)
 
 
-def _model_to_schema_lines(model_cls) -> list[str]:
+def _descriptors_to_schema_lines(fields: list[dict], indent: int = 2) -> list[str]:
+    """Render the same metadata consumed by the UI, including nested config shapes."""
     lines = []
-    try:
-        fields = model_cls.model_fields
-    except AttributeError:
-        return lines
-
-    for name, field_info in fields.items():
-        if name in _SKIP_FIELDS or name.startswith(_INTERNAL_PREFIX):
-            continue
-
-        required = field_info.is_required()
-        default = field_info.default
-        annotation = field_info.annotation
-
-        type_str = _type_name(annotation) if annotation is not None else "any"
-        type_str = re.sub(r"SerializerConfig \| None", "SerializerConfig", type_str)
-
-        if required:
-            lines.append(f"  {name}: {type_str}  # required")
-        else:
-            if default is None:
-                lines.append(f"  {name}: {type_str}  # optional")
-            elif isinstance(default, bool):
-                lines.append(f"  {name}: {type_str} = {str(default).lower()}")
-            elif isinstance(default, (int, float)):
-                lines.append(f"  {name}: {type_str} = {default}")
-            elif isinstance(default, str) and default:
-                lines.append(f"  {name}: {type_str} = \"{default}\"")
-            elif isinstance(default, list) and not default:
-                pass
-            elif isinstance(default, str) and not default:
-                pass
-            else:
-                lines.append(f"  {name}: {type_str}")
-
+    for field in fields:
+        default = field["default"]
+        status = "required" if field["required"] else "optional"
+        value = "" if default is None else f" = {json.dumps(default)}"
+        description = field.get("description", "")
+        lines.append(
+            f"{' ' * indent}{field['name']}: {field['type']}{value}"
+            f"  # {status}" + (f"; {description}" if description else "")
+        )
+        for model_name, children in field.get("nested_models", {}).items():
+            lines.append(f"{' ' * (indent + 2)}{model_name}:")
+            lines.extend(_descriptors_to_schema_lines(children, indent + 4))
     return lines
+
+
+def _model_to_schema_lines(model_cls, category: str | None = None) -> list[str]:
+    return _descriptors_to_schema_lines(_model_to_field_descriptors(model_cls, category))
+
+
+def _nested_models(annotation) -> list[type[BaseModel]]:
+    if isinstance(annotation, type) and issubclass(annotation, BaseModel):
+        return [annotation]
+    return [model for arg in get_args(annotation) for model in _nested_models(arg)]
 
 
 def _unwrap_optional(annotation):
     origin = get_origin(annotation)
     args = get_args(annotation)
-    import types as _types
 
     if origin is typing.Union or (
         isinstance(annotation, _types.UnionType)
@@ -142,7 +132,9 @@ def _serialize_default(value):
     return str(value)
 
 
-def _model_to_field_descriptors(model_cls) -> list[dict]:
+def _model_to_field_descriptors(
+    model_cls, category: str | None = None, *, depth: int = 0, seen: tuple = ()
+) -> list[dict]:
     fields = []
     try:
         model_fields = model_cls.model_fields
@@ -150,10 +142,15 @@ def _model_to_field_descriptors(model_cls) -> list[dict]:
         return fields
 
     for name, field_info in model_fields.items():
-        if name in _SKIP_FIELDS or name.startswith(_INTERNAL_PREFIX):
+        if (depth == 0 and name == "type") or name.startswith(_INTERNAL_PREFIX):
+            continue
+        if depth == 0 and category == "sink" and name in _SINK_COMMON_FIELDS:
             continue
         annotation = field_info.annotation
         kind, choices = _field_kind(annotation)
+        default = field_info.default
+        if field_info.default_factory is not None:
+            default = field_info.get_default(call_default_factory=True)
         fields.append(
             {
                 "name": name,
@@ -161,11 +158,23 @@ def _model_to_field_descriptors(model_cls) -> list[dict]:
                 "kind": kind,
                 "choices": choices or [],
                 "required": field_info.is_required(),
-                "default": _serialize_default(field_info.default),
+                "default": _serialize_default(default),
                 "secret": any(token in name for token in SECRET_NAME_TOKENS),
                 "multiline": name in {"query", "body"} or name.endswith("_template"),
             }
         )
+        if depth < 3:
+            nested = {
+                model.__name__: _model_to_field_descriptors(
+                    model, category, depth=depth + 1, seen=(*seen, model_cls)
+                )
+                for model in _nested_models(annotation)
+                if model not in (*seen, model_cls)
+            }
+            if nested:
+                fields[-1]["nested_models"] = nested
+        if field_info.description:
+            fields[-1]["description"] = field_info.description
     return fields
 
 
@@ -178,6 +187,7 @@ def _model_to_field_descriptors(model_cls) -> list[dict]:
 # (category, type, field).
 
 _COMMON_FIELD_DESCRIPTIONS: dict[str, str] = {
+    "condition": "Boolean simpleeval expression evaluated against each record",
     "host": "Server hostname or IP address",
     "port": "Server port",
     "username": "Authentication username",
@@ -242,7 +252,7 @@ _COMMON_FIELD_DESCRIPTIONS: dict[str, str] = {
     "id_field": "Record field used as the document ID",
     "index": "Index name (supports {pipeline}, {timestamp}, {YYYY}, {MM}, {DD} tokens)",
     "filename_template": "Output filename template; tokens: {pipeline}, {timestamp}, {epoch}, {part}/{index}, {run_id}, {source_filename}, {source_stem}, {field.*}",
-    "file_mode": "Output file mode (single or rolling)",
+    "file_mode": "Output file mode (append or single)",
     "max_records": "Roll to a new file part when the next write would exceed this record count",
     "max_time": "Roll to a new file part after this many seconds",
     "max_bytes": "Roll to a new file part when the byte count would exceed this",
@@ -425,7 +435,7 @@ _TYPE_FIELD_DESCRIPTIONS: dict[tuple[str, str, str], str] = {
     ("source", "elasticsearch", "scroll"): "Scroll context duration for deep pagination (e.g. 1m)",
     ("source", "ftp", "remote_path"): "Remote directory to read from",
     ("source", "gnmi", "subscriptions"): "gNMI subscription paths to stream",
-    ("source", "gnmi", "subscription_mode"): "gNMI subscription mode (STREAM, ONCE, or POLL)",
+    ("source", "gnmi", "subscription_mode"): "gNMI subscription mode (stream, once, or poll)",
     ("source", "influxdb", "query"): "Flux query string",
     ("source", "local", "path"): "Directory to scan for files",
     ("source", "nats", "reconnect_time_wait"): "Seconds to wait between reconnect attempts",
@@ -514,6 +524,61 @@ _TYPE_FIELD_DESCRIPTIONS: dict[tuple[str, str, str], str] = {
 }
 
 
+# Nested rule shapes have their own meanings (notably selection output direction).
+_NESTED_FIELD_DESCRIPTIONS: dict[str, dict[str, str]] = {
+    "VarbindConfig": {
+        "oid": "OID emitted in the trap", "value_field": "Record field supplying the value",
+        "type": "SNMP value type (e.g. OctetString or Integer32)",
+    },
+    "CoalesceFieldRuleConfig": {
+        "sources": "Candidate source paths in priority order",
+        "default": "Fallback when every source is empty",
+        "empty_values": "Values treated as empty when choosing a source",
+    },
+    "SelectFromListSelectionConfig": {
+        "name": "Optional selection label for errors",
+        "match": "Exact item key/value match; mutually exclusive with first_item",
+        "first_item": "Select the first item; mutually exclusive with match",
+        "output": "Item source path to output field name mapping",
+    },
+    "ProjectFieldConfig": {
+        "source": "Source path; mutually exclusive with source_any",
+        "source_any": "First existing source path; mutually exclusive with source",
+        "default": "Fallback for missing paths (existing null is preserved)",
+        "required": "Raise when no path exists and no default was supplied",
+    },
+    "JsonFlattenZipGroupConfig": {
+        "fields": "List source path to output field name mapping",
+        "strict": "Require equal list lengths",
+    },
+    "JsonFlattenChoiceUnwrapConfig": {
+        "paths": "Paths holding ASN.1 CHOICE values",
+        "mode": "keep preserves the CHOICE object; value unwraps it; both emits type and value",
+        "type_suffix": "Suffix for the discriminator output field",
+        "value_suffix": "Suffix for the value output field",
+    },
+    "HexDecodeOverrideConfig": {
+        "path": "Field path receiving this decoding override",
+        "decode_as": "Decoder override for this path",
+        "format": "Format override for this path",
+        "bit_length_field": "Record path containing the significant bit length",
+        "mapping": "Bit index to name mapping",
+        "output": "Emit names, indexes, or both",
+    },
+}
+
+
+def _apply_nested_descriptions(fields: list[dict]) -> None:
+    for field in fields:
+        for model_name, children in field.get("nested_models", {}).items():
+            descriptions = _NESTED_FIELD_DESCRIPTIONS.get(model_name, {})
+            for child in children:
+                description = child.get("description") or descriptions.get(child["name"])
+                if description:
+                    child["description"] = description
+            _apply_nested_descriptions(children)
+
+
 def _apply_field_descriptions() -> None:
     """Merge a ``description`` key into every SCHEMA_FIELDS field descriptor
     (A.1). Type-specific wording wins; shared fields fall back to the
@@ -522,10 +587,12 @@ def _apply_field_descriptions() -> None:
     missing: list[str] = []
     for category, types in SCHEMA_FIELDS.items():
         for type_name, fields in types.items():
+            _apply_nested_descriptions(fields)
             for field in fields:
                 key = (category, type_name, field["name"])
                 description = (
-                    _TYPE_FIELD_DESCRIPTIONS.get(key)
+                    field.get("description")
+                    or _TYPE_FIELD_DESCRIPTIONS.get(key)
                     or _COMMON_FIELD_DESCRIPTIONS.get(field["name"])
                 )
                 if not description:
@@ -555,7 +622,6 @@ SCHEMA_FIELDS: dict[str, dict[str, list[dict]]] = {
 
 def _iter_union_models(union_type) -> list:
     """Unwrap Annotated[A | B | C, ...] into a model list."""
-    import types as _types
 
     args = get_args(union_type)
     if not args:
@@ -577,6 +643,8 @@ def _build_schema_cache() -> None:
     except ImportError:
         return
 
+    from tram.models import pipeline
+
     for category, union_type in (
         ("source", SourceConfig),
         ("sink", SinkConfig),
@@ -584,18 +652,17 @@ def _build_schema_cache() -> None:
         ("transform", TransformConfig),
     ):
         for model_cls in _iter_union_models(union_type):
-            try:
-                ann = model_cls.model_fields["type"].annotation
-                type_args = get_args(ann)
-                type_name = type_args[0] if type_args else None
-                if not type_name:
-                    default = model_cls.model_fields["type"].default
-                    type_name = default if isinstance(default, str) else None
-                if type_name:
-                    SCHEMA_LINES[category][type_name] = _model_to_schema_lines(model_cls)
-                    SCHEMA_FIELDS[category][type_name] = _model_to_field_descriptors(model_cls)
-            except Exception:
-                pass
+            model_cls.model_rebuild(_types_namespace=vars(pipeline))
+            ann = model_cls.model_fields["type"].annotation
+            type_args = get_args(ann)
+            type_name = type_args[0] if type_args else None
+            if not type_name:
+                default = model_cls.model_fields["type"].default
+                type_name = default if isinstance(default, str) else None
+            if type_name:
+                SCHEMA_FIELDS[category][type_name] = _model_to_field_descriptors(
+                    model_cls, category
+                )
 
 
 def build_config_schema_payload() -> dict:
@@ -644,3 +711,6 @@ def schema_version() -> str:
 
 _build_schema_cache()
 _apply_field_descriptions()
+for _category, _models in SCHEMA_FIELDS.items():
+    for _name, _fields in _models.items():
+        SCHEMA_LINES[_category][_name] = _descriptors_to_schema_lines(_fields)

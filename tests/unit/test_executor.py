@@ -177,6 +177,37 @@ class TestPipelineExecutorDryRun:
         assert result["valid"] is False
         assert any("unknown_token" in issue for issue in result["issues"])
 
+    @pytest.mark.parametrize("failure", ["sink", "serializer"])
+    def test_partial_sink_construction_releases_clickhouse_resources(self, failure):
+        from tram.connectors.clickhouse.sink import ClickHouseSink
+
+        config = load_pipeline_from_yaml("""
+        name: partial-sinks
+        source: {type: local, path: /synthetic/input}
+        serializer_in: {type: json}
+        sinks:
+          - {type: clickhouse, table: valid_table}
+          - {type: clickhouse, table: invalid-table, serializer_out: {type: json}}
+        """)
+        built = []
+        with patch.object(
+            ClickHouseSink, "_schedule_flush", autospec=True, side_effect=built.append
+        ):
+            if failure == "serializer":
+                # The second sink's serializer fails before its sink is appended.
+                with patch(
+                    "tram.pipeline.executor.get_serializer", side_effect=RuntimeError("bad serializer")
+                ):
+                    with pytest.raises(RuntimeError, match="bad serializer"):
+                        PipelineExecutor()._build_sinks(config)
+            else:
+                result = PipelineExecutor().dry_run(config)
+                assert result["valid"] is False
+                assert any("invalid-table" in issue for issue in result["issues"])
+
+        assert len(built) == 1
+        assert built[0]._closed is True
+
     def test_dry_run_closes_built_sinks_and_source_on_success(self):
         """dry_run builds real sink instances (e.g. ClickHouse) — they must be
         closed so a per-request executor does not leak flush timers/connections."""

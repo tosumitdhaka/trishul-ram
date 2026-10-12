@@ -9,11 +9,13 @@ preserves earlier grouping decisions and links to the current release scope.
 
 ## Current priority — v1.8.x maturity and hardening
 
-Agreed 2026-10-10: take v1.8.1 → v1.8.2 → v1.8.3 in sequence, focusing on
-data integrity, failure recovery and sustained operational evidence. Scope and
-acceptance are in the three linked plans below; v1.8.1 implementation started
-on 2026-10-12. The same-day scope amendment admits GH #91 into v1.8.1 and a
-bounded ten-IP concurrent SNMP polling pilot into v1.8.2.
+Agreed 2026-10-10 and rescheduled 2026-10-12: take v1.8.1 → v1.8.2 →
+v1.8.3 → v1.8.4 in sequence. v1.8.2 contains the completed UI and AI pipeline
+corrections. All unfinished former v1.8.2 goals move to v1.8.3; the former
+v1.8.3 operational-confidence scope moves to v1.8.4. H182-01–07 become
+H183-01–07, former H183-01–06 become H184-01–06, and completed H182-08
+stays in v1.8.2. The prepared v1.8.1 fixes, including GH #91, are inherited
+by v1.8.2; v1.8.1 remains unpublished. The ten-IP SNMP pilot is now v1.8.3.
 The [2026-10-10 inventory](ideas/open-items-inventory-2026-10-10.md) tracks all
 90 originally collected items plus B091–B092, added 2026-10-12, with a
 planned-resolution field and release-package scope.
@@ -23,11 +25,12 @@ proposal. [CSV export](ideas/backlog-resolution-targets-2026-10-10.csv).
 | Release | Objective | Plan |
 |---|---|---|
 | v1.8.1 | Journal integrity, truthful capabilities and security readiness | [Scoped plan](plans/v1.8.1-hardening-plan.md) |
-| v1.8.2 | Existing connector correctness under failure | [Scoped plan](plans/v1.8.2-connector-hardening-plan.md) |
-| v1.8.3 | Recovery, bounded capacity and operational confidence | [Scoped plan](plans/v1.8.3-operational-confidence-plan.md) |
+| v1.8.2 | UI and AI pipeline correctness | [Scoped plan](plans/v1.8.2-ui-ai-correctness-plan.md) |
+| v1.8.3 | Existing connector correctness under failure | [Scoped plan](plans/v1.8.3-connector-hardening-plan.md) |
+| v1.8.4 | Recovery, bounded capacity and operational confidence | [Scoped plan](plans/v1.8.4-operational-confidence-plan.md) |
 
 New connectors, AI/authoring expansion, manager HA, RBAC, deeper queues and
-runtime redesign have explicit `TBD after v1.8.3` targets during this cycle. Broad issue umbrellas
+runtime redesign have explicit `TBD after v1.8.4` targets during this cycle. Broad issue umbrellas
 are only partially assigned: close delivered requirements with evidence and
 retain residual scope. Each release requires self-review, independent full-diff
 review and all 11 release-gate checks green before tagging; dates follow gates.
@@ -227,10 +230,11 @@ timing is gate-driven. Single-manager deployment, UTC/coalesced schedules, one
 pending manual run, and explicitly in-memory webhook 202 remain documented
 contracts. No universal exactly-once or blind partition-failover guarantee.
 
-## v1.8.1 — Journal Integrity & Security Readiness (planned)
+## v1.8.1 — Journal Integrity & Security Readiness (unpublished candidate)
 
 > Full plan: [v1.8.1 hardening](plans/v1.8.1-hardening-plan.md). Baseline: v1.8.0
-> plus main-branch CI fixes. Small patch scope; preserve existing contracts.
+> plus main-branch CI fixes. This candidate was not tagged; its prepared fixes
+> are included in v1.8.2. The original checklist below is retained as planning history.
 
 - [ ] **H181-01 — atomic completion/outbox and recovery** — close the journal crash window, recover pre-existing stranded completions and prove idempotent replay without a manager restart
 - [ ] **H181-02 — truthful revocation capabilities** — narrow unsupported declarations or wire only the existing required behavior with mixed-v1.8.x compatibility evidence
@@ -241,34 +245,44 @@ contracts. No universal exactly-once or blind partition-failover guarantee.
 - [ ] **H181-07 — short-batch recovery race (GH #91)** — preserve authoritative completion results when reconciliation overlaps dispatch/callback delivery; prove genuine lost-run recovery remains bounded
 - [ ] **Release closure** — linked crash/replay evidence, self-review, independent full-diff review and all 11 release checks green
 
-## v1.8.2 — Connector Correctness Under Failure (planned)
+## v1.8.2 — UI and AI Pipeline Correctness
 
-> Full plan: [v1.8.2 connector hardening](plans/v1.8.2-connector-hardening-plan.md).
-> Baseline: released v1.8.1. Verification scope is agreed; fixes require current
+> Full plan: [v1.8.2 UI and AI correctness](plans/v1.8.2-ui-ai-correctness-plan.md).
+> Baseline: published v1.8.0 plus prepared, unpublished v1.8.1 recovery/auth fixes.
+> v1.8.2 includes those inherited fixes; remaining connector goals moved to v1.8.3.
+
+- [x] **H182-08 — AI pipeline correctness** — implemented and dev-verified 2026-10-12: repaired schema omissions and incorrect cron guidance, added source-record and transform semantics, and validated generated wiring before reporting success; six repeated live generation probes, deployed dry-runs and fixture behavior checks pass ([review](reviews/ai-pipeline-reality-review.md)). The separate wizard/editor toolbar patch also belongs to this 1.8.2 scope.
+- [x] **Wizard/editor toolbar correction** — included with the existing authoring workflow fixes.
+- [ ] **Release closure** — self-review, independent full-diff review and all 11 release checks green before tagging.
+
+## v1.8.3 — Connector Correctness Under Failure (planned)
+
+> Full plan: [v1.8.3 connector hardening](plans/v1.8.3-connector-hardening-plan.md).
+> Baseline: released v1.8.2. Verification scope is agreed; fixes require current
 > reproductions. This does not assign every capability in GH #58–#61.
 
-- [ ] **H182-01 — Kafka (scoped GH #58)** — reconnect/rebalance/stop, producer failures and acknowledgement-frontier correctness
-- [ ] **H182-02 — AMQP (scoped GH #61)** — channel/broker failure, ack/nack ownership, publisher confirmations and bounded admission
-- [ ] **H182-03 — ClickHouse (scoped GH #60)** — failed flush/commit, retained obligations and truthful stop/drain outcomes
-- [ ] **H182-04 — SNMP traps (remaining GH #65)** — community verification and visible v3 privacy failures; retain valid-trap/Counter64 behavior
-- [ ] **H182-05 — file finalization** — verify historical threaded stream/staged-batch residuals and the PGW ASN.1 memory case; fix reproduced violations before destructive source actions
-- [ ] **H182-06 — evidence and issue scope** — deterministic regressions plus required live Kafka/AMQP/ClickHouse/SNMP/file evidence; already-covered and deferred requirements recorded separately
-- [ ] **H182-07 — ten-IP SNMP polling pilot** — approved scope exception: one pipeline, bounded concurrent targets, device attribution, isolated failures and truthful results; five-minute demo with SFTP readback, preserving single-host YAML
+- [ ] **H183-01 — Kafka (scoped GH #58)** — reconnect/rebalance/stop, producer failures and acknowledgement-frontier correctness
+- [ ] **H183-02 — AMQP (scoped GH #61)** — channel/broker failure, ack/nack ownership, publisher confirmations and bounded admission
+- [ ] **H183-03 — ClickHouse (scoped GH #60)** — failed flush/commit, retained obligations and truthful stop/drain outcomes
+- [ ] **H183-04 — SNMP traps (remaining GH #65)** — community verification and visible v3 privacy failures; retain valid-trap/Counter64 behavior
+- [ ] **H183-05 — file finalization** — verify historical threaded stream/staged-batch residuals and the PGW ASN.1 memory case; fix reproduced violations before destructive source actions
+- [ ] **H183-06 — evidence and issue scope** — deterministic regressions plus required live Kafka/AMQP/ClickHouse/SNMP/file evidence; already-covered and deferred requirements recorded separately
+- [ ] **H183-07 — ten-IP SNMP polling pilot** — approved scope exception: one pipeline, bounded concurrent targets, device attribution, isolated failures and truthful results; five-minute demo with SFTP readback, preserving single-host YAML
 - [ ] **Release closure** — selected live faults repeated at least three times, reconciled output/acknowledgement evidence, independent full-diff review and all release checks green
 
-## v1.8.3 — Operational Confidence & Bounded Capacity (planned)
+## v1.8.4 — Operational Confidence & Bounded Capacity (planned)
 
-> Full plan: [v1.8.3 operational confidence](plans/v1.8.3-operational-confidence-plan.md).
-> Baseline: released v1.8.2. Complete finite campaigns and fix proven defects
+> Full plan: [v1.8.4 operational confidence](plans/v1.8.4-operational-confidence-plan.md).
+> Baseline: released v1.8.3. Complete finite campaigns and fix proven defects
 > in existing behavior; performance gains are not a substitute for correctness.
 
-- [ ] **H183-01 — recovery/drain/upgrade/rollback** — manager/worker restart, empty and active stream placement, checkpoint/outbox recovery and uncertain ownership
-- [ ] **H183-02 — sustained capacity** — 24-hour mixed-workload soak plus 30-minute overload/slow-sink phase; configured budgets hold and pressure recovery is automatic
-- [ ] **H183-03 — flush-lock discipline** — rate-limit waiting outside sink-write locking, stateful-flush synchronization and mandatory lock contract
-- [ ] **H183-04 — per-sink accounting (scoped GH #62)** — close verified omissions in existing API/UI disposition views without adding new operations pages
-- [ ] **H183-05 — accelerated HTTP overload** — kind verification of both runtime paths, accepted/refused inputs and sink completion before fleet-wide enablement
-- [ ] **H183-06 — controlled measurements** — Parquet re-measure, saturation-capable Kafka producer, clean scheduler and accurate pod/latency/accounting telemetry
-- [ ] **Multi-target SNMP pilot follow-up** — soak/fault verification of the v1.8.2 ten-IP pilot and measured capacity; a 100-IP commitment requires evidence and separate scope admission
+- [ ] **H184-01 — recovery/drain/upgrade/rollback** — manager/worker restart, empty and active stream placement, checkpoint/outbox recovery and uncertain ownership
+- [ ] **H184-02 — sustained capacity** — 24-hour mixed-workload soak plus 30-minute overload/slow-sink phase; configured budgets hold and pressure recovery is automatic
+- [ ] **H184-03 — flush-lock discipline** — rate-limit waiting outside sink-write locking, stateful-flush synchronization and mandatory lock contract
+- [ ] **H184-04 — per-sink accounting (scoped GH #62)** — close verified omissions in existing API/UI disposition views without adding new operations pages
+- [ ] **H184-05 — accelerated HTTP overload** — kind verification of both runtime paths, accepted/refused inputs and sink completion before fleet-wide enablement
+- [ ] **H184-06 — controlled measurements** — Parquet re-measure, saturation-capable Kafka producer, clean scheduler and accurate pod/latency/accounting telemetry
+- [ ] **Multi-target SNMP pilot follow-up** — soak/fault verification of the v1.8.3 ten-IP pilot and measured capacity; a 100-IP commitment requires evidence and separate scope admission
 - [ ] **Release closure** — campaign records, recovery-budget compliance, independent full-diff review and all release checks green
 
 ## v1.9.0 (planned)
@@ -283,7 +297,7 @@ contracts. No universal exactly-once or blind partition-failover guarantee.
 - [ ] treq `_providers/` vendoring (GH #71) + Wave C (A9 streaming; B3–B6 = MIB compile-error explanation, alert-rule authoring, throughput-anomaly explanation, connector test-failure explanation, per `docs/plans/ai-expansion-plan.md`) + A.2/A.3 plugin docstrings/examples (GH #41/#42) — **not scheduled to a version**; the maintainer runs a design round after the v1.6.0 re-measurement reevaluation. Calibration from the 2026-09-28 plan review: vendor 4–6 days, Wave C 2–3 weeks, A.2/A.3 ~1 week; treq's portable tests ~1,346 lines, no bedrock coverage.
 
 The 2026-10-10 maturity decision defers this design round until after the
-v1.8.1–v1.8.3 cycle. Authoring-UX C.1–C.3 remains under GH #42 and is also
+v1.8.1–v1.8.4 cycle. Authoring-UX C.1–C.3 remains under GH #42 and is also
 unscheduled; it is distinct from the AI integration scope above.
 
 ---
@@ -309,16 +323,16 @@ Other requirements remain unscheduled during the maturity cycle.
 - [ ] **AMQP source/sink** — exchange/queue binding, ack/nack, prefetch (GH #61)
 - [ ] **NATS source/sink** — subject routing, JetStream, reconnect (GH #61)
 
-Kafka failure/acknowledgement behavior is assigned to v1.8.2 H182-01;
-AMQP to H182-02; ClickHouse durability to H182-03. Local/SFTP file-finalization
-verification is H182-05. The remaining GH #58–#61 capability requests are not
+Kafka failure/acknowledgement behavior is assigned to v1.8.3 H183-01;
+AMQP to H183-02; ClickHouse durability to H183-03. Local/SFTP file-finalization
+verification is H183-05. The remaining GH #58–#61 capability requests are not
 assigned to those packages.
 
 ### Operations & Observability
 - [ ] **Pipeline cloning** — copy a pipeline with a name prompt in the UI (GH #62)
 - [ ] **Scheduled alert evaluation** — cron-based alert checks independent of pipeline runs (GH #62)
 - [ ] **Dead-letter queue viewer** — browse and replay DLQ records via the UI (GH #62)
-- [ ] **Per-sink record counts** — v1.8.0 shipped disposition/loss accounting; verify and close remaining omissions in existing views in v1.8.3 H183-04 (scoped GH #62)
+- [ ] **Per-sink record counts** — v1.8.0 shipped disposition/loss accounting; verify and close remaining omissions in existing views in v1.8.4 H184-04 (scoped GH #62)
 - [ ] **Pipeline dependency graph** — visualize pipeline chains when A feeds B (GH #62)
 - [ ] **Bulk actions** — start/stop/delete multiple pipelines from the list view (GH #62)
 - [ ] **Live log streaming** — WebSocket tail of log output for running stream pipelines (GH #62)
@@ -343,14 +357,14 @@ assigned to those packages.
 - [x] **Coverage target increase** — CI threshold raised to 75%; current coverage ~80%
 
 ### Performance follow-ups (deferred from the v1.6.0 review, non-blocking, outside the locked v1.6.1 scope)
-- [ ] **Rate-limit sleeps hold the flush lock** — stream `_flush_now` holds `flush_lock` across per-record rate-limit sleeps; move sleeps outside the lock — assigned v1.8.3 H183-03
-- [ ] **`_route_stateful_flush_records` lock discipline** — takes no `flush_lock` (currently benign: called post-join); document or align with the flush path — assigned v1.8.3 H183-03
-- [ ] **`_stream_run_threaded(flush_lock=None)` NIT** — `None` default while `_flush_now` unconditionally acquires it; latent footgun — assigned v1.8.3 H183-03
-- [ ] **Parquet controlled re-measure** — the v1.6.0-vs-v1.5.1 parquet cell is unproven; one controlled re-measure needed (`docs/ideas/perf-v160-vs-v151-comparison-2026-10.md`) — assigned v1.8.3 H183-06
+- [ ] **Rate-limit sleeps hold the flush lock** — stream `_flush_now` holds `flush_lock` across per-record rate-limit sleeps; move sleeps outside the lock — assigned v1.8.4 H184-03
+- [ ] **`_route_stateful_flush_records` lock discipline** — takes no `flush_lock` (currently benign: called post-join); document or align with the flush path — assigned v1.8.4 H184-03
+- [ ] **`_stream_run_threaded(flush_lock=None)` NIT** — `None` default while `_flush_now` unconditionally acquires it; latent footgun — assigned v1.8.4 H184-03
+- [ ] **Parquet controlled re-measure** — the v1.6.0-vs-v1.5.1 parquet cell is unproven; one controlled re-measure needed (`docs/ideas/perf-v160-vs-v151-comparison-2026-10.md`) — assigned v1.8.4 H184-06
 
 ### Telecom Domain Hardening (from `docs/reviews/telecom-domain-review.md`)
-- [ ] **SNMP trap community-string verification** — trap source does not verify the community string (spoofing vector) (GH #65) — assigned v1.8.2 H182-04
-- [ ] **SNMPv3 trap privacy handling** — undecryptable v3 traps surfaced/handled explicitly (GH #65) — assigned v1.8.2 H182-04
+- [ ] **SNMP trap community-string verification** — trap source does not verify the community string (spoofing vector) (GH #65) — assigned v1.8.3 H183-04
+- [ ] **SNMPv3 trap privacy handling** — undecryptable v3 traps surfaced/handled explicitly (GH #65) — assigned v1.8.3 H183-04
 - [x] **Counter64 varbind in SNMP trap sink** — trap sink lacks Counter64 varbind support (GH #65) — shipped on the default tsnmp stack (`_build_tsnmp_value`, `tram/connectors/snmp/sink.py`); the legacy pysnmp path intentionally never gains it and is deleted in v1.9.0
 - [ ] **Timezone-aware scheduling** — APScheduler is UTC-only and `misfire_grace_time` is hardcoded 60s; make both configurable (GH #66)
 - [ ] **Missed-window backfill for poll pipelines** — downtime windows are skipped, not backfilled (GH #66)
@@ -424,4 +438,4 @@ assigned to those packages.
 ### Performance follow-ups (2026-10-07, from v1.7.0 pilots)
 - [x] **Stream re-adoption after worker restart — assigned to v1.8.0 V18-06/07/10** — measured on kind: no re-dispatch within 900 s (asyncio/h11) / 600 s (uvloop) after rollout. Reproduce and establish the cause before fixing; per-run-only stats are a hypothesis, not a confirmed RCA. Include worker session reporting independent of runs and automatic desired-stream recovery. Evidence: `scripts/perf/results/v170-http-pilot/` — shipped v1.8.0 (V18-06 empty-stream placement recovery + independent boot/session reporting + shared per-worker status snapshots)
 - [ ] **Pilot B real-pipeline eligibility** — passthrough eligibility (same-schema in/out, no transforms/conditions, local sinks, DLQ off) currently matches no real pipeline (all transform records; cisco_pm_proto_to_json and proto-device-event do not qualify); the 30× result is on the canonical eligible shape. Re-evaluate when pure-transport pipelines appear
-- [ ] **Accel-on cluster saturation check** — the 202-accepted/503-queue-full contract under overload with `TRAM_HTTP_ACCELERATED=1` is unit-covered but not kind-exercised; run before any fleet-wide enablement — assigned v1.8.3 H183-05
+- [ ] **Accel-on cluster saturation check** — the 202-accepted/503-queue-full contract under overload with `TRAM_HTTP_ACCELERATED=1` is unit-covered but not kind-exercised; run before any fleet-wide enablement — assigned v1.8.4 H184-05

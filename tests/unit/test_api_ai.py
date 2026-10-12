@@ -1503,7 +1503,7 @@ class TestAiAuditLog:
         client = TestClient(app)
         with caplog.at_level(logging.INFO, logger="tram.ai"):
             with patch("tram.api.routers.ai._call_ai",
-                       return_value=_AiResult("name: my-pipe", None, tokens_in=10, tokens_out=25)):
+                       return_value=_AiResult(_VALID_PIPELINE_YAML, None, tokens_in=10, tokens_out=25)):
                 r = client.post("/api/ai/suggest", json={"mode": "generate", "prompt": "x"})
         assert r.status_code == 200
         records = [rec for rec in caplog.records if rec.name == "tram.ai"]
@@ -1516,6 +1516,8 @@ class TestAiAuditLog:
         assert rec.model == "claude-haiku-4-5-20251001"
         assert rec.tokens_in == 10
         assert rec.tokens_out == 25
+        assert rec.retried is False
+        assert r.json()["retried"] is False
         assert rec.ok is True
         assert rec.duration_s >= 0
 
@@ -1561,10 +1563,11 @@ class TestAiUsagePersistence:
         app = _make_app(db=db)
         client = TestClient(app)
         with patch("tram.api.routers.ai._call_ai",
-                   return_value=_AiResult("name: p", None, tokens_in=3, tokens_out=7)):
+                   return_value=_AiResult(_VALID_PIPELINE_YAML, None, tokens_in=3, tokens_out=7)):
             r = client.post("/api/ai/suggest", json={"mode": "modify", "yaml": "x", "instruction": "i"})
         assert r.status_code == 200
         assert db.append_ai_usage.call_count == 1
+        assert r.json()["retried"] is False
         kwargs = db.append_ai_usage.call_args.kwargs
         assert kwargs["mode"] == "modify"
         assert kwargs["client"] == "testclient"

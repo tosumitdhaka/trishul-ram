@@ -4,7 +4,8 @@ from __future__ import annotations
 
 from fastapi import APIRouter
 
-from tram.api.config_schema import SCHEMA_LINES, schema_version
+from tram.api.config_schema import SCHEMA_FIELDS, SCHEMA_LINES, schema_version
+from tram.registry.registry import list_plugins
 
 router = APIRouter()
 
@@ -97,8 +98,8 @@ def _format_block(category: str, type_name: str) -> str:
 
 def _one_liner(category: str, type_name: str) -> str:
     """Return a compact one-line summary showing only required fields."""
-    lines = SCHEMA_LINES[category].get(type_name, [])
-    required = [ln.strip().split(":")[0] for ln in lines if "required" in ln]
+    fields = SCHEMA_FIELDS[category].get(type_name, [])
+    required = [field["name"] for field in fields if field["required"]]
     if required:
         return f"  {type_name}: requires {', '.join(required)}"
     return f"  {type_name}"
@@ -112,6 +113,12 @@ def build_ai_context(prompt: str, plugins: dict) -> str:
     - One-line summaries for all others.
     - Full schema for all serializers and transforms (they're short).
     """
+    import tram.connectors  # noqa: F401
+    import tram.serializers  # noqa: F401
+    import tram.transforms  # noqa: F401
+
+    # Client-provided plugin lists cannot hide or invent runtime capabilities.
+    plugins = list_plugins()
     sections: list[str] = []
 
     # ── Schema identity (Issue #24 / Option A) ──────────────────────────────
@@ -129,7 +136,7 @@ CRITICAL RULES — violating any of these causes validation errors:
 3. SFTP sink uses "filename_template" for the output filename — NOT "file_pattern" (source-only field).
 4. All list fields (oids, brokers, hosts) must use YAML list syntax, not inline strings.
 
-EXPRESSION SYNTAX (used in add_field.fields, filter_rows.condition, sink.condition):
+EXPRESSION SYNTAX (used in add_field.fields, filter.condition, sink.condition):
 - Expressions are plain Python evaluated by simpleeval. NO Jinja2 / NO {{...}} wrappers.
 - WRONG: timestamp: "{{now()}}"   RIGHT: timestamp: "now()"
 - WRONG: condition: "{{rx > 0}}"  RIGHT: condition: "rx > 0"
@@ -140,7 +147,35 @@ EXPRESSION SYNTAX (used in add_field.fields, filter_rows.condition, sink.conditi
     now('%Y-%m-%d')     → formatted date string  e.g. "2026-04-08"
     now('%Y-%m-%dT%H:%M:%SZ')  → compact UTC    e.g. "2026-04-08T10:23:45Z"
     epoch()             → Unix timestamp float   e.g. 1744105425.123
-    epoch_ms()          → Unix ms integer        e.g. 1744105425123""")
+    epoch_ms()          → Unix ms integer        e.g. 1744105425123
+- Literal strings in add_field need expression quotes: fields: {site: "'tokyo'"}.
+  A bare expression tokyo looks up a record variable; it is not a string constant.
+
+COMMON FIELDS BY CATEGORY:
+- Source and transform type is required; filter.condition is a required expression.
+- Sinks may use condition (expression), transforms (list of transform objects), and
+  serializer_out (serializer object). They inherit top-level serializer_out when omitted.
+
+SEMANTIC RULES:
+- SNMP tables: source type snmp_poll, operation: walk, yield_rows: true.
+  classify: true replaces flat values with _metrics and _labels dicts; row index is _index.
+  Read classified data via paths such as _metrics.ifInOctets and _labels.ifDescr.
+  metric_patterns and label_patterns are shell-style globs (e.g. '*Octets*'), not regexes;
+  metric patterns win. Use resolve_oids: true for symbolic field names.
+- gNMI subscription_mode: once ends after one snapshot; pair with schedule type interval
+  for repeated snapshots. poll repeats snapshots internally using poll_interval_seconds;
+  poll and stream are continuous sources and need schedule type stream.
+- aggregate.operations maps output names to 'op:field' or {op: sum, field: rx}.
+  Ops: sum, avg, min, max, count, first, last. count counts non-null values of its field,
+  not all rows. To count rows, add a constant field first and count that field.
+- select_from_list.select is a list: each entry sets exactly one of match (exact key/value
+  match against an item) or first_item: true, plus output: {item.path: output_field}.
+  Example: select: [{match: {name: eth0}, output: {stats.rx: rx_bytes}}].
+- project.fields maps output_field to a dotted source path (supports list indices), or
+  {source: path, default: value, required: true}, or {source_any: [path1, path2]}.
+  Defaults apply to missing paths; an existing null is preserved. Only projected fields remain.
+- File sink filename_template supports record tokens {field.path}, e.g.
+  '{field.device.name}_{timestamp}.json'; do not use a bare {device} record token.""")
 
 
     # ── Sources ───────────────────────────────────────────────────────────────
@@ -189,4 +224,96 @@ EXPRESSION SYNTAX (used in add_field.fields, filter_rows.condition, sink.conditi
             tr_lines.append(f"  {t}")
     sections.append("\n".join(tr_lines))
 
+    return "\n\n".join(sections)
+
+
+def build_task_guidance(request_text: str) -> str:
+    """Return bounded, relevant runtime examples for the end of the system prompt."""
+    text = request_text.lower()
+    sections = [
+        "FINAL TASK GUIDANCE — adapt example names and paths to the user's actual intent. "
+        "Before returning YAML, verify matching versus first-item selection, missing versus null "
+        "defaults, the field counted for record totals, and MIB readiness for symbolic SNMP fields."
+    ]
+    if any(word in text for word in (
+        "select", "list", "nested", "project", "default", "null", "missing",
+    )):
+        sections.append("""Nested selection and defaults:
+select_from_list.match picks the FIRST MATCHING item. first_item: true picks the first item
+without testing conditions; use match when the user asks for a particular name or category.
+output maps item source paths to output names. A missing match or missing projected path yields
+None. project.default handles absent paths only: it does NOT replace an existing None.
+When the user wants zero for missing/null values, coalesce before projecting (0 remains 0).
+Adapt this example's list path, match keys, and output names:
+```yaml
+transforms:
+  - type: select_from_list
+    field: interfaces
+    select:
+      - match: {name: eth0}
+        output: {stats.rx: rx}
+  - type: coalesce_fields
+    fields:
+      rx: {sources: [rx], default: 0, empty_values: [null, '']}
+  - type: project
+    fields: {rx: rx}
+```""")
+    if any(word in text for word in ("aggregate", "group", "sum", "count", "total")):
+        sections.append("""Aggregation and record counts:
+operations maps output names to 'op:field' or {op: ..., field: ...}. count counts NON-NULL
+values in that source field. count:bytes is not a record count when bytes is null or absent.
+If the user requests number of records, add a constant marker and count it. IMPORTANT: the
+executor applies TOP-LEVEL transforms separately to each record. Put aggregate inside
+sinks[].transforms to group the whole parsed source chunk; top-level aggregate produces
+one aggregate per input record. For a local JSON array file, omit record_chunk_size so the
+whole array is one chunk. This aggregates each chunk/file, NOT across all files in a run.
+For multi-chunk windows use window_aggregate only when timestamp window semantics are wanted.
+Adapt group keys, sink, and output names below to the requested output schema:
+```yaml
+transforms:
+  - type: add_field
+    fields: {_row_present: '1'}
+sinks:
+  - type: local
+    path: /output
+    serializer_out: {type: ndjson}
+    transforms:
+      - type: aggregate
+        group_by: [device]
+        operations:
+          bytes_total: 'sum:bytes'
+          records: 'count:_row_present'
+```""")
+    if "snmp" in text or any(word in text for word in ("iftype", "ifdescr", "ifoctets")):
+        sections.append("""SNMP symbolic IF-MIB tables:
+For symbolic IF-MIB categorization, INCLUDE source.resolve_oids: true, source.mib_dirs with
+the real assets directory, and source.mib_modules: [IF-MIB, IANAifType-MIB]. These explicit
+source settings are mandatory for this generated configuration; do not omit them even when
+the host may auto-discover /mibs. Do not emit symbolic category expressions without them.
+Symbolic fields and enum labels require available MIB bundles and successful runtime loading.
+Explicit mib_dirs/modules make that intent clear; the runtime can also auto-use /mibs or
+TRAM_MIB_DIR when present. For the trishul SNMP stack, modules alone do not supply JSON IR
+bundles: use the directory containing the actual assets (the deployed example uses /mibs).
+For IF-MIB table rows use operation: walk, yield_rows: true, index_depth: 1. classify: true
+produces _metrics, _labels, and _index, not the original flat fields. ifType belongs in labels
+for interface-type categorization. Load both IF-MIB and IANAifType-MIB assets for symbolic
+interface type names. Enum labels include the number, e.g. "ethernetCsmacd (6)"; test the name
+within that string rather than equality to a bare name. label_patterns: [ifType] forces labels
+but overrides enum rendering with raw numeric text (e.g. "6"); use it only when intentionally
+matching numeric values. Confirm those MIBs are available on the
+runtime host; otherwise do not assume resolved names or silently label every row 'unknown'.
+Adapt the device, OIDs, and metric/label patterns to the actual requested table:
+```yaml
+source:
+  type: snmp_poll
+  host: device.example
+  oids: ['IF-MIB::ifTable']
+  operation: walk
+  resolve_oids: true
+  mib_dirs: [/mibs]
+  mib_modules: [IF-MIB, IANAifType-MIB]
+  yield_rows: true
+  index_depth: 1
+  classify: true
+```""")
     return "\n\n".join(sections)

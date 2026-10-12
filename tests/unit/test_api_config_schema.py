@@ -123,3 +123,48 @@ def test_config_schema_endpoint_serves_field_descriptions():
     # The description key is additive — existing metadata keys are intact.
     assert sftp_fields["password"]["kind"] == "text"
     assert sftp_fields["password"]["secret"] is True
+
+
+def test_filter_condition_and_literal_choices_are_grounded():
+    fields = {field["name"]: field for field in cs.SCHEMA_FIELDS["transform"]["filter"]}
+    assert fields["condition"]["required"] is True
+    context = "\n".join(cs.SCHEMA_LINES["transform"]["hex_decode"])
+    assert "utf8_or_hex" in context
+    assert "latin1_or_hex" in context
+    assert "Literal" not in context
+
+
+def test_empty_defaults_and_resolved_nested_models_are_available_to_ai():
+    lines = "\n".join(cs.SCHEMA_LINES["transform"]["json_flatten"])
+    assert "explode_paths: list[str] = []" in lines
+    assert "value_suffix: str = \"\"" in lines
+    assert "ForwardRef" not in lines
+    fields = {field["name"]: field for field in cs.SCHEMA_FIELDS["transform"]["json_flatten"]}
+    nested = fields["zip_groups"]["nested_models"]["JsonFlattenZipGroupConfig"]
+    assert any(field["name"] == "fields" and field["required"] for field in nested)
+    assert "Align paired list fields" in lines
+
+
+def test_nested_selection_and_projection_have_expanded_shapes():
+    selection = "\n".join(cs.SCHEMA_LINES["transform"]["select_from_list"])
+    projection = "\n".join(cs.SCHEMA_LINES["transform"]["project"])
+    assert "match: dict[str, Any] | None" in selection
+    assert "output: dict[str, str]" in selection
+    assert "source_any: list[str] = []" in projection
+    assert "default:" in projection
+    assert "Item source path to output field name mapping" in selection
+    assert "existing null is preserved" in projection
+
+
+
+def test_nested_varbind_type_is_data_not_plugin_discriminator():
+    fields = {field["name"]: field for field in cs.SCHEMA_FIELDS["sink"]["snmp_trap"]}
+    nested = {field["name"]: field for field in fields["varbinds"]["nested_models"]["VarbindConfig"]}
+    assert "type" not in fields
+    assert nested["type"]["default"] == "OctetString"
+    assert nested["type"]["description"].startswith("SNMP value type")
+    assert nested["type"]["choices"] == [
+        "Integer32", "OctetString", "Counter32", "Gauge32", "TimeTicks",
+    ]
+    lines = "\n".join(cs.SCHEMA_LINES["sink"]["snmp_trap"])
+    assert 'type: \'Integer32\' | \'OctetString\'' in lines
