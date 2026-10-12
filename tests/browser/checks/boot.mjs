@@ -66,7 +66,7 @@ const ROUTES = [
   ['#pipelines', 'Pipelines'],
   ['#runs', 'Run History'],
   ['#editor', 'Pipeline Editor'],
-  ['#create', 'New Pipeline'],
+  ['#create', 'Pipeline Wizard'],
   ['#schemas', 'Schemas'],
   ['#mibs', 'MIB Modules'],
   ['#cluster', 'Cluster'],

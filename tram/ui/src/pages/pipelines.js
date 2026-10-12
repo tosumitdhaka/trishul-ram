@@ -39,6 +39,7 @@ function wireToolbar() {
   document.getElementById('pl-status')?.addEventListener('change', () => renderTable(filteredPipelines()))
   document.getElementById('pl-type')?.addEventListener('change', () => renderTable(filteredPipelines()))
   document.getElementById('pl-new-btn')?.addEventListener('click', openNewPipeline)
+  document.getElementById('pl-wizard-btn')?.addEventListener('click', () => router.navigate('create?return=pipelines'))
   document.getElementById('pl-import-btn')?.addEventListener('click', () => document.getElementById('pl-import-input')?.click())
   document.getElementById('pl-import-input')?.addEventListener('change', handleImportSelection)
   document.getElementById('pl-refresh-btn')?.addEventListener('click', refreshWithSpinner)
@@ -194,7 +195,7 @@ async function reloadPipelines() {
 }
 
 function openNewPipeline() {
-  router.navigate('create?return=pipelines')
+  router.navigate('editor?return=pipelines')
 }
 
 function openPipelineDetail(name) {
