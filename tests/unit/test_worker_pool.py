@@ -1637,6 +1637,7 @@ def _handshake_client(
     captured: dict,
     *,
     session_id: str = "w0-boot1234abcd",
+    health_session_id: str | None = None,
     session_secret: str | None = "w0-session-secret-1",
     handshake_error: Exception | None = None,
     attempt_status: int = 200,
@@ -1669,6 +1670,8 @@ def _handshake_client(
             "worker_id": url.rsplit("/", 1)[-1],
             "running_pipelines": [],
         }
+        if health_session_id is not None:
+            resp.json.return_value["session_id"] = health_session_id
         return resp
 
     def _post(url, **kwargs):
@@ -1834,6 +1837,108 @@ class TestHandshakeClient:
         record = pool._worker_sessions["http://w0:8766"]
         assert record["previous_secret"] == "old"
         assert record["previous_secret_until"] - time.time() == pytest.approx(605, abs=5)
+
+    def test_healthy_worker_process_change_refreshes_dispatch_authorization(self):
+        pool = _pool("http://w0:8766")
+        pool.register_worker_session("http://w0:8766", session_id="old-boot", secret="old")
+        captured = {}
+        client = _handshake_client(captured, health_session_id="w0-boot1234abcd")
+        with patch("httpx.Client", return_value=client):
+            pool._poll_all()
+            assert pool._health["http://w0:8766"]["ok"]
+            pool.dispatch_with_result(
+                "r1", "p", "yaml", "batch", attempt_id="r1-a1", generation=1,
+            )
+        from tram.agent.auth_tokens import validate_start_authorization
+        token = captured["posts"][-1][1]["authorization"]
+        assert validate_start_authorization(
+            token, worker_session="w0-boot1234abcd", current_secret="w0-session-secret-1",
+            max_ttl_s=600, clock_skew_s=5, now_unix=int(time.time()),
+        ).valid
+        assert len([p for p in captured["posts"] if p[0].endswith("/agent/handshake")]) == 1
+
+    def test_changed_session_failed_handshake_blocks_dispatch_and_retries(self):
+        pool = _pool("http://w0:8766")
+        pool.register_worker_session("http://w0:8766", session_id="old-boot", secret="old")
+        captured = {}
+        client = _handshake_client(
+            captured, health_session_id="w0-boot1234abcd",
+            handshake_error=httpx.ConnectError("handshake unavailable"),
+        )
+        with patch("httpx.Client", return_value=client):
+            pool._poll_all()
+            assert not pool._health["http://w0:8766"]["ok"]
+            assert pool._dispatch_to_worker(
+                "http://w0:8766", "selected-before-refresh", "p", "yaml", "batch",
+                attempt_id="selected-a1", generation=1,
+            ) == "Worker authorization session refresh pending"
+            pool.dispatch_with_result(
+                "r1", "p", "yaml", "batch", attempt_id="r1-a1", generation=1,
+            )
+            pool._poll_all()
+            assert not pool._health["http://w0:8766"]["ok"]
+        assert all(url.endswith("/agent/handshake") for url, _ in captured["posts"])
+        assert len(captured["posts"]) == 2
+        assert pool._worker_sessions["http://w0:8766"]["session_id"] == "old-boot"
+        with patch("httpx.Client", return_value=_handshake_client(
+            captured, health_session_id="w0-boot1234abcd",
+        )):
+            pool._poll_all()
+        assert pool._health["http://w0:8766"]["ok"]
+        assert pool._worker_sessions["http://w0:8766"]["session_id"] == "w0-boot1234abcd"
+
+    def test_health_without_session_preserves_existing_handshake_compatibility(self):
+        pool = _pool("http://w0:8766")
+        pool.register_worker_session("http://w0:8766", session_id="old-boot", secret="old")
+        captured = {}
+        with patch("httpx.Client", return_value=_handshake_client(captured)):
+            pool._poll_all()
+        assert pool._health["http://w0:8766"]["ok"]
+        assert not captured.get("posts")
+        assert pool._worker_sessions["http://w0:8766"]["session_id"] == "old-boot"
+
+    def test_dispatch_waiting_for_client_mints_after_session_refresh(self):
+        pool = _pool("http://w0:8766")
+        pool.register_worker_session("http://w0:8766", session_id="old-boot", secret="old")
+        captured = {}
+        client = _handshake_client(captured, health_session_id="w0-boot1234abcd")
+        entered = False
+
+        def acquire_client(_client):
+            nonlocal entered
+            if not entered:
+                entered = True
+                pool._poll_all()
+            return client
+
+        client.__enter__ = acquire_client
+        with patch("httpx.Client", return_value=client):
+            assert pool._dispatch_to_worker(
+                "http://w0:8766", "r1", "p", "yaml", "batch",
+                attempt_id="r1-a1", generation=1,
+            ) is None
+        from tram.agent.auth_tokens import validate_start_authorization
+        assert validate_start_authorization(
+            captured["posts"][-1][1]["authorization"],
+            worker_session="w0-boot1234abcd", current_secret="w0-session-secret-1",
+            max_ttl_s=600, clock_skew_s=5, now_unix=int(time.time()),
+        ).valid
+
+    def test_restart_during_handshake_recovers_on_next_current_session_probe(self):
+        pool = _pool("http://w0:8766")
+        pool.register_worker_session("http://w0:8766", session_id="old-boot", secret="old")
+        captured = {}
+        with patch("httpx.Client", return_value=_handshake_client(
+            captured, session_id="boot-c", health_session_id="boot-b",
+        )):
+            pool._poll_all()
+        assert not pool._health["http://w0:8766"]["ok"]
+        with patch("httpx.Client", return_value=_handshake_client(
+            captured, session_id="boot-c", health_session_id="boot-c",
+        )):
+            pool._poll_all()
+        assert pool._health["http://w0:8766"]["ok"]
+        assert "http://w0:8766" not in pool._session_refresh_pending
 
 
 class TestQueryAttempt:

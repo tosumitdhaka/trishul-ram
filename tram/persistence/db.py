@@ -843,11 +843,11 @@ class TramDB:
                         INSERT INTO run_history
                           (run_id, pipeline_name, status, started_at, finished_at,
                            records_in, records_out, records_skipped, bytes_in, bytes_out,
-                           error, node_id, dlq_count, errors_json)
+                           error, node_id, dlq_count, errors_json, disposition_json)
                         VALUES
                           (:run_id, :pipeline_name, :status, :started_at, :finished_at,
                            :records_in, :records_out, :records_skipped, :bytes_in, :bytes_out,
-                           :error, :node_id, :dlq_count, :errors_json)
+                           :error, :node_id, :dlq_count, :errors_json, :disposition_json)
                     """),
                     {
                         "run_id": result.run_id,
@@ -864,6 +864,14 @@ class TramDB:
                         "node_id": result.node_id or self._node_id,
                         "dlq_count": result.dlq_count,
                         "errors_json": _json.dumps(result.errors) if result.errors else None,
+                        "disposition_json": _json.dumps({
+                            "dlq_count": result.dlq_count,
+                            "records_failed": result.records_failed,
+                            "dlq_succeeded": result.dlq_succeeded,
+                            "dlq_failed": result.dlq_failed,
+                            "per_sink": result.disposition,
+                            "spool": result.spool,
+                        }),
                     },
                 )
         except IntegrityError:
@@ -917,6 +925,12 @@ class TramDB:
             errors = _json.loads(raw_errors) if raw_errors else []
         except Exception:
             errors = []
+        try:
+            accounting = _json.loads(row.get("disposition_json") or "{}")
+        except (ValueError, TypeError):
+            accounting = {}
+        if not isinstance(accounting, dict):
+            accounting = {}
         return RunResult(
             run_id=row["run_id"],
             pipeline_name=row["pipeline_name"],
@@ -932,6 +946,11 @@ class TramDB:
             dlq_count=row.get("dlq_count", 0) or 0,
             node_id=row.get("node_id", "") or "",
             errors=errors,
+            records_failed=int(accounting.get("records_failed") or 0),
+            dlq_succeeded=int(accounting.get("dlq_succeeded") or 0),
+            dlq_failed=int(accounting.get("dlq_failed") or 0),
+            disposition=accounting.get("per_sink") or {},
+            spool=accounting.get("spool") or {},
         )
 
     # ── Pipeline versions ──────────────────────────────────────────────────

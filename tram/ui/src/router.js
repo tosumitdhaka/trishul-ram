@@ -49,7 +49,7 @@ const pages = {
 const meta = {
   dashboard: { title: 'Dashboard',         sub: 'Overview' },
   pipelines: { title: 'Pipelines',         sub: '' },
-  create:    { title: 'New Pipeline',      sub: 'Guided creation' },
+  create:    { title: 'Pipeline Wizard',   sub: 'Guided creation' },
   detail:    { title: 'Pipeline Detail',   sub: '' },
   editor:    { title: 'Pipeline Editor',   sub: '' },
   runs:      { title: 'Run History',      sub: '' },

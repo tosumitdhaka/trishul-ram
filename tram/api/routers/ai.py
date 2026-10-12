@@ -17,9 +17,15 @@ from pydantic import BaseModel, ValidationError
 
 from tram.api.config_schema import SCHEMA_FIELDS, SECRET_NAME_TOKENS, schema_version
 from tram.api.routers import templates as _templates_mod
-from tram.api.routers.ai_docs import build_ai_context, build_template_examples
+from tram.api.routers.ai_docs import (
+    build_ai_context,
+    build_task_guidance,
+    build_template_examples,
+)
 from tram.core.config import ai_audit_enabled
 from tram.core.exceptions import ConfigError
+from tram.pipeline.executor import PipelineExecutor
+from tram.pipeline.linter import lint
 from tram.pipeline.loader import load_pipeline_from_yaml
 
 router = APIRouter()
@@ -40,6 +46,9 @@ _AI_PROVIDERS = ("anthropic", "openai", "bedrock")
 # runs in a worker thread (asyncio.to_thread) but a hung call would still
 # occupy that thread, so cap the SDK default (minutes) here.
 _AI_CALL_TIMEOUT = 60.0
+
+# Bound complete pipeline output and keep retries to one additional call.
+_AI_YAML_MAX_TOKENS = 4096
 
 _AI_KEYS = ("ai.provider", "ai.api_key", "ai.model", "ai.base_url")
 
@@ -241,7 +250,7 @@ Pipeline top-level structure (YAML):
   schedule:                          # required
     type: interval | cron | manual | stream
     interval_seconds: 300            # only for interval
-    cron_expr: "*/5 * * * *"        # only for cron
+    cron: "*/5 * * * *"        # only for cron
   source:                            # required
     type: <source_type>
     <source fields — see SOURCES below>
@@ -461,20 +470,32 @@ def _strip_fences(text: str) -> str:
 
 
 def _validate_yaml(yaml_text: str) -> list[str]:
-    """Validate model-produced YAML, mirroring the dry-run endpoint's
-    ``yaml.safe_load`` + ``load_pipeline_from_yaml`` check. Returns a list of
-    human-readable issues (empty when the YAML parses and validates)."""
+    """Mirror schema, dry-run wiring and lint errors without source/sink I/O.
+
+    Existing constructors may read configured local lookup or schema assets.
+    """
     if not yaml_text.strip():
         return ["Model returned empty YAML"]
     try:
-        yaml.safe_load(yaml_text)
+        document = yaml.safe_load(yaml_text)
     except yaml.YAMLError as exc:
         return [f"YAML parse error: {exc}"]
+    if not isinstance(document, dict):
+        return ["Pipeline YAML must be a mapping at the top level"]
     try:
-        load_pipeline_from_yaml(yaml_text)
+        # Match application startup registration, including standalone callers.
+        import tram.connectors  # noqa: F401
+        import tram.serializers  # noqa: F401
+        import tram.transforms  # noqa: F401
+
+        config = load_pipeline_from_yaml(yaml_text)
     except ConfigError as exc:
         return [str(exc)]
-    return []
+    except AttributeError:
+        return ["Pipeline YAML must remain a mapping after environment substitution"]
+    issues = PipelineExecutor().dry_run(config)["issues"]
+    issues.extend(finding.message for finding in lint(config) if finding.severity == "error")
+    return issues
 
 
 _TRUNCATION_REASONS = {"max_tokens", "length"}  # anthropic / openai (bedrock is anthropic-shaped)
@@ -517,29 +538,104 @@ def _fix_mode_result(result: _AiResult, yaml_text: str, *, retried: bool) -> dic
     return out
 
 
-async def _run_fix_with_retry(request: Request, cfg: dict, system: str, user: str) -> dict:
-    """Fix-mode loop (A7): call the provider, validate the returned YAML with
-    the existing loader check, and when it fails validation feed the validation
-    errors back into the prompt for AT MOST ONE retry. Never loops more than
-    once. Per-call wall time is bounded by the A1 timeout discipline, so a
-    retried fix costs at most two such calls. The retry attempt is audited with
-    ``retried=True`` (A10)."""
-    result = await _run_ai_call(request, "fix", system, user, max_tokens=1024, cfg=cfg)
-    yaml_text = _strip_fences(result.text)
-    issues = _validate_yaml(yaml_text)
-    if not issues:
-        return _fix_mode_result(result, yaml_text, retried=False)
+def _redact_retry_candidate(yaml_text: str) -> str:
+    """Sanitize even invalid credential shapes before retrying validation.
+
+    Environment references and defaults are masked before the loader can expand
+    them into validation messages. This deliberately over-redacts retry input.
+    """
+    try:
+        data = yaml.safe_load(yaml_text)
+    except yaml.YAMLError as exc:
+        raise ValueError("Candidate YAML cannot be safely parsed") from exc
+    if not isinstance(data, dict):
+        raise ValueError("Candidate must be a mapping")
+    secret_names = {"community", "auth_key", "priv_key", "connection_url"} | {
+        field["name"]
+        for category in SCHEMA_FIELDS.values()
+        for fields in category.values()
+        for field in fields
+        if field.get("secret")
+    }
+
+    def sanitize(value: object) -> object:
+        if isinstance(value, dict):
+            # Omit the candidate rather than risk expansion or key collisions.
+            if any(isinstance(key, str) and "${" in key for key in value):
+                raise ValueError("Environment references in mapping keys are unsafe")
+            return {
+                key: _MASK_VALUE
+                if isinstance(key, str) and (
+                    _is_secret_key(key) or key in secret_names
+                    or key in (*_HEADER_FIELD_NAMES, "webhook_url")
+                )
+                else sanitize(item)
+                for key, item in value.items()
+            }
+        if isinstance(value, list):
+            return [sanitize(item) for item in value]
+        if isinstance(value, str):
+            if "${" in value:
+                return _MASK_VALUE
+            try:
+                parts = urlsplit(value)
+                if parts.username is not None or parts.password is not None:
+                    return _MASK_VALUE
+            except ValueError:
+                # Malformed URLs may still embed credentials.
+                if "://" in value and "@" in value:
+                    return _MASK_VALUE
+        return value
+
+    try:
+        return yaml.safe_dump(sanitize(data), sort_keys=False)
+    except RecursionError as exc:
+        raise ValueError("Recursive YAML aliases cannot be safely redacted") from exc
+
+
+async def _run_yaml_with_retry(
+    request: Request, cfg: dict, system: str, user: str, *, mode: str,
+) -> dict:
+    """Validate dry-run wiring, retrying at most once with redacted feedback.
+
+    Structural validity does not establish that the candidate meets user intent.
+    """
+    result = await _run_ai_call(
+        request, mode, system, user, max_tokens=_AI_YAML_MAX_TOKENS, cfg=cfg,
+    )
+    out = await asyncio.to_thread(_yaml_mode_result, result)
+    if out["valid"]:
+        return {**out, "retried": False, "attempts": 1}
+    try:
+        candidate = _redact_retry_candidate(out["yaml"])
+    except ValueError:
+        candidate = "[Previous candidate omitted: cannot safely redact malformed YAML]"
+        feedback = ["Return a complete, parseable pipeline YAML mapping."]
+    else:
+        # Validate the redacted copy so errors do not echo credential values.
+        feedback = await asyncio.to_thread(_validate_yaml, candidate)
+    if warning := _truncation_warning(result.stop_reason):
+        feedback.append(warning)
     retry_user = (
         user
-        + "\n\nThe YAML you produced above failed TRAM validation. Fix ALL of "
-        "these validation errors and return the complete corrected pipeline "
-        "YAML only:\n"
-        + "\n".join(f"- {issue}" for issue in issues)
+        + "\n\nPrevious candidate (secrets redacted):\n"
+        + candidate
+        + "\n\nThe candidate failed TRAM validation. Fix ALL validation errors and return "
+        "the complete corrected pipeline YAML only:\n"
+        + "\n".join(f"- {issue}" for issue in feedback)
     )
     retry_result = await _run_ai_call(
-        request, "fix", system, retry_user, max_tokens=1024, cfg=cfg, retried=True,
+        request, mode, system, retry_user, max_tokens=_AI_YAML_MAX_TOKENS,
+        cfg=cfg, retried=True,
     )
-    return _fix_mode_result(retry_result, _strip_fences(retry_result.text), retried=True)
+    return await asyncio.to_thread(
+        _fix_mode_result, retry_result, _strip_fences(retry_result.text), retried=True,
+    )
+
+
+async def _run_fix_with_retry(request: Request, cfg: dict, system: str, user: str) -> dict:
+    """Compatibility wrapper for fix-mode validation retry."""
+    return await _run_yaml_with_retry(request, cfg, system, user, mode="fix")
 
 
 # ── B1: run-failure triage context ──────────────────────────────────────────
@@ -996,11 +1092,11 @@ async def ai_suggest(request: Request) -> dict:
         )
         if template_examples:
             system += "\n\n" + template_examples
+        system += "\n\n" + build_task_guidance(prompt)
         try:
-            result = await _run_ai_call(request, "generate", system, prompt, max_tokens=1024, cfg=cfg)
+            return await _run_yaml_with_retry(request, cfg, system, prompt, mode="generate")
         except Exception as exc:
             raise HTTPException(status_code=502, detail=str(exc))
-        return _yaml_mode_result(result)
 
     elif mode == "explain":
         user = (
@@ -1025,6 +1121,9 @@ async def ai_suggest(request: Request) -> dict:
             pipeline_structure = _PIPELINE_STRUCTURE,
             connector_schema   = build_ai_context(redacted_yaml + " " + body.get("error", ""), plugins),
         ) + "\nFix the provided YAML to resolve the error. Output ONLY valid TRAM pipeline YAML — no prose, no markdown fences."
+        system += "\n\n" + build_task_guidance(
+            redacted_yaml + " " + body.get("error", "")
+        )
         user = (
             f"TRAM pipeline YAML:\n{redacted_yaml}\n\n"
             f"Error to fix: {body.get('error', '')}"
@@ -1041,15 +1140,17 @@ async def ai_suggest(request: Request) -> dict:
             pipeline_structure = _PIPELINE_STRUCTURE,
             connector_schema   = build_ai_context(redacted_yaml + " " + body.get("instruction", ""), plugins),
         ) + "\nModify the provided YAML per the user instruction. Output ONLY the complete modified TRAM pipeline YAML — no prose, no markdown fences."
+        system += "\n\n" + build_task_guidance(
+            redacted_yaml + " " + body.get("instruction", "")
+        )
         user = (
             f"Existing pipeline YAML:\n{redacted_yaml}\n\n"
             f"Instruction: {body.get('instruction', '')}"
         )
         try:
-            result = await _run_ai_call(request, "modify", system, user, max_tokens=1024, cfg=cfg)
+            return await _run_yaml_with_retry(request, cfg, system, user, mode="modify")
         except Exception as exc:
             raise HTTPException(status_code=502, detail=str(exc))
-        return _yaml_mode_result(result)
 
     elif mode == "triage":
         # B1: explain a failed run from its run-history row. The run context

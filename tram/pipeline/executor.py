@@ -1155,23 +1155,27 @@ class PipelineExecutor:
     def _build_sinks(self, config: PipelineConfig) -> list[tuple]:
         """Returns list of (sink_instance, condition_str|None, sink_transforms, sink_cfg, per_sink_ser|None)."""
         result = []
-        for sink_cfg in config.sinks:
-            sink_cls = get_sink(sink_cfg.type)
-            condition = getattr(sink_cfg, "condition", None)
-            sink_transforms = []
-            pipeline_ctx = {"name": config.name, "source": config.source.model_dump()}
-            for t_cfg in getattr(sink_cfg, "transforms", []):
-                t_cls = get_transform(t_cfg.type)
-                d = t_cfg.model_dump()
-                d["_pipeline"] = pipeline_ctx
-                sink_transforms.append(t_cls(d))
-            # Per-sink serializer_out override (None → use global serializer_out)
-            per_sink_ser = None
-            sink_ser_cfg = getattr(sink_cfg, "serializer_out", None)
-            if sink_ser_cfg is not None:
-                ser_cls = get_serializer(sink_ser_cfg.type)
-                per_sink_ser = ser_cls(sink_ser_cfg.model_dump())
-            result.append((sink_cls(sink_cfg.model_dump()), condition, sink_transforms, sink_cfg, per_sink_ser))
+        try:
+            for sink_cfg in config.sinks:
+                sink_cls = get_sink(sink_cfg.type)
+                condition = getattr(sink_cfg, "condition", None)
+                sink_transforms = []
+                pipeline_ctx = {"name": config.name, "source": config.source.model_dump()}
+                for t_cfg in getattr(sink_cfg, "transforms", []):
+                    t_cls = get_transform(t_cfg.type)
+                    d = t_cfg.model_dump()
+                    d["_pipeline"] = pipeline_ctx
+                    sink_transforms.append(t_cls(d))
+                # Per-sink serializer_out override (None → use global serializer_out)
+                per_sink_ser = None
+                sink_ser_cfg = getattr(sink_cfg, "serializer_out", None)
+                if sink_ser_cfg is not None:
+                    ser_cls = get_serializer(sink_ser_cfg.type)
+                    per_sink_ser = ser_cls(sink_ser_cfg.model_dump())
+                result.append((sink_cls(sink_cfg.model_dump()), condition, sink_transforms, sink_cfg, per_sink_ser))
+        except Exception:
+            self._close_sinks(result)
+            raise
         return result
 
     def _build_dlq_sink(self, config: PipelineConfig):

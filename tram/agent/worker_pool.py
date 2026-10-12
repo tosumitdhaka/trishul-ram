@@ -150,6 +150,7 @@ class WorkerPool:
         # handshake lane lands, so dispatches stay legacy-shaped with no
         # authorization field.
         self._worker_sessions: dict[str, dict] = {}
+        self._session_refresh_pending: dict[str, str] = {}
         # Round-robin counter for tie-breaking equally-loaded workers
         self._rr_counter: int = 0
         # V18-08 (plan F): consecutive selection decisions each healthy worker
@@ -292,6 +293,7 @@ class WorkerPool:
                 "active_runs": int(data.get("active_runs", 0)),
                 "running_pipelines": list(data.get("running_pipelines", [])),
                 "worker_id": str(data.get("worker_id", "")).strip(),
+                "session_id": str(data.get("session_id", "")).strip(),
             }
 
     def _poll_all(self, initial_scan: bool = False) -> None:
@@ -335,13 +337,24 @@ class WorkerPool:
             active = int(probe.get("active_runs", 0))
             pipelines = list(probe.get("running_pipelines", []))
             worker_id = str(probe.get("worker_id", "")).strip()
+            session_id = str(probe.get("session_id", "")).strip()
 
             with self._lock:
                 health = self._health[url]
                 prev_ok = health["ok"]
+                registered = self._worker_sessions.get(url)
+                session_changed = bool(
+                    ok and session_id and registered
+                    and session_id != registered["session_id"]
+                )
+                if session_changed or (session_id and url in self._session_refresh_pending):
+                    self._session_refresh_pending[url] = session_id
+                refresh_session = self._session_refresh_pending.get(url)
                 if ok:
                     health.update({
-                        "ok": True,
+                        # Exclude a restarted process until its new handshake
+                        # succeeds, even if no probe observed it going down.
+                        "ok": not refresh_session,
                         "failures": 0,
                         "active_runs": active,
                         "running_pipelines": pipelines,
@@ -373,12 +386,21 @@ class WorkerPool:
                     self._worker_ids[worker_id] = url
                     self._url_to_worker_id[url] = worker_id
 
-            if ok and not prev_ok:
-                logger.info("Worker came back up", extra={"worker": url})
+            if ok and (not prev_ok or refresh_session):
+                logger.info("Worker session or health recovered", extra={"worker": url})
                 # V18-01 §5: a recovered worker re-registers — re-establish the
                 # session secret (a process restart mints a new session_id).
-                self._handshake_worker(url)
-                if self.on_health_restored is not None:
+                refreshed = self._handshake_worker(url)
+                if refresh_session:
+                    with self._lock:
+                        current = self._worker_sessions.get(url)
+                        refreshed = bool(
+                            refreshed and current and current["session_id"] == refresh_session
+                        )
+                        self._health[url]["ok"] = refreshed
+                        if refreshed:
+                            self._session_refresh_pending.pop(url, None)
+                if (not refresh_session or refreshed) and self.on_health_restored is not None:
                     try:
                         self.on_health_restored()
                     except Exception as exc:  # noqa: BLE001 — hook must never break polling
@@ -995,17 +1017,22 @@ class WorkerPool:
                 payload["generation"] = generation
             if slot_id:
                 payload["slot_id"] = slot_id
-            authorization = self._mint_authorization(
-                worker_url,
-                attempt_id=attempt_id,
-                run_id=run_id,
-                generation=generation if generation is not None else 1,
-                slot_id=slot_id,
-            )
-            if authorization is not None:
-                payload["authorization"] = authorization
         try:
             with self._agent_client(10) as client:
+                # Client acquisition can wait on the RPC cap. Fence and mint
+                # together afterwards so a completed refresh cannot leave a
+                # token from the old process in an already-selected dispatch.
+                with self._lock:
+                    if worker_url in self._session_refresh_pending:
+                        return "Worker authorization session refresh pending"
+                    if attempt_id is not None:
+                        authorization = self._mint_authorization(
+                            worker_url, attempt_id=attempt_id, run_id=run_id,
+                            generation=generation if generation is not None else 1,
+                            slot_id=slot_id,
+                        )
+                        if authorization is not None:
+                            payload["authorization"] = authorization
                 resp = client.post(f"{worker_url}/agent/run", json=payload)
                 resp.raise_for_status()
         except Exception as exc:

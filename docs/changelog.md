@@ -5,6 +5,33 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ---
 
+## [1.8.2] - 2026-10-12
+
+Includes the prepared recovery/auth corrections from the unpublished 1.8.1
+candidate, plus UI entrypoints and AI pipeline correctness. Connector hardening
+is reassigned to 1.8.3; operational confidence is reassigned to 1.8.4.
+
+### Fixed
+- Pipelines toolbar offers an enabled Pipeline Wizard and a separate New Pipeline action that opens the YAML editor.
+- AI pipeline context includes enum choices, nested configuration shapes, optional fields and field descriptions; filter conditions remain visible and plugin availability comes from the server registry.
+- AI task guidance uses matching selectors, explicit null defaults and record-count markers; batch aggregation uses sink transforms and symbolic SNMP categorization includes MIB setup.
+- AI YAML validation checks connector/transform wiring, filename tokens and lint errors before reporting success. Generate, modify and fix can retry once with safely redacted validation feedback; cron guidance uses the supported `cron` field.
+
+- Manager health polling refreshes worker authorization after a process restart even when every health probe succeeds. Workers with a changed session remain unavailable until the handshake succeeds.
+- Worker completion and its replayable outbox event now commit atomically. Worker boot restores missing outbox events for pre-existing unacknowledged completions without changing their recorded results or existing retry state.
+- Short batch runs are protected while dispatch registers their lease. Recovery consults the worker completion journal before declaring a tracked run lost and fences stale probes against newer leases (GH #91).
+- Pipeline lifecycle routers use a supported controller interface with unchanged operation responses.
+
+### Added
+- Bounded internal-auth decision counters for manager and worker warn/enforce modes, with missing/invalid credential distinctions and an observation/rollback runbook (GH #73). The default remains `warn`.
+- Browser regression asserts that navigation resolves the pending confirmation promise as cancellation; schema-description coverage explicitly documents its built-in-only boundary (GH #70).
+
+### Documentation
+- Worker `fencing` capability describes implemented session/token and manager identity checks; remote worker revocation is not advertised as supported.
+- Reconcile historical release/issue scope and record the agreed ten-IP concurrent SNMP polling pilot for v1.8.3, followed by sustained-capacity verification in v1.8.4.
+
+---
+
 ## [1.8.0] - 2026-10-09
 
 ### Breaking changes
@@ -1763,7 +1790,8 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 ---
 
 <!-- Comparison links -->
-[Unreleased]: https://github.com/tosumitdhaka/trishul-ram/compare/v1.4.0...HEAD
+[Unreleased]: https://github.com/tosumitdhaka/trishul-ram/compare/v1.8.2...HEAD
+[1.8.2]: https://github.com/tosumitdhaka/trishul-ram/compare/v1.8.0...v1.8.2
 [1.4.0]: https://github.com/tosumitdhaka/trishul-ram/compare/v1.3.3...v1.4.0
 [1.3.3]: https://github.com/tosumitdhaka/trishul-ram/compare/v1.3.2...v1.3.3
 [1.3.2]: https://github.com/tosumitdhaka/trishul-ram/compare/v1.3.1...v1.3.2

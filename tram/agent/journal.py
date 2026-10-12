@@ -875,7 +875,17 @@ class WorkerJournal:
     def record_completion(
         self, attempt_id: str, result_json: str, run_id: str | None = None
     ) -> None:
-        """Commit the completion row BEFORE the run leaves active tracking.
+        """Compatibility primitive for recording a result without an outbox entry.
+
+        Worker completion paths use ``record_completion_and_enqueue`` so no
+        committed result is stranded between separate journal transactions.
+        """
+        self._record_completion(attempt_id, result_json, run_id, enqueue=False)
+
+    def _record_completion(
+        self, attempt_id: str, result_json: str, run_id: str | None, *, enqueue: bool
+    ) -> None:
+        """Commit completion state and, when requested, its replay entry.
 
         Idempotent: the first completion wins (``ON CONFLICT DO NOTHING``);
         the reservation state is flipped to ``completed`` in the same
@@ -908,7 +918,44 @@ class WorkerJournal:
                 (attempt_id, resolved_run_id, result_json, self._now_iso()),
             )
 
+            if enqueue:
+                self._respool_completions_locked(conn, attempt_id)
+
         self._txn(fn)
+
+    def record_completion_and_enqueue(
+        self, attempt_id: str, result_json: str, run_id: str | None = None
+    ) -> None:
+        """Atomically persist the first result and its run-complete replay path.
+
+        Duplicate calls retain the original payload and retry state. Acked
+        completions are never re-enqueued. Worker completion paths use this
+        transaction; ``record_completion`` remains a compatibility primitive.
+        """
+        self._record_completion(attempt_id, result_json, run_id, enqueue=True)
+
+    def _respool_completions_locked(
+        self, conn: sqlite3.Connection, attempt_id: str | None = None
+    ) -> int:
+        now = self._now_iso()
+        cur = conn.execute(
+            "INSERT INTO outbox (attempt_id, kind, payload_json, created_at, "
+            "next_attempt_at, attempts, last_error) "
+            "SELECT c.attempt_id, 'run-complete', c.result_json, ?, ?, 0, NULL "
+            "FROM completions c WHERE c.acked = 0 "
+            "AND (? IS NULL OR c.attempt_id = ?) "
+            "AND NOT EXISTS (SELECT 1 FROM outbox o WHERE o.attempt_id = c.attempt_id "
+            "AND o.kind = 'run-complete')",
+            (now, now, attempt_id, attempt_id),
+        )
+        return cur.rowcount
+
+    def respool_unacked_completions(self) -> int:
+        """Repair stranded results at boot, retaining results, acks and retries.
+
+        Repeating recovery creates no duplicate result or delivery row.
+        """
+        return int(self._txn(self._respool_completions_locked))
 
     def enqueue_outbox(self, attempt_id: str, kind: str, payload: dict | str) -> int:
         """Enqueue an undelivered event for the attempt; returns its ``seq``."""

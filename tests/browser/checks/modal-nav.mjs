@@ -120,12 +120,49 @@ check('route change with modal open: no .modal.show remains', routeChangeState.s
 await page.goto(`${BASE}/#dashboard`, { waitUntil: 'networkidle', timeout: 15000 })
 await page.evaluate(() => { window.location.hash = '#pipelines' })
 await page.waitForFunction(() => document.querySelector('[data-action="stop"]') !== null, { timeout: 10000 })
+// Observe the real promise whose executor registers the confirm page-leave listener.
+// Restore Promise immediately afterward; no production test hook is needed.
+await page.evaluate(() => {
+  const NativePromise = window.Promise
+  window.__confirmOutcome = { captured: false, settled: false, value: null }
+  const nativeAdd = window.addEventListener
+  let confirmListeners = 0
+  window.addEventListener = function (type, ...args) {
+    if (type === 'tram:page-leave') confirmListeners += 1
+    return nativeAdd.call(this, type, ...args)
+  }
+  window.__restoreConfirmPromise = () => {
+    window.Promise = NativePromise
+    window.addEventListener = nativeAdd
+  }
+  window.Promise = new Proxy(NativePromise, {
+    construct(Target, [executor], newTarget) {
+      let candidate = false
+      const before = confirmListeners
+      const promise = Reflect.construct(Target, [(resolve, reject) => {
+        executor((value) => {
+          if (candidate) Object.assign(window.__confirmOutcome, { settled: true, value })
+          resolve(value)
+        }, reject)
+        candidate = confirmListeners > before
+        if (candidate) window.__confirmOutcome.captured = true
+      }], newTarget)
+      return promise
+    },
+  })
+})
 await page.click('[data-action="stop"]')
 await page.waitForFunction(() => document.getElementById('tram-confirm-modal')?.classList.contains('show'), { timeout: 10000 })
+await page.evaluate(() => window.__restoreConfirmPromise())
 check('Stop opens the shared confirm dialog', await page.evaluate(() => document.getElementById('tram-confirm-modal')?.classList.contains('show')))
 
 await page.evaluate(() => history.back())
 await page.waitForFunction(() => document.getElementById('tb-title')?.textContent === 'Dashboard', { timeout: 10000 })
+
+const confirmOutcome = await page.waitForFunction(() => window.__confirmOutcome.settled, null, { timeout: 2000 })
+  .then(() => page.evaluate(() => window.__confirmOutcome))
+  .catch(() => page.evaluate(() => window.__confirmOutcome))
+check('Back resolves the pending confirmAction promise as false', confirmOutcome.captured && confirmOutcome.settled && confirmOutcome.value === false, JSON.stringify(confirmOutcome))
 
 const confirmBackState = await residue()
 check('Back with confirm open: no .modal-backdrop remains', confirmBackState.backdrops === 0, JSON.stringify(confirmBackState))

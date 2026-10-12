@@ -434,7 +434,7 @@ async def trigger_run(
     # id — the audit/idempotency handle for the trigger operation (op_kind
     # `trigger`). The controller no-ops (returns None) when persistence is not
     # configured. The 202 receipt keeps the legacy `name`/`status` keys.
-    operation_id = controller._record_completed_lifecycle_operation(
+    operation_id = controller.record_completed_lifecycle_operation(
         name, "trigger", detail="manual run triggered"
     )
 

@@ -76,3 +76,57 @@ def test_build_template_examples_includes_name_and_content():
     out = build_template_examples(templates, "kafka to local")
     assert "### Template: kafka-to-local" in out
     assert "name: kafka-to-local" in out  # the worked YAML content itself
+
+def test_context_uses_server_registry_not_client_plugin_lists(monkeypatch):
+    import tram.api.routers.ai_docs as ai_docs
+
+    monkeypatch.setattr(ai_docs, "list_plugins", lambda: {
+        "sources": ["snmp_poll"], "sinks": ["local"],
+        "serializers": ["json"], "transforms": ["filter"],
+    })
+    context = build_ai_context("snmp to local", {"sources": ["invented"], "transforms": []})
+    assert "invented" not in context
+    assert "snmp_poll:" in context
+    assert "filter:" in context
+    assert "condition: str  # required" in context
+    assert "filename_template:" in context
+
+
+def test_context_explains_runtime_shapes_and_expression_literals(monkeypatch):
+    import tram.api.routers.ai_docs as ai_docs
+
+    monkeypatch.setattr(ai_docs, "list_plugins", lambda: {
+        "sources": ["gnmi", "snmp_poll"], "sinks": ["local"],
+        "serializers": ["json"], "transforms": ["aggregate", "select_from_list", "project"],
+    })
+    context = build_ai_context("gnmi and snmp to local", {})
+    for guidance in (
+        "_metrics.ifInOctets", "_labels.ifDescr", "_index", "shell-style globs",
+        "schedule type interval", "schedule type stream", "'op:field'",
+        "non-null values", "output: {item.path: output_field}",
+        "existing null is preserved", "{field.device.name}", "\"'tokyo'\"",
+    ):
+        assert guidance in context
+
+
+
+def test_context_loads_runtime_plugins_in_a_fresh_process():
+    import subprocess
+    import sys
+
+    result = subprocess.run(
+        [sys.executable, "-c", """
+from tram.api.routers.ai_docs import build_ai_context
+context = build_ai_context('SNMP SFTP gNMI polling', {
+    'sources': [], 'sinks': [], 'transforms': [], 'serializers': [],
+})
+for schema in ('snmp_poll:', 'sftp:', 'gnmi:', 'json:', 'filter:'):
+    assert schema in context, schema
+assert 'filename_template:' in context
+assert 'condition: str  # required' in context
+"""],
+        capture_output=True,
+        text=True,
+        timeout=30,
+    )
+    assert result.returncode == 0, result.stderr

@@ -557,7 +557,7 @@ class TestLifecycle:
         app = _make_app()
         app.state.controller.get.return_value = state
         app.state.controller.trigger_run.return_value = "run-123"
-        app.state.controller._record_completed_lifecycle_operation.return_value = "op-123"
+        app.state.controller.record_completed_lifecycle_operation.return_value = "op-123"
         client = TestClient(app)
         resp = client.post("/api/pipelines/test-pipe/run")
         # V18-09: the trigger receipt is 202 with the lifecycle-operation id
@@ -568,7 +568,7 @@ class TestLifecycle:
         assert body["operation_id"] == "op-123"
         assert body["name"] == "test-pipe"
         assert body["status"] == "triggered"
-        app.state.controller._record_completed_lifecycle_operation.assert_called_once_with(
+        app.state.controller.record_completed_lifecycle_operation.assert_called_once_with(
             "test-pipe", "trigger", detail="manual run triggered"
         )
 
@@ -578,7 +578,7 @@ class TestLifecycle:
         app = _make_app()
         app.state.controller.get.return_value = state
         app.state.controller.trigger_run.return_value = "run-flush-1"
-        app.state.controller._record_completed_lifecycle_operation.return_value = "op-1"
+        app.state.controller.record_completed_lifecycle_operation.return_value = "op-1"
         client = TestClient(app)
         resp = client.post("/api/pipelines/test-pipe/run?flush=true")
         assert resp.status_code == 202
@@ -599,7 +599,7 @@ class TestLifecycle:
         resp = client.post("/api/pipelines/test-pipe/run")
         assert resp.status_code == 503
         assert "queue at capacity" in resp.json()["detail"]
-        app.state.controller._record_completed_lifecycle_operation.assert_not_called()
+        app.state.controller.record_completed_lifecycle_operation.assert_not_called()
 
     def test_trigger_run_executor_overload_maps_503(self):
         """V18-08: bounded management executor saturation is explicit
@@ -621,7 +621,7 @@ class TestLifecycle:
         app = _make_app()
         app.state.controller.get.return_value = state
         app.state.controller.trigger_run.return_value = "run-norm-1"
-        app.state.controller._record_completed_lifecycle_operation.return_value = "op-1"
+        app.state.controller.record_completed_lifecycle_operation.return_value = "op-1"
         client = TestClient(app)
         resp = client.post("/api/pipelines/test-pipe/run")
         assert resp.status_code == 202
@@ -636,7 +636,7 @@ class TestLifecycle:
         app = _make_app()
         app.state.controller.get.return_value = state
         app.state.controller.trigger_run.return_value = TriggerResult("run-queued-1", "queued")
-        app.state.controller._record_completed_lifecycle_operation.return_value = "op-queued-1"
+        app.state.controller.record_completed_lifecycle_operation.return_value = "op-queued-1"
         client = TestClient(app)
         resp = client.post("/api/pipelines/test-pipe/run")
         assert resp.status_code == 202
@@ -653,7 +653,7 @@ class TestLifecycle:
         app = _make_app()
         app.state.controller.get.return_value = state
         app.state.controller.trigger_run.return_value = TriggerResult("run-dispatch-1", "dispatched")
-        app.state.controller._record_completed_lifecycle_operation.return_value = "op-dispatch-1"
+        app.state.controller.record_completed_lifecycle_operation.return_value = "op-dispatch-1"
         client = TestClient(app)
         resp = client.post("/api/pipelines/test-pipe/run")
         assert resp.status_code == 202
@@ -695,7 +695,7 @@ class TestLifecycle:
         app = _make_app()
         app.state.controller.get.return_value = state
         app.state.controller.trigger_run.return_value = "run-nodb-1"
-        app.state.controller._record_completed_lifecycle_operation.return_value = None
+        app.state.controller.record_completed_lifecycle_operation.return_value = None
         client = TestClient(app)
         resp = client.post("/api/pipelines/test-pipe/run")
         assert resp.status_code == 202
@@ -817,7 +817,7 @@ class TestLifecycleOperations:
         ctrl.manager.register(
             load_pipeline_from_yaml(_MINIMAL_YAML), yaml_text=_MINIMAL_YAML
         )
-        op_id = ctrl._record_completed_lifecycle_operation(
+        op_id = ctrl.record_completed_lifecycle_operation(
             "test-pipe", "boot_adopt", detail="boot adoption test"
         )
         app = _make_app(db=db)

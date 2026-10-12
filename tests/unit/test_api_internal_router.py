@@ -61,6 +61,8 @@ class TestRunCompleteEndpoint:
             errors=[],
             started_at=datetime.fromisoformat(started_at),
             finished_at=datetime.fromisoformat(finished_at),
+            dlq_count=0, records_failed=0, dlq_succeeded=0, dlq_failed=0,
+            disposition=None, spool=None,
         )
 
     def test_passes_error_string(self):
@@ -160,6 +162,8 @@ class TestRunCompleteEndpoint:
             errors=[],
             started_at=None,
             finished_at=None,
+            dlq_count=0, records_failed=0, dlq_succeeded=0, dlq_failed=0,
+            disposition=None, spool=None,
         )
         ctrl.on_worker_run_complete.assert_not_called()
 

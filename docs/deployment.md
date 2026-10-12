@@ -329,7 +329,7 @@ need a key, regardless of the mode below.
 
 | Mode | Behavior |
 |------|----------|
-| `off` (no key) | Pass through with no check and no log |
+| `off` | Pass through with no check and no log |
 | `warn` (default) | Log a WARNING (path + client) and still serve the request |
 | `enforce` | Reject with 401 — requires `TRAM_API_KEY` to be set on the server |
 
@@ -338,6 +338,46 @@ every run-complete/stats callback automatically when `TRAM_API_KEY` is set on th
 then set `TRAM_INTERNAL_AUTH_MODE=warn` and watch the WARNING logs for clients that still
 miss the key, then flip to `enforce`. The default is `warn`, so nothing 401s a working
 deployment at any point in this sequence.
+
+**Observe before enforce (v1.8.1):** scrape `/metrics` on the manager and every
+worker process. `tram_internal_auth_total{mode,verdict,action}` counts exactly one
+authentication decision per non-exempt internal request when authentication is
+configured and mode is `warn` or `enforce`:
+
+| Verdict | Warn action | Enforce action |
+|---------|-------------|----------------|
+| `valid` | `allowed` | `allowed` |
+| `missing` | `warned` | `rejected` |
+| `invalid` | `warned` | `rejected` |
+
+These are bounded labels; credentials, paths and worker IDs are never labels.
+`missing` means an absent/empty machine-key header, or absent/empty Authorization
+header in bearer-only deployments. A nonempty malformed Authorization header is
+`invalid`. When a machine key is configured, internal requests use that key;
+a bearer token does not substitute for it. Counts describe the authentication
+decision, not the downstream HTTP result. Probes, `/metrics`, non-internal paths,
+`off` and completely disabled authentication produce no increments. Counters are
+process-local, reset on restart, and require `prometheus_client`; scrape every pod
+and use `increase`, accounting for restarts and gaps. Absent series or zero misses
+alone do not prove callers are exercising the channel; check allowed traffic too.
+
+Record a representative observation window including scheduled/manual runs,
+worker restart, drain and recovery. For example, inspect
+`sum by (verdict) (increase(tram_internal_auth_total{mode="warn",action="warned"}[1h]))`
+and the corresponding `action="allowed"` traffic across manager and workers.
+Correlate unexplained misses with WARNING logs (path/client), repair callers, and
+require zero unexplained misses before changing mode. Record duration, scrape
+coverage, exclusions and result. Flip the target deployment to `enforce`, restart
+processes to reload configuration, verify probe health and normal runs, and watch
+`sum by (verdict) (increase(tram_internal_auth_total{mode="enforce",action="rejected"}[1h]))`
+for unexpected rejections. Enforce rejection does not emit the warn-mode log.
+
+**Rollback:** restore `TRAM_INTERNAL_AUTH_MODE=warn` in the deployment configuration
+and restart affected manager/worker processes; verify successful callbacks and
+worker operations, then investigate new `warned` increments. Keep keys and network
+restrictions in place. Rollback permits invalid callers again, so record the reason
+and exposure window. This software release does not change the default or supply
+production observation evidence.
 
 **Without a machine key (`auth_users`-only deployments):** internal surfaces fall back to
 the browser Bearer-token check with the same mode knob — `enforce` closes `/api/internal/*`
@@ -352,6 +392,15 @@ deployments must set a real secret (not the old committed `tram-internal-2026` d
 the `apiKey` Helm value or `envSecret.TRAM_API_KEY`, and set `TRAM_INTERNAL_AUTH_MODE=enforce`
 after the rollout window. Workers automatically receive the same key from the chart
 (`worker-statefulset.yaml` injects `.Values.apiKey` as `TRAM_API_KEY`).
+
+Worker health replies include a nonsecret `session_id` identifying the current process.
+The manager refreshes authorization when that identity changes, including restarts that
+remain healthy between polls. A changed worker session stays unavailable for dispatch
+until its handshake succeeds; older workers without this health field retain the
+existing compatibility behavior.
+If the worker restarts after the manager's local token mint, dispatch can still
+fail cleanly; this refresh does not automatically replay that dispatch or downgrade
+it to legacy admission.
 
 **Production posture (v1.8.0 — expanded internal surface):** v1.8 adds state-changing
 internal endpoints (the checkpoint endpoint writes `delivery_checkpoints` + `transform_state`;

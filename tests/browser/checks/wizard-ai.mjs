@@ -182,14 +182,31 @@ await page.screenshot({ path: `${SHOT_DIR}/bug2-editor-handoff.png` })
 await page.click('#editor-cancel-btn')
 await page.waitForTimeout(900)
 const pipelinesRows = await page.evaluate(() => document.querySelectorAll('#pl-body tr[data-pipeline-name]').length)
-const newBtnClickable = await page.evaluate(() => {
-  document.getElementById('pl-new-btn')?.click()
-  return true
-})
+const newBtnClickable = await page.locator('#pl-new-btn').isEnabled()
+await page.click('#pl-new-btn')
 await page.waitForTimeout(500)
 const hashAfterNew = await page.evaluate(() => window.location.hash)
 check('editor Cancel lands on the pipelines page', pipelinesRows === 2, `rows=${pipelinesRows}`)
-check('pipelines "New Pipeline" button responds to click', newBtnClickable && hashAfterNew.startsWith('#create'), `hash=${hashAfterNew}`)
+const newEditor = await page.evaluate(() => ({
+  title: document.getElementById('editor-title')?.textContent,
+  yaml: document.getElementById('editor-textarea')?.value || '',
+  wizard: Boolean(document.getElementById('wiz-step-1')),
+}))
+check('New Pipeline opens the YAML editor', newBtnClickable && hashAfterNew === '#editor?return=pipelines' && !newEditor.wizard, `hash=${hashAfterNew}`)
+check('New Pipeline starts with the default YAML instead of wizard hand-off',
+  newEditor.title === 'New Pipeline' && newEditor.yaml.startsWith('name: my-pipeline\n') && newEditor.yaml.trim() !== AI_YAML,
+  `title=${newEditor.title}, first line=${JSON.stringify(newEditor.yaml.split('\n')[0])}`)
+await page.click('#editor-cancel-btn')
+await page.waitForTimeout(500)
+check('new editor Cancel returns to Pipelines', await page.evaluate(() => window.location.hash === '#pipelines'))
+const wizardBtnEnabled = await page.locator('#pl-wizard-btn').isEnabled()
+const wizardBtnText = await page.locator('#pl-wizard-btn').innerText()
+await page.click('#pl-wizard-btn')
+await page.waitForTimeout(500)
+check('Pipeline Wizard opens the guided flow',
+  wizardBtnEnabled && wizardBtnText.includes('Pipeline Wizard') && await page.evaluate(() =>
+    window.location.hash === '#create?return=pipelines' && Boolean(document.getElementById('wiz-step-1'))
+  ), `button=${wizardBtnText}`)
 
 // ── Phase 3: Save Pipeline after AI assist (operator path, name typed) ──────
 await page.goto(`${BASE}/#create`, { waitUntil: 'networkidle', timeout: 15000 })

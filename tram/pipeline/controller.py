@@ -333,6 +333,7 @@ class PipelineController:
         self._active_placement_group: dict[str, str] = {}
         # {pipeline_name: _ActiveBatchRun}
         self._active_batch_runs: dict[str, _ActiveBatchRun] = {}
+        self._batch_dispatching: dict[str, int] = {}
 
         self._running = False
 
@@ -657,7 +658,7 @@ class PipelineController:
                 cancel_reason="manager_lost_before_dispatch",
             )
             self._terminal_cancel_queued_run(run_id, "manager_lost_before_dispatch")
-            self._record_completed_lifecycle_operation(
+            self.record_completed_lifecycle_operation(
                 pipeline_name,
                 "boot_adopt",
                 attempt_id=attempt_id,
@@ -685,7 +686,7 @@ class PipelineController:
             self._mark_attempt_unknown(
                 attempt, uncertainty_reason="boot_adoption_no_journal_evidence"
             )
-            self._record_completed_lifecycle_operation(
+            self.record_completed_lifecycle_operation(
                 pipeline_name,
                 "boot_adopt",
                 attempt_id=attempt_id,
@@ -721,7 +722,7 @@ class PipelineController:
             # boot; manager.register hydrates last_run from the row).
             self._record_adoption_completion_history(attempt, result_json, outcome=outcome)
             self._terminal_cancel_queued_run(run_id, "boot_adoption_completed")
-            self._record_completed_lifecycle_operation(
+            self.record_completed_lifecycle_operation(
                 pipeline_name,
                 "boot_adopt",
                 attempt_id=attempt_id,
@@ -749,7 +750,7 @@ class PipelineController:
                 cancel_reason=f"boot_adoption_{kind}",
             )
             self._terminal_cancel_queued_run(run_id, f"boot_adoption_{kind}")
-            self._record_completed_lifecycle_operation(
+            self.record_completed_lifecycle_operation(
                 pipeline_name,
                 "boot_adopt",
                 attempt_id=attempt_id,
@@ -776,7 +777,7 @@ class PipelineController:
         self._mark_attempt_unknown(
             attempt, uncertainty_reason="boot_adoption_unrecognized_journal_reply"
         )
-        self._record_completed_lifecycle_operation(
+        self.record_completed_lifecycle_operation(
             pipeline_name,
                 "boot_adopt",
                 attempt_id=attempt_id,
@@ -823,7 +824,7 @@ class PipelineController:
         kind = str(
             data.get("kind") or data.get("status") or data.get("state") or ""
         ).lower()
-        result_json = data.get("result_json")
+        result_json = data.get("result_json", data.get("result"))
         if result_json is not None or kind in ("completed", "completion"):
             return "completed", result_json
         if kind in ("interrupted", "interrupted_reservation"):
@@ -1893,7 +1894,7 @@ class PipelineController:
                 "now": datetime.now(UTC).isoformat(),
             })
 
-    def _record_completed_lifecycle_operation(
+    def record_completed_lifecycle_operation(
         self,
         pipeline_name: str,
         op_kind: str,
@@ -2591,6 +2592,14 @@ class PipelineController:
                         extra={"pipeline": config.name, "cron": config.schedule.cron})
 
     def _run_batch(self, pipeline_name: str, run_id: str | None = None, *, origin: str = "scheduled", flush: bool = False) -> None:
+        try:
+            self._execute_batch(pipeline_name, run_id, origin=origin, flush=flush)
+        finally:
+            with self._lock:
+                if self._batch_dispatching.get(pipeline_name) == threading.get_ident():
+                    self._batch_dispatching.pop(pipeline_name, None)
+
+    def _execute_batch(self, pipeline_name: str, run_id: str | None = None, *, origin: str = "scheduled", flush: bool = False) -> None:
         """APScheduler/thread-pool callback — one batch execution.
 
         ``origin`` is keyword-only so manual triggers are distinguishable from
@@ -2680,6 +2689,9 @@ class PipelineController:
                             "Manual run skipped: another attempt holds the run guard",
                         )
                     return
+
+            if self._worker_pool is not None:
+                self._batch_dispatching[pipeline_name] = threading.get_ident()
 
         # ── Manager+worker dispatch path ───────────────────────────────────
         if self._worker_pool is not None:
@@ -3031,9 +3043,74 @@ class PipelineController:
         run_id: str | None = None,
         finished_at: datetime | None = None,
     ) -> bool:
+        # A short run can leave the active list before its outbox callback.
         with self._lock:
-            lease = self._active_batch_runs.pop(pipeline_name, None)
+            if pipeline_name in self._batch_dispatching:
+                return False
+            lease = self._active_batch_runs.get(pipeline_name)
+            if run_id is not None and (lease is None or lease.run_id != run_id):
+                return lease is None and self.manager.get_run(run_id) is not None
+            attempt = self._active_attempt_for_run(lease.run_id) if lease else None
+        if lease is not None and self._worker_pool is not None:
+            query_id = attempt["attempt_id"] if attempt else f"legacy:{lease.run_id}"
+            data = self._worker_pool.query_attempt(lease.worker_url, query_id)
+            legacy_reply = attempt is None
+            # An unsuccessful handshake admits the same DB-backed run through
+            # the legacy bridge. Its worker journal uses the synthetic key.
+            if attempt and (not isinstance(data, dict)
+                            or self._classify_attempt_query(data)[0] == "unknown"):
+                query_id = f"legacy:{lease.run_id}"
+                data = self._worker_pool.query_attempt(lease.worker_url, query_id)
+                legacy_reply = True
+            if isinstance(data, dict):
+                kind, payload = self._classify_attempt_query(data)
+                if kind == "active":
+                    return False
+                if kind == "completed":
+                    if isinstance(payload, str):
+                        try:
+                            payload = json.loads(payload)
+                        except ValueError:
+                            return False
+                    if not isinstance(payload, dict):
+                        return False
+                    expected = {"run_id": lease.run_id, "pipeline_name": pipeline_name}
+                    if attempt and not legacy_reply:
+                        expected.update(attempt_id=attempt["attempt_id"],
+                                        generation=attempt["generation"])
+                    if data.get("attempt_id", query_id) != query_id:
+                        return False
+                    for source in (data, payload):
+                        if any(key in source and source[key] != value
+                               for key, value in expected.items()):
+                            return False
+                    if legacy_reply and payload.get("attempt_id") not in (None, "", query_id):
+                        return False
+                    fields = ("status", "records_in", "records_out", "records_skipped",
+                              "bytes_in", "bytes_out", "error", "errors", "started_at",
+                              "finished_at", "dlq_count", "records_failed", "dlq_succeeded",
+                              "dlq_failed", "disposition", "spool")
+                    if not all(key in payload for key in ("status", "records_in", "records_out")):
+                        return False
+                    with self._lock:
+                        if self._active_batch_runs.get(pipeline_name) is not lease:
+                            return False
+                        callback = (self.on_attempt_run_complete if not legacy_reply
+                                    else self.on_worker_run_complete)
+                        callback(**expected, worker_id=payload.get("worker_id"),
+                                 **{key: payload[key] for key in fields if key in payload})
+                    return False
+        with self._lock:
+            # Network probes race callbacks and new dispatches: compare again.
+            if pipeline_name in self._batch_dispatching:
+                return False
+            current = self._active_batch_runs.get(pipeline_name)
+            if current is not lease:
+                return False
             state = self.manager.get(pipeline_name) if self.manager.exists(pipeline_name) else None
+            if lease is None and (state is None or state.status != "running"):
+                return False
+            self._active_batch_runs.pop(pipeline_name, None)
             if state is None:
                 return False
 
@@ -3111,6 +3188,12 @@ class PipelineController:
         errors: list[str] | None = None,
         started_at: datetime | str | None = None,
         finished_at: datetime | str | None = None,
+        dlq_count: int = 0,
+        records_failed: int = 0,
+        dlq_succeeded: int = 0,
+        dlq_failed: int = 0,
+        disposition: dict | None = None,
+        spool: dict | None = None,
     ) -> None:
         """Callback from a worker agent when a dispatched run finishes.
 
@@ -3161,6 +3244,9 @@ class PipelineController:
                 error=error,
                 node_id=result_node_id,
                 errors=errors or [],
+                dlq_count=dlq_count, records_failed=records_failed,
+                dlq_succeeded=dlq_succeeded, dlq_failed=dlq_failed,
+                disposition=disposition or {}, spool=spool or {},
             )
 
             if self._worker_pool is not None:
@@ -3221,6 +3307,12 @@ class PipelineController:
         errors: list[str] | None = None,
         started_at: datetime | str | None = None,
         finished_at: datetime | str | None = None,
+        dlq_count: int = 0,
+        records_failed: int = 0,
+        dlq_succeeded: int = 0,
+        dlq_failed: int = 0,
+        disposition: dict | None = None,
+        spool: dict | None = None,
     ) -> dict:
         """Identity-checked run-complete (frozen §2: running → terminal).
 
@@ -3237,63 +3329,70 @@ class PipelineController:
         retrying). With no ledger (``db is None``) the handler degrades to
         today's path.
         """
-        if self._db is None:
+        with self._lock:
+            if self._db is None:
+                self.on_worker_run_complete(
+                    run_id=run_id, pipeline_name=pipeline_name, worker_id=worker_id,
+                    status=status, records_in=records_in, records_out=records_out,
+                    records_skipped=records_skipped, bytes_in=bytes_in, bytes_out=bytes_out,
+                    error=error, errors=errors, started_at=started_at, finished_at=finished_at,
+                    dlq_count=dlq_count, records_failed=records_failed,
+                    dlq_succeeded=dlq_succeeded, dlq_failed=dlq_failed,
+                    disposition=disposition, spool=spool,
+                )
+                return {"ok": True}
+
+            attempt = ledger.get_attempt(self._db._engine, attempt_id)
+            if attempt is None:
+                logger.warning(
+                    "Ignoring run-complete for unknown attempt",
+                    extra={"attempt_id": attempt_id, "run_id": run_id, "pipeline": pipeline_name},
+                )
+                return {"ok": True, "ignored": "unknown_attempt"}
+            if (
+                attempt["run_id"] != run_id
+                or attempt["pipeline_name"] != pipeline_name
+                or attempt["generation"] != generation
+            ):
+                logger.warning(
+                    "Ignoring run-complete with mismatched attempt identity",
+                    extra={
+                        "attempt_id": attempt_id,
+                        "run_id": run_id,
+                        "pipeline": pipeline_name,
+                        "generation": generation,
+                        "ledger_run_id": attempt["run_id"],
+                        "ledger_pipeline": attempt["pipeline_name"],
+                        "ledger_generation": attempt["generation"],
+                    },
+                )
+                return {"ok": True, "ignored": "identity_mismatch"}
+
+            try:
+                run_status = RunStatus(status)
+            except ValueError:
+                run_status = RunStatus.FAILED
+
+            # Ledger commit: attempt → terminal (fenced), intent resolved
+            # (idempotent for the winner), guard released by identity.
+            self._terminalize_attempt(
+                attempt_id=attempt_id,
+                run_id=run_id,
+                pipeline_name=pipeline_name,
+                generation=generation,
+                resolve_outcome=self._intent_outcome(run_status),
+            )
+
             self.on_worker_run_complete(
                 run_id=run_id, pipeline_name=pipeline_name, worker_id=worker_id,
                 status=status, records_in=records_in, records_out=records_out,
                 records_skipped=records_skipped, bytes_in=bytes_in, bytes_out=bytes_out,
                 error=error, errors=errors, started_at=started_at, finished_at=finished_at,
+                dlq_count=dlq_count, records_failed=records_failed,
+                dlq_succeeded=dlq_succeeded, dlq_failed=dlq_failed,
+                disposition=disposition, spool=spool,
             )
             return {"ok": True}
-
-        attempt = ledger.get_attempt(self._db._engine, attempt_id)
-        if attempt is None:
-            logger.warning(
-                "Ignoring run-complete for unknown attempt",
-                extra={"attempt_id": attempt_id, "run_id": run_id, "pipeline": pipeline_name},
-            )
-            return {"ok": True, "ignored": "unknown_attempt"}
-        if (
-            attempt["run_id"] != run_id
-            or attempt["pipeline_name"] != pipeline_name
-            or attempt["generation"] != generation
-        ):
-            logger.warning(
-                "Ignoring run-complete with mismatched attempt identity",
-                extra={
-                    "attempt_id": attempt_id,
-                    "run_id": run_id,
-                    "pipeline": pipeline_name,
-                    "generation": generation,
-                    "ledger_run_id": attempt["run_id"],
-                    "ledger_pipeline": attempt["pipeline_name"],
-                    "ledger_generation": attempt["generation"],
-                },
-            )
-            return {"ok": True, "ignored": "identity_mismatch"}
-
-        try:
-            run_status = RunStatus(status)
-        except ValueError:
-            run_status = RunStatus.FAILED
-
-        # Ledger commit: attempt → terminal (fenced), intent resolved
-        # (idempotent for the winner), guard released by identity.
-        self._terminalize_attempt(
-            attempt_id=attempt_id,
-            run_id=run_id,
-            pipeline_name=pipeline_name,
-            generation=generation,
-            resolve_outcome=self._intent_outcome(run_status),
-        )
-
-        self.on_worker_run_complete(
-            run_id=run_id, pipeline_name=pipeline_name, worker_id=worker_id,
-            status=status, records_in=records_in, records_out=records_out,
-            records_skipped=records_skipped, bytes_in=bytes_in, bytes_out=bytes_out,
-            error=error, errors=errors, started_at=started_at, finished_at=finished_at,
-        )
-        return {"ok": True}
 
     # ── Stream execution ───────────────────────────────────────────────────
 

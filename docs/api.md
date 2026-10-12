@@ -600,6 +600,44 @@ Per-pipeline aggregated stats for the last hour (records in/out, error rate, avg
 
 ---
 
+## Worker protocol capabilities (v1.8.x)
+
+`POST /agent/handshake` reports protocol `1.8` and the capabilities `fencing`,
+`commit_receipts`, `durable_completion`, `query_replay`, and `drain`.
+`fencing` means that authorized admission validates the worker session, signed
+start token, session epoch and clock watermark; the manager checks attempt,
+generation identity on completion and stats. It does not promise a
+remote worker revocation or tombstone installation endpoint. Journal tombstones
+are a local admission guard, and `/agent/stop` cooperatively signals the active
+run rather than installing a durable revocation. A stop does not fence sink
+side effects from a still-draining executor.
+
+The capability names and protocol version remain compatible with v1.8.0 peers.
+The manager obtains session secrets through the handshake and preserves its
+legacy admission bridge for older peers. No peer must negotiate a revocation
+capability to dispatch or replay a result.
+
+Worker completion callbacks and journal replay preserve `dlq_count`,
+`records_failed`, `dlq_succeeded`, `dlq_failed`, per-sink `disposition`, and
+`spool` accounting alongside the record and byte totals. These fields are
+optional for older workers; missing counters default to zero and missing maps
+to empty maps. History persists this accounting in the same insert as the run result.
+
+Worker completion and its `run-complete` outbox entry commit atomically. At boot,
+the worker also respools pre-existing unacknowledged completions with no replay
+entry, retaining the original result and retry state. Delivery retries continue
+until the manager acknowledges, without requiring a manager restart. Already
+acknowledged results remain subject to the existing audit retention policy.
+
+Batch reconciliation suppresses loss recovery while its dispatch RPC is in
+flight. For an accepted lease missing from the active-run list, it queries the
+worker journal before finalizing loss, including the synthetic legacy key when
+the admission bridge was used. Journal queries retain their ten-second request
+deadline (the bridge fallback can require two queries). A valid completion is
+replayed through the existing identity-checked callback; active evidence retains
+the lease. Unavailable/no-query peers retain the existing worker-loss policy;
+this change does not infer delivery success without terminal evidence.
+
 ## Authentication (v1.0.0)
 
 When `TRAM_API_KEY` is set (or `apiKey` in Helm values), all protected `/api/*` requests must include the key via the `X-API-Key` header:
@@ -817,12 +855,31 @@ Generate, explain, fix, or modify pipeline YAML. Returns `503` when AI is not
 configured, `502` when the provider call fails, and `400` for an unknown mode.
 
 For `generate`/`fix`/`modify`, the response carries `valid` and `issues` in
-addition to the YAML: the model output is validated server-side with the same
-`yaml.safe_load` + `load_pipeline_from_yaml` check the dry-run endpoint uses.
-`valid` is `false` when the YAML fails to parse/validate (errors in `issues`),
+addition to the YAML: the model output is validated server-side against the
+configuration models, dry-run wiring (including transform construction
+and filename tokens), and lint errors. `valid` is `false` when any of these
+checks fail (errors in `issues`),
 or when the provider reported output truncation (`stop_reason`/`finish_reason`
 of `max_tokens`/`length` — a warning is appended to `issues`). The raw YAML is
 always returned so the editor can still show it.
+
+These modes allow at most one additional provider call when validation fails or
+output is truncated, with a 4096-token output budget per call. The retry includes
+a safely redacted previous candidate and validation feedback; malformed output
+that cannot be safely redacted is omitted. Responses also include `retried` and
+`attempts`. Passing validation establishes configuration and wiring validity;
+it does not prove connectivity, data shape or compliance with every user intent.
+Validation does not connect to data sources or write sink records. Constructors
+may read configured local assets, such as an enrichment lookup file, as in the
+existing dry-run endpoint.
+
+Schema context comes from the server's registered plugins and configuration
+models, including enum choices, nested definitions and field descriptions.
+Client-supplied plugin inventories cannot hide available plugin schemas.
+Task guidance covers matching items, null defaults, counting records, SNMP MIB
+readiness and aggregation placement. Top-level transforms run per record;
+sink transforms operate on the surviving parsed chunk. Sink aggregation therefore
+groups within each chunk/file, not across an entire multi-file run.
 
 For `explain`/`fix`/`modify`, secret fields in the incoming YAML (per the
 schema metadata: field names containing `password`/`token`/`secret`) are masked
@@ -837,7 +894,7 @@ Create a new pipeline from a description.
 |-------|-------------|
 | `mode` | `"generate"` |
 | `prompt` | Natural-language description of the pipeline |
-| `plugins` | Optional `{sources, sinks, transforms, serializers}` type lists to scope the schema context |
+| `plugins` | Optional legacy inventory accepted for compatibility; availability is resolved server-side |
 
 ```bash
 curl -X POST http://localhost:8765/api/ai/suggest \

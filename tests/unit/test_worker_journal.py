@@ -799,3 +799,89 @@ def test_validate_and_admit_accepts_previous_secret_within_overlap(tmp_path):
         assert refused.refusal_reason == "bad signature"
     finally:
         j.close()
+
+@pytest.mark.parametrize('attempt_id', ['a1', 'legacy:r1'])
+def test_atomic_completion_rolls_back_when_outbox_insert_fails(journal, attempt_id):
+    import sqlite3
+
+    journal.admit(_auth(attempt_id, 'r1'), 'pipe-a')
+    journal._conn.execute(
+        "CREATE TEMP TRIGGER fail_outbox BEFORE INSERT ON outbox "
+        "BEGIN SELECT RAISE(ABORT, 'simulated interruption before commit'); END"
+    )
+    with pytest.raises(sqlite3.IntegrityError, match='simulated interruption'):
+        journal.record_completion_and_enqueue(attempt_id, '{"status":"ok"}')
+    assert journal.get_attempt(attempt_id).kind == 'active'
+    assert journal.list_unacked_completions() == []
+    assert journal.fetch_due_outbox() == []
+    journal._conn.execute('DROP TRIGGER fail_outbox')
+    journal.record_completion_and_enqueue(attempt_id, '{"status":"ok"}')
+    assert journal.get_attempt(attempt_id).kind == 'completion'
+    assert len(journal.fetch_due_outbox()) == 1
+
+
+@pytest.mark.parametrize('attempt_id', ['a1', 'legacy:r1'])
+def test_atomic_completion_survives_restart_and_duplicate(journal, attempt_id):
+    payload = '{"run_id":"r1","status":"completed"}'
+    journal.record_completion_and_enqueue(attempt_id, payload, run_id='r1')
+    path = journal._path
+    journal.close()
+    with WorkerJournal(path) as recovered:
+        assert recovered.respool_unacked_completions() == 0
+        recovered.record_completion_and_enqueue(attempt_id, '{"status":"failed"}', run_id='r1')
+        assert recovered.get_attempt(attempt_id).result_json == payload
+        rows = recovered.fetch_due_outbox()
+        assert len(rows) == 1
+        assert rows[0].payload_json == payload
+        recovered.mark_acked(attempt_id)
+        recovered.record_completion_and_enqueue(attempt_id, '{}', run_id='r1')
+        assert recovered.get_attempt(attempt_id).acked
+        assert recovered.fetch_due_outbox() == []
+
+
+def test_boot_respool_repairs_only_stranded_results_idempotently(journal):
+    journal.record_completion('stranded', '{"run_id":"r1"}', run_id='r1')
+    journal.record_completion_and_enqueue('retry', '{"run_id":"r2"}', run_id='r2')
+    row = journal.fetch_due_outbox()[0]
+    journal.record_outbox_failure(row.seq, 'lost response')
+    journal.record_completion('acked', '{}', run_id='r3')
+    journal.mark_acked('acked')
+    assert journal.respool_unacked_completions() == 1
+    assert journal.respool_unacked_completions() == 0
+    retry = journal._conn.execute('SELECT * FROM outbox WHERE seq = ?', (row.seq,)).fetchone()
+    assert retry['attempts'] == 1
+    assert retry['last_error'] == 'lost response'
+    assert journal.get_attempt('stranded').result_json == '{"run_id":"r1"}'
+    assert journal.get_attempt('acked').acked
+    assert [r.attempt_id for r in journal.fetch_due_outbox()] == ['stranded']
+
+
+@pytest.mark.parametrize('phase', ['before_commit', 'after_commit'])
+def test_process_death_around_atomic_completion_commit(journal, phase):
+    import subprocess
+    import sys
+
+    journal.admit(_auth(), 'pipe-a')
+    path = journal._path
+    journal.close()
+    script = """
+import os
+import sys
+from tram.agent.journal import WorkerJournal
+j = WorkerJournal(sys.argv[1])
+if sys.argv[2] == 'before_commit':
+    j._respool_completions_locked = lambda *args: os._exit(23)
+j.record_completion_and_enqueue('a1', '{"run_id":"r1"}')
+os._exit(23)
+"""
+    result = subprocess.run([sys.executable, '-c', script, str(path), phase], check=False)
+    assert result.returncode == 23
+    with WorkerJournal(path) as recovered:
+        if phase == 'before_commit':
+            assert recovered.get_attempt('a1').kind == 'active'
+            assert recovered.fetch_due_outbox() == []
+            assert recovered.list_unacked_completions() == []
+        else:
+            assert recovered.get_attempt('a1').result_json == '{"run_id":"r1"}'
+            assert len(recovered.fetch_due_outbox()) == 1
+            assert recovered.respool_unacked_completions() == 0
