@@ -120,7 +120,7 @@ class ClickHouseSink(BaseSink):
 
     # ── Buffer management ──────────────────────────────────────────────────
 
-    def _flush(self) -> None:
+    def _flush(self, *, observed_error: Exception | None = None) -> None:
         """Deliver buffered rows as one bulk INSERT.
 
         Serialized by ``_flush_lock`` so concurrent timer/foreground/close
@@ -129,6 +129,8 @@ class ClickHouseSink(BaseSink):
         retry/replay (R1 fix).
         """
         with self._flush_lock:
+            if observed_error is not None and self._latched_error is observed_error:
+                self._latched_error = None
             with self._buffer_lock:
                 if not self._buffer:
                     return
@@ -250,9 +252,31 @@ class ClickHouseSink(BaseSink):
         if not records:
             return
 
+        admission = meta.get("_clickhouse_admitted_write")
+        if (
+            meta.get("_sink_write_retry_attempt", 0) > 0
+            and isinstance(admission, tuple)
+            and len(admission) == 3
+            and admission[0] is self
+            and admission[1] == data
+        ):
+            # Retry delivery of this already-admitted write. Comparing the
+            # sink and exact bytes prevents an unrelated write from skipping intake.
+            try:
+                self._flush(observed_error=admission[2])
+            except Exception as exc:
+                meta["_clickhouse_admitted_write"] = (self, data, exc)
+                raise
+            meta.pop("_clickhouse_admitted_write", None)
+            return
+
         with self._buffer_lock:
             self._buffer.extend(records)
             should_flush = len(self._buffer) >= self.batch_size
 
         if should_flush:
-            self._flush()
+            try:
+                self._flush()
+            except Exception as exc:
+                meta["_clickhouse_admitted_write"] = (self, data, exc)
+                raise

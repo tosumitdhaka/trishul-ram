@@ -50,6 +50,241 @@ def _make_pipeline(extra_yaml: str = "") -> object:
     return load_pipeline_from_yaml(yaml_text)
 
 
+class TestPipelineExecutorSourceConstruction:
+    @pytest.mark.parametrize("thread_workers", [1, 2])
+    @pytest.mark.parametrize("broker", ["kafka", "amqp"])
+    @pytest.mark.parametrize("sink_type", ["local", "sftp"])
+    def test_batch_broker_append_retains_every_acknowledged_record(
+        self, thread_workers, broker, sink_type, tmp_path
+    ):
+        from pathlib import Path
+
+        import tram.connectors  # noqa: F401
+        import tram.serializers  # noqa: F401
+        from tram.connectors.local.sink import LocalSink
+        from tram.connectors.sftp.sink import SFTPSink
+
+        class FilesystemSftp:
+            def stat(self, path):
+                return Path(path).stat()
+
+            def mkdir(self, path):
+                Path(path).mkdir()
+
+            def listdir(self, path):
+                return [entry.name for entry in Path(path).iterdir()]
+
+            def open(self, path, mode):
+                return Path(path).open(mode)
+
+            def remove(self, path):
+                Path(path).unlink()
+
+            def posix_rename(self, source, destination):
+                Path(source).replace(destination)
+
+        sink_yaml = (
+            f"type: local\n    path: {tmp_path}"
+            if sink_type == "local" else
+            f"type: sftp\n    host: unused\n    username: unused\n    password: fixture"
+            f"\n    remote_path: {tmp_path}"
+        )
+        config = load_pipeline_from_yaml(f"""
+pipeline:
+  name: broker-append
+  thread_workers: {thread_workers}
+  batch_size: 3
+  source:
+    type: kafka
+    brokers: [unused:9092]
+    topic: events
+  serializer_in:
+    type: json
+  serializer_out:
+    type: ndjson
+  sink:
+    {sink_yaml}
+    filename_template: output.jsonl
+    file_mode: append
+""")
+        source = MagicMock()
+        first_ack = threading.Event()
+        source.ack.side_effect = lambda meta, disposition: first_ack.set()
+        source.source_unit_id.return_value = None
+        source.read.return_value = iter([
+            (json.dumps([{"id": identity}]).encode(), {
+                "kafka_topic": "events", "kafka_partition": 0,
+                "kafka_offset": identity, "kafka_epoch": 1,
+            } if broker == "kafka" else {
+                "amqp_queue": "events", "amqp_delivery_tag": identity + 1,
+            })
+            for identity in range(3)
+        ])
+        executor = PipelineExecutor()
+        sink_class = LocalSink if sink_type == "local" else SFTPSink
+        original_write = sink_class.write
+
+        def write_after_first_ack(sink, data, meta):
+            record = json.loads(data.splitlines()[0])
+            if thread_workers > 1 and record["id"] > 0:
+                assert first_ack.wait(timeout=5)
+            return original_write(sink, data, meta)
+
+        with (
+            patch.object(executor, "_build_source", return_value=source),
+            patch.object(SFTPSink, "_connect", return_value=(MagicMock(), FilesystemSftp())),
+            patch.object(sink_class, "write", new=write_after_first_ack),
+        ):
+            result = executor.batch_run(config)
+
+        assert result.status == RunStatus.SUCCESS
+        assert source.ack.call_count == 3
+        records = [
+            json.loads(line) for line in (tmp_path / "output.jsonl").read_text().splitlines()
+        ]
+        assert sorted(records, key=lambda record: record["id"]) == [
+            {"id": identity} for identity in range(3)
+        ]
+
+    @pytest.mark.parametrize("thread_workers", [1, 2])
+    @pytest.mark.parametrize("commit_fails", [False, True])
+    def test_batch_broker_records_ack_only_after_confirmed_commit(
+        self, thread_workers, commit_fails,
+    ):
+        config = _make_pipeline(f"thread_workers: {thread_workers}\n          on_error: continue")
+        checkpoint = MagicMock()
+        checkpoint.checkpoint.return_value = CheckpointResult(
+            committed=True, already_committed=False, checkpoint_id=1, state_revision=1,
+        )
+        executor = PipelineExecutor(checkpoint_client=checkpoint)
+        source = MagicMock()
+        # Durable identity is partition-level; accounting must remain per record.
+        source.source_unit_id.return_value = "cluster/events/0"
+        source.read.return_value = iter([
+            (json.dumps([{"id": offset}]).encode(), {
+                "kafka_topic": "events", "kafka_partition": 0,
+                "kafka_offset": offset, "kafka_epoch": 1,
+            })
+            for offset in range(3)
+        ])
+        written = []
+        sink = MagicMock()
+        sink.write.side_effect = lambda data, meta: written.extend(json.loads(data))
+        sink.commit.return_value = SinkCommitReceipt(
+            sink_key="test", tier=DeliveryTier.REMOTE_DURABLE,
+            confirmed=not commit_fails, notes="test confirmation",
+        )
+        acknowledged = []
+
+        def ack(meta, disposition):
+            assert sink.commit.call_count > 0
+            assert {"id": meta["kafka_offset"]} in written
+            acknowledged.append((meta["kafka_offset"], disposition))
+
+        source.ack.side_effect = ack
+        with (
+            patch.object(executor, "_build_source", return_value=source),
+            patch.object(executor, "_build_sinks", return_value=[(sink, None, [])]),
+        ):
+            result = executor.batch_run(config)
+
+        assert sorted(written, key=lambda record: record["id"]) == [
+            {"id": offset} for offset in range(3)
+        ]
+        if commit_fails:
+            assert acknowledged == []
+            assert result.status == RunStatus.PARTIAL
+        else:
+            assert acknowledged == [(offset, AckDisposition.DELIVERED) for offset in range(3)]
+            assert result.status == RunStatus.SUCCESS
+            assert [call.kwargs["source_unit"] for call in checkpoint.checkpoint.call_args_list] == [
+                "cluster/events/0",
+            ] * 3
+            assert [call.kwargs["frontier_seq"] for call in checkpoint.checkpoint.call_args_list] == [
+                0, 1, 2,
+            ]
+
+    @pytest.mark.parametrize("thread_workers", [1, 2])
+    def test_batch_size_boundary_acknowledges_complete_broker_record(self, thread_workers):
+        config = _make_pipeline(f"thread_workers: {thread_workers}\n          batch_size: 1")
+        source = MagicMock()
+        closed_after_ack = []
+        reader_thread = threading.get_ident()
+
+        def read():
+            try:
+                yield (
+                    b'[{"id": 1}]',
+                    {"kafka_topic": "events", "kafka_partition": 0, "kafka_offset": 0},
+                )
+            finally:
+                closed_after_ack.append((source.ack.call_count, threading.get_ident()))
+
+        source.read.side_effect = read
+        sink = MagicMock()
+        executor = PipelineExecutor()
+        with (
+            patch.object(executor, "_build_source", return_value=source),
+            patch.object(executor, "_build_sinks", return_value=[(sink, None, [])]),
+        ):
+            result = executor.batch_run(config)
+
+        assert result.status == RunStatus.SUCCESS
+        source.ack.assert_called_once()
+        assert source.ack.call_args.args[1] == AckDisposition.DELIVERED
+        assert closed_after_ack == [(1, reader_thread)]
+
+    @pytest.mark.parametrize("thread_workers", [1, 2])
+    def test_batch_broker_strict_missing_checkpoint_retains_record(self, thread_workers):
+        config = _make_pipeline(
+            f"thread_workers: {thread_workers}\n          delivery:\n            contract: strict"
+        )
+        source = MagicMock()
+        source.source_unit_id.return_value = "cluster/events/0"
+        source.read.return_value = iter([(
+            b'[{"id": 1}]',
+            {"kafka_topic": "events", "kafka_partition": 0, "kafka_offset": 0},
+        )])
+        executor = PipelineExecutor()
+        with (
+            patch.object(executor, "_build_source", return_value=source),
+            patch.object(executor, "_build_sinks", return_value=[(MagicMock(), None, [])]),
+        ):
+            result = executor.batch_run(config)
+
+        assert result.status == RunStatus.PARTIAL
+        source.ack.assert_not_called()
+
+    @pytest.mark.parametrize("thread_workers", [1, 2])
+    def test_kafka_source_requires_disposition_before_offset_commit(self, thread_workers):
+        from tram.connectors.kafka.source import KafkaSource
+
+        config = load_pipeline_from_yaml(textwrap.dedent(f"""
+            pipeline:
+              name: kafka-managed-acks
+              thread_workers: {thread_workers}
+              source:
+                type: kafka
+                brokers: [localhost:9092]
+                topic: events
+              serializer_in:
+                type: json
+              serializer_out:
+                type: json
+              sink:
+                type: local
+                path: /tmp/kafka-managed-acks
+        """))
+
+        with patch("tram.pipeline.executor.get_source", return_value=KafkaSource):
+            source = PipelineExecutor()._build_source(config)
+
+        assert source._ack_managed is True
+        assert source.enable_auto_commit is False
+        assert source.group_id == config.name
+        assert "_ack_managed" not in config.source.model_dump()
+
+
 class TestPipelineExecutorDryRun:
     def test_pipeline_config_accepts_record_chunk_size(self):
         config = _make_pipeline("record_chunk_size: 1000")

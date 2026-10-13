@@ -1,0 +1,1263 @@
+.........................................ss............................. [  1%]
+........................................................................ [  3%]
+........................................................................ [  5%]
+........................................................ssssssssssssssss [  7%]
+ssssss.................................................................. [  9%]
+........................................................................ [ 11%]
+........................................................................ [ 13%]
+........................................................................ [ 15%]
+........................................................................ [ 17%]
+........................................................................ [ 19%]
+........................................................................ [ 21%]
+........................................................................ [ 23%]
+........................................................................ [ 25%]
+........................................................................ [ 27%]
+........................................................................ [ 29%]
+...................................................................sssss [ 30%]
+ss...................................................................... [ 32%]
+........................................................................ [ 34%]
+........................................................................ [ 36%]
+........................................................................ [ 38%]
+sss..................................................................... [ 40%]
+........................................................................ [ 42%]
+........................................................................ [ 44%]
+........................................................................ [ 46%]
+.........F.............................................................. [ 48%]
+....................................ssssssssssssssss.................... [ 50%]
+........................................................................ [ 52%]
+.......s................................................................ [ 54%]
+........................................................................ [ 56%]
+........................................................................ [ 58%]
+--- Logging error ---
+Traceback (most recent call last):
+  File "/home/dhaka/.local/share/uv/python/cpython-3.13.15-linux-x86_64-gnu/lib/python3.13/logging/__init__.py", line 1154, in emit
+    stream.write(msg + self.terminator)
+    ~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^
+ValueError: I/O operation on closed file.
+Call stack:
+  File "/home/dhaka/.local/share/uv/python/cpython-3.13.15-linux-x86_64-gnu/lib/python3.13/threading.py", line 1015, in _bootstrap
+    self._bootstrap_inner()
+  File "/home/dhaka/.local/share/uv/python/cpython-3.13.15-linux-x86_64-gnu/lib/python3.13/threading.py", line 1044, in _bootstrap_inner
+    self.run()
+  File "/home/dhaka/.local/share/uv/python/cpython-3.13.15-linux-x86_64-gnu/lib/python3.13/threading.py", line 995, in run
+    self._target(*self._args, **self._kwargs)
+  File "/home/dhaka/.local/share/uv/python/cpython-3.13.15-linux-x86_64-gnu/lib/python3.13/concurrent/futures/thread.py", line 93, in _worker
+    work_item.run()
+  File "/home/dhaka/.local/share/uv/python/cpython-3.13.15-linux-x86_64-gnu/lib/python3.13/concurrent/futures/thread.py", line 59, in run
+    result = self.fn(*self.args, **self.kwargs)
+  File "/tmp/tram-v183-venv/lib/python3.13/site-packages/apscheduler/executors/base.py", line 131, in run_job
+    retval = job.func(*job.args, **job.kwargs)
+  File "/home/dhaka/trishul/trishul-ram/tram/pipeline/controller.py", line 2596, in _run_batch
+    self._execute_batch(pipeline_name, run_id, origin=origin, flush=flush)
+  File "/home/dhaka/trishul/trishul-ram/tram/pipeline/controller.py", line 2932, in _execute_batch
+    self._finalize_batch_result(pipeline_name, result)
+  File "/home/dhaka/trishul/trishul-ram/tram/pipeline/controller.py", line 2994, in _finalize_batch_result
+    self._on_run_complete(pipeline_name, result)
+  File "/home/dhaka/trishul/trishul-ram/tram/pipeline/controller.py", line 2971, in _on_run_complete
+    self._do_schedule(pipeline_name)
+  File "/home/dhaka/trishul/trishul-ram/tram/pipeline/controller.py", line 2535, in _do_schedule
+    self._add_interval_job(state.config)
+  File "/home/dhaka/trishul/trishul-ram/tram/pipeline/controller.py", line 2572, in _add_interval_job
+    logger.info("Scheduled interval pipeline",
+Message: 'Scheduled interval pipeline'
+Arguments: ()
+--- Logging error ---
+Traceback (most recent call last):
+  File "/home/dhaka/.local/share/uv/python/cpython-3.13.15-linux-x86_64-gnu/lib/python3.13/logging/__init__.py", line 1154, in emit
+    stream.write(msg + self.terminator)
+    ~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^
+ValueError: I/O operation on closed file.
+Call stack:
+  File "/home/dhaka/.local/share/uv/python/cpython-3.13.15-linux-x86_64-gnu/lib/python3.13/threading.py", line 1015, in _bootstrap
+    self._bootstrap_inner()
+  File "/home/dhaka/.local/share/uv/python/cpython-3.13.15-linux-x86_64-gnu/lib/python3.13/threading.py", line 1044, in _bootstrap_inner
+    self.run()
+  File "/home/dhaka/.local/share/uv/python/cpython-3.13.15-linux-x86_64-gnu/lib/python3.13/threading.py", line 995, in run
+    self._target(*self._args, **self._kwargs)
+  File "/home/dhaka/.local/share/uv/python/cpython-3.13.15-linux-x86_64-gnu/lib/python3.13/concurrent/futures/thread.py", line 93, in _worker
+    work_item.run()
+  File "/home/dhaka/.local/share/uv/python/cpython-3.13.15-linux-x86_64-gnu/lib/python3.13/concurrent/futures/thread.py", line 59, in run
+    result = self.fn(*self.args, **self.kwargs)
+  File "/tmp/tram-v183-venv/lib/python3.13/site-packages/apscheduler/executors/base.py", line 156, in run_job
+    logger.info('Job "%s" executed successfully', job)
+Message: 'Job "%s" executed successfully'
+Arguments: (<Job (id=batch-my-interval name=PipelineController._run_batch)>,)
+.........--- Logging error ---
+Traceback (most recent call last):
+  File "/home/dhaka/.local/share/uv/python/cpython-3.13.15-linux-x86_64-gnu/lib/python3.13/logging/__init__.py", line 1154, in emit
+    stream.write(msg + self.terminator)
+    ~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^
+ValueError: I/O operation on closed file.
+Call stack:
+.  File "/home/dhaka/.local/share/uv/python/cpython-3.13.15-linux-x86_64-gnu/lib/python3.13/threading.py", line 1015, in _bootstrap
+    self._bootstrap_inner()
+  File "/home/dhaka/.local/share/uv/python/cpython-3.13.15-linux-x86_64-gnu/lib/python3.13/threading.py", line 1044, in _bootstrap_inner
+    self.run()
+  File "/home/dhaka/.local/share/uv/python/cpython-3.13.15-linux-x86_64-gnu/lib/python3.13/threading.py", line 995, in run
+    self._target(*self._args, **self._kwargs)
+Message: 'Adding job tentatively -- it will be properly scheduled when the scheduler starts'
+Arguments: ()
+--- Logging error ---
+Traceback (most recent call last):
+  File "/home/dhaka/.local/share/uv/python/cpython-3.13.15-linux-x86_64-gnu/lib/python3.13/logging/__init__.py", line 1154, in emit
+    stream.write(msg + self.terminator)
+    ~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^
+................Traceback (most recent call last):
+  File "/home/dhaka/.local/share/uv/python/cpython-3.13.15-linux-x86_64-gnu/lib/python3.13/logging/__init__.py", line 1154, in emit
+    stream.write(msg + self.terminator)
+    ~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^
+ValueError: I/O operation on closed file.
+Call stack:
+.  File "/home/dhaka/.local/share/uv/python/cpython-3.13.15-linux-x86_64-gnu/lib/python3.13/threading.py", line 1015, in _bootstrap
+    self._bootstrap_inner()
+  File "/home/dhaka/.local/share/uv/python/cpython-3.13.15-linux-x86_64-gnu/lib/python3.13/threading.py", line 1044, in _bootstrap_inner
+    self.run()
+  File "/home/dhaka/.local/share/uv/python/cpython-3.13.15-linux-x86_64-gnu/lib/python3.13/threading.py", line 995, in run
+    self._target(*self._args, **self._kwargs)
+  File "/home/dhaka/.local/share/uv/python/cpython-3.13.15-linux-x86_64-gnu/lib/python3.13/concurrent/futures/thread.py", line 93, in _worker
+    work_item.run()
+  File "/home/dhaka/.local/share/uv/python/cpython-3.13.15-linux-x86_64-gnu/lib/python3.13/concurrent/futures/thread.py", line 59, in run
+    result = self.fn(*self.args, **self.kwargs)
+  File "/tmp/tram-v183-venv/lib/python3.13/site-packages/apscheduler/executors/base.py", line 131, in run_job
+    retval = job.func(*job.args, **job.kwargs)
+  File "/home/dhaka/trishul/trishul-ram/tram/pipeline/controller.py", line 2596, in _run_batch
+    self._execute_batch(pipeline_name, run_id, origin=origin, flush=flush)
+  File "/home/dhaka/trishul/trishul-ram/tram/pipeline/controller.py", line 2929, in _execute_batch
+    result = self.executor.batch_run(
+  File "/home/dhaka/trishul/trishul-ram/tram/pipeline/executor.py", line 2714, in batch_run
+    return self._batch_run_inner(
+  File "/home/dhaka/trishul/trishul-ram/tram/pipeline/executor.py", line 2940, in _batch_run_inner
+    self._post_batch_cleanup(config)
+  File "/home/dhaka/trishul/trishul-ram/tram/pipeline/executor.py", line 1488, in _post_batch_cleanup
+    logger.debug(
+Message: 'Post-batch cleanup completed'
+Arguments: ()
+--- Logging error ---
+Traceback (most recent call last):
+  File "/home/dhaka/.local/share/uv/python/cpython-3.13.15-linux-x86_64-gnu/lib/python3.13/logging/__init__.py", line 1154, in emit
+    stream.write(msg + self.terminator)
+    ~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^
+ValueError: I/O operation on closed file.
+Call stack:
+............................................. [ 60%]
+..................................................................ssssss [ 61%]
+sss..................................................................... [ 63%]
+........................................................................ [ 65%]
+........................................................................ [ 67%]
+........................................................................ [ 69%]
+........................................................................ [ 71%]
+........................................................................ [ 73%]
+........................................................................ [ 75%]
+........................................................................ [ 77%]
+........................................................................ [ 79%]
+........................................................................ [ 81%]
+........................................................................ [ 83%]
+........................................................................ [ 85%]
+........................................................................ [ 87%]
+........................................................................ [ 89%]
+........................................................................ [ 91%]
+........................................................................ [ 92%]
+........................................................................ [ 94%]
+........................................................................ [ 96%]
+........................................................................ [ 98%]
+..............................................                           [100%]
+=================================== FAILURES ===================================
+_ TestKafkaFailureOwnership.test_executor_single_partition_stream_commits_each_record_before_stop[delayed_abort-2] _
+tests/unit/test_kafka_connectors.py:282: in apply
+    return super().apply(records)
+           ^^^^^^^^^^^^^^^^^^^^^^
+tram/transforms/counter_delta.py:276: in apply
+    new_record = self._handle_bad_record(
+tram/transforms/counter_delta.py:206: in _handle_bad_record
+    raise TransformError(message)
+E   tram.core.exceptions.TransformError: counter_delta: key field missing for 'id' (key_fields=['_index'])
+
+The above exception was the direct cause of the following exception:
+tests/unit/test_kafka_connectors.py:297: in test_executor_single_partition_stream_commits_each_record_before_stop
+    pytest.raises(TramError, match="earlier input failed"),
+    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+tram/pipeline/executor.py:3475: in stream_run
+    self._stream_run_threaded(
+tram/pipeline/executor.py:3874: in _stream_run_threaded
+    raise worker_errors.get_nowait()
+tram/pipeline/executor.py:3771: in _worker
+    needs_flush = self._process_chunk(
+tram/pipeline/executor.py:2391: in _process_chunk
+    survivors = self._apply_global_transforms(
+tram/pipeline/executor.py:1846: in _apply_global_transforms
+    raise TramError(f"Transform error: {exc}") from exc
+E   tram.core.exceptions.TramError: Transform error: counter_delta: key field missing for 'id' (key_fields=['_index'])
+
+During handling of the above exception, another exception occurred:
+tests/unit/test_kafka_connectors.py:295: in test_executor_single_partition_stream_commits_each_record_before_stop
+    with (
+        ^^^
+E   AssertionError: Regex pattern did not match.
+E    Regex: 'earlier input failed'
+E    Input: "Transform error: counter_delta: key field missing for 'id' (key_fields=['_index'])"
+----------------------------- Captured stderr call -----------------------------
+--- Logging error ---
+Traceback (most recent call last):
+  File "/home/dhaka/.local/share/uv/python/cpython-3.13.15-linux-x86_64-gnu/lib/python3.13/logging/__init__.py", line 1154, in emit
+    stream.write(msg + self.terminator)
+    ~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^
+ValueError: I/O operation on closed file.
+Call stack:
+  File "<frozen runpy>", line 203, in _run_module_as_main
+  File "<frozen runpy>", line 88, in _run_code
+  File "/tmp/tram-v183-venv/lib/python3.13/site-packages/pytest/__main__.py", line 9, in <module>
+    raise SystemExit(pytest.console_main())
+  File "/tmp/tram-v183-venv/lib/python3.13/site-packages/_pytest/config/__init__.py", line 201, in console_main
+    code = main()
+  File "/tmp/tram-v183-venv/lib/python3.13/site-packages/_pytest/config/__init__.py", line 175, in main
+    ret: ExitCode | int = config.hook.pytest_cmdline_main(config=config)
+  File "/tmp/tram-v183-venv/lib/python3.13/site-packages/pluggy/_hooks.py", line 512, in __call__
+    return self._hookexec(self.name, self._hookimpls.copy(), kwargs, firstresult)
+  File "/tmp/tram-v183-venv/lib/python3.13/site-packages/pluggy/_manager.py", line 120, in _hookexec
+    return self._inner_hookexec(hook_name, methods, kwargs, firstresult)
+  File "/tmp/tram-v183-venv/lib/python3.13/site-packages/pluggy/_callers.py", line 121, in _multicall
+    res = hook_impl.function(*args)
+  File "/tmp/tram-v183-venv/lib/python3.13/site-packages/_pytest/main.py", line 336, in pytest_cmdline_main
+    return wrap_session(config, _main)
+  File "/tmp/tram-v183-venv/lib/python3.13/site-packages/_pytest/main.py", line 289, in wrap_session
+    session.exitstatus = doit(config, session) or 0
+  File "/tmp/tram-v183-venv/lib/python3.13/site-packages/_pytest/main.py", line 343, in _main
+    config.hook.pytest_runtestloop(session=session)
+  File "/tmp/tram-v183-venv/lib/python3.13/site-packages/pluggy/_hooks.py", line 512, in __call__
+    return self._hookexec(self.name, self._hookimpls.copy(), kwargs, firstresult)
+  File "/tmp/tram-v183-venv/lib/python3.13/site-packages/pluggy/_manager.py", line 120, in _hookexec
+    return self._inner_hookexec(hook_name, methods, kwargs, firstresult)
+  File "/tmp/tram-v183-venv/lib/python3.13/site-packages/pluggy/_callers.py", line 121, in _multicall
+    res = hook_impl.function(*args)
+  File "/tmp/tram-v183-venv/lib/python3.13/site-packages/_pytest/main.py", line 367, in pytest_runtestloop
+    item.config.hook.pytest_runtest_protocol(item=item, nextitem=nextitem)
+  File "/tmp/tram-v183-venv/lib/python3.13/site-packages/pluggy/_hooks.py", line 512, in __call__
+    return self._hookexec(self.name, self._hookimpls.copy(), kwargs, firstresult)
+  File "/tmp/tram-v183-venv/lib/python3.13/site-packages/pluggy/_manager.py", line 120, in _hookexec
+    return self._inner_hookexec(hook_name, methods, kwargs, firstresult)
+  File "/tmp/tram-v183-venv/lib/python3.13/site-packages/pluggy/_callers.py", line 121, in _multicall
+    res = hook_impl.function(*args)
+  File "/tmp/tram-v183-venv/lib/python3.13/site-packages/_pytest/runner.py", line 117, in pytest_runtest_protocol
+    runtestprotocol(item, nextitem=nextitem)
+  File "/tmp/tram-v183-venv/lib/python3.13/site-packages/_pytest/runner.py", line 136, in runtestprotocol
+    reports.append(call_and_report(item, "call", log))
+  File "/tmp/tram-v183-venv/lib/python3.13/site-packages/_pytest/runner.py", line 245, in call_and_report
+    call = CallInfo.from_call(
+  File "/tmp/tram-v183-venv/lib/python3.13/site-packages/_pytest/runner.py", line 344, in from_call
+    result: TResult | None = func()
+  File "/tmp/tram-v183-venv/lib/python3.13/site-packages/_pytest/runner.py", line 246, in <lambda>
+    lambda: runtest_hook(item=item, **kwds), when=when, reraise=reraise
+  File "/tmp/tram-v183-venv/lib/python3.13/site-packages/pluggy/_hooks.py", line 512, in __call__
+    return self._hookexec(self.name, self._hookimpls.copy(), kwargs, firstresult)
+  File "/tmp/tram-v183-venv/lib/python3.13/site-packages/pluggy/_manager.py", line 120, in _hookexec
+    return self._inner_hookexec(hook_name, methods, kwargs, firstresult)
+  File "/tmp/tram-v183-venv/lib/python3.13/site-packages/pluggy/_callers.py", line 121, in _multicall
+    res = hook_impl.function(*args)
+  File "/tmp/tram-v183-venv/lib/python3.13/site-packages/_pytest/runner.py", line 178, in pytest_runtest_call
+    item.runtest()
+  File "/tmp/tram-v183-venv/lib/python3.13/site-packages/_pytest/python.py", line 1671, in runtest
+    self.ihook.pytest_pyfunc_call(pyfuncitem=self)
+  File "/tmp/tram-v183-venv/lib/python3.13/site-packages/pluggy/_hooks.py", line 512, in __call__
+    return self._hookexec(self.name, self._hookimpls.copy(), kwargs, firstresult)
+  File "/tmp/tram-v183-venv/lib/python3.13/site-packages/pluggy/_manager.py", line 120, in _hookexec
+    return self._inner_hookexec(hook_name, methods, kwargs, firstresult)
+  File "/tmp/tram-v183-venv/lib/python3.13/site-packages/pluggy/_callers.py", line 121, in _multicall
+    res = hook_impl.function(*args)
+  File "/tmp/tram-v183-venv/lib/python3.13/site-packages/_pytest/python.py", line 157, in pytest_pyfunc_call
+    result = testfunction(**testargs)
+  File "/home/dhaka/trishul/trishul-ram/tests/unit/test_kafka_connectors.py", line 297, in test_executor_single_partition_stream_commits_each_record_before_stop
+    pytest.raises(TramError, match="earlier input failed"),
+  File "/home/dhaka/trishul/trishul-ram/tram/pipeline/executor.py", line 3318, in stream_run
+    logger.info("Stream run started", extra={"pipeline": config.name})
+Message: 'Stream run started'
+Arguments: ()
+--- Logging error ---
+Traceback (most recent call last):
+  File "/home/dhaka/.local/share/uv/python/cpython-3.13.15-linux-x86_64-gnu/lib/python3.13/logging/__init__.py", line 1154, in emit
+    stream.write(msg + self.terminator)
+    ~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^
+ValueError: I/O operation on closed file.
+Call stack:
+  File "<frozen runpy>", line 203, in _run_module_as_main
+  File "<frozen runpy>", line 88, in _run_code
+  File "/tmp/tram-v183-venv/lib/python3.13/site-packages/pytest/__main__.py", line 9, in <module>
+    raise SystemExit(pytest.console_main())
+  File "/tmp/tram-v183-venv/lib/python3.13/site-packages/_pytest/config/__init__.py", line 201, in console_main
+    code = main()
+  File "/tmp/tram-v183-venv/lib/python3.13/site-packages/_pytest/config/__init__.py", line 175, in main
+    ret: ExitCode | int = config.hook.pytest_cmdline_main(config=config)
+  File "/tmp/tram-v183-venv/lib/python3.13/site-packages/pluggy/_hooks.py", line 512, in __call__
+    return self._hookexec(self.name, self._hookimpls.copy(), kwargs, firstresult)
+  File "/tmp/tram-v183-venv/lib/python3.13/site-packages/pluggy/_manager.py", line 120, in _hookexec
+    return self._inner_hookexec(hook_name, methods, kwargs, firstresult)
+  File "/tmp/tram-v183-venv/lib/python3.13/site-packages/pluggy/_callers.py", line 121, in _multicall
+    res = hook_impl.function(*args)
+  File "/tmp/tram-v183-venv/lib/python3.13/site-packages/_pytest/main.py", line 336, in pytest_cmdline_main
+    return wrap_session(config, _main)
+  File "/tmp/tram-v183-venv/lib/python3.13/site-packages/_pytest/main.py", line 289, in wrap_session
+    session.exitstatus = doit(config, session) or 0
+  File "/tmp/tram-v183-venv/lib/python3.13/site-packages/_pytest/main.py", line 343, in _main
+    config.hook.pytest_runtestloop(session=session)
+  File "/tmp/tram-v183-venv/lib/python3.13/site-packages/pluggy/_hooks.py", line 512, in __call__
+    return self._hookexec(self.name, self._hookimpls.copy(), kwargs, firstresult)
+  File "/tmp/tram-v183-venv/lib/python3.13/site-packages/pluggy/_manager.py", line 120, in _hookexec
+    return self._inner_hookexec(hook_name, methods, kwargs, firstresult)
+  File "/tmp/tram-v183-venv/lib/python3.13/site-packages/pluggy/_callers.py", line 121, in _multicall
+    res = hook_impl.function(*args)
+  File "/tmp/tram-v183-venv/lib/python3.13/site-packages/_pytest/main.py", line 367, in pytest_runtestloop
+    item.config.hook.pytest_runtest_protocol(item=item, nextitem=nextitem)
+  File "/tmp/tram-v183-venv/lib/python3.13/site-packages/pluggy/_hooks.py", line 512, in __call__
+    return self._hookexec(self.name, self._hookimpls.copy(), kwargs, firstresult)
+  File "/tmp/tram-v183-venv/lib/python3.13/site-packages/pluggy/_manager.py", line 120, in _hookexec
+    return self._inner_hookexec(hook_name, methods, kwargs, firstresult)
+  File "/tmp/tram-v183-venv/lib/python3.13/site-packages/pluggy/_callers.py", line 121, in _multicall
+    res = hook_impl.function(*args)
+  File "/tmp/tram-v183-venv/lib/python3.13/site-packages/_pytest/runner.py", line 117, in pytest_runtest_protocol
+    runtestprotocol(item, nextitem=nextitem)
+  File "/tmp/tram-v183-venv/lib/python3.13/site-packages/_pytest/runner.py", line 136, in runtestprotocol
+    reports.append(call_and_report(item, "call", log))
+  File "/tmp/tram-v183-venv/lib/python3.13/site-packages/_pytest/runner.py", line 245, in call_and_report
+    call = CallInfo.from_call(
+  File "/tmp/tram-v183-venv/lib/python3.13/site-packages/_pytest/runner.py", line 344, in from_call
+    result: TResult | None = func()
+  File "/tmp/tram-v183-venv/lib/python3.13/site-packages/_pytest/runner.py", line 246, in <lambda>
+    lambda: runtest_hook(item=item, **kwds), when=when, reraise=reraise
+  File "/tmp/tram-v183-venv/lib/python3.13/site-packages/pluggy/_hooks.py", line 512, in __call__
+    return self._hookexec(self.name, self._hookimpls.copy(), kwargs, firstresult)
+  File "/tmp/tram-v183-venv/lib/python3.13/site-packages/pluggy/_manager.py", line 120, in _hookexec
+    return self._inner_hookexec(hook_name, methods, kwargs, firstresult)
+  File "/tmp/tram-v183-venv/lib/python3.13/site-packages/pluggy/_callers.py", line 121, in _multicall
+    res = hook_impl.function(*args)
+  File "/tmp/tram-v183-venv/lib/python3.13/site-packages/_pytest/runner.py", line 178, in pytest_runtest_call
+    item.runtest()
+  File "/tmp/tram-v183-venv/lib/python3.13/site-packages/_pytest/python.py", line 1671, in runtest
+    self.ihook.pytest_pyfunc_call(pyfuncitem=self)
+  File "/tmp/tram-v183-venv/lib/python3.13/site-packages/pluggy/_hooks.py", line 512, in __call__
+    return self._hookexec(self.name, self._hookimpls.copy(), kwargs, firstresult)
+  File "/tmp/tram-v183-venv/lib/python3.13/site-packages/pluggy/_manager.py", line 120, in _hookexec
+    return self._inner_hookexec(hook_name, methods, kwargs, firstresult)
+  File "/tmp/tram-v183-venv/lib/python3.13/site-packages/pluggy/_callers.py", line 121, in _multicall
+    res = hook_impl.function(*args)
+  File "/tmp/tram-v183-venv/lib/python3.13/site-packages/_pytest/python.py", line 157, in pytest_pyfunc_call
+    result = testfunction(**testargs)
+  File "/home/dhaka/trishul/trishul-ram/tests/unit/test_kafka_connectors.py", line 297, in test_executor_single_partition_stream_commits_each_record_before_stop
+    pytest.raises(TramError, match="earlier input failed"),
+  File "/home/dhaka/trishul/trishul-ram/tram/pipeline/executor.py", line 3475, in stream_run
+    self._stream_run_threaded(
+  File "/home/dhaka/trishul/trishul-ram/tram/pipeline/executor.py", line 3810, in _stream_run_threaded
+    for raw, meta in source_iter if source_iter is not None else source.read():
+  File "/home/dhaka/trishul/trishul-ram/tram/connectors/kafka/source.py", line 663, in read
+    logger.info(
+Message: 'Kafka consumer starting'
+Arguments: ()
+--- Logging error ---
+Traceback (most recent call last):
+  File "/home/dhaka/trishul/trishul-ram/tram/pipeline/executor.py", line 1840, in _apply_global_transforms
+    processed = t.apply(processed)
+  File "/home/dhaka/trishul/trishul-ram/tests/unit/test_kafka_connectors.py", line 282, in apply
+    return super().apply(records)
+           ~~~~~~~~~~~~~^^^^^^^^^
+  File "/home/dhaka/trishul/trishul-ram/tram/transforms/counter_delta.py", line 276, in apply
+    new_record = self._handle_bad_record(
+        new_record,
+    ...<3 lines>...
+        snapshot=record,
+    )
+  File "/home/dhaka/trishul/trishul-ram/tram/transforms/counter_delta.py", line 206, in _handle_bad_record
+    raise TransformError(message)
+tram.core.exceptions.TransformError: counter_delta: key field missing for 'id' (key_fields=['_index'])
+
+The above exception was the direct cause of the following exception:
+
+Traceback (most recent call last):
+  File "/home/dhaka/trishul/trishul-ram/tram/pipeline/executor.py", line 3812, in _stream_run_threaded
+    raise worker_errors.get_nowait()
+  File "/home/dhaka/trishul/trishul-ram/tram/pipeline/executor.py", line 3771, in _worker
+    needs_flush = self._process_chunk(
+        raw, meta, serializer_in, transforms,
+    ...<7 lines>...
+        sink_pool=sink_pool,
+    )
+  File "/home/dhaka/trishul/trishul-ram/tram/pipeline/executor.py", line 2391, in _process_chunk
+    survivors = self._apply_global_transforms(
+        records, transforms, meta, ctx, on_error,
+        dlq_sink=dlq_sink, stats=stats, delivery=delivery,
+    )
+  File "/home/dhaka/trishul/trishul-ram/tram/pipeline/executor.py", line 1846, in _apply_global_transforms
+    raise TramError(f"Transform error: {exc}") from exc
+tram.core.exceptions.TramError: Transform error: counter_delta: key field missing for 'id' (key_fields=['_index'])
+
+During handling of the above exception, another exception occurred:
+
+Traceback (most recent call last):
+  File "/home/dhaka/.local/share/uv/python/cpython-3.13.15-linux-x86_64-gnu/lib/python3.13/logging/__init__.py", line 1154, in emit
+    stream.write(msg + self.terminator)
+    ~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^
+ValueError: I/O operation on closed file.
+Call stack:
+  File "/home/dhaka/.local/share/uv/python/cpython-3.13.15-linux-x86_64-gnu/lib/python3.13/threading.py", line 1015, in _bootstrap
+    self._bootstrap_inner()
+  File "/home/dhaka/.local/share/uv/python/cpython-3.13.15-linux-x86_64-gnu/lib/python3.13/threading.py", line 1044, in _bootstrap_inner
+    self.run()
+  File "/home/dhaka/.local/share/uv/python/cpython-3.13.15-linux-x86_64-gnu/lib/python3.13/threading.py", line 995, in run
+    self._target(*self._args, **self._kwargs)
+  File "/home/dhaka/trishul/trishul-ram/tram/pipeline/executor.py", line 3786, in _worker
+    logger.error(
+Message: 'Stream worker error'
+Arguments: ()
+--- Logging error ---
+Traceback (most recent call last):
+  File "/home/dhaka/trishul/trishul-ram/tram/pipeline/executor.py", line 1840, in _apply_global_transforms
+    processed = t.apply(processed)
+  File "/home/dhaka/trishul/trishul-ram/tests/unit/test_kafka_connectors.py", line 282, in apply
+    return super().apply(records)
+           ~~~~~~~~~~~~~^^^^^^^^^
+  File "/home/dhaka/trishul/trishul-ram/tram/transforms/counter_delta.py", line 276, in apply
+    new_record = self._handle_bad_record(
+        new_record,
+    ...<3 lines>...
+        snapshot=record,
+    )
+  File "/home/dhaka/trishul/trishul-ram/tram/transforms/counter_delta.py", line 206, in _handle_bad_record
+    raise TransformError(message)
+tram.core.exceptions.TransformError: counter_delta: key field missing for 'id' (key_fields=['_index'])
+
+The above exception was the direct cause of the following exception:
+
+Traceback (most recent call last):
+  File "/home/dhaka/trishul/trishul-ram/tram/pipeline/executor.py", line 3771, in _worker
+    needs_flush = self._process_chunk(
+        raw, meta, serializer_in, transforms,
+    ...<7 lines>...
+        sink_pool=sink_pool,
+    )
+  File "/home/dhaka/trishul/trishul-ram/tram/pipeline/executor.py", line 2391, in _process_chunk
+    survivors = self._apply_global_transforms(
+        records, transforms, meta, ctx, on_error,
+        dlq_sink=dlq_sink, stats=stats, delivery=delivery,
+    )
+  File "/home/dhaka/trishul/trishul-ram/tram/pipeline/executor.py", line 1846, in _apply_global_transforms
+    raise TramError(f"Transform error: {exc}") from exc
+tram.core.exceptions.TramError: Transform error: counter_delta: key field missing for 'id' (key_fields=['_index'])
+
+During handling of the above exception, another exception occurred:
+
+Traceback (most recent call last):
+  File "/home/dhaka/.local/share/uv/python/cpython-3.13.15-linux-x86_64-gnu/lib/python3.13/logging/__init__.py", line 1154, in emit
+    stream.write(msg + self.terminator)
+    ~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^
+ValueError: I/O operation on closed file.
+Call stack:
+  File "/home/dhaka/.local/share/uv/python/cpython-3.13.15-linux-x86_64-gnu/lib/python3.13/threading.py", line 1015, in _bootstrap
+    self._bootstrap_inner()
+  File "/home/dhaka/.local/share/uv/python/cpython-3.13.15-linux-x86_64-gnu/lib/python3.13/threading.py", line 1044, in _bootstrap_inner
+    self.run()
+  File "/home/dhaka/.local/share/uv/python/cpython-3.13.15-linux-x86_64-gnu/lib/python3.13/threading.py", line 995, in run
+    self._target(*self._args, **self._kwargs)
+  File "/home/dhaka/trishul/trishul-ram/tram/pipeline/executor.py", line 3786, in _worker
+    logger.error(
+Message: 'Stream worker error'
+Arguments: ()
+--- Logging error ---
+Traceback (most recent call last):
+  File "/home/dhaka/trishul/trishul-ram/tram/pipeline/executor.py", line 1840, in _apply_global_transforms
+    processed = t.apply(processed)
+  File "/home/dhaka/trishul/trishul-ram/tests/unit/test_kafka_connectors.py", line 282, in apply
+    return super().apply(records)
+           ~~~~~~~~~~~~~^^^^^^^^^
+  File "/home/dhaka/trishul/trishul-ram/tram/transforms/counter_delta.py", line 276, in apply
+    new_record = self._handle_bad_record(
+        new_record,
+    ...<3 lines>...
+        snapshot=record,
+    )
+  File "/home/dhaka/trishul/trishul-ram/tram/transforms/counter_delta.py", line 206, in _handle_bad_record
+    raise TransformError(message)
+tram.core.exceptions.TransformError: counter_delta: key field missing for 'id' (key_fields=['_index'])
+
+The above exception was the direct cause of the following exception:
+
+Traceback (most recent call last):
+  File "/home/dhaka/trishul/trishul-ram/tram/pipeline/executor.py", line 3771, in _worker
+    needs_flush = self._process_chunk(
+        raw, meta, serializer_in, transforms,
+    ...<7 lines>...
+        sink_pool=sink_pool,
+    )
+  File "/home/dhaka/trishul/trishul-ram/tram/pipeline/executor.py", line 2391, in _process_chunk
+    survivors = self._apply_global_transforms(
+        records, transforms, meta, ctx, on_error,
+        dlq_sink=dlq_sink, stats=stats, delivery=delivery,
+    )
+  File "/home/dhaka/trishul/trishul-ram/tram/pipeline/executor.py", line 1846, in _apply_global_transforms
+    raise TramError(f"Transform error: {exc}") from exc
+tram.core.exceptions.TramError: Transform error: counter_delta: key field missing for 'id' (key_fields=['_index'])
+
+During handling of the above exception, another exception occurred:
+
+Traceback (most recent call last):
+  File "/home/dhaka/.local/share/uv/python/cpython-3.13.15-linux-x86_64-gnu/lib/python3.13/logging/__init__.py", line 1154, in emit
+    stream.write(msg + self.terminator)
+    ~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^
+ValueError: I/O operation on closed file.
+Call stack:
+  File "/home/dhaka/.local/share/uv/python/cpython-3.13.15-linux-x86_64-gnu/lib/python3.13/threading.py", line 1015, in _bootstrap
+    self._bootstrap_inner()
+  File "/home/dhaka/.local/share/uv/python/cpython-3.13.15-linux-x86_64-gnu/lib/python3.13/threading.py", line 1044, in _bootstrap_inner
+    self.run()
+  File "/home/dhaka/.local/share/uv/python/cpython-3.13.15-linux-x86_64-gnu/lib/python3.13/threading.py", line 995, in run
+    self._target(*self._args, **self._kwargs)
+  File "/home/dhaka/trishul/trishul-ram/tram/pipeline/executor.py", line 3786, in _worker
+    logger.error(
+Message: 'Stream worker error'
+Arguments: ()
+--- Logging error ---
+Traceback (most recent call last):
+  File "/home/dhaka/trishul/trishul-ram/tram/pipeline/executor.py", line 1840, in _apply_global_transforms
+    processed = t.apply(processed)
+  File "/home/dhaka/trishul/trishul-ram/tests/unit/test_kafka_connectors.py", line 282, in apply
+    return super().apply(records)
+           ~~~~~~~~~~~~~^^^^^^^^^
+  File "/home/dhaka/trishul/trishul-ram/tram/transforms/counter_delta.py", line 276, in apply
+    new_record = self._handle_bad_record(
+        new_record,
+    ...<3 lines>...
+        snapshot=record,
+    )
+  File "/home/dhaka/trishul/trishul-ram/tram/transforms/counter_delta.py", line 206, in _handle_bad_record
+    raise TransformError(message)
+tram.core.exceptions.TransformError: counter_delta: key field missing for 'id' (key_fields=['_index'])
+
+The above exception was the direct cause of the following exception:
+
+Traceback (most recent call last):
+  File "/home/dhaka/trishul/trishul-ram/tram/pipeline/executor.py", line 3771, in _worker
+    needs_flush = self._process_chunk(
+        raw, meta, serializer_in, transforms,
+    ...<7 lines>...
+        sink_pool=sink_pool,
+    )
+  File "/home/dhaka/trishul/trishul-ram/tram/pipeline/executor.py", line 2391, in _process_chunk
+    survivors = self._apply_global_transforms(
+        records, transforms, meta, ctx, on_error,
+        dlq_sink=dlq_sink, stats=stats, delivery=delivery,
+    )
+  File "/home/dhaka/trishul/trishul-ram/tram/pipeline/executor.py", line 1846, in _apply_global_transforms
+    raise TramError(f"Transform error: {exc}") from exc
+tram.core.exceptions.TramError: Transform error: counter_delta: key field missing for 'id' (key_fields=['_index'])
+
+During handling of the above exception, another exception occurred:
+
+Traceback (most recent call last):
+  File "/home/dhaka/.local/share/uv/python/cpython-3.13.15-linux-x86_64-gnu/lib/python3.13/logging/__init__.py", line 1154, in emit
+    stream.write(msg + self.terminator)
+    ~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^
+ValueError: I/O operation on closed file.
+Call stack:
+  File "/home/dhaka/.local/share/uv/python/cpython-3.13.15-linux-x86_64-gnu/lib/python3.13/threading.py", line 1015, in _bootstrap
+    self._bootstrap_inner()
+  File "/home/dhaka/.local/share/uv/python/cpython-3.13.15-linux-x86_64-gnu/lib/python3.13/threading.py", line 1044, in _bootstrap_inner
+    self.run()
+  File "/home/dhaka/.local/share/uv/python/cpython-3.13.15-linux-x86_64-gnu/lib/python3.13/threading.py", line 995, in run
+    self._target(*self._args, **self._kwargs)
+  File "/home/dhaka/trishul/trishul-ram/tram/pipeline/executor.py", line 3786, in _worker
+    logger.error(
+Message: 'Stream worker error'
+Arguments: ()
+--- Logging error ---
+Traceback (most recent call last):
+  File "/home/dhaka/trishul/trishul-ram/tram/pipeline/executor.py", line 1840, in _apply_global_transforms
+    processed = t.apply(processed)
+  File "/home/dhaka/trishul/trishul-ram/tests/unit/test_kafka_connectors.py", line 281, in apply
+    raise RuntimeError("earlier input failed")
+RuntimeError: earlier input failed
+
+The above exception was the direct cause of the following exception:
+
+Traceback (most recent call last):
+  File "/home/dhaka/trishul/trishul-ram/tram/pipeline/executor.py", line 3771, in _worker
+    needs_flush = self._process_chunk(
+        raw, meta, serializer_in, transforms,
+    ...<7 lines>...
+        sink_pool=sink_pool,
+    )
+  File "/home/dhaka/trishul/trishul-ram/tram/pipeline/executor.py", line 2391, in _process_chunk
+    survivors = self._apply_global_transforms(
+        records, transforms, meta, ctx, on_error,
+        dlq_sink=dlq_sink, stats=stats, delivery=delivery,
+    )
+  File "/home/dhaka/trishul/trishul-ram/tram/pipeline/executor.py", line 1846, in _apply_global_transforms
+    raise TramError(f"Transform error: {exc}") from exc
+tram.core.exceptions.TramError: Transform error: earlier input failed
+
+During handling of the above exception, another exception occurred:
+
+Traceback (most recent call last):
+  File "/home/dhaka/.local/share/uv/python/cpython-3.13.15-linux-x86_64-gnu/lib/python3.13/logging/__init__.py", line 1154, in emit
+    stream.write(msg + self.terminator)
+    ~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^
+ValueError: I/O operation on closed file.
+Call stack:
+  File "/home/dhaka/.local/share/uv/python/cpython-3.13.15-linux-x86_64-gnu/lib/python3.13/threading.py", line 1015, in _bootstrap
+    self._bootstrap_inner()
+  File "/home/dhaka/.local/share/uv/python/cpython-3.13.15-linux-x86_64-gnu/lib/python3.13/threading.py", line 1044, in _bootstrap_inner
+    self.run()
+  File "/home/dhaka/.local/share/uv/python/cpython-3.13.15-linux-x86_64-gnu/lib/python3.13/threading.py", line 995, in run
+    self._target(*self._args, **self._kwargs)
+  File "/home/dhaka/trishul/trishul-ram/tram/pipeline/executor.py", line 3786, in _worker
+    logger.error(
+Message: 'Stream worker error'
+Arguments: ()
+--- Logging error ---
+Traceback (most recent call last):
+  File "/home/dhaka/trishul/trishul-ram/tram/pipeline/executor.py", line 1840, in _apply_global_transforms
+    processed = t.apply(processed)
+  File "/home/dhaka/trishul/trishul-ram/tests/unit/test_kafka_connectors.py", line 282, in apply
+    return super().apply(records)
+           ~~~~~~~~~~~~~^^^^^^^^^
+  File "/home/dhaka/trishul/trishul-ram/tram/transforms/counter_delta.py", line 276, in apply
+    new_record = self._handle_bad_record(
+        new_record,
+    ...<3 lines>...
+        snapshot=record,
+    )
+  File "/home/dhaka/trishul/trishul-ram/tram/transforms/counter_delta.py", line 206, in _handle_bad_record
+    raise TransformError(message)
+tram.core.exceptions.TransformError: counter_delta: key field missing for 'id' (key_fields=['_index'])
+
+The above exception was the direct cause of the following exception:
+
+Traceback (most recent call last):
+  File "/home/dhaka/trishul/trishul-ram/tram/pipeline/executor.py", line 3475, in stream_run
+    self._stream_run_threaded(
+    ~~~~~~~~~~~~~~~~~~~~~~~~~^
+        config, source, sinks, serializer_in, serializer_out,
+        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    ...<9 lines>...
+        source_iter=source_iter,
+        ^^^^^^^^^^^^^^^^^^^^^^^^
+    )
+    ^
+  File "/home/dhaka/trishul/trishul-ram/tram/pipeline/executor.py", line 3874, in _stream_run_threaded
+    raise worker_errors.get_nowait()
+  File "/home/dhaka/trishul/trishul-ram/tram/pipeline/executor.py", line 3771, in _worker
+    needs_flush = self._process_chunk(
+        raw, meta, serializer_in, transforms,
+    ...<7 lines>...
+        sink_pool=sink_pool,
+    )
+  File "/home/dhaka/trishul/trishul-ram/tram/pipeline/executor.py", line 2391, in _process_chunk
+    survivors = self._apply_global_transforms(
+        records, transforms, meta, ctx, on_error,
+        dlq_sink=dlq_sink, stats=stats, delivery=delivery,
+    )
+  File "/home/dhaka/trishul/trishul-ram/tram/pipeline/executor.py", line 1846, in _apply_global_transforms
+    raise TramError(f"Transform error: {exc}") from exc
+tram.core.exceptions.TramError: Transform error: counter_delta: key field missing for 'id' (key_fields=['_index'])
+
+During handling of the above exception, another exception occurred:
+
+Traceback (most recent call last):
+  File "/home/dhaka/.local/share/uv/python/cpython-3.13.15-linux-x86_64-gnu/lib/python3.13/logging/__init__.py", line 1154, in emit
+    stream.write(msg + self.terminator)
+    ~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^
+ValueError: I/O operation on closed file.
+Call stack:
+  File "<frozen runpy>", line 203, in _run_module_as_main
+  File "<frozen runpy>", line 88, in _run_code
+  File "/tmp/tram-v183-venv/lib/python3.13/site-packages/pytest/__main__.py", line 9, in <module>
+    raise SystemExit(pytest.console_main())
+  File "/tmp/tram-v183-venv/lib/python3.13/site-packages/_pytest/config/__init__.py", line 201, in console_main
+    code = main()
+  File "/tmp/tram-v183-venv/lib/python3.13/site-packages/_pytest/config/__init__.py", line 175, in main
+    ret: ExitCode | int = config.hook.pytest_cmdline_main(config=config)
+  File "/tmp/tram-v183-venv/lib/python3.13/site-packages/pluggy/_hooks.py", line 512, in __call__
+    return self._hookexec(self.name, self._hookimpls.copy(), kwargs, firstresult)
+  File "/tmp/tram-v183-venv/lib/python3.13/site-packages/pluggy/_manager.py", line 120, in _hookexec
+    return self._inner_hookexec(hook_name, methods, kwargs, firstresult)
+  File "/tmp/tram-v183-venv/lib/python3.13/site-packages/pluggy/_callers.py", line 121, in _multicall
+    res = hook_impl.function(*args)
+  File "/tmp/tram-v183-venv/lib/python3.13/site-packages/_pytest/main.py", line 336, in pytest_cmdline_main
+    return wrap_session(config, _main)
+  File "/tmp/tram-v183-venv/lib/python3.13/site-packages/_pytest/main.py", line 289, in wrap_session
+    session.exitstatus = doit(config, session) or 0
+  File "/tmp/tram-v183-venv/lib/python3.13/site-packages/_pytest/main.py", line 343, in _main
+    config.hook.pytest_runtestloop(session=session)
+  File "/tmp/tram-v183-venv/lib/python3.13/site-packages/pluggy/_hooks.py", line 512, in __call__
+    return self._hookexec(self.name, self._hookimpls.copy(), kwargs, firstresult)
+  File "/tmp/tram-v183-venv/lib/python3.13/site-packages/pluggy/_manager.py", line 120, in _hookexec
+    return self._inner_hookexec(hook_name, methods, kwargs, firstresult)
+  File "/tmp/tram-v183-venv/lib/python3.13/site-packages/pluggy/_callers.py", line 121, in _multicall
+    res = hook_impl.function(*args)
+  File "/tmp/tram-v183-venv/lib/python3.13/site-packages/_pytest/main.py", line 367, in pytest_runtestloop
+    item.config.hook.pytest_runtest_protocol(item=item, nextitem=nextitem)
+  File "/tmp/tram-v183-venv/lib/python3.13/site-packages/pluggy/_hooks.py", line 512, in __call__
+    return self._hookexec(self.name, self._hookimpls.copy(), kwargs, firstresult)
+  File "/tmp/tram-v183-venv/lib/python3.13/site-packages/pluggy/_manager.py", line 120, in _hookexec
+    return self._inner_hookexec(hook_name, methods, kwargs, firstresult)
+  File "/tmp/tram-v183-venv/lib/python3.13/site-packages/pluggy/_callers.py", line 121, in _multicall
+    res = hook_impl.function(*args)
+  File "/tmp/tram-v183-venv/lib/python3.13/site-packages/_pytest/runner.py", line 117, in pytest_runtest_protocol
+    runtestprotocol(item, nextitem=nextitem)
+  File "/tmp/tram-v183-venv/lib/python3.13/site-packages/_pytest/runner.py", line 136, in runtestprotocol
+    reports.append(call_and_report(item, "call", log))
+  File "/tmp/tram-v183-venv/lib/python3.13/site-packages/_pytest/runner.py", line 245, in call_and_report
+    call = CallInfo.from_call(
+  File "/tmp/tram-v183-venv/lib/python3.13/site-packages/_pytest/runner.py", line 344, in from_call
+    result: TResult | None = func()
+  File "/tmp/tram-v183-venv/lib/python3.13/site-packages/_pytest/runner.py", line 246, in <lambda>
+    lambda: runtest_hook(item=item, **kwds), when=when, reraise=reraise
+  File "/tmp/tram-v183-venv/lib/python3.13/site-packages/pluggy/_hooks.py", line 512, in __call__
+    return self._hookexec(self.name, self._hookimpls.copy(), kwargs, firstresult)
+  File "/tmp/tram-v183-venv/lib/python3.13/site-packages/pluggy/_manager.py", line 120, in _hookexec
+    return self._inner_hookexec(hook_name, methods, kwargs, firstresult)
+  File "/tmp/tram-v183-venv/lib/python3.13/site-packages/pluggy/_callers.py", line 121, in _multicall
+    res = hook_impl.function(*args)
+  File "/tmp/tram-v183-venv/lib/python3.13/site-packages/_pytest/runner.py", line 178, in pytest_runtest_call
+    item.runtest()
+  File "/tmp/tram-v183-venv/lib/python3.13/site-packages/_pytest/python.py", line 1671, in runtest
+    self.ihook.pytest_pyfunc_call(pyfuncitem=self)
+  File "/tmp/tram-v183-venv/lib/python3.13/site-packages/pluggy/_hooks.py", line 512, in __call__
+    return self._hookexec(self.name, self._hookimpls.copy(), kwargs, firstresult)
+  File "/tmp/tram-v183-venv/lib/python3.13/site-packages/pluggy/_manager.py", line 120, in _hookexec
+    return self._inner_hookexec(hook_name, methods, kwargs, firstresult)
+  File "/tmp/tram-v183-venv/lib/python3.13/site-packages/pluggy/_callers.py", line 121, in _multicall
+    res = hook_impl.function(*args)
+  File "/tmp/tram-v183-venv/lib/python3.13/site-packages/_pytest/python.py", line 157, in pytest_pyfunc_call
+    result = testfunction(**testargs)
+  File "/home/dhaka/trishul/trishul-ram/tests/unit/test_kafka_connectors.py", line 297, in test_executor_single_partition_stream_commits_each_record_before_stop
+    pytest.raises(TramError, match="earlier input failed"),
+  File "/home/dhaka/trishul/trishul-ram/tram/pipeline/executor.py", line 3573, in stream_run
+    logger.error(
+Message: 'Stream run error'
+Arguments: ()
+--- Logging error ---
+Traceback (most recent call last):
+  File "/home/dhaka/trishul/trishul-ram/tram/pipeline/executor.py", line 1840, in _apply_global_transforms
+    processed = t.apply(processed)
+  File "/home/dhaka/trishul/trishul-ram/tests/unit/test_kafka_connectors.py", line 282, in apply
+    return super().apply(records)
+           ~~~~~~~~~~~~~^^^^^^^^^
+  File "/home/dhaka/trishul/trishul-ram/tram/transforms/counter_delta.py", line 276, in apply
+    new_record = self._handle_bad_record(
+        new_record,
+    ...<3 lines>...
+        snapshot=record,
+    )
+  File "/home/dhaka/trishul/trishul-ram/tram/transforms/counter_delta.py", line 206, in _handle_bad_record
+    raise TransformError(message)
+tram.core.exceptions.TransformError: counter_delta: key field missing for 'id' (key_fields=['_index'])
+
+The above exception was the direct cause of the following exception:
+
+Traceback (most recent call last):
+  File "/home/dhaka/trishul/trishul-ram/tram/pipeline/executor.py", line 3475, in stream_run
+    self._stream_run_threaded(
+    ~~~~~~~~~~~~~~~~~~~~~~~~~^
+        config, source, sinks, serializer_in, serializer_out,
+        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    ...<9 lines>...
+        source_iter=source_iter,
+        ^^^^^^^^^^^^^^^^^^^^^^^^
+    )
+    ^
+  File "/home/dhaka/trishul/trishul-ram/tram/pipeline/executor.py", line 3874, in _stream_run_threaded
+    raise worker_errors.get_nowait()
+  File "/home/dhaka/trishul/trishul-ram/tram/pipeline/executor.py", line 3771, in _worker
+    needs_flush = self._process_chunk(
+        raw, meta, serializer_in, transforms,
+    ...<7 lines>...
+        sink_pool=sink_pool,
+    )
+  File "/home/dhaka/trishul/trishul-ram/tram/pipeline/executor.py", line 2391, in _process_chunk
+    survivors = self._apply_global_transforms(
+        records, transforms, meta, ctx, on_error,
+        dlq_sink=dlq_sink, stats=stats, delivery=delivery,
+    )
+  File "/home/dhaka/trishul/trishul-ram/tram/pipeline/executor.py", line 1846, in _apply_global_transforms
+    raise TramError(f"Transform error: {exc}") from exc
+tram.core.exceptions.TramError: Transform error: counter_delta: key field missing for 'id' (key_fields=['_index'])
+
+During handling of the above exception, another exception occurred:
+
+Traceback (most recent call last):
+  File "/home/dhaka/trishul/trishul-ram/tram/connectors/kafka/source.py", line 768, in read
+    yield value, {
+    ...<6 lines>...
+    }
+GeneratorExit
+
+During handling of the above exception, another exception occurred:
+
+Traceback (most recent call last):
+  File "/home/dhaka/.local/share/uv/python/cpython-3.13.15-linux-x86_64-gnu/lib/python3.13/logging/__init__.py", line 1154, in emit
+    stream.write(msg + self.terminator)
+    ~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^
+ValueError: I/O operation on closed file.
+Call stack:
+  File "<frozen runpy>", line 203, in _run_module_as_main
+  File "<frozen runpy>", line 88, in _run_code
+  File "/tmp/tram-v183-venv/lib/python3.13/site-packages/pytest/__main__.py", line 9, in <module>
+    raise SystemExit(pytest.console_main())
+  File "/tmp/tram-v183-venv/lib/python3.13/site-packages/_pytest/config/__init__.py", line 201, in console_main
+    code = main()
+  File "/tmp/tram-v183-venv/lib/python3.13/site-packages/_pytest/config/__init__.py", line 175, in main
+    ret: ExitCode | int = config.hook.pytest_cmdline_main(config=config)
+  File "/tmp/tram-v183-venv/lib/python3.13/site-packages/pluggy/_hooks.py", line 512, in __call__
+    return self._hookexec(self.name, self._hookimpls.copy(), kwargs, firstresult)
+  File "/tmp/tram-v183-venv/lib/python3.13/site-packages/pluggy/_manager.py", line 120, in _hookexec
+    return self._inner_hookexec(hook_name, methods, kwargs, firstresult)
+  File "/tmp/tram-v183-venv/lib/python3.13/site-packages/pluggy/_callers.py", line 121, in _multicall
+    res = hook_impl.function(*args)
+  File "/tmp/tram-v183-venv/lib/python3.13/site-packages/_pytest/main.py", line 336, in pytest_cmdline_main
+    return wrap_session(config, _main)
+  File "/tmp/tram-v183-venv/lib/python3.13/site-packages/_pytest/main.py", line 289, in wrap_session
+    session.exitstatus = doit(config, session) or 0
+  File "/tmp/tram-v183-venv/lib/python3.13/site-packages/_pytest/main.py", line 343, in _main
+    config.hook.pytest_runtestloop(session=session)
+  File "/tmp/tram-v183-venv/lib/python3.13/site-packages/pluggy/_hooks.py", line 512, in __call__
+    return self._hookexec(self.name, self._hookimpls.copy(), kwargs, firstresult)
+  File "/tmp/tram-v183-venv/lib/python3.13/site-packages/pluggy/_manager.py", line 120, in _hookexec
+    return self._inner_hookexec(hook_name, methods, kwargs, firstresult)
+  File "/tmp/tram-v183-venv/lib/python3.13/site-packages/pluggy/_callers.py", line 121, in _multicall
+    res = hook_impl.function(*args)
+  File "/tmp/tram-v183-venv/lib/python3.13/site-packages/_pytest/main.py", line 367, in pytest_runtestloop
+    item.config.hook.pytest_runtest_protocol(item=item, nextitem=nextitem)
+  File "/tmp/tram-v183-venv/lib/python3.13/site-packages/pluggy/_hooks.py", line 512, in __call__
+    return self._hookexec(self.name, self._hookimpls.copy(), kwargs, firstresult)
+  File "/tmp/tram-v183-venv/lib/python3.13/site-packages/pluggy/_manager.py", line 120, in _hookexec
+    return self._inner_hookexec(hook_name, methods, kwargs, firstresult)
+  File "/tmp/tram-v183-venv/lib/python3.13/site-packages/pluggy/_callers.py", line 121, in _multicall
+    res = hook_impl.function(*args)
+  File "/tmp/tram-v183-venv/lib/python3.13/site-packages/_pytest/runner.py", line 117, in pytest_runtest_protocol
+    runtestprotocol(item, nextitem=nextitem)
+  File "/tmp/tram-v183-venv/lib/python3.13/site-packages/_pytest/runner.py", line 136, in runtestprotocol
+    reports.append(call_and_report(item, "call", log))
+  File "/tmp/tram-v183-venv/lib/python3.13/site-packages/_pytest/runner.py", line 245, in call_and_report
+    call = CallInfo.from_call(
+  File "/tmp/tram-v183-venv/lib/python3.13/site-packages/_pytest/runner.py", line 344, in from_call
+    result: TResult | None = func()
+  File "/tmp/tram-v183-venv/lib/python3.13/site-packages/_pytest/runner.py", line 246, in <lambda>
+    lambda: runtest_hook(item=item, **kwds), when=when, reraise=reraise
+  File "/tmp/tram-v183-venv/lib/python3.13/site-packages/pluggy/_hooks.py", line 512, in __call__
+    return self._hookexec(self.name, self._hookimpls.copy(), kwargs, firstresult)
+  File "/tmp/tram-v183-venv/lib/python3.13/site-packages/pluggy/_manager.py", line 120, in _hookexec
+    return self._inner_hookexec(hook_name, methods, kwargs, firstresult)
+  File "/tmp/tram-v183-venv/lib/python3.13/site-packages/pluggy/_callers.py", line 121, in _multicall
+    res = hook_impl.function(*args)
+  File "/tmp/tram-v183-venv/lib/python3.13/site-packages/_pytest/runner.py", line 178, in pytest_runtest_call
+    item.runtest()
+  File "/tmp/tram-v183-venv/lib/python3.13/site-packages/_pytest/python.py", line 1671, in runtest
+    self.ihook.pytest_pyfunc_call(pyfuncitem=self)
+  File "/tmp/tram-v183-venv/lib/python3.13/site-packages/pluggy/_hooks.py", line 512, in __call__
+    return self._hookexec(self.name, self._hookimpls.copy(), kwargs, firstresult)
+  File "/tmp/tram-v183-venv/lib/python3.13/site-packages/pluggy/_manager.py", line 120, in _hookexec
+    return self._inner_hookexec(hook_name, methods, kwargs, firstresult)
+  File "/tmp/tram-v183-venv/lib/python3.13/site-packages/pluggy/_callers.py", line 121, in _multicall
+    res = hook_impl.function(*args)
+  File "/tmp/tram-v183-venv/lib/python3.13/site-packages/_pytest/python.py", line 157, in pytest_pyfunc_call
+    result = testfunction(**testargs)
+  File "/home/dhaka/trishul/trishul-ram/tests/unit/test_kafka_connectors.py", line 297, in test_executor_single_partition_stream_commits_each_record_before_stop
+    pytest.raises(TramError, match="earlier input failed"),
+  File "/home/dhaka/trishul/trishul-ram/tram/pipeline/executor.py", line 3592, in stream_run
+    close()
+  File "/home/dhaka/trishul/trishul-ram/tram/connectors/kafka/source.py", line 819, in read
+    self.close()
+  File "/home/dhaka/trishul/trishul-ram/tram/connectors/kafka/source.py", line 222, in close
+    logger.info("Kafka consumer closed", extra={"topics": self.topics})
+Message: 'Kafka consumer closed'
+Arguments: ()
+--- Logging error ---
+Traceback (most recent call last):
+  File "/home/dhaka/trishul/trishul-ram/tram/pipeline/executor.py", line 1840, in _apply_global_transforms
+    processed = t.apply(processed)
+  File "/home/dhaka/trishul/trishul-ram/tests/unit/test_kafka_connectors.py", line 282, in apply
+    return super().apply(records)
+           ~~~~~~~~~~~~~^^^^^^^^^
+  File "/home/dhaka/trishul/trishul-ram/tram/transforms/counter_delta.py", line 276, in apply
+    new_record = self._handle_bad_record(
+        new_record,
+    ...<3 lines>...
+        snapshot=record,
+    )
+  File "/home/dhaka/trishul/trishul-ram/tram/transforms/counter_delta.py", line 206, in _handle_bad_record
+    raise TransformError(message)
+tram.core.exceptions.TransformError: counter_delta: key field missing for 'id' (key_fields=['_index'])
+
+The above exception was the direct cause of the following exception:
+
+Traceback (most recent call last):
+  File "/home/dhaka/trishul/trishul-ram/tram/pipeline/executor.py", line 3475, in stream_run
+    self._stream_run_threaded(
+    ~~~~~~~~~~~~~~~~~~~~~~~~~^
+        config, source, sinks, serializer_in, serializer_out,
+        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    ...<9 lines>...
+        source_iter=source_iter,
+        ^^^^^^^^^^^^^^^^^^^^^^^^
+    )
+    ^
+  File "/home/dhaka/trishul/trishul-ram/tram/pipeline/executor.py", line 3874, in _stream_run_threaded
+    raise worker_errors.get_nowait()
+  File "/home/dhaka/trishul/trishul-ram/tram/pipeline/executor.py", line 3771, in _worker
+    needs_flush = self._process_chunk(
+        raw, meta, serializer_in, transforms,
+    ...<7 lines>...
+        sink_pool=sink_pool,
+    )
+  File "/home/dhaka/trishul/trishul-ram/tram/pipeline/executor.py", line 2391, in _process_chunk
+    survivors = self._apply_global_transforms(
+        records, transforms, meta, ctx, on_error,
+        dlq_sink=dlq_sink, stats=stats, delivery=delivery,
+    )
+  File "/home/dhaka/trishul/trishul-ram/tram/pipeline/executor.py", line 1846, in _apply_global_transforms
+    raise TramError(f"Transform error: {exc}") from exc
+tram.core.exceptions.TramError: Transform error: counter_delta: key field missing for 'id' (key_fields=['_index'])
+
+During handling of the above exception, another exception occurred:
+
+Traceback (most recent call last):
+  File "/home/dhaka/.local/share/uv/python/cpython-3.13.15-linux-x86_64-gnu/lib/python3.13/logging/__init__.py", line 1154, in emit
+    stream.write(msg + self.terminator)
+    ~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^
+ValueError: I/O operation on closed file.
+Call stack:
+  File "<frozen runpy>", line 203, in _run_module_as_main
+  File "<frozen runpy>", line 88, in _run_code
+  File "/tmp/tram-v183-venv/lib/python3.13/site-packages/pytest/__main__.py", line 9, in <module>
+    raise SystemExit(pytest.console_main())
+  File "/tmp/tram-v183-venv/lib/python3.13/site-packages/_pytest/config/__init__.py", line 201, in console_main
+    code = main()
+  File "/tmp/tram-v183-venv/lib/python3.13/site-packages/_pytest/config/__init__.py", line 175, in main
+    ret: ExitCode | int = config.hook.pytest_cmdline_main(config=config)
+  File "/tmp/tram-v183-venv/lib/python3.13/site-packages/pluggy/_hooks.py", line 512, in __call__
+    return self._hookexec(self.name, self._hookimpls.copy(), kwargs, firstresult)
+  File "/tmp/tram-v183-venv/lib/python3.13/site-packages/pluggy/_manager.py", line 120, in _hookexec
+    return self._inner_hookexec(hook_name, methods, kwargs, firstresult)
+  File "/tmp/tram-v183-venv/lib/python3.13/site-packages/pluggy/_callers.py", line 121, in _multicall
+    res = hook_impl.function(*args)
+  File "/tmp/tram-v183-venv/lib/python3.13/site-packages/_pytest/main.py", line 336, in pytest_cmdline_main
+    return wrap_session(config, _main)
+  File "/tmp/tram-v183-venv/lib/python3.13/site-packages/_pytest/main.py", line 289, in wrap_session
+    session.exitstatus = doit(config, session) or 0
+  File "/tmp/tram-v183-venv/lib/python3.13/site-packages/_pytest/main.py", line 343, in _main
+    config.hook.pytest_runtestloop(session=session)
+  File "/tmp/tram-v183-venv/lib/python3.13/site-packages/pluggy/_hooks.py", line 512, in __call__
+    return self._hookexec(self.name, self._hookimpls.copy(), kwargs, firstresult)
+  File "/tmp/tram-v183-venv/lib/python3.13/site-packages/pluggy/_manager.py", line 120, in _hookexec
+    return self._inner_hookexec(hook_name, methods, kwargs, firstresult)
+  File "/tmp/tram-v183-venv/lib/python3.13/site-packages/pluggy/_callers.py", line 121, in _multicall
+    res = hook_impl.function(*args)
+  File "/tmp/tram-v183-venv/lib/python3.13/site-packages/_pytest/main.py", line 367, in pytest_runtestloop
+    item.config.hook.pytest_runtest_protocol(item=item, nextitem=nextitem)
+  File "/tmp/tram-v183-venv/lib/python3.13/site-packages/pluggy/_hooks.py", line 512, in __call__
+    return self._hookexec(self.name, self._hookimpls.copy(), kwargs, firstresult)
+  File "/tmp/tram-v183-venv/lib/python3.13/site-packages/pluggy/_manager.py", line 120, in _hookexec
+    return self._inner_hookexec(hook_name, methods, kwargs, firstresult)
+  File "/tmp/tram-v183-venv/lib/python3.13/site-packages/pluggy/_callers.py", line 121, in _multicall
+    res = hook_impl.function(*args)
+  File "/tmp/tram-v183-venv/lib/python3.13/site-packages/_pytest/runner.py", line 117, in pytest_runtest_protocol
+    runtestprotocol(item, nextitem=nextitem)
+  File "/tmp/tram-v183-venv/lib/python3.13/site-packages/_pytest/runner.py", line 136, in runtestprotocol
+    reports.append(call_and_report(item, "call", log))
+  File "/tmp/tram-v183-venv/lib/python3.13/site-packages/_pytest/runner.py", line 245, in call_and_report
+    call = CallInfo.from_call(
+  File "/tmp/tram-v183-venv/lib/python3.13/site-packages/_pytest/runner.py", line 344, in from_call
+    result: TResult | None = func()
+  File "/tmp/tram-v183-venv/lib/python3.13/site-packages/_pytest/runner.py", line 246, in <lambda>
+    lambda: runtest_hook(item=item, **kwds), when=when, reraise=reraise
+  File "/tmp/tram-v183-venv/lib/python3.13/site-packages/pluggy/_hooks.py", line 512, in __call__
+    return self._hookexec(self.name, self._hookimpls.copy(), kwargs, firstresult)
+  File "/tmp/tram-v183-venv/lib/python3.13/site-packages/pluggy/_manager.py", line 120, in _hookexec
+    return self._inner_hookexec(hook_name, methods, kwargs, firstresult)
+  File "/tmp/tram-v183-venv/lib/python3.13/site-packages/pluggy/_callers.py", line 121, in _multicall
+    res = hook_impl.function(*args)
+  File "/tmp/tram-v183-venv/lib/python3.13/site-packages/_pytest/runner.py", line 178, in pytest_runtest_call
+    item.runtest()
+  File "/tmp/tram-v183-venv/lib/python3.13/site-packages/_pytest/python.py", line 1671, in runtest
+    self.ihook.pytest_pyfunc_call(pyfuncitem=self)
+  File "/tmp/tram-v183-venv/lib/python3.13/site-packages/pluggy/_hooks.py", line 512, in __call__
+    return self._hookexec(self.name, self._hookimpls.copy(), kwargs, firstresult)
+  File "/tmp/tram-v183-venv/lib/python3.13/site-packages/pluggy/_manager.py", line 120, in _hookexec
+    return self._inner_hookexec(hook_name, methods, kwargs, firstresult)
+  File "/tmp/tram-v183-venv/lib/python3.13/site-packages/pluggy/_callers.py", line 121, in _multicall
+    res = hook_impl.function(*args)
+  File "/tmp/tram-v183-venv/lib/python3.13/site-packages/_pytest/python.py", line 157, in pytest_pyfunc_call
+    result = testfunction(**testargs)
+  File "/home/dhaka/trishul/trishul-ram/tests/unit/test_kafka_connectors.py", line 297, in test_executor_single_partition_stream_commits_each_record_before_stop
+    pytest.raises(TramError, match="earlier input failed"),
+  File "/home/dhaka/trishul/trishul-ram/tram/pipeline/executor.py", line 3646, in stream_run
+    logger.info(
+Message: 'Stream run ended'
+Arguments: ()
+------------------------------ Captured log call -------------------------------
+INFO     tram.pipeline.executor:executor.py:3318 Stream run started
+INFO     tram.connectors.kafka.source:source.py:663 Kafka consumer starting
+ERROR    tram.pipeline.executor:executor.py:3786 Stream worker error
+ERROR    tram.pipeline.executor:executor.py:3786 Stream worker error
+ERROR    tram.pipeline.executor:executor.py:3786 Stream worker error
+ERROR    tram.pipeline.executor:executor.py:3786 Stream worker error
+ERROR    tram.pipeline.executor:executor.py:3786 Stream worker error
+ERROR    tram.pipeline.executor:executor.py:3573 Stream run error
+Traceback (most recent call last):
+  File "/home/dhaka/trishul/trishul-ram/tram/pipeline/executor.py", line 1840, in _apply_global_transforms
+    processed = t.apply(processed)
+  File "/home/dhaka/trishul/trishul-ram/tests/unit/test_kafka_connectors.py", line 282, in apply
+    return super().apply(records)
+           ~~~~~~~~~~~~~^^^^^^^^^
+  File "/home/dhaka/trishul/trishul-ram/tram/transforms/counter_delta.py", line 276, in apply
+    new_record = self._handle_bad_record(
+        new_record,
+    ...<3 lines>...
+        snapshot=record,
+    )
+  File "/home/dhaka/trishul/trishul-ram/tram/transforms/counter_delta.py", line 206, in _handle_bad_record
+    raise TransformError(message)
+tram.core.exceptions.TransformError: counter_delta: key field missing for 'id' (key_fields=['_index'])
+
+The above exception was the direct cause of the following exception:
+
+Traceback (most recent call last):
+  File "/home/dhaka/trishul/trishul-ram/tram/pipeline/executor.py", line 3475, in stream_run
+    self._stream_run_threaded(
+    ~~~~~~~~~~~~~~~~~~~~~~~~~^
+        config, source, sinks, serializer_in, serializer_out,
+        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    ...<9 lines>...
+        source_iter=source_iter,
+        ^^^^^^^^^^^^^^^^^^^^^^^^
+    )
+    ^
+  File "/home/dhaka/trishul/trishul-ram/tram/pipeline/executor.py", line 3874, in _stream_run_threaded
+    raise worker_errors.get_nowait()
+  File "/home/dhaka/trishul/trishul-ram/tram/pipeline/executor.py", line 3771, in _worker
+    needs_flush = self._process_chunk(
+        raw, meta, serializer_in, transforms,
+    ...<7 lines>...
+        sink_pool=sink_pool,
+    )
+  File "/home/dhaka/trishul/trishul-ram/tram/pipeline/executor.py", line 2391, in _process_chunk
+    survivors = self._apply_global_transforms(
+        records, transforms, meta, ctx, on_error,
+        dlq_sink=dlq_sink, stats=stats, delivery=delivery,
+    )
+  File "/home/dhaka/trishul/trishul-ram/tram/pipeline/executor.py", line 1846, in _apply_global_transforms
+    raise TramError(f"Transform error: {exc}") from exc
+tram.core.exceptions.TramError: Transform error: counter_delta: key field missing for 'id' (key_fields=['_index'])
+INFO     tram.connectors.kafka.source:source.py:222 Kafka consumer closed
+INFO     tram.pipeline.executor:executor.py:3646 Stream run ended
+=============================== warnings summary ===============================
+../../../../tmp/tram-v183-venv/lib/python3.13/site-packages/fastapi/testclient.py:1
+  /tmp/tram-v183-venv/lib/python3.13/site-packages/fastapi/testclient.py:1: StarletteDeprecationWarning: Using `httpx` with `starlette.testclient` is deprecated; install `httpx2` instead.
+    from starlette.testclient import TestClient as TestClient  # noqa
+
+-- Docs: https://docs.pytest.org/en/stable/how-to/capture-warnings.html
+
+---------- coverage: platform linux, python 3.13.15-final-0 ----------
+Name                                        Stmts   Miss  Cover   Missing
+-------------------------------------------------------------------------
+tram/__init__.py                                5      2    60%   7-9
+tram/agent/__init__.py                          0      0   100%
+tram/agent/assets.py                           83      3    96%   64-65, 146
+tram/agent/auth_tokens.py                      60      0   100%
+tram/agent/file_tracker_client.py             104      8    92%   138-144, 171, 173, 240, 264-266
+tram/agent/journal.py                         521     39    93%   325-329, 339-340, 378-383, 397-398, 405-407, 418-419, 429, 437-438, 462-463, 468, 532-544, 654-655, 698, 903, 1016, 1114
+tram/agent/metrics.py                          48      0   100%
+tram/agent/reconciler.py                      285     30    89%   36, 55, 70, 83, 105, 109-115, 118-120, 123-127, 175, 177, 179, 227-235, 297, 398, 401-402, 437, 497
+tram/agent/server.py                          587     44    93%   201-205, 786-787, 795, 816, 827, 843, 959, 1005, 1009-1016, 1109, 1175-1176, 1232, 1238, 1250-1251, 1256, 1258, 1468-1469, 1631-1634, 1779-1781, 1864-1891, 1941, 2172-2173, 2177
+tram/agent/stats_store.py                      36      1    97%   58
+tram/agent/worker_pool.py                     582     39    93%   279, 404-407, 475-479, 526, 585-593, 721-726, 775, 798, 801, 814, 891-892, 925-926, 1019, 1259, 1297-1302, 1316-1321, 1337-1338, 1391
+tram/alerts/__init__.py                         2      0   100%
+tram/alerts/evaluator.py                       89      6    93%   33-38, 77-78, 169
+tram/api/__init__.py                            0      0   100%
+tram/api/app.py                               174     56    68%   52-58, 68-77, 82-83, 90, 92, 96-105, 115, 118, 120, 125, 139, 151-165, 171-173, 190-197, 227-243, 321-326
+tram/api/auth.py                               66      2    97%   70, 115
+tram/api/config_schema.py                     183     14    92%   55, 77, 132, 141-142, 599-600, 603, 628, 632, 643-644, 660-661
+tram/api/middleware.py                        123      1    99%   235
+tram/api/routers/__init__.py                    0      0   100%
+tram/api/routers/_errors.py                     9      4    56%   15, 30-32
+tram/api/routers/_net_checks.py                19      3    84%   42, 51, 55
+tram/api/routers/_stream_views.py             136     12    91%   67, 212-214, 250, 265, 268, 274, 293, 297-308
+tram/api/routers/ai.py                        580     27    95%   159, 162-163, 191-192, 227, 404-409, 453, 494-495, 552, 579, 583-587, 593, 667, 764, 811, 827, 833
+tram/api/routers/ai_docs.py                   100      2    98%   95, 224
+tram/api/routers/auth.py                       70      5    93%   37, 49, 52-53, 86
+tram/api/routers/connectors.py                173     34    80%   113, 124, 138-141, 149-150, 173, 175, 196-197, 200-201, 209-210, 218-219, 227-228, 231-237, 241-247
+tram/api/routers/health.py                    146      5    97%   26, 30, 37, 158, 169
+tram/api/routers/internal.py                  243      9    96%   147, 374, 472-473, 620-621, 657, 689, 698
+tram/api/routers/metrics_router.py             11      0   100%
+tram/api/routers/mibs.py                      189     13    93%   88, 91-94, 159, 163, 278-279, 344, 359-362
+tram/api/routers/pipelines.py                 370     59    84%   39, 152-153, 255, 261, 265-266, 276-277, 296-297, 311, 317, 331-332, 350, 363-364, 368-369, 384-399, 412-413, 427-428, 518-524, 556-557, 573-574, 577, 596-597, 629, 665-666, 673-674, 678-681, 688-689
+tram/api/routers/runs.py                      121      8    93%   283-292
+tram/api/routers/schemas.py                   121     13    89%   114, 124, 153-154, 230-231, 283, 317-323
+tram/api/routers/stats.py                     183      9    95%   132-133, 398-408
+tram/api/routers/templates.py                  47      2    96%   22, 42
+tram/api/routers/webhooks.py                   78      4    95%   40-45, 151
+tram/cli/__init__.py                            0      0   100%
+tram/cli/main.py                              313     55    82%   151, 484-552, 581-613
+tram/connectors/__init__.py                    43      0   100%
+tram/connectors/amqp/__init__.py                0      0   100%
+tram/connectors/amqp/sink.py                   52     16    69%   57-70, 104-105
+tram/connectors/amqp/source.py                139     29    79%   80-93, 157-158, 200-201, 224, 239-240, 243-244, 279-282, 288-289, 305-306
+tram/connectors/azure_blob/__init__.py          0      0   100%
+tram/connectors/azure_blob/sink.py             68     29    57%   52-71, 83-90, 107-108
+tram/connectors/azure_blob/source.py          108     49    55%   52-59, 62-81, 88-89, 100, 105-107, 119-123, 127-135, 140-141
+tram/connectors/bridge.py                      62     22    65%   52-53, 86-94, 106-111, 120-125
+tram/connectors/clickhouse/__init__.py          0      0   100%
+tram/connectors/clickhouse/sink.py            140     11    92%   106-108, 156, 159-160, 226-227, 235, 241-242
+tram/connectors/clickhouse/source.py           67     20    70%   76-77, 81-104, 125, 131-132
+tram/connectors/config_utils.py                21      0   100%
+tram/connectors/corba/__init__.py               0      0   100%
+tram/connectors/corba/source.py               125     56    55%   73-74, 98-131, 135-144, 149-165, 198-199
+tram/connectors/elasticsearch/__init__.py       0      0   100%
+tram/connectors/elasticsearch/sink.py          63     11    83%   47-48, 57, 59, 61, 78-79, 82, 94, 105-106
+tram/connectors/elasticsearch/source.py        53      7    87%   56, 58, 60, 86-89
+tram/connectors/file_sink_common.py           494     49    90%   84, 104-108, 195-199, 259, 288, 290, 292, 294, 307, 330, 334, 346, 351, 471-472, 488, 490-492, 498-499, 540, 546, 552-553, 556, 562-563, 584-588, 593-594, 786, 880-881, 915, 918, 921-922
+tram/connectors/ftp/__init__.py                 0      0   100%
+tram/connectors/ftp/sink.py                    84     11    87%   100-101, 130-133, 141-145
+tram/connectors/ftp/source.py                  93     19    80%   60-61, 88, 91-93, 109-113, 117-118, 129-130, 133-134, 139-140
+tram/connectors/gcs/__init__.py                 0      0   100%
+tram/connectors/gcs/sink.py                    57     20    65%   45-59, 70, 72-73, 91-92
+tram/connectors/gcs/source.py                  94     39    59%   47, 49-50, 53-67, 74-75, 86, 90-92, 103-107, 111-118, 123-124
+tram/connectors/gnmi/__init__.py                0      0   100%
+tram/connectors/gnmi/source.py                141     15    89%   86-87, 96, 116, 119-121, 145, 181-184, 209, 256, 262
+tram/connectors/http_pool.py                   18      0   100%
+tram/connectors/influxdb/__init__.py            0      0   100%
+tram/connectors/influxdb/sink.py               53      7    87%   41-42, 67, 76-79
+tram/connectors/influxdb/source.py             49     15    69%   34-44, 64-67
+tram/connectors/kafka/__init__.py               0      0   100%
+tram/connectors/kafka/sink.py                 176     36    80%   155, 174-175, 184, 186-188, 190, 194-195, 218-219, 292, 295-296, 301-302, 319-320, 322, 332-333, 335, 340-350, 365, 388
+tram/connectors/kafka/source.py               371     39    89%   210-211, 223-224, 235, 257-259, 261, 275-277, 325, 351, 361, 377, 405, 469, 565, 590, 606, 618-636, 659-660, 673, 790
+tram/connectors/local/__init__.py               0      0   100%
+tram/connectors/local/sink.py                  51      4    92%   80-81, 98-99
+tram/connectors/local/source.py               127     12    91%   63, 65, 111, 113, 133-134, 148, 187, 204, 207, 211-212
+tram/connectors/mqtt/__init__.py                0      0   100%
+tram/connectors/mqtt/sink.py                   42      3    93%   48, 63-64
+tram/connectors/mqtt/source.py                 64     11    83%   74, 79-83, 90-91, 98-101
+tram/connectors/nats/__init__.py                0      0   100%
+tram/connectors/nats/sink.py                   35      2    94%   51-52
+tram/connectors/nats/source.py                 71     20    72%   74-94, 97, 107-110
+tram/connectors/opensearch/__init__.py          0      0   100%
+tram/connectors/opensearch/sink.py             95     79    17%   40-52, 55-71, 74-92, 96, 99-108, 111-161
+tram/connectors/prometheus_rw/__init__.py       0      0   100%
+tram/connectors/prometheus_rw/source.py       109     90    17%   37-39, 42-55, 61-71, 75-120, 124-146, 149-150, 153-185
+tram/connectors/redis/__init__.py               0      0   100%
+tram/connectors/redis/sink.py                  50      5    90%   45, 47-48, 70-71
+tram/connectors/redis/source.py                59      5    92%   53, 55-56, 71-72
+tram/connectors/rest/__init__.py                0      0   100%
+tram/connectors/rest/sink.py                   53      6    89%   66, 68, 73, 84, 88-89
+tram/connectors/rest/source.py                130     40    69%   34-37, 91, 99, 111, 113-116, 121-122, 132, 136-139, 148, 151, 166-168, 173-174, 183-204
+tram/connectors/s3/__init__.py                  0      0   100%
+tram/connectors/s3/sink.py                     70     29    59%   75, 77, 79, 82-83, 86-107, 129-130
+tram/connectors/s3/source.py                  128     50    61%   64, 66, 68, 71-72, 75-96, 112-113, 130, 134-136, 146-156, 166-170, 184-185, 190-191
+tram/connectors/sftp/__init__.py                0      0   100%
+tram/connectors/sftp/sink.py                  114     30    74%   105-106, 124-125, 147-150, 168-183, 197-209, 238
+tram/connectors/sftp/source.py                177     29    84%   64-65, 70-71, 80-81, 168-173, 191, 204-205, 249-250, 281, 284-285, 304-305, 308-309, 311-315
+tram/connectors/snmp/__init__.py                0      0   100%
+tram/connectors/snmp/mib_utils.py             290     44    85%   52, 62-65, 76, 85, 122-126, 148-149, 171-176, 181, 186-187, 375, 385-392, 402, 410, 413, 457-459, 478-479, 537-538, 554, 612-614, 629-633
+tram/connectors/snmp/sink.py                  220     25    89%   122-126, 139-142, 214, 216, 218, 220, 222, 224-225, 238-239, 247, 258-259, 267-268, 332, 462
+tram/connectors/snmp/source.py                821    142    83%   76-80, 82, 148-160, 200-204, 230-231, 294-296, 299-300, 304-305, 331-333, 343-344, 367, 369, 398-414, 438, 445, 504, 506, 509, 512, 525, 617, 619, 621, 691, 694, 703-705, 770, 800-845, 856, 866-868, 873-874, 889, 894, 902, 959, 1018, 1023, 1041-1042, 1051, 1058, 1125-1126, 1131-1132, 1162-1168, 1201, 1203, 1208, 1245, 1247, 1306, 1314-1317, 1324-1326, 1433-1434, 1461-1463, 1520, 1529-1533
+tram/connectors/sql/__init__.py                 0      0   100%
+tram/connectors/sql/sink.py                    59     21    64%   41-42, 47-48, 54-81, 87-90
+tram/connectors/sql/source.py                  58     15    74%   34-44, 80-83
+tram/connectors/syslog/__init__.py              0      0   100%
+tram/connectors/syslog/source.py              322     27    92%   106, 143, 158, 239-240, 325-326, 354-357, 377-381, 394-395, 446-447, 475-476, 486-487, 508, 523-524
+tram/connectors/ves/__init__.py                 0      0   100%
+tram/connectors/ves/sink.py                    85     25    71%   98-122, 145-146
+tram/connectors/webhook/__init__.py             1      0   100%
+tram/connectors/webhook/source.py              40      3    92%   41-42, 56
+tram/connectors/websocket/__init__.py           0      0   100%
+tram/connectors/websocket/sink.py              45     23    49%   30-47, 59-60, 63-69
+tram/connectors/websocket/source.py            93     65    30%   47-64, 74-104, 107-143
+tram/core/__init__.py                           0      0   100%
+tram/core/base.py                               4      4     0%   3-22
+tram/core/config.py                           229     23    90%   107, 133-138, 228-233, 248-253, 400-405, 422-427, 500-505, 522-527, 648
+tram/core/context.py                           78      0   100%
+tram/core/exceptions.py                         9      0   100%
+tram/core/log_config.py                        28     10    64%   15-36, 46
+tram/core/mib_compiler.py                     239     12    95%   112, 114, 161-162, 168, 171, 228, 259, 436, 445, 461-462
+tram/daemon/__init__.py                         0      0   100%
+tram/daemon/server.py                         134     20    85%   68-76, 83-84, 88, 94, 125-127, 223-224, 228-229
+tram/interfaces/__init__.py                     5      0   100%
+tram/interfaces/base_serializer.py             17      6    65%   34-39
+tram/interfaces/base_sink.py                   33      0   100%
+tram/interfaces/base_source.py                 22      0   100%
+tram/interfaces/base_transform.py               7      0   100%
+tram/metrics/__init__.py                        0      0   100%
+tram/metrics/registry.py                       85      4    95%   19, 22, 33, 36
+tram/models/__init__.py                         0      0   100%
+tram/models/pipeline.py                      1168     35    97%   32, 74, 291, 540, 633, 639-641, 646-648, 679, 807, 829, 866, 932, 934, 938, 975, 1302, 1369, 1373, 1451, 1453, 1456, 1458, 1478, 1480, 1486, 1493, 1856-1864
+tram/persistence/__init__.py                    0      0   100%
+tram/persistence/db.py                        487     43    91%   94-96, 103-111, 136-137, 147-148, 525-531, 690-691, 716-717, 725-726, 830-832, 926-927, 930-931, 933, 1028, 1077, 1138-1139, 1244-1249, 1261-1265, 1289-1290
+tram/persistence/file_tracker.py               18      0   100%
+tram/persistence/ledger.py                     96      6    94%   108-113
+tram/pipeline/__init__.py                       0      0   100%
+tram/pipeline/controller.py                  1852    231    88%   117-121, 135-140, 276, 427, 538-550, 567, 599, 604-605, 797, 811, 843-846, 853-857, 864-868, 904, 907-910, 919-920, 1000, 1094-1098, 1136-1140, 1190-1194, 1214, 1233, 1237-1241, 1292-1293, 1313, 1337, 1343-1345, 1432, 1448, 1471, 1488, 1529, 1560, 1595, 1613, 1650, 1755, 1777, 1797, 1827, 1921, 1942-1944, 1981, 1986, 2013, 2022, 2024, 2027, 2029, 2042-2043, 2084, 2091, 2094, 2164, 2173, 2209, 2211, 2214, 2236, 2252, 2258, 2260, 2278, 2297-2298, 2326, 2358, 2377, 2390, 2424-2425, 2439-2444, 2453, 2459-2460, 2481-2482, 2489-2490, 2629, 2736-2752, 2831, 2849, 2976, 2990-2992, 3022, 3025, 3027, 3068, 3071-3074, 3076, 3082, 3086, 3088, 3094, 3097, 3106, 3109, 3112, 3115, 3148-3152, 3210, 3212, 3258, 3334-3343, 3373-3374, 3479-3481, 3535-3564, 3774, 3902-3903, 4011, 4015, 4050, 4052, 4082, 4094, 4097, 4099, 4110-4111, 4123, 4139, 4142, 4144, 4295, 4346, 4362-4363, 4378, 4408-4411, 4426, 4443-4444, 4455-4456, 4503, 4509, 4513, 4515, 4534, 4537, 4544, 4552-4562, 4577-4588, 4591-4592, 4598, 4601-4602, 4621, 4627, 4634, 4638, 4655, 4667
+tram/pipeline/executor.py                    1762    169    90%   82-87, 96, 99-104, 142, 180, 240, 245, 256, 259, 285-290, 294-296, 299-300, 311, 345-350, 534, 538-539, 641, 745, 855, 1284, 1287-1288, 1312-1317, 1349-1351, 1370, 1373-1378, 1380, 1382-1386, 1434-1439, 1462, 1477-1478, 1621-1627, 1679-1680, 1781, 1803-1804, 1857, 1861, 1868, 1992, 1996-2000, 2003, 2048, 2050, 2215, 2226, 2286, 2332-2336, 2364, 2370, 2374, 2414, 2451, 2458, 2462, 2471-2511, 2583, 2617, 2629-2630, 2656-2657, 2671-2672, 2710-2711, 2929, 2968-2983, 3178, 3223-3225, 3243-3248, 3333, 3343-3351, 3437-3438, 3464-3465, 3495-3497, 3583-3584, 3637, 3753, 3802-3803, 3818-3823, 3858-3859, 3878-3879, 3909-3910, 3914-3915, 3925-3926
+tram/pipeline/k8s_service_manager.py          261     54    79%   57, 81, 97, 100, 107-111, 132, 142, 151-155, 164-183, 187, 190, 193-198, 206, 209, 213-214, 236, 250, 261, 270, 309, 328, 365, 370, 386-390, 406-413
+tram/pipeline/linter.py                       206     18    91%   73, 147, 150-153, 160, 178, 194, 214, 232-235, 335, 513, 518-519
+tram/pipeline/loader.py                        78      5    94%   64-65, 84-85, 102
+tram/pipeline/manager.py                      117      4    97%   189, 208, 219, 230
+tram/pipeline/protobuf_passthrough.py         249    249     0%   16-567
+tram/pipeline/state_store.py                   79      8    90%   73-79, 102-109
+tram/registry/__init__.py                       0      0   100%
+tram/registry/registry.py                      54      1    98%   85
+tram/schema_registry/__init__.py                0      0   100%
+tram/schema_registry/client.py                 40      1    98%   65
+tram/serializers/__init__.py                   12      0   100%
+tram/serializers/asn1_serializer.py           229     31    86%   101, 136, 142, 149-157, 164, 172-178, 190, 194, 208, 252, 283, 328-330, 364, 366-367
+tram/serializers/avro_serializer.py            80     23    71%   48-49, 58-59, 65-78, 80-81, 98-99, 105-106, 119-120, 124-125
+tram/serializers/bytes_serializer.py           38      0   100%
+tram/serializers/csv_serializer.py             36      6    83%   33-34, 36-37, 56-57
+tram/serializers/json_serializer.py            27      3    89%   32, 37-38
+tram/serializers/msgpack_serializer.py         31      7    77%   24-28, 37-38
+tram/serializers/ndjson_serializer.py          48      6    88%   46-47, 84-85, 88-89
+tram/serializers/parquet_serializer.py         33      4    88%   26-27, 40-41
+tram/serializers/pm_xml_serializer.py         101     18    82%   47-48, 73, 149-165
+tram/serializers/protobuf_serializer.py       178      4    98%   35, 124, 143, 151
+tram/serializers/text_serializer.py            43      4    91%   70-71, 74-75
+tram/serializers/xml_serializer.py             44      4    91%   38, 51, 69-70
+tram/telemetry/__init__.py                      0      0   100%
+tram/telemetry/tracing.py                      48     28    42%   23-48, 58-59, 67, 70, 73, 76, 79, 86, 89
+tram/transforms/__init__.py                    29      0   100%
+tram/transforms/add_field.py                   74     12    84%   23, 26, 38-39, 42, 45, 66-67, 106-108, 123
+tram/transforms/aggregate.py                   67      0   100%
+tram/transforms/cast.py                        46      4    91%   21, 27, 30-31
+tram/transforms/coalesce_fields.py             24      0   100%
+tram/transforms/counter_delta.py              165     14    92%   78, 85, 88, 91, 95, 98, 101, 104, 217, 246, 264-272
+tram/transforms/deduplicate.py                 25      1    96%   22
+tram/transforms/drop.py                        24      0   100%
+tram/transforms/enrich.py                      59      2    97%   30, 36
+tram/transforms/explode.py                     38      0   100%
+tram/transforms/filter_rows.py                 47      5    89%   24-25, 60-61, 65
+tram/transforms/flatten.py                     20      0   100%
+tram/transforms/hex_decode.py                 190     50    74%   59-62, 66-82, 88-90, 102, 104, 117, 141-143, 147, 149, 154-156, 191, 206, 249-250, 258-268
+tram/transforms/inject_meta.py                 32      1    97%   29
+tram/transforms/jmespath_extract.py            34      5    85%   25, 43-44, 54-55
+tram/transforms/json_flatten.py               171     30    82%   22-37, 65, 67, 72, 130, 141, 150-151, 153, 159-160, 164-169, 206, 208
+tram/transforms/limit.py                       20      3    85%   22, 25-26
+tram/transforms/mask.py                        40      2    95%   24, 50
+tram/transforms/melt.py                        41      0   100%
+tram/transforms/path_patterns.py                9      0   100%
+tram/transforms/path_utils.py                  56      5    91%   16, 34, 57, 59, 73
+tram/transforms/project.py                     39      2    95%   19, 43
+tram/transforms/regex_extract.py               46      4    91%   19, 21, 27, 58
+tram/transforms/rename.py                      25      0   100%
+tram/transforms/select_from_list.py            46      1    98%   23
+tram/transforms/sort.py                        27      2    93%   45-46
+tram/transforms/stateful.py                     8      0   100%
+tram/transforms/template.py                    23      0   100%
+tram/transforms/timestamp_normalize.py        106      2    98%   155, 169
+tram/transforms/unnest.py                      41      3    93%   37, 54-55
+tram/transforms/validate.py                    73     12    84%   40, 44, 54-55, 71, 78, 93-95, 103-104, 109
+tram/transforms/value_map.py                   28      0   100%
+tram/transforms/window_aggregate.py           186     13    93%   211, 216-218, 224-226, 248, 255, 283, 290, 293, 310
+tram/watcher/__init__.py                        0      0   100%
+tram/watcher/pipeline_watcher.py               84      2    98%   92, 97
+-------------------------------------------------------------------------
+TOTAL                                       22085   3030    86%
+Coverage JSON written to file /tmp/tram-v183-final-coverage.json
+
+Required test coverage of 75% reached. Total coverage: 86.28%
+=========================== short test summary info ============================
+FAILED tests/unit/test_kafka_connectors.py::TestKafkaFailureOwnership::test_executor_single_partition_stream_commits_each_record_before_stop[delayed_abort-2]
+1 failed, 3657 passed, 62 skipped, 1 warning in 543.02s (0:09:03)

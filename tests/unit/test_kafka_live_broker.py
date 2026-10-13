@@ -32,6 +32,9 @@ from __future__ import annotations
 
 import json
 import os
+import select
+import subprocess
+import sys
 import threading
 import time
 import uuid
@@ -41,6 +44,7 @@ import pytest
 
 from tram.connectors.kafka.sink import KafkaSink
 from tram.connectors.kafka.source import KafkaSource
+from tram.core.exceptions import SinkError
 from tram.interfaces.base_sink import DeliveryTier
 from tram.interfaces.base_source import AckDisposition
 from tram.serializers.json_serializer import JsonSerializer
@@ -153,7 +157,230 @@ class TestLiveKafkaBroker:
         finally:
             producer.close()
 
+    @pytest.mark.parametrize("repeat", range(3))
+    def test_live_broker_rejects_oversized_publication(self, topics, repeat):
+        topic = f"tram-rejection-{uuid.uuid4().hex[:12]}"
+        admin = _admin()
+        try:
+            admin.create_topics([NewTopic(
+                topic, num_partitions=1, replication_factor=1,
+                topic_configs={"max.message.bytes": "1024"},
+            )])
+            topics.append(topic)
+        finally:
+            admin.close()
+        sink = KafkaSink({"brokers": _broker_list(), "topic": topic})
+        try:
+            with pytest.raises(SinkError, match="Kafka send failed"):
+                sink.write(bytes([repeat + 1]) * 4096, {})
+        finally:
+            _close_sink_producer(sink)
+
+    @pytest.mark.parametrize("repeat", range(3))
+    def test_live_undecided_prefix_replays_after_consumer_session_restart(self, topics, repeat):
+        from kafka import TopicPartition
+
+        topic = self._make_topic(topics)
+        self._plant_records(topic, count=2, partition=0)
+        group = f"g-restart-{repeat}-{uuid.uuid4().hex[:8]}"
+        config = {
+            "brokers": _broker_list(), "topic": topic, "group_id": group,
+            "auto_offset_reset": "earliest", "_ack_managed": True,
+        }
+        source = KafkaSource(config)
+        reader = source.read()
+        try:
+            first = next(reader)
+            last = next(reader)
+            source.ack(last[1], AckDisposition.DELIVERED)
+            assert source._pending_commits == {}
+        finally:
+            reader.close()
+        inspector = KafkaConsumer(
+            bootstrap_servers=_broker_list(), group_id=group, enable_auto_commit=False,
+        )
+        try:
+            assert inspector.committed(TopicPartition(topic, 0)) is None
+        finally:
+            inspector.close()
+
+        restarted = KafkaSource(config)
+        reader = restarted.read()
+        try:
+            replayed = [next(reader), next(reader)]
+            assert [body for body, _ in replayed] == [first[0], last[0]]
+            for _, meta in replayed:
+                restarted.ack(meta, AckDisposition.DELIVERED)
+        finally:
+            reader.close()
+        inspector = KafkaConsumer(
+            bootstrap_servers=_broker_list(), group_id=group, enable_auto_commit=False,
+        )
+        try:
+            assert inspector.committed(TopicPartition(topic, 0)) == 2
+        finally:
+            inspector.close()
+
+    @pytest.mark.parametrize("repeat", range(3))
+    def test_live_process_restart_replays_unacknowledged_inputs(self, topics, repeat):
+        from kafka import TopicPartition
+
+        topic = self._make_topic(topics)
+        self._plant_records(topic, count=2, partition=0)
+        group = f"g-process-{repeat}-{uuid.uuid4().hex[:8]}"
+        config = {
+            "brokers": _broker_list(), "topic": topic, "group_id": group,
+            "auto_offset_reset": "earliest", "_ack_managed": True,
+            "session_timeout_ms": 6000,
+        }
+        worker_code = """
+import json, sys, time
+from tram.connectors.kafka.source import KafkaSource
+from tram.interfaces.base_source import AckDisposition
+source = KafkaSource(json.loads(sys.argv[1]))
+reader = source.read()
+inputs = [next(reader), next(reader)]
+print(json.dumps([json.loads(body)["seq"] for body, meta in inputs]), flush=True)
+if sys.argv[2] == "admit":
+    time.sleep(120)
+else:
+    for body, meta in inputs:
+        source.ack(meta, AckDisposition.DELIVERED)
+    reader.close()
+"""
+        command = [sys.executable, "-u", "-c", worker_code, json.dumps(config)]
+        worker = subprocess.Popen(
+            [*command, "admit"], stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
+        )
+        try:
+            assert select.select([worker.stdout], [], [], 30)[0], "worker admission timed out"
+            offered = json.loads(worker.stdout.readline())
+            assert offered == [0, 1]
+            worker.kill()
+            worker.communicate(timeout=5)
+            assert worker.returncode != 0
+        finally:
+            if worker.poll() is None:
+                worker.kill()
+                worker.communicate(timeout=5)
+
+        replay_worker = subprocess.run(
+            [*command, "complete"], capture_output=True, text=True, timeout=30, check=True,
+        )
+        assert json.loads(replay_worker.stdout) == offered
+        inspector = KafkaConsumer(
+            bootstrap_servers=_broker_list(), group_id=group, enable_auto_commit=False,
+        )
+        try:
+            assert inspector.committed(TopicPartition(topic, 0)) == 2
+        finally:
+            inspector.close()
+
     # ── Sink: durable-tier commit barrier ──────────────────────────────────
+
+    @pytest.mark.parametrize("repeat", range(3))
+    def test_live_rebalance_fences_inflight_ownership(self, topics, repeat):
+        from kafka import TopicPartition
+
+        topic = self._make_topic(topics, partitions=2)
+        for partition in range(2):
+            self._plant_records(topic, count=1, partition=partition)
+        group = f"g-rebalance-{repeat}-{uuid.uuid4().hex[:8]}"
+        source = KafkaSource({
+            "brokers": _broker_list(), "topic": topic, "group_id": group,
+            "auto_offset_reset": "earliest", "_ack_managed": True,
+            "session_timeout_ms": 6000,
+        })
+        seen = []
+        lock = threading.Lock()
+        errors = []
+        rival_stop = threading.Event()
+
+        def read():
+            try:
+                for body, meta in source.read():
+                    with lock:
+                        seen.append((body, meta))
+            except Exception as exc:
+                errors.append(exc)
+            finally:
+                source.close()
+
+        reader = threading.Thread(target=read, daemon=True)
+        reader.start()
+        rival = None
+        rival_thread = None
+        try:
+            deadline = time.monotonic() + 30
+            while time.monotonic() < deadline:
+                with lock:
+                    if len(seen) == 2:
+                        old_inputs = list(seen)
+                        break
+                time.sleep(0.05)
+            else:
+                raise AssertionError(f"initial assignment failed: {errors}")
+            old_epoch = source._assignment_epoch
+            rival = KafkaConsumer(
+                topic, bootstrap_servers=_broker_list(), group_id=group,
+                auto_offset_reset="earliest", enable_auto_commit=False, session_timeout_ms=6000,
+            )
+
+            def rival_read():
+                try:
+                    while not rival_stop.is_set():
+                        rival.poll(timeout_ms=100)
+                except Exception as exc:
+                    errors.append(exc)
+
+            rival_thread = threading.Thread(target=rival_read, daemon=True)
+            rival_thread.start()
+            deadline = time.monotonic() + 30
+            while time.monotonic() < deadline:
+                with source._lock:
+                    owned = set(source._assigned)
+                    epochs = dict(source._partition_epochs)
+                with lock:
+                    current = [
+                        meta for _, meta in seen
+                        if meta["kafka_epoch"] == epochs.get((topic, meta["kafka_partition"]))
+                    ]
+                if source._assignment_epoch > old_epoch and len(owned) == 1 and current:
+                    break
+                time.sleep(0.05)
+            else:
+                raise AssertionError(f"actual rebalance did not complete: {errors}")
+
+            for _, meta in old_inputs:
+                source.ack(meta, AckDisposition.DELIVERED)
+            assert source._pending_commits == {}
+            for meta in current:
+                source.ack(meta, AckDisposition.DELIVERED)
+            inspector = KafkaConsumer(
+                bootstrap_servers=_broker_list(), group_id=group, enable_auto_commit=False,
+            )
+            try:
+                deadline = time.monotonic() + 10
+                while time.monotonic() < deadline:
+                    committed = [inspector.committed(tp) for tp in owned]
+                    if committed == [1]:
+                        break
+                    time.sleep(0.1)
+                assert committed == [1]
+                unowned = {TopicPartition(topic, p) for p in range(2)} - owned
+                assert all(inspector.committed(tp) is None for tp in unowned)
+            finally:
+                inspector.close()
+        finally:
+            source.stop()
+            reader.join(timeout=10)
+            rival_stop.set()
+            if rival_thread is not None:
+                rival_thread.join(timeout=10)
+            if rival is not None:
+                rival.close()
+        assert not reader.is_alive()
+        assert errors == []
 
     def test_live_sink_durable_commit_barrier_lands_records(self, topics):
         topic = self._make_topic(topics, partitions=1)
@@ -189,7 +416,7 @@ class TestLiveKafkaBroker:
         group = f"g-{uuid.uuid4().hex[:8]}"
         source = KafkaSource(
             {"brokers": _broker_list(), "topic": topic, "group_id": group,
-             "auto_offset_reset": "earliest"}
+             "auto_offset_reset": "earliest", "_ack_managed": True}
         )
         seen: list[tuple[bytes, dict]] = []
         errors: list[BaseException] = []
@@ -214,6 +441,8 @@ class TestLiveKafkaBroker:
             except Exception as exc:
                 errors.append(exc)
                 done.set()
+            finally:
+                source.close()
 
         reader = threading.Thread(target=_reader, daemon=True)
         reader.start()
@@ -259,30 +488,27 @@ class TestLiveKafkaBroker:
         group = f"g-{uuid.uuid4().hex[:8]}"
         source = KafkaSource(
             {"brokers": _broker_list(), "topic": topic, "group_id": group,
-             "auto_offset_reset": "earliest"}
+             "auto_offset_reset": "earliest", "_ack_managed": True}
         )
         it = source.read()
         try:
             _payload, meta = next(it)
             assert meta["kafka_offset"] == 0
 
-            # Fabricate a rebalance: bump the assignment epoch so the meta's
-            # captured epoch is stale (mirrors the unit-test fencing setup).
-            source._assignment_epoch += 1
+            from kafka import TopicPartition
+
+            # Exercise the authoritative ownership callbacks while retaining
+            # the same partition set: the old completion is still fenced.
+            assigned = {TopicPartition(topic, 0)}
+            source._on_partitions_revoked(assigned)
+            source._on_partitions_assigned(assigned)
             source.ack(meta, AckDisposition.DELIVERED)
             assert source._pending_commits == {}
             assert source._completed == {}
 
-            # Positive control: the same completion with the current epoch is
-            # accepted — the refusal above was the epoch fence, not the ack path.
-            current = dict(meta, kafka_epoch=source._assignment_epoch)
-            source.ack(current, AckDisposition.DELIVERED)
-            assert source._pending_commits == {(topic, 0): 0}
-            assert source._completed == {(topic, 0): 0}
         finally:
-            # Mid-batch close: the legacy per-batch commit never fires, and the
-            # accepted pending commit is never drained (the reader thread owns
-            # commits) — so nothing moves on the broker.
+            # Closing drains decided frontiers only. A refused stale ack
+            # creates no pending frontier, so nothing moves on the broker.
             it.close()
             source.stop()
 
@@ -329,7 +555,7 @@ class TestLiveKafkaBroker:
 
         source = KafkaSource(
             {"brokers": _broker_list(), "topic": topic, "group_id": group,
-             "auto_offset_reset": "earliest"}
+             "auto_offset_reset": "earliest", "_ack_managed": True}
         )
 
         # Commit spy: wrap the live consumer's commit so every broker commit
@@ -384,6 +610,8 @@ class TestLiveKafkaBroker:
                     pool.submit(_worker_ack, meta)
             except Exception as exc:
                 errors.append(exc)
+            finally:
+                source.close()
 
         reader = threading.Thread(target=_reader, daemon=True)
         reader.start()

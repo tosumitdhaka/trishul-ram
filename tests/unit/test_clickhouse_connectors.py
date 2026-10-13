@@ -511,3 +511,104 @@ class TestClickHouseSink:
             with pytest.raises(SinkError, match="deadline"):
                 sink.commit(deadline=time.monotonic() - 1)
         mock_client.execute.assert_not_called()
+
+
+@pytest.mark.parametrize("exhausted", [False, True])
+def test_executor_clickhouse_retry_preserves_single_admission(exhausted):
+    from tram.core.context import RunStatus
+    from tram.pipeline.executor import PipelineExecutor
+    from tram.pipeline.loader import load_pipeline_from_yaml
+
+    config = load_pipeline_from_yaml("""pipeline:
+  name: clickhouse-retry
+  on_error: abort
+  source:
+    type: local
+    path: /tmp/input
+  serializer_in:
+    type: json
+  serializer_out:
+    type: json
+  sink:
+    type: clickhouse
+    table: events
+    batch_size: 1
+    batch_timeout_seconds: 0
+    retry_count: 1
+    retry_delay_seconds: 0
+""")
+    source = MagicMock()
+    source.read.return_value = iter([(b'[{"id": 1}]', {"source_path": "/tmp/input/a"})])
+    sink = ClickHouseSink(config.sinks[0].model_dump())
+    attempts = []
+    output = []
+
+    def insert(rows):
+        attempts.append(list(rows))
+        if exhausted or len(attempts) == 1:
+            raise SinkError("server rejected before persistence")
+        output.extend(rows)
+
+    sink._insert_rows = insert
+    executor = PipelineExecutor()
+    with (
+        patch.object(executor, "_build_source", return_value=source),
+        patch.object(executor, "_build_sinks", return_value=[(sink, None, [], config.sinks[0], None)]),
+        patch("tram.pipeline.executor.time.sleep"),
+    ):
+        result = executor.batch_run(config)
+
+    assert all(rows == [{"id": 1}] for rows in attempts)
+    if exhausted:
+        assert result.status == RunStatus.FAILED
+        source.ack.assert_not_called()
+        assert sink._buffer == [{"id": 1}]
+        assert output == []
+    else:
+        assert result.status == RunStatus.SUCCESS
+        source.ack.assert_called_once()
+        assert output == [{"id": 1}]
+        assert sink._buffer == []
+
+
+def test_clickhouse_retry_after_timer_success_does_not_readmit():
+    sink = ClickHouseSink({"table": "events", "batch_size": 1, "batch_timeout_seconds": 0})
+    meta = {"_sink_write_retry_attempt": 0}
+    data = b'[{"id": 1}]'
+    output = []
+    with patch.object(sink, "_insert_rows", side_effect=SinkError("rejected")):
+        with pytest.raises(SinkError):
+            sink.write(data, meta)
+    sink._insert_rows = lambda rows: output.extend(rows)
+    sink._timer_flush()
+    meta["_sink_write_retry_attempt"] = 1
+    sink.write(data, meta)
+    assert sink.latched_error() is None
+    sink.write(data, {"_sink_write_retry_attempt": 0})
+    assert output == [{"id": 1}, {"id": 1}]
+    sink.close()
+
+
+def test_clickhouse_retry_flag_without_admission_does_not_skip_new_input():
+    sink = ClickHouseSink({"table": "events", "batch_size": 1, "batch_timeout_seconds": 0})
+    with patch.object(sink, "_insert_rows") as insert:
+        sink.write(b'[{"id": 1}]', {"_sink_write_retry_attempt": 1})
+        insert.assert_called_once_with([{"id": 1}])
+        with pytest.raises(SinkError, match="parse"):
+            sink.write(b'invalid JSON', {"_sink_write_retry_attempt": 1})
+    sink.close()
+
+
+def test_clickhouse_retry_preserves_later_unrelated_latched_failure():
+    sink = ClickHouseSink({"table": "events", "batch_size": 1, "batch_timeout_seconds": 0})
+    meta = {"_sink_write_retry_attempt": 0}
+    with patch.object(sink, "_insert_rows", side_effect=SinkError("first rejection")):
+        with pytest.raises(SinkError):
+            sink.write(b'[{"id": 1}]', meta)
+    later_error = SinkError("later timer failure")
+    sink._latched_error = later_error
+    meta["_sink_write_retry_attempt"] = 1
+    with patch.object(sink, "_insert_rows"):
+        sink.write(b'[{"id": 1}]', meta)
+    assert sink.latched_error() is later_error
+    sink.close()

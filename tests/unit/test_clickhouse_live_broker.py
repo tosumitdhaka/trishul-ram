@@ -26,6 +26,7 @@ from urllib.parse import urlsplit
 import pytest
 
 from tram.connectors.clickhouse.sink import ClickHouseSink
+from tram.core.exceptions import SinkError
 from tram.interfaces.base_sink import DeliveryTier
 
 CH_URL = os.environ.get("TRAM_TEST_CLICKHOUSE_URL", "")
@@ -36,7 +37,7 @@ def _ch_config() -> dict:
     parts = urlsplit(CH_URL)
     return {
         "host": parts.hostname or "127.0.0.1",
-        "port": 9000,  # native protocol — the connector never uses the HTTP port
+        "port": int(os.environ.get("TRAM_TEST_CLICKHOUSE_NATIVE_PORT", "9000")),
         "database": "trishul",
         "username": parts.username or "default",
         "password": parts.password or "",
@@ -85,6 +86,13 @@ class TestLiveClickHouseBroker:
         client.disconnect()
         return rows[0][0]
 
+    def _rows(self, table: str) -> list:
+        client = _ch_client()
+        try:
+            return client.execute(f"SELECT id, val FROM {table} ORDER BY id")
+        finally:
+            client.disconnect()
+
     def _sink(self, table: str, **overrides) -> ClickHouseSink:
         cfg = {**_ch_config(), "table": table}
         cfg.update(overrides)
@@ -105,6 +113,7 @@ class TestLiveClickHouseBroker:
         assert receipt.confirmed is True
         assert len(sink._buffer) == 0
         assert self._row_count(table) == 2  # confirmed insert is queryable
+        assert self._rows(table) == [(1, "a"), (2, "b")]
         sink.close()
 
     def test_live_batch_flush_on_stop_false_retains_buffer(self, table):
@@ -128,6 +137,7 @@ class TestLiveClickHouseBroker:
         assert receipt.confirmed is True
         assert len(sink._buffer) == 0
         assert self._row_count(table) == 2
+        assert self._rows(table) == [(1, "kept"), (2, "retained")]
 
     def test_live_close_flushes_when_batch_flush_on_stop_true(self, table):
         """Default ``batch_flush_on_stop=True``: a stop flushes the remaining
@@ -138,3 +148,65 @@ class TestLiveClickHouseBroker:
         sink.close()
         assert len(sink._buffer) == 0
         assert self._row_count(table) == 1
+        assert self._rows(table) == [(7, "stop")]
+
+    def test_live_rejected_insert_retained_and_retry_commits_contents(self, table):
+        sink = self._sink(table + "_missing", batch_size=100, batch_timeout_seconds=0)
+        sink.write(b'[{"id": 1, "val": "retained"}]', {})
+        with pytest.raises(SinkError):
+            sink.commit()
+        assert sink._buffer == [{"id": 1, "val": "retained"}]
+        assert self._rows(table) == []
+        sink.table = table
+        with pytest.raises(SinkError, match="latched"):
+            sink.commit()
+        assert sink.commit().confirmed
+        assert self._rows(table) == [(1, "retained")]
+        sink.close()
+
+    def test_live_lost_insert_response_retains_uncertain_rows(self, table, monkeypatch):
+        sink = self._sink(table, batch_size=100, batch_timeout_seconds=0)
+        sink.write(b'[{"id": 1, "val": "uncertain"}]', {})
+        insert = sink._insert_rows
+
+        def lose_response(rows):
+            insert(rows)
+            raise SinkError("insert completed but response lost")
+
+        monkeypatch.setattr(sink, "_insert_rows", lose_response)
+        with pytest.raises(SinkError):
+            sink.commit()
+        assert sink._buffer == [{"id": 1, "val": "uncertain"}]
+        assert self._rows(table) == [(1, "uncertain")]
+        monkeypatch.setattr(sink, "_insert_rows", insert)
+        with pytest.raises(SinkError, match="latched"):
+            sink.commit()
+        assert sink.commit().confirmed
+        # Lost-response replay remains at-least-once; duplication is visible.
+        assert self._rows(table) == [(1, "uncertain"), (1, "uncertain")]
+        sink.close()
+
+    def test_live_foreground_rejection_retry_admits_input_once(self, table):
+        sink = self._sink(table + "_missing", batch_size=1, batch_timeout_seconds=0)
+        payload = b'[{"id": 1, "val": "retry"}]'
+        meta = {"_sink_write_retry_attempt": 0}
+        with pytest.raises(SinkError):
+            sink.write(payload, meta)
+        assert sink._buffer == [{"id": 1, "val": "retry"}]
+        sink.table = table
+        meta["_sink_write_retry_attempt"] = 1
+        sink.write(payload, meta)
+        assert sink.commit().confirmed
+        assert self._rows(table) == [(1, "retry")]
+        sink.close()
+
+    def test_live_close_rejection_retains_buffer_for_commit_recovery(self, table):
+        sink = self._sink(table + "_missing", batch_size=100, batch_timeout_seconds=0)
+        sink.write(b'[{"id": 1, "val": "close"}]', {})
+        sink.close()
+        assert sink._buffer == [{"id": 1, "val": "close"}]
+        assert sink.latched_error() is not None
+        assert self._rows(table) == []
+        sink.table = table
+        assert sink.commit().confirmed
+        assert self._rows(table) == [(1, "close")]

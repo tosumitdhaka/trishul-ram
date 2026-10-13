@@ -237,7 +237,7 @@ class SnmpTrapSourceConfig(BaseModel):
     mib_dirs: list[str] = Field(default_factory=list)
     mib_modules: list[str] = Field(default_factory=list)
     resolve_oids: bool = True
-    # SNMPv3 USM (used when version="3"; trap decoding is best-effort for v3)
+    # SNMPv3 USM (default stack only; legacy v3 reception fails explicitly)
     security_name: str = ""
     auth_protocol: str = "SHA"
     auth_key: str | None = None
@@ -253,7 +253,15 @@ class SnmpTrapSourceConfig(BaseModel):
 
 class SnmpPollSourceConfig(BaseModel):
     type: Literal["snmp_poll"]
-    host: str
+    host: str | None = Field(default=None, description="Single agent host; use host or targets")
+    targets: list[str] = Field(default_factory=list, max_length=10,
+                             description="1–10 distinct device hosts; use targets or host")
+    max_concurrency: int = Field(default=4, ge=1, le=10,
+                                 description="Maximum concurrent device polls (1–10)")
+    target_timeout: float = Field(default=60.0, gt=0,
+                                description="Whole-device GET/WALK timeout in seconds")
+    timeout: float = Field(default=1.0, gt=0, description="Per-request timeout in seconds")
+    retries: int = Field(default=5, ge=0, description="Retries per SNMP request after initial attempt")
     port: int = 161
     community: str = "public"
     version: str = "2c"
@@ -276,6 +284,18 @@ class SnmpPollSourceConfig(BaseModel):
     priv_protocol: str = "AES128"     # AES | AES128 | AES192 | AES256
     priv_key: str | None = None    # priv passphrase; None → authNoPriv
     context_name: str = ""            # SNMPv3 contextName (usually empty)
+
+    @model_validator(mode="after")
+    def check_targets(self) -> SnmpPollSourceConfig:
+        if self.host is not None and not self.host.strip():
+            raise ValueError("snmp_poll host must be nonempty")
+        if bool(self.host) == bool(self.targets):
+            raise ValueError("snmp_poll requires exactly one of host or targets")
+        if any(not target.strip() for target in self.targets):
+            raise ValueError("snmp_poll targets must be nonempty")
+        if len(set(self.targets)) != len(self.targets):
+            raise ValueError("snmp_poll targets must be distinct")
+        return self
 
     @field_validator("priv_protocol")
     @classmethod
@@ -300,7 +320,7 @@ class AmqpSourceConfig(BaseModel):
     type: Literal["amqp"]
     url: str = "amqp://guest:guest@localhost:5672/"
     queue: str
-    prefetch_count: int = 10
+    prefetch_count: int = Field(default=10, ge=1)
     auto_ack: bool = False
     # V18-01 §7 replay identity: source_unit_id() is
     # ``{queue}/{producer message ID}`` and the connector returns None

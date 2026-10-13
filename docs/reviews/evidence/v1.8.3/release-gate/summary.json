@@ -1,0 +1,75 @@
+{
+  "date": "2026-10-13",
+  "candidate_commit": "edd1e3c0fa1bb94130e26808260cc4a872f48a4d",
+  "version": "1.8.3",
+  "checkout": "/tmp/tram-v183-release-gate",
+  "script": "scripts/release-gate.sh",
+  "flags": [],
+  "exit_code": 0,
+  "passed": 11,
+  "failed": 0,
+  "checks": [
+    {
+      "name": "clean working tree",
+      "result": "PASS"
+    },
+    {
+      "name": "version consistency",
+      "result": "PASS"
+    },
+    {
+      "name": "version not already tagged",
+      "result": "PASS"
+    },
+    {
+      "name": "changelog",
+      "result": "PASS"
+    },
+    {
+      "name": "ruff",
+      "result": "PASS"
+    },
+    {
+      "name": "pytest and coverage",
+      "result": "PASS"
+    },
+    {
+      "name": "UI build",
+      "result": "PASS"
+    },
+    {
+      "name": "UI browser smoke",
+      "result": "PASS"
+    },
+    {
+      "name": "33 pipeline examples",
+      "result": "PASS"
+    },
+    {
+      "name": "Helm lint and template",
+      "result": "PASS"
+    },
+    {
+      "name": "docs-sync",
+      "result": "PASS"
+    }
+  ],
+  "python": "3.13.15",
+  "node": "20.19.5",
+  "backend": {
+    "passed": 3664,
+    "skipped": 62,
+    "warnings": 1,
+    "seconds": 304.28,
+    "coverage_percent": 86.28,
+    "required_coverage_percent": 75,
+    "snmp_wire_enabled": true,
+    "raw_log_sha256": "d42ca1f50cb7e42b278b1dfbfc4b3cf04e4eef638fcf8bb790988d9d7ec54b76"
+  },
+  "checkout_clean_after_gate": true,
+  "kind_touched": false,
+  "tag_created": false,
+  "pushed": false,
+  "deployment_performed": false,
+  "open_verification_checklist": "docs/plans/v1.8.3-open-verification-followups.md"
+}

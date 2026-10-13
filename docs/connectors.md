@@ -351,6 +351,14 @@ source:
 ### snmp_trap
 
 Receives SNMP v1/v2c/v3 traps. Stream mode. Requires `pip install tram[snmp]`.
+The configured `community` is an exact allow-list of one value for community-based
+traps; mismatches and corrupt packets are dropped with a sanitized rejection reason.
+This replaces the previous permissive reception behavior. SNMPv3 reception requires
+the default `TRAM_SNMP_STACK=trishul` stack. The legacy receiver now fails explicitly
+for v3 instead of emitting encrypted packets as `_raw` records. Both stacks decode
+valid v1/v2c traps; legacy reception accepts the configured version only. Default
+stack authentication/decryption failures are logged as categorized drops, without
+keys or complete packet payloads (the dependency may log a short BER prefix). UDP traps remain unreplayable and provide no durability guarantee.
 In manager mode, `snmp_trap` multi-worker streams are supported in `1.3.2+`, but UDP ingress
 must go through a per-pipeline Kubernetes Service. Set `kubernetes.enabled: true` on the
 pipeline; `workers.count: all` uses the shared worker selector path, while `workers.count: N`
@@ -386,6 +394,28 @@ source:
 ---
 
 ### snmp_poll
+
+The bounded multi-target pilot accepts `targets` (1–10 distinct nonempty hosts)
+in place of `host`, with `max_concurrency` (1–10, default 4). Existing scalar
+`host` configurations retain their output shape. Multi-target records include
+`_source_host`; each payload's `source_host` metadata identifies its device and
+keeps `counter_delta` state separate. Payload metadata includes `poll_results`,
+and structured `snmp_target_result` logs expose status, duration and binding count.
+
+`timeout` (default 1 second) and `retries` (default 5) apply per request.
+`target_timeout` (default 60 seconds) bounds each whole multi-target device cycle,
+including WALK. Stop cancels active requests and awaits manager cleanup; restart
+creates a fresh run/source instance. Interval/cron scheduling permits one active
+job per pipeline. Ten healthy targets must still be measured within the configured
+300-second interval; timeout budgets alone do not prove network performance.
+
+Healthy target records are drained and committed before a failed target marks
+the overall batch run failed. The run error lists per-target statuses; failed
+requests produce no synthetic metric records. Standalone source iteration yields
+healthy payloads and then raises an incomplete-cycle error. Retrying a failed
+cycle can duplicate healthy records under the existing at-least-once policy.
+See [the disabled ten-target SFTP JSONL example](../pipelines/snmp-ten-target-pilot-to-sftp-jsonl.yaml).
+Replace its documentation IPs and configure SFTP authentication before enabling.
 
 Polls SNMP agents via GET or WALK. Batch mode. Requires `pip install tram[snmp]`.
 
@@ -487,9 +517,16 @@ Consumes from an AMQP 0-9-1 queue (RabbitMQ). Stream mode. Requires `pip install
 |---|---|---|
 | `url` | `amqp://guest:guest@localhost:5672/` | AMQP connection URL (includes credentials and vhost) |
 | `queue` | required | Queue name |
-| `prefetch_count` | `10` | Prefetch limit |
-| `durable` | `true` | Expect a durable queue |
+| `prefetch_count` | `10` | Positive prefetch limit; zero/unlimited prefetch is rejected |
 | `auto_ack` | `false` | Auto-acknowledge messages |
+
+Provision the queue and its bindings on the broker before consuming. Deliveries
+remain unacknowledged until their processing disposition is decided. Unexpected
+consumer or channel cancellation becomes a source failure after admitted
+deliveries drain, so a lost consumer cannot leave the reader waiting forever.
+The intake bridge also enforces the shared count/byte budgets without blocking
+the connection's I/O thread. Overflow fails the consumer visibly: manual-ack
+deliveries can requeue, while `auto_ack: true` overflow cannot be replayed.
 
 ```yaml
 source:
@@ -1205,6 +1242,12 @@ sinks:
 ### amqp
 
 Publishes to an AMQP exchange or queue. Requires `pip install tram[amqp]`.
+
+Publishes persistent messages with publisher confirms and mandatory routing.
+An unroutable message or failed confirmation fails the write; it cannot report
+successful delivery. Configure durable queues and exchanges on the broker for
+restart durability: persistence flags cannot make a transient topology durable.
+Retrying after a lost confirmation can duplicate a publication.
 
 | Parameter | Default | Description |
 |---|---|---|

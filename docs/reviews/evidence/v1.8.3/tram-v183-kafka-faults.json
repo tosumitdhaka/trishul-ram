@@ -1,0 +1,68 @@
+[
+  {
+    "repetition": 1,
+    "topic": "tram-disconnect-1c3e6dc5783a",
+    "fixture": "tram-v183-kafka-test",
+    "broker": "apache/kafka:3.9.1",
+    "offered_ids": [
+      0,
+      1
+    ],
+    "initial_decided_ids": [
+      1
+    ],
+    "initial_pending": {},
+    "outage_publication": "SinkError",
+    "error": "Kafka send failed to topic 'tram-disconnect-1c3e6dc5783a': KafkaTimeoutError: Expiring 1 record(s) for TopicPartition(topic='tram-disconnect-1c3e6dc5783a', partition=0): 2001 ms has passed since batch creation",
+    "replayed_ids": [
+      0,
+      1
+    ],
+    "final_committed_resume_offset": 2,
+    "duplicate_window": "decided id 1 is replayed when id 0 remains undecided"
+  },
+  {
+    "repetition": 2,
+    "topic": "tram-disconnect-d3a040870c4c",
+    "fixture": "tram-v183-kafka-test",
+    "broker": "apache/kafka:3.9.1",
+    "offered_ids": [
+      0,
+      1
+    ],
+    "initial_decided_ids": [
+      1
+    ],
+    "initial_pending": {},
+    "outage_publication": "SinkError",
+    "error": "Kafka send failed to topic 'tram-disconnect-d3a040870c4c': KafkaTimeoutError: Expiring 1 record(s) for TopicPartition(topic='tram-disconnect-d3a040870c4c', partition=0): 2004 ms has passed since batch creation",
+    "replayed_ids": [
+      0,
+      1
+    ],
+    "final_committed_resume_offset": 2,
+    "duplicate_window": "decided id 1 is replayed when id 0 remains undecided"
+  },
+  {
+    "repetition": 3,
+    "topic": "tram-disconnect-d5d634f1ec5c",
+    "fixture": "tram-v183-kafka-test",
+    "broker": "apache/kafka:3.9.1",
+    "offered_ids": [
+      0,
+      1
+    ],
+    "initial_decided_ids": [
+      1
+    ],
+    "initial_pending": {},
+    "outage_publication": "SinkError",
+    "error": "Kafka send failed to topic 'tram-disconnect-d5d634f1ec5c': KafkaTimeoutError: Expiring 1 record(s) for TopicPartition(topic='tram-disconnect-d5d634f1ec5c', partition=0): 2001 ms has passed since batch creation",
+    "replayed_ids": [
+      0,
+      1
+    ],
+    "final_committed_resume_offset": 2,
+    "duplicate_window": "decided id 1 is replayed when id 0 remains undecided"
+  }
+]

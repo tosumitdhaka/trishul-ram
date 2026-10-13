@@ -15,16 +15,12 @@ cross-stack decode proof with no external peers:
   socket (USM wrap needs pysnmp's engine machinery; the envelope varies per
   send but the varbind record is fixed, which is what the test asserts).
 
-Findings encoded here (matching the layer-1 wire-harness evidence):
+Current contracts:
 
-* v2c — both stacks parse identical records (the true equivalence case).
-* v1 — the legacy v2c-spec decoder cannot parse a v1 Trap-PDU (tag 0xa4) and
-  degrades to ``_raw``; tsnmp fully decodes varbinds + Trap-PDU metadata.
-* v3 authPriv — encrypted scoped PDU: legacy always degrades to ``_raw``;
-  tsnmp authenticates/decrypts (the #28-defect class: a standard pysnmp
-  SHA-256/AES-128 trap must decode).
-* v3 noAuthNoPriv — tsnmp fully decodes; legacy cannot produce the payload
-  record (``_raw`` or a header-only partial).
+* v1 / v2c — both stacks decode valid configured-community traps.
+* v3 — the default stack authenticates/decrypts; the legacy receiver rejects
+  unsupported v3 reception explicitly instead of emitting encrypted bytes.
+* malformed input — both stacks reject it without yielding raw packet records.
 """
 
 from __future__ import annotations
@@ -36,6 +32,7 @@ from dataclasses import dataclass
 import pytest
 
 from tram.connectors.snmp.source import SNMPTrapSource
+from tram.core.exceptions import SourceError
 
 try:
     import trishul_snmp  # noqa: F401
@@ -259,14 +256,13 @@ class TestV2cDecodeEquivalence:
 
 
 class TestV1DecodeEquivalence:
-    def test_legacy_raw_tsnmp_full_record(self):
-        """v1 Trap-PDUs: legacy (v2c-spec decoder) degrades to _raw; tsnmp
-        fully decodes the varbind record."""
+    def test_identical_v1_records_both_stacks(self):
+        """Both stacks decode a valid v1 Trap-PDU."""
         raw = _v1_trap_bytes()
         legacy = _decode_legacy(raw, version="1")
         tsnmp = _decode_tsnmp(raw, version="1")
 
-        assert legacy == {"_raw": raw.hex()}
+        assert legacy == tsnmp
         assert tsnmp == {
             "1.3.6.1.2.1.1.3.0": "123456",
             "1.3.6.1.4.1.99999.1.0": "v1-alarm",
@@ -292,37 +288,35 @@ class TestV1DecodeEquivalence:
 
 
 class TestV3DecodeEquivalence:
-    def test_authpriv_legacy_raw_tsnmp_full(self):
-        """Standard pysnmp SHA-256/AES-128 trap: legacy sees only _raw (the
-        scoped PDU is encrypted); tsnmp authenticates + decrypts the full
-        record — the #28-defect class caught in CI."""
+    def test_authpriv_legacy_rejected_tsnmp_full(self):
+        """Default stack decrypts authPriv; legacy explicitly rejects v3."""
         fixture = _capture_pysnmp_v3_trap(
             username="trapuser", authpw="authpass", privpw="privpass"
         )
-        legacy = _decode_legacy(fixture.raw, version="3", **_v3_usm_config())
+        with pytest.raises(SourceError, match="requires TRAM_SNMP_STACK=trishul"):
+            _decode_legacy(fixture.raw, version="3", **_v3_usm_config())
         tsnmp = _decode_tsnmp(fixture.raw, version="3", **_v3_usm_config())
 
-        assert legacy == {"_raw": fixture.raw.hex()}
         assert tsnmp == fixture.expected
 
     def test_noauth_tsnmp_full_legacy_cannot(self):
-        """noAuthNoPriv v3: tsnmp decodes the record; legacy cannot produce
-        the payload varbind (either _raw or a header-only partial)."""
+        """Default stack decodes noAuthNoPriv; legacy rejects v3."""
         fixture = _capture_pysnmp_v3_trap(username="trapuser")
         tsnmp = _decode_tsnmp(
             fixture.raw, version="3", security_name="trapuser"
         )
         assert tsnmp == fixture.expected
 
-        legacy = _decode_legacy(fixture.raw, version="3", security_name="trapuser")
-        assert "1.3.6.1.4.1.99999.1.0" not in legacy
+        with pytest.raises(SourceError, match="requires TRAM_SNMP_STACK=trishul"):
+            _decode_legacy(fixture.raw, version="3", security_name="trapuser")
 
 
 class TestDecodeGarbageEquivalence:
-    def test_legacy_raw_fallback(self):
-        """Legacy decoder falls back to _raw hex on undecodable bytes."""
+    def test_legacy_rejects_garbage(self):
+        """Legacy decoder rejects undecodable bytes."""
         garbage = b"\x00\x01\x02garbage"
-        assert _decode_legacy(garbage) == {"_raw": garbage.hex()}
+        with pytest.raises(SourceError, match="undecodable packet"):
+            _decode_legacy(garbage)
 
     def test_tsnmp_decode_notification_rejects_garbage(self):
         """decode_notification raises on undecodable bytes — the listener path

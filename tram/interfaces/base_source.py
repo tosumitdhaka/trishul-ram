@@ -44,6 +44,17 @@ class BaseSource(ABC):
         """
         ...
 
+    def bind_run_control(self, stop_event: object | None, deadline: float | None) -> None:
+        """Bind cooperative batch stop/deadline before read; default is a no-op."""
+
+    def completion_error(self) -> str | None:
+        """Optional terminal failure to check after confirmed batch output drain.
+
+        A source must raise its own terminal failure during standalone iteration
+        unless the executor explicitly takes ownership of this completion check.
+        """
+        return None
+
     def finalize(self, meta: dict, *, success: bool) -> None:
         """Deferred post-read finalize hook (no-op by default).
 

@@ -32,7 +32,7 @@ from tram.core.config import (
     stream_flush_records as _default_stream_flush_records,
 )
 from tram.core.context import PipelineRunContext, RunResult, RunStatus
-from tram.core.exceptions import TramError
+from tram.core.exceptions import SourceError, TramError
 from tram.interfaces.base_sink import SinkCommitReceipt
 from tram.interfaces.base_source import AckDisposition
 from tram.pipeline.state_store import TransformState
@@ -266,15 +266,17 @@ def _broker_meta_unit_key(meta: dict) -> tuple[str, str] | None:
 def _stream_source_unit_key(source, meta: dict) -> tuple[str, str] | None:
     """Unit identity for stream unit registration (V18-02).
 
-    File identity is unchanged. A connector-declared ``source_unit_id(meta)``
-    is preferred for broker units when it yields a value (identity-driven,
-    never by connector name); otherwise the meta's broker coordinate fields
-    decide (Kafka: partition/offset/epoch; AMQP: delivery tag). The resolved
-    broker key is stashed into the meta so the shared processing paths
-    attribute delivery accounting to the same registered unit.
+    File identity is unchanged. Broker coordinates identify each processing
+    obligation (Kafka partition/offset/epoch; AMQP delivery tag), while the
+    connector-declared durable identity remains the checkpoint key. The
+    resolved key is stashed into the meta for shared delivery accounting.
     """
     key = _source_unit_key(meta)
     if key is not None:
+        return key
+    key = _broker_meta_unit_key(meta)
+    if key is not None:
+        meta[_UNIT_KEY_META] = key
         return key
     unit_id_fn = getattr(source, "source_unit_id", None)
     if callable(unit_id_fn):
@@ -297,6 +299,31 @@ def _stream_source_unit_key(source, meta: dict) -> tuple[str, str] | None:
         meta[_UNIT_KEY_META] = key
         return key
     return None
+
+
+def _stream_batch_broker(meta: dict) -> bool:
+    return _broker_meta_unit_key(meta) is not None
+
+
+def _broker_partition_frontier(meta: dict) -> tuple[tuple, int] | None:
+    key = _broker_meta_unit_key(meta)
+    if key is None:
+        return None
+    ns = key[0]
+    offset = meta.get(f"{ns}_offset")
+    if offset is None:
+        return None
+    return (ns, meta.get(f"{ns}_topic"), meta.get(f"{ns}_partition")), int(offset)
+
+
+def _batch_source_unit_key(meta: dict) -> tuple[str, str] | None:
+    """Register broker records separately from their durable partition identity."""
+    key = _source_unit_key(meta)
+    if key is None:
+        key = _broker_meta_unit_key(meta)
+        if key is not None:
+            meta[_UNIT_KEY_META] = key
+    return key
 
 
 def _source_durable_unit_id(source, meta: dict) -> str | None:
@@ -583,6 +610,8 @@ class _StreamFlushBuffer:
         self._records: list[dict] = []
         self._meta: dict | None = None
         self._oldest_at: float | None = None
+        self._contributors: list[tuple[dict, list[dict]]] = []
+        self._completed: deque[tuple[dict, _UnitOutcome]] = deque()
         self.record_threshold = record_threshold
         self.interval_s = interval_s
 
@@ -595,19 +624,25 @@ class _StreamFlushBuffer:
         the batch sink path writes one batch per meta, so a flush is a
         super-chunk carrying the meta of its first contributing chunk.
         """
-        if not records and not batch_end:
+        broker_unit = _stream_batch_broker(meta)
+        if not records and not batch_end and not broker_unit:
             return False
         with self._lock:
+            if broker_unit:
+                self._contributors.append((dict(meta), records))
+                if self._oldest_at is None:
+                    self._oldest_at = time.monotonic()
             if records:
                 if not self._records:
                     self._meta = dict(meta)
                     self._oldest_at = time.monotonic()
                 self._records.extend(records)
-            if not self._records:
+            if not self._records and not self._contributors:
                 return False
             return (
                 batch_end
                 or len(self._records) >= self.record_threshold
+                or len(self._contributors) >= self.record_threshold
                 or (
                     self.interval_s > 0
                     and time.monotonic() - (self._oldest_at or 0.0) >= self.interval_s
@@ -623,7 +658,7 @@ class _StreamFlushBuffer:
         """
         with self._lock:
             return (
-                bool(self._records)
+                bool(self._records or self._contributors)
                 and self.interval_s > 0
                 and time.monotonic() - (self._oldest_at or 0.0) >= self.interval_s
             )
@@ -631,13 +666,31 @@ class _StreamFlushBuffer:
     def drain(self) -> tuple[list[dict], dict] | None:
         """Atomically take the buffered records + their representative meta."""
         with self._lock:
-            if not self._records:
+            if not self._records and not self._contributors:
                 return None
             records, meta = self._records, self._meta
+            meta = dict(meta or {})
+            if self._contributors:
+                meta["_stream_contributors"] = self._contributors
+                self._contributors = []
             self._records = []
             self._meta = None
             self._oldest_at = None
-            return records, meta or {}
+            return records, meta
+
+    def complete(self, entries: list[tuple[dict, _UnitOutcome]]) -> None:
+        with self._lock:
+            self._completed.extend(entries)
+
+    def take_completed(self) -> list[tuple[dict, _UnitOutcome]]:
+        with self._lock:
+            completed = list(self._completed)
+            self._completed.clear()
+            return completed
+
+    def has_completed(self) -> bool:
+        with self._lock:
+            return bool(self._completed)
 
 
 class _DLQDeliveryError(TramError):
@@ -727,6 +780,7 @@ class _RunDeliveryAccounting:
         # not commit — they stay pending (never acked) and the run can never
         # report clean success.
         self.checkpoint_pending = 0
+        self.broker_gaps: dict[tuple, int] = {}
         # The pipeline's transform-state revision this attempt is based on
         # (the frozen §7 CAS base); seeded from hydration, advanced from
         # checkpoint responses.
@@ -1148,6 +1202,11 @@ class PipelineExecutor:
         src_cls = get_source(config.source.type)
         src_conf = config.source.model_dump()
         src_conf["_pipeline_name"] = config.name   # connectors use as default group/queue id
+        if config.source.type == "kafka":
+            # Intake completion cannot commit records whose delivery is undecided.
+            src_conf["_ack_managed"] = True
+        if config.source.type == "snmp_poll" and config.schedule.type != "stream":
+            src_conf["_completion_managed"] = True
         if self._file_tracker is not None:
             src_conf["_file_tracker"] = self._file_tracker
         return src_cls(src_conf)
@@ -1546,6 +1605,11 @@ class PipelineExecutor:
                     f"Sink commit failed: {exc}",
                     exc,
                 )
+                return None
+        for receipt in receipts:
+            if isinstance(receipt, SinkCommitReceipt) and not receipt.confirmed:
+                exc = TramError(f"Sink commit unconfirmed: {receipt.sink_key}: {receipt.notes}")
+                PipelineExecutor._commit_failure(sinks, ctx, on_error, str(exc), exc)
                 return None
         for sink_tuple in sinks:
             sink_instance = sink_tuple[0]
@@ -2002,10 +2066,12 @@ class PipelineExecutor:
                     sink_meta["serializer_type"] = str(active_ser.config.get("type", "json"))
                     sink_meta["serializer_config"] = dict(active_ser.config)
                     sink_meta["output_record_count"] = len(partition_records)
+                    sink_meta.pop("_clickhouse_admitted_write", None)
 
                     last_exc = None
                     partition_succeeded = False
                     for attempt in range(retry_count + 1):
+                        sink_meta["_sink_write_retry_attempt"] = attempt
                         try:
                             sink_instance.write(serialized, sink_meta)
                             # Count total sink egress, not logical record size. If the same
@@ -2320,6 +2386,8 @@ class PipelineExecutor:
                 RECORDS_IN.labels(pipeline=ctx.pipeline_name).inc(len(records))
                 if stats is not None:
                     stats.increment(records_in=len(records))
+                if delivery is not None and _broker_meta_unit_key(meta) is not None:
+                    delivery.record_chunk(key, max(1, len(records)), 0)
                 survivors = self._apply_global_transforms(
                     records, transforms, meta, ctx, on_error,
                     dlq_sink=dlq_sink, stats=stats, delivery=delivery,
@@ -2344,6 +2412,10 @@ class PipelineExecutor:
             ctx.record_error(msg)
             if stats is not None:
                 stats.increment(skipped=1, errors=[msg])
+            if flush_buffer is not None and _stream_batch_broker(meta):
+                return flush_buffer.append(
+                    [], meta, batch_end=bool(meta.get("source_batch_end")),
+                )
             return False
 
     def _process_chunk_incrementally(
@@ -2484,6 +2556,12 @@ class PipelineExecutor:
         if entry is None:
             return False
         records, meta = entry
+        contributors = meta.pop("_stream_contributors", [])
+        cohort_key = None
+        if contributors and delivery is not None:
+            cohort_key = ("stream-flush", uuid.uuid4().hex)
+            meta[_UNIT_KEY_META] = cohort_key
+            delivery.register_unit(cohort_key, meta)
         self._process_records(
             records, meta, [], serializer_out, sinks, ctx, on_error,
             rate_limit_rps, dlq_sink, parallel_sinks, sink_cb_keys, stats,
@@ -2494,9 +2572,108 @@ class PipelineExecutor:
             delivery=delivery,
             sink_pool=sink_pool,
         )
+        if contributors and delivery is not None:
+            cohort = delivery.take_unit(cohort_key)
+            completed = []
+            for unit_meta, survivors in contributors:
+                key = _source_unit_key(unit_meta)
+                with delivery._lock:
+                    unit = delivery.units.get(key)
+                    if unit is None:
+                        continue
+                    if survivors and cohort is not None:
+                        # Failure belongs to the entire flush obligation;
+                        # arbitrary sink transforms cannot prove finer provenance.
+                        unit.records_failed += cohort.records_failed
+                        unit.dlq_succeeded += cohort.dlq_succeeded
+                        unit.dlq_failed += cohort.dlq_failed
+                        if cohort.delivered:
+                            selected = any(
+                                _filter_by_condition(
+                                    survivors, sink[1], _cache=self._condition_cache,
+                                ) if sink[1] else survivors
+                                for sink in sinks
+                            )
+                            if selected:
+                                unit.delivered += len(survivors)
+                    completed.append((unit_meta, unit))
+            flush_buffer.complete(completed)
         return True
 
     # ── Batch run ────────────────────────────────────────────────────────────
+
+    def _finalize_stream_broker_units(
+        self, flush_buffer, sinks, source, delivery, ctx, on_error, checkpointer,
+    ) -> None:
+        """Decide completed cohorts at a drained source batch boundary.
+
+        One output barrier covers the cohort; each partition checkpoint uses
+        its highest decided frontier before any contributor is acknowledged.
+        A flush failure applies to every contributing survivor, with explicit
+        dropped dispositions under continue and retained inputs otherwise.
+        """
+        completed = flush_buffer.take_completed()
+        if not completed:
+            return
+        ready_keys = {_source_unit_key(meta) for meta, _ in completed}
+        with delivery._lock:
+            pending = [unit.meta for key, unit in delivery.units.items() if key not in ready_keys]
+        for meta, _ in completed:
+            frontier = _broker_partition_frontier(meta)
+            if frontier is not None and any(
+                earlier is not None and earlier[0] == frontier[0] and earlier[1] < frontier[1]
+                for earlier in (_broker_partition_frontier(item) for item in pending)
+            ):
+                # A later worker can finish first. Keep its bounded cohort
+                # until the earlier admitted input has a decided outcome.
+                flush_buffer.complete(completed)
+                return
+        receipts = self._commit_sinks_receipts(sinks, ctx, on_error=on_error)
+        if receipts is None:
+            delivery.record_checkpoint_pending()
+        decisions = []
+        for meta, unit in completed:
+            unit = delivery.take_unit(_source_unit_key(meta)) or unit
+            decisions.append((meta, unit.disposition(on_error)))
+        for meta, disposition in decisions:
+            frontier = _broker_partition_frontier(meta)
+            if frontier is not None and (receipts is None or disposition is None):
+                partition, offset = frontier
+                delivery.broker_gaps[partition] = min(
+                    offset, delivery.broker_gaps.get(partition, offset),
+                )
+        checkpoint_ok = receipts is not None
+        if any(
+            frontier is not None and delivery.broker_gaps.get(frontier[0], frontier[1] + 1) <= frontier[1]
+            for frontier in (_broker_partition_frontier(meta) for meta, _ in decisions)
+        ):
+            checkpoint_ok = False
+            delivery.record_checkpoint_pending()
+        if checkpointer.strict and (
+            delivery.has_pending_checkpoints()
+            or any(disposition is None for _, disposition in decisions)
+        ):
+            checkpoint_ok = False
+            delivery.record_checkpoint_pending()
+        if checkpoint_ok:
+            partitions = {}
+            delivered_partitions = set()
+            for meta, disposition in decisions:
+                identity = _source_durable_unit_id(source, meta) or _source_unit_key(meta)
+                current = partitions.get(identity)
+                if current is None or _checkpoint_frontier(meta)[1] > _checkpoint_frontier(current)[1]:
+                    partitions[identity] = meta
+                if disposition == AckDisposition.DELIVERED:
+                    delivered_partitions.add(identity)
+            for identity in delivered_partitions:
+                meta = partitions[identity]
+                if not checkpointer.check_unit(source, meta, receipts, ctx, delivery):
+                    checkpoint_ok = False
+                    break
+        for meta, disposition in decisions:
+            if checkpoint_ok and disposition is not None:
+                self._ack_source_unit(source, meta, disposition)
+            source.finalize(meta, success=receipts is not None)
 
     def batch_run(
         self,
@@ -2558,6 +2735,9 @@ class PipelineExecutor:
         )
 
         source = self._build_source(config)
+        bind_control = getattr(source, "bind_run_control", None)
+        if callable(bind_control):
+            bind_control(stop_event, deadline)
         sinks = self._build_sinks(config)
         serializer_in = self._build_serializer_in(config)
         serializer_out = self._build_serializer_out(config)
@@ -2641,6 +2821,12 @@ class PipelineExecutor:
                     # close ordering). Under continue a barrier failure yields a
                     # PARTIAL outcome instead of raising.
                     commit_ok = self._commit_sinks(sinks, ctx, on_error=config.on_error)
+                    if commit_ok and not drained:
+                        completion_error = getattr(source, "completion_error", None)
+                        if callable(completion_error):
+                            message = completion_error()
+                            if isinstance(message, str) and message:
+                                raise SourceError(message)
                     if drained:
                         status = RunStatus.ABORTED
                         error = _stop_reason(stop_event, deadline)
@@ -2714,6 +2900,9 @@ class PipelineExecutor:
                             # attempt's context).
                             stats.reset()
                         source = self._build_source(config)
+                        bind_control = getattr(source, "bind_run_control", None)
+                        if callable(bind_control):
+                            bind_control(stop_event, deadline)
                         sinks = self._build_sinks(config)
                         serializer_in = self._build_serializer_in(config)
                         serializer_out = self._build_serializer_out(config)
@@ -2847,8 +3036,9 @@ class PipelineExecutor:
         current_unit: _UnitOutcome | None = None
         stopped_early = False
         drain_stopped = False
+        source_iter = iter(source.read())
         try:
-            for raw, meta in source.read():
+            for raw, meta in source_iter:
                 if _stop_requested(stop_event, deadline):
                     logger.info(
                         "Batch run stop requested — finishing current source unit",
@@ -2857,9 +3047,10 @@ class PipelineExecutor:
                     drain_stopped = True
                     break
                 meta = _augment_chunk_meta(meta, ctx)
-                source_key = _source_unit_key(meta)
+                source_key = _batch_source_unit_key(meta)
                 if source_key is not None:
-                    meta["enable_safe_finalize"] = True
+                    if meta.get("source_path") or meta.get("source_filename"):
+                        meta["enable_safe_finalize"] = True
                     if current_source_key is not None and source_key != current_source_key:
                         self._finalize_batch_source_unit(
                             sinks, source, delivery, current_source_key,
@@ -2891,6 +3082,14 @@ class PipelineExecutor:
                         passthrough=passthrough,
                         delivery=delivery, sink_pool=sink_pool,
                     )
+                if source_key is not None and _broker_meta_unit_key(meta) is not None:
+                    self._finalize_batch_source_unit(
+                        sinks, source, delivery, source_key, meta, current_unit,
+                        ctx, on_error, finalize_source=True, checkpointer=checkpointer,
+                    )
+                    current_source_key = None
+                    current_source_meta = None
+                    current_unit = None
                 if batch_size and ctx.records_in >= batch_size:
                     logger.info(
                         "batch_size limit reached, stopping source read",
@@ -2916,6 +3115,10 @@ class PipelineExecutor:
                     finalize_source=not stopped_early or drain_stopped,
                     checkpointer=checkpointer,
                 )
+        finally:
+            close = getattr(source_iter, "close", None)
+            if callable(close):
+                close()
 
     def _run_batch_chunks_threaded(
         self,
@@ -2962,19 +3165,23 @@ class PipelineExecutor:
         units: deque[list] = deque()
 
         def _submit(raw: bytes, meta: dict) -> None:
+            meta = _augment_chunk_meta(meta, ctx)
             # Register the unit's outcome BEFORE the future can start on a
             # worker thread — the worker's record_chunk/record_loss must find
             # the tracker already in the dict (a submit-then-register order
             # races the first `_process_records` of the unit).
-            key = _source_unit_key(meta)
+            key = _batch_source_unit_key(meta)
             if key is not None:
+                if meta.get("source_path") or meta.get("source_filename"):
+                    meta["enable_safe_finalize"] = True
                 if units and units[-1][0] == key:
                     units[-1][2] += 1
                 else:
                     if units:
                         units[-1][3] = True  # previous unit fully submitted
                     unit = delivery.register_unit(key, dict(meta)) if delivery is not None else None
-                    units.append([key, dict(meta), 1, False, unit])
+                    complete_record = _broker_meta_unit_key(meta) is not None
+                    units.append([key, dict(meta), 1, complete_record, unit])
             if record_chunk_size:
                 # GH #48 §2.10: honor record_chunk_size on the threaded path
                 # too — parse_chunks bounds the fan-out per chunk instead of
@@ -3027,10 +3234,11 @@ class PipelineExecutor:
                     )
 
         with ThreadPoolExecutor(max_workers=config.thread_workers) as pool:
+            source_iter = iter(source.read())
             try:
                 stopped_early = False
                 drain_stopped = False
-                for raw, meta in source.read():
+                for raw, meta in source_iter:
                     if _stop_requested(stop_event, deadline):
                         logger.info(
                             "Batch run stop requested — finishing current source unit",
@@ -3068,6 +3276,10 @@ class PipelineExecutor:
                 for fut, _key, _meta in in_flight:
                     fut.cancel()
                 raise
+            finally:
+                close = getattr(source_iter, "close", None)
+                if callable(close):
+                    close()
 
     # ── Stream run ────────────────────────────────────────────────────────────
 
@@ -3206,6 +3418,15 @@ class PipelineExecutor:
                     delivery=delivery, sink_pool=sink_pool,
                 )
 
+        def _decide_brokers() -> None:
+            if not flush_buffer.has_completed():
+                return
+            with flush_lock:
+                self._finalize_stream_broker_units(
+                    flush_buffer, sinks, source, delivery, ctx,
+                    config.on_error, checkpointer,
+                )
+
         def _interval_flusher() -> None:
             wake = max(flush_buffer.interval_s / 2, 0.05)
             while not flusher_stop.wait(wake):
@@ -3247,7 +3468,9 @@ class PipelineExecutor:
         watcher.start()
 
         graceful_stop = False
+        source_iter = None
         try:
+            source_iter = iter(source.read())
             if config.thread_workers > 1:
                 self._stream_run_threaded(
                     config, source, sinks, serializer_in, serializer_out,
@@ -3260,13 +3483,14 @@ class PipelineExecutor:
                     checkpointer=checkpointer,
                     deadline=deadline,
                     sink_pool=sink_pool,
+                    source_iter=source_iter,
                 )
             else:
                 current_source_key: tuple[str, str] | None = None
                 current_source_meta: dict | None = None
                 current_unit: _UnitOutcome | None = None
                 stopped = False
-                for raw, meta in source.read():
+                for raw, meta in source_iter:
                     if stop_event.is_set():
                         logger.info("Stream stop requested", extra={"pipeline": config.name})
                         stopped = True
@@ -3279,7 +3503,10 @@ class PipelineExecutor:
                         stopped = True
                         break
                     source_key = _stream_source_unit_key(source, meta)
-                    if source_key is not None:
+                    broker_record = _stream_batch_broker(meta)
+                    if broker_record:
+                        delivery.register_unit(source_key, dict(meta))
+                    elif source_key is not None:
                         if current_source_key is not None and source_key != current_source_key:
                             # Drain the micro-batch buffer at source-unit
                             # boundaries so one file's records never ride a
@@ -3320,6 +3547,8 @@ class PipelineExecutor:
                     ):
                         # Record threshold / flush interval / source-batch-end.
                         _flush_now()
+                    if broker_record and meta.get("source_batch_end"):
+                        _decide_brokers()
                     _maybe_persist_state()
                 # On a stop the generator was abandoned mid-file; the current
                 # file stays unmarked (matches the pre-hook behavior). On a
@@ -3338,6 +3567,7 @@ class PipelineExecutor:
             # drain the micro-batch buffer so records counted in at arrival are
             # never silently stranded at stop (GH #78 crash-window accounting).
             _flush_now()
+            _decide_brokers()
             graceful_stop = True
         except Exception as exc:
             logger.error(
@@ -3357,6 +3587,9 @@ class PipelineExecutor:
                 )
             raise
         finally:
+            close = getattr(source_iter, "close", None)
+            if callable(close):
+                close()
             # End the stop-watcher as early as possible: on the crash path the
             # stop_event never fires, so without this the watcher thread would
             # leak (one per crash cycle). On the graceful path the controller
@@ -3433,7 +3666,9 @@ class PipelineExecutor:
                 error="drained: worker drain deadline exceeded",
             )
         else:
-            result = RunResult.from_context(ctx, RunStatus.SUCCESS)
+            result = RunResult.from_context(
+                ctx, self._batch_outcome(config.on_error, delivery, commit_failed=False),
+            )
         # V18-09: surface the stream's run-scoped delivery accounting on the
         # completion exactly like the batch path — the per-sink disposition and
         # spool maps plus the delivery counters the worker's completion payload
@@ -3465,6 +3700,7 @@ class PipelineExecutor:
         checkpointer: _CheckpointGate | None = None,
         deadline: float | None = None,
         sink_pool: ThreadPoolExecutor | None = None,
+        source_iter=None,
     ) -> None:
         """Stream mode with N worker threads. Producer reads; workers process.
 
@@ -3486,6 +3722,7 @@ class PipelineExecutor:
         # Bounded queue gives backpressure: producer blocks if workers are slow
         chunk_q: _queue.Queue = _queue.Queue(maxsize=config.thread_workers * 2)
         on_error = config.on_error
+        worker_errors: _queue.Queue = _queue.Queue()
 
         def _flush_now() -> None:
             with flush_lock:
@@ -3507,7 +3744,17 @@ class PipelineExecutor:
             whole source unit in one serialized sink write.
             """
             chunk_q.join()
+            if not worker_errors.empty():
+                raise worker_errors.get_nowait()
             _flush_now()
+
+        def _decide_brokers() -> None:
+            if not flush_buffer.has_completed():
+                return
+            with flush_lock:
+                self._finalize_stream_broker_units(
+                    flush_buffer, sinks, source, delivery, ctx, on_error, checkpointer,
+                )
 
         def _worker() -> None:
             while True:
@@ -3516,6 +3763,11 @@ class PipelineExecutor:
                     return
                 raw, meta = item
                 try:
+                    if _stream_batch_broker(meta):
+                        # The reader flushes the poll boundary after all of
+                        # its workers finish; the last queued record may finish first.
+                        meta = dict(meta)
+                        meta["source_batch_end"] = False
                     needs_flush = self._process_chunk(
                         raw, meta, serializer_in, transforms,
                         serializer_out, sinks, ctx, on_error,
@@ -3530,6 +3782,7 @@ class PipelineExecutor:
                     if flush_buffer is not None and needs_flush:
                         _flush_now()
                 except Exception as exc:
+                    worker_errors.put(exc)
                     logger.error(
                         "Stream worker error",
                         extra={"pipeline": config.name, "error": str(exc)},
@@ -3554,7 +3807,9 @@ class PipelineExecutor:
             current_source_meta: dict | None = None
             current_unit: _UnitOutcome | None = None
             stopped = False
-            for raw, meta in source.read():
+            for raw, meta in source_iter if source_iter is not None else source.read():
+                if not worker_errors.empty():
+                    raise worker_errors.get_nowait()
                 if stop_event.is_set():
                     logger.info("Stream stop requested", extra={"pipeline": config.name})
                     stopped = True
@@ -3567,7 +3822,10 @@ class PipelineExecutor:
                     stopped = True
                     break
                 source_key = _stream_source_unit_key(source, meta)
-                if source_key is not None:
+                broker_record = _stream_batch_broker(meta)
+                if broker_record:
+                    delivery.register_unit(source_key, dict(meta))
+                elif source_key is not None:
                     if current_source_key is not None and source_key != current_source_key:
                         _drain_before_finalize()
                         # Delivery barrier + ack gate + legacy finalize
@@ -3589,6 +3847,9 @@ class PipelineExecutor:
                             current_unit = delivery.register_unit(source_key, dict(meta))
                     current_source_meta = dict(meta)
                 chunk_q.put((raw, meta))  # blocks if queue full (backpressure)
+                if broker_record and meta.get("source_batch_end"):
+                    _drain_before_finalize()
+                    _decide_brokers()
                 if on_persist is not None:
                     on_persist()
                 if STREAM_QUEUE_DEPTH is not None:
@@ -3609,6 +3870,8 @@ class PipelineExecutor:
                 chunk_q.put(None)
             for t in threads:
                 t.join(timeout=30)
+            if not worker_errors.empty():
+                raise worker_errors.get_nowait()
             if STREAM_QUEUE_DEPTH is not None:
                 try:
                     STREAM_QUEUE_DEPTH.labels(pipeline=config.name).set(0)

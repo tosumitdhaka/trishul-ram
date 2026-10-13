@@ -1,0 +1,18 @@
+== TRAM release gate ==
+version under gate: 1.8.3
+
+----------------------------- gate summary -----------------------------
+  [PASS] clean working tree
+  [PASS] version consistency (pyproject/chart/ui/meta fixture)
+  [PASS] version not already tagged
+  [PASS] changelog entry for 1.8.3
+  [PASS] ruff check
+  [PASS] pytest + coverage floor (75%)
+  [PASS] UI build (vite)
+  [PASS] UI browser smoke (Playwright)
+  [PASS] pipeline examples validate (33 files)
+  [PASS] helm lint + template
+  [PASS] docs-sync: env vars + values-template image.tag
+------------------------------------------------------------------------
+passed: 11   failed: 0
+GATE GREEN — ready to tag v1.8.3.

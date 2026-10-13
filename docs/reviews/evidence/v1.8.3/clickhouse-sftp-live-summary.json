@@ -1,0 +1,17 @@
+[
+  {
+    "repetition": 1,
+    "exit_code": 0,
+    "summary": "9 passed in 2.93s"
+  },
+  {
+    "repetition": 2,
+    "exit_code": 0,
+    "summary": "9 passed in 2.88s"
+  },
+  {
+    "repetition": 3,
+    "exit_code": 0,
+    "summary": "9 passed in 2.99s"
+  }
+]

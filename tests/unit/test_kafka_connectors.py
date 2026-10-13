@@ -4,6 +4,7 @@ from __future__ import annotations
 import sys
 import threading
 import time
+from collections import deque
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -55,6 +56,7 @@ def _mock_kafka_module(consumer: MagicMock | None = None) -> MagicMock:
     mock_kafka = MagicMock()
     mock_kafka.TopicPartition = _TopicPartition
     mock_kafka.OffsetAndMetadata = _OffsetAndMetadata
+    mock_kafka.ConsumerRebalanceListener = type("ConsumerRebalanceListener", (), {})
     if consumer is not None:
         mock_kafka.KafkaConsumer.return_value = consumer
     return mock_kafka
@@ -94,6 +96,506 @@ class TestKafkaSourceGroupId:
         assert src.group_id == "my-pipeline"
 
 
+class TestKafkaManagedIntake:
+    @pytest.mark.parametrize("ack_last", [False, True])
+    def test_exhausted_poll_never_commits_undecided_records(self, ack_last):
+        tp = _TopicPartition("events", 0)
+        messages = [
+            MagicMock(topic="events", partition=0, offset=i, value=b"{}", key=None)
+            for i in range(2)
+        ]
+        consumer = MagicMock()
+        consumer.assignment.return_value = {tp}
+        consumer.poll.side_effect = [{tp: messages}, RuntimeError("broker lost")]
+        source = _make_source({"_ack_managed": True, "max_reconnect_attempts": 1})
+
+        with patch.dict(sys.modules, {"kafka": _mock_kafka_module(consumer)}):
+            reader = source.read()
+            next(reader)
+            _, last_meta = next(reader)
+            if ack_last:
+                source.ack(last_meta, AckDisposition.DELIVERED)
+            with pytest.raises(SourceError, match="broker lost"):
+                next(reader)
+
+        consumer.commit.assert_not_called()
+
+    def test_decided_frontier_commits_on_next_poll(self):
+        tp = _TopicPartition("events", 0)
+        messages = [
+            MagicMock(topic="events", partition=0, offset=i, value=b"{}", key=None)
+            for i in range(2)
+        ]
+        consumer = MagicMock()
+        consumer.assignment.return_value = {tp}
+        consumer.poll.side_effect = [{tp: messages}, {}, RuntimeError("broker lost")]
+        source = _make_source({"_ack_managed": True, "max_reconnect_attempts": 1})
+
+        with patch.dict(sys.modules, {"kafka": _mock_kafka_module(consumer)}):
+            reader = source.read()
+            _, first_meta = next(reader)
+            _, last_meta = next(reader)
+            source.ack(last_meta, AckDisposition.DELIVERED)
+            source.ack(first_meta, AckDisposition.DELIVERED)
+            with pytest.raises(SourceError, match="broker lost"):
+                next(reader)
+
+        consumer.commit.assert_called_once()
+        assert consumer.commit.call_args.args[0][tp].offset == 2
+
+
+class TestKafkaFailureOwnership:
+    def test_managed_stop_keeps_consumer_for_tail_decision_on_reader_thread(self):
+        tp = _TopicPartition("events", 0)
+        message = MagicMock(topic="events", partition=0, offset=0, value=b"{}", key=None)
+        consumer = MagicMock()
+        consumer.assignment.return_value = {tp}
+        consumer.poll.return_value = {tp: [message]}
+        source = _make_source({"_ack_managed": True})
+        closed_threads = []
+        consumer.close.side_effect = lambda: closed_threads.append(threading.get_ident())
+        with patch.dict(sys.modules, {"kafka": _mock_kafka_module(consumer)}):
+            reader = source.read()
+            _, meta = next(reader)
+            watcher = threading.Thread(target=source.stop)
+            watcher.start()
+            watcher.join(timeout=2)
+            reader.close()
+            consumer.close.assert_not_called()
+            source.ack(meta, AckDisposition.DELIVERED)
+            source.close()
+            source.close()
+
+        consumer.commit.assert_called_once()
+        assert consumer.commit.call_args.args[0][tp].offset == 1
+        assert closed_threads == [threading.get_ident()]
+
+    @pytest.mark.parametrize("thread_workers", [1, 2])
+    @pytest.mark.parametrize("outcome", [
+        "delivered", "filtered", "unconfirmed", "parse_error", "transform_error", "abort_error",
+        "delayed_abort",
+    ])
+    def test_executor_single_partition_stream_commits_each_record_before_stop(
+        self, thread_workers, outcome, tmp_path,
+    ):
+        import json
+
+        from tram.connectors.local.sink import LocalSink
+        from tram.core.context import RunStatus
+        from tram.interfaces.base_sink import SinkCommitReceipt
+        from tram.pipeline.executor import CheckpointResult, PipelineExecutor
+        from tram.pipeline.loader import load_pipeline_from_yaml
+
+        config = load_pipeline_from_yaml(json.dumps({"pipeline": {
+            "name": "kafka-stream-frontier", "thread_workers": thread_workers,
+            "on_error": "abort" if outcome in {"abort_error", "delayed_abort"} else "continue",
+            "stream_flush_records": 1 if outcome == "delayed_abort" else 500,
+            "schedule": {"type": "stream"},
+            "transforms": ([{"type": "filter", "condition": "False"}]
+                           if outcome == "filtered" else
+                           [{"type": "filter", "condition": "1 / id"}]
+                           if outcome == "transform_error" else []),
+            "source": {
+                "type": "kafka", "brokers": ["unused:9092"], "topic": "events",
+            },
+            "serializer_in": {"type": "json"}, "serializer_out": {"type": "ndjson"},
+            "sink": {
+                "type": "local", "path": str(tmp_path),
+                "filename_template": "output.jsonl", "file_mode": "append",
+            },
+        }}))
+        tp = _TopicPartition("events", 0)
+        messages = [MagicMock(
+            topic="events", partition=0, offset=i,
+            value=json.dumps([{"id": i}]).encode(), key=None,
+        ) for i in range(8 if outcome == "delayed_abort" else 3)]
+        if outcome == "delayed_abort":
+            for i, message in enumerate(messages):
+                message.value = json.dumps([{
+                    "id": i, "_polled_at": f"2026-10-13T00:00:{i:02d}Z",
+                }]).encode()
+        if outcome in {"parse_error", "abort_error"}:
+            messages[0].value = b"malformed-json"
+        consumer = MagicMock()
+        consumer._client.cluster.cluster_id = "fixture-cluster"
+        consumer.assignment.return_value = {tp}
+        stop = threading.Event()
+        polls = 0
+        commits = []
+        reader_thread = threading.get_ident()
+
+        def poll(**kwargs):
+            nonlocal polls
+            polls += 1
+            if polls == 1:
+                return {tp: messages}
+            stop.set()
+            return {}
+
+        def commit(offsets):
+            assert consumer.close.call_count == 0
+            frontier = offsets[tp].offset
+            if outcome != "filtered":
+                records = [json.loads(line) for line in
+                           (tmp_path / "output.jsonl").read_text().splitlines()]
+                expected = set(range(frontier))
+                if outcome in {"parse_error", "transform_error"}:
+                    expected.discard(0)
+                assert {r["id"] for r in records}.issuperset(expected)
+            commits.append((frontier, threading.get_ident()))
+
+        consumer.poll.side_effect = poll
+        consumer.commit.side_effect = commit
+        checkpoint = MagicMock()
+        checkpoint.checkpoint.return_value = CheckpointResult(
+            committed=True, already_committed=False, checkpoint_id=1, state_revision=1,
+        )
+        original_commit = LocalSink.commit
+
+        def sink_commit(sink, **kwargs):
+            if outcome == "unconfirmed":
+                return SinkCommitReceipt(
+                    sink_key="fixture", tier=DeliveryTier.FSYNCED_LOCAL,
+                    confirmed=False, notes="publication refused",
+                )
+            return original_commit(sink, **kwargs)
+
+        with (
+            patch.dict(sys.modules, {"kafka": _mock_kafka_module(consumer)}),
+            patch.object(LocalSink, "commit", new=sink_commit),
+        ):
+            executor = PipelineExecutor(checkpoint_client=checkpoint)
+            if outcome in {"abort_error", "delayed_abort"}:
+                from tram.core.exceptions import TramError
+
+                if outcome == "delayed_abort":
+                    from tram.transforms.counter_delta import CounterDeltaTransform
+
+                    released = threading.Event()
+
+                    class DelayedCounter(CounterDeltaTransform):
+                        def apply(self, records):
+                            if records[0]["id"] == 0:
+                                if thread_workers > 1:
+                                    released.wait(0.2)
+                                raise RuntimeError("earlier input failed")
+                            return super().apply(records)
+
+                    def checkpoint_after_gap(**kwargs):
+                        released.set()
+                        return CheckpointResult(
+                            committed=True, already_committed=False,
+                            checkpoint_id=1, state_revision=1,
+                        )
+
+                    checkpoint.checkpoint.side_effect = checkpoint_after_gap
+                    transform = DelayedCounter({
+                        "fields": ["id"], "first_sample": "pass", "key_fields": [],
+                    })
+                    with (
+                        patch.object(executor, "_build_transforms", return_value=[transform]),
+                        pytest.raises(TramError, match="earlier input failed"),
+                    ):
+                        executor.stream_run(config, stop)
+                else:
+                    with pytest.raises(TramError, match="Parse error"):
+                        executor.stream_run(config, stop)
+                assert commits == []
+                checkpoint.checkpoint.assert_not_called()
+                consumer.close.assert_called_once()
+                return
+            result = executor.stream_run(config, stop)
+
+        assert result.status == (
+            RunStatus.PARTIAL
+            if outcome in {"unconfirmed", "parse_error", "transform_error"}
+            else RunStatus.SUCCESS
+        )
+        if outcome == "filtered":
+            assert not (tmp_path / "output.jsonl").exists()
+        else:
+            records = [json.loads(line) for line in
+                       (tmp_path / "output.jsonl").read_text().splitlines()]
+            assert sorted(records, key=lambda record: record["id"]) == [
+                {"id": i} for i in range(3)
+                if i != 0 or outcome not in {"parse_error", "transform_error"}
+            ]
+        assert commits == ([] if outcome == "unconfirmed" else [(3, reader_thread)])
+        consumer.close.assert_called_once()
+
+    def test_retained_partition_ack_survives_other_partition_revocation(self):
+        a = _TopicPartition("events", 0)
+        b = _TopicPartition("events", 1)
+        consumer = MagicMock()
+        consumer.assignment.return_value = {a, b}
+        source = _make_source({"_ack_managed": True})
+        source._consumer = consumer
+        source._sync_assignment(consumer)
+        epoch = source._assignment_epoch
+        source._read_min[("events", 0)] = 0
+        source._observed_offsets[("events", 0)] = deque([0, 1])
+        consumer.assignment.return_value = {a}
+        source._sync_assignment(consumer)
+        source.ack({
+            "kafka_topic": "events", "kafka_partition": 0,
+            "kafka_offset": 0, "kafka_epoch": epoch,
+        }, AckDisposition.DELIVERED)
+        assert source._pending_commits == {("events", 0): 0}
+
+    def test_same_assignment_callback_fences_old_completion(self):
+        tp = _TopicPartition("events", 0)
+        consumer = MagicMock()
+        source = _make_source({"_ack_managed": True})
+        with patch.dict(sys.modules, {"kafka": _mock_kafka_module(consumer)}):
+            source._build_consumer()
+        listener = consumer.subscribe.call_args.kwargs["listener"]
+        source._consumer = consumer
+        listener.on_partitions_assigned({tp})
+        epoch = source._assignment_epoch
+        source._read_min[("events", 0)] = 0
+        source._observed_offsets[("events", 0)] = deque([0])
+        listener.on_partitions_revoked({tp})
+        listener.on_partitions_assigned({tp})
+        source._read_min[("events", 0)] = 0
+        source._observed_offsets[("events", 0)] = deque([0])
+        source.ack({
+            "kafka_topic": "events", "kafka_partition": 0,
+            "kafka_offset": 0, "kafka_epoch": epoch,
+        }, AckDisposition.DELIVERED)
+        assert source._pending_commits == {}
+        assert source._completed == {}
+
+    @pytest.mark.parametrize("ack_order", [(0, 2), (2, 0)])
+    def test_compacted_offset_gap_waits_only_for_observed_payloads(self, ack_order):
+        tp = _TopicPartition("events", 0)
+        messages = [
+            MagicMock(topic="events", partition=0, offset=i, value=b"{}", key=None)
+            for i in (0, 2)
+        ]
+        consumer = MagicMock()
+        consumer.assignment.return_value = {tp}
+        consumer.poll.return_value = {tp: messages}
+        source = _make_source({"_ack_managed": True})
+
+        with patch.dict(sys.modules, {"kafka": _mock_kafka_module(consumer)}):
+            reader = source.read()
+            metas: dict[int, dict] = {}
+            for _ in range(2):
+                _, meta = next(reader)
+                metas[meta["kafka_offset"]] = meta
+            source.ack(metas[ack_order[0]], AckDisposition.DELIVERED)
+            if ack_order[0] == 2:
+                assert source._pending_commits == {}
+            else:
+                assert source._pending_commits == {("events", 0): 0}
+            source.ack(metas[ack_order[1]], AckDisposition.DELIVERED)
+            reader.close()
+
+        assert consumer.commit.call_args.args[0][tp].offset == 3
+
+    @pytest.mark.parametrize("thread_workers", [1, 2])
+    @pytest.mark.parametrize("batch_size", [1, 2])
+    def test_executor_batch_boundary_commits_decided_records_before_close(
+        self, thread_workers, batch_size
+    ):
+        import json
+
+        from tram.core.context import RunStatus
+        from tram.interfaces.base_sink import SinkCommitReceipt
+        from tram.pipeline.executor import PipelineExecutor
+        from tram.pipeline.loader import load_pipeline_from_yaml
+
+        config = load_pipeline_from_yaml(f"""
+pipeline:
+  name: kafka-batch-frontier
+  thread_workers: {thread_workers}
+  batch_size: {batch_size}
+  source:
+    type: kafka
+    brokers: [unused:9092]
+    topic: events
+  serializer_in:
+    type: json
+  serializer_out:
+    type: json
+  sink:
+    type: local
+    path: /tmp/unused-kafka-output
+""")
+        tp = _TopicPartition("events", 0)
+        messages = [
+            MagicMock(
+                topic="events", partition=0, offset=i,
+                value=json.dumps([{"id": i}]).encode(), key=None,
+            )
+            for i in range(8)
+        ]
+        consumer = MagicMock()
+        consumer.assignment.return_value = {tp}
+        consumer.poll.return_value = {tp: messages}
+        sink = MagicMock()
+        sink.commit.return_value = SinkCommitReceipt(
+            sink_key="fixture", tier=DeliveryTier.REMOTE_DURABLE, confirmed=True,
+            notes="confirmed fixture write",
+        )
+        written = []
+        sink.write.side_effect = lambda data, meta: written.extend(json.loads(data))
+        reader_thread = threading.get_ident()
+        commits = []
+
+        def commit(offsets):
+            assert consumer.close.call_count == 0
+            assert sink.commit.call_count > 0
+            commits.append((offsets[tp].offset, threading.get_ident()))
+
+        consumer.commit.side_effect = commit
+        executor = PipelineExecutor()
+        with (
+            patch.dict(sys.modules, {"kafka": _mock_kafka_module(consumer)}),
+            patch.object(executor, "_build_sinks", return_value=[(sink, None, [])]),
+        ):
+            result = executor.batch_run(config)
+
+        assert result.status == RunStatus.SUCCESS
+        assert 0 < len(written) < 8
+        assert sorted(record["id"] for record in written) == list(range(len(written)))
+        assert commits == [(len(written), reader_thread)]
+        consumer.close.assert_called_once()
+
+    @pytest.mark.parametrize("change", ["newer_ack", "reset"])
+    def test_failed_commit_never_overwrites_newer_or_new_session_state(self, change):
+        source = _make_source({"_ack_managed": True})
+        consumer = MagicMock()
+        source._consumer = consumer
+        source._pending_commits = {("events", 0): 4}
+
+        def fail_commit(offsets):
+            if change == "reset":
+                source._reset_session_state()
+            else:
+                source.ack({
+                    "kafka_topic": "events", "kafka_partition": 0,
+                    "kafka_offset": 7, "kafka_epoch": source._assignment_epoch,
+                }, AckDisposition.DELIVERED)
+            raise RuntimeError("commit timed out")
+
+        consumer.commit.side_effect = fail_commit
+        with patch.dict(sys.modules, {"kafka": _mock_kafka_module()}):
+            source._drain_pending_commits(consumer)
+
+        expected = {} if change == "reset" else {("events", 0): 7}
+        assert source._pending_commits == expected
+
+    @pytest.mark.parametrize("ack_first", [False, True])
+    def test_managed_close_drains_only_decided_prefix(self, ack_first):
+        tp = _TopicPartition("events", 0)
+        messages = [
+            MagicMock(topic="events", partition=0, offset=i, value=b"{}", key=None)
+            for i in range(2)
+        ]
+        consumer = MagicMock()
+        consumer.assignment.return_value = {tp}
+        consumer.poll.return_value = {tp: messages}
+        source = _make_source({"_ack_managed": True})
+
+        with patch.dict(sys.modules, {"kafka": _mock_kafka_module(consumer)}):
+            reader = source.read()
+            _, meta = next(reader)
+            if ack_first:
+                source.ack(meta, AckDisposition.DELIVERED)
+            reader.close()
+
+        if ack_first:
+            consumer.commit.assert_called_once()
+            assert consumer.commit.call_args.args[0][tp].offset == 1
+        else:
+            consumer.commit.assert_not_called()
+        consumer.close.assert_called_once()
+
+    def test_failed_pending_commit_is_retried_without_new_ack(self):
+        consumer = MagicMock()
+        consumer.commit.side_effect = [RuntimeError("commit timed out"), None]
+        source = _make_source({"_ack_managed": True})
+        source._consumer = consumer
+        source._pending_commits = {("events", 0): 4}
+
+        with patch.dict(sys.modules, {"kafka": _mock_kafka_module()}):
+            source._drain_pending_commits(consumer)
+            assert source._pending_commits == {("events", 0): 4}
+            source._drain_pending_commits(consumer)
+
+        assert consumer.commit.call_count == 2
+        assert source._pending_commits == {}
+
+    def test_repeated_poll_failure_exhausts_reconnect_budget(self):
+        consumers = [MagicMock(), MagicMock()]
+        for consumer in consumers:
+            consumer.poll.side_effect = RuntimeError("broker lost")
+        source = _make_source({"max_reconnect_attempts": 2})
+        with (
+            patch.object(source, "_build_consumer", side_effect=[
+                *consumers, SourceError("unexpected third consumer")
+            ]) as build,
+            patch.object(source, "_sleep_interruptible", return_value=False),
+        ):
+            with pytest.raises(SourceError, match="after 2 reconnect attempts"):
+                next(source.read())
+
+        assert build.call_count == 2
+        for consumer in consumers:
+            consumer.close.assert_called_once()
+
+    def test_successful_poll_resets_failure_streak(self):
+        consumers = [MagicMock() for _ in range(3)]
+        consumers[0].poll.side_effect = RuntimeError("broker lost")
+        consumers[1].poll.side_effect = [{}, RuntimeError("broker lost")]
+        consumers[2].poll.side_effect = RuntimeError("broker lost")
+        source = _make_source({"max_reconnect_attempts": 2})
+        with (
+            patch.object(source, "_build_consumer", side_effect=consumers) as build,
+            patch.object(source, "_sleep_interruptible", return_value=False),
+        ):
+            with pytest.raises(SourceError, match="after 2 reconnect attempts"):
+                next(source.read())
+
+        assert build.call_count == 3
+
+    @pytest.mark.parametrize("first_value,ack_first,expected_offset", [
+        (None, False, 2),
+        (b"{}", True, 2),
+        (b"{}", False, None),
+    ])
+    def test_managed_tombstones_advance_only_decided_prefix(
+        self, first_value, ack_first, expected_offset
+    ):
+        tp = _TopicPartition("events", 0)
+        messages = [
+            MagicMock(topic="events", partition=0, offset=0, value=first_value, key=None),
+            MagicMock(topic="events", partition=0, offset=1, value=None, key=None),
+        ]
+        sentinel = MagicMock(topic="events", partition=0, offset=2, value=b"next", key=None)
+        consumer = MagicMock()
+        consumer.assignment.return_value = {tp}
+        consumer.poll.side_effect = [{tp: messages}, {tp: [sentinel]}]
+        source = _make_source({"_ack_managed": True})
+
+        with patch.dict(sys.modules, {"kafka": _mock_kafka_module(consumer)}):
+            reader = source.read()
+            if first_value is not None:
+                _, meta = next(reader)
+                if ack_first:
+                    source.ack(meta, AckDisposition.DELIVERED)
+            assert next(reader)[0] == b"next"
+            if expected_offset is None:
+                consumer.commit.assert_not_called()
+                assert source._tombstone_offsets == {("events", 0): {1}}
+            else:
+                consumer.commit.assert_called_once()
+                assert consumer.commit.call_args.args[0][tp].offset == expected_offset
+                assert source._tombstone_offsets == {}
+            reader.close()
+
+
 class TestKafkaSourceConfig:
     def test_topic_string_wrapped_in_list(self):
         src = _make_source()
@@ -121,7 +623,7 @@ class TestKafkaSourceConfig:
     def test_consumer_built_with_auto_commit_disabled_by_default(self):
         mock_consumer = MagicMock()
         mock_consumer.poll.return_value = {}
-        mock_kafka = MagicMock()
+        mock_kafka = _mock_kafka_module()
         mock_kafka.KafkaConsumer.return_value = mock_consumer
 
         with patch.dict(sys.modules, {"kafka": mock_kafka}):
@@ -132,7 +634,7 @@ class TestKafkaSourceConfig:
         assert call_kwargs["enable_auto_commit"] is False
 
     def test_consumer_built_with_auto_commit_true_when_opted_in(self):
-        mock_kafka = MagicMock()
+        mock_kafka = _mock_kafka_module()
         mock_kafka.KafkaConsumer.return_value = MagicMock()
 
         with patch.dict(sys.modules, {"kafka": mock_kafka}):
@@ -188,7 +690,7 @@ class TestKafkaSourceRead:
         mock_consumer.end_offsets.return_value = {}
         mock_consumer.poll.side_effect = batches
 
-        mock_kafka = MagicMock()
+        mock_kafka = _mock_kafka_module()
         mock_kafka.KafkaConsumer.return_value = mock_consumer
         return mock_kafka, mock_consumer
 
@@ -294,7 +796,7 @@ class TestKafkaSourceRead:
             {_TopicPartition("events", 0): [msg]},
             RuntimeError("conn lost"),
         ]
-        mock_kafka = MagicMock()
+        mock_kafka = _mock_kafka_module()
         mock_kafka.KafkaConsumer.return_value = mock_consumer
 
         with patch.dict(sys.modules, {"kafka": mock_kafka}):
@@ -328,7 +830,7 @@ class TestKafkaSourceRead:
         it.close()
 
     def test_consumer_uses_correct_group_id(self):
-        mock_kafka = MagicMock()
+        mock_kafka = _mock_kafka_module()
         mock_kafka.KafkaConsumer.return_value = MagicMock()
 
         with patch.dict(sys.modules, {"kafka": mock_kafka}):
@@ -341,7 +843,7 @@ class TestKafkaSourceRead:
     def test_consumer_error_raises_source_error(self):
         mock_consumer = MagicMock()
         mock_consumer.poll.side_effect = RuntimeError("conn lost")
-        mock_kafka = MagicMock()
+        mock_kafka = _mock_kafka_module()
         mock_kafka.KafkaConsumer.return_value = mock_consumer
 
         with patch.dict(sys.modules, {"kafka": mock_kafka}):
@@ -361,7 +863,7 @@ class TestKafkaSourceRead:
             {_TopicPartition("events", 0): [msg]},
             RuntimeError("conn lost"),
         ]
-        mock_kafka = MagicMock()
+        mock_kafka = _mock_kafka_module()
         mock_kafka.KafkaConsumer.return_value = mock_consumer
 
         with patch.dict(sys.modules, {"kafka": mock_kafka}):
@@ -393,7 +895,7 @@ class TestKafkaSourceLag:
             {tp: [msg1, msg2]},
             {tp: [sentinel]},
         ]
-        mock_kafka = MagicMock()
+        mock_kafka = _mock_kafka_module()
         mock_kafka.KafkaConsumer.return_value = mock_consumer
 
         with (
@@ -426,7 +928,7 @@ class TestKafkaSourceStop:
         mock_consumer.assignment.return_value = []
         mock_consumer.end_offsets.return_value = {}
         mock_consumer.poll.return_value = {}
-        mock_kafka = MagicMock()
+        mock_kafka = _mock_kafka_module()
         mock_kafka.KafkaConsumer.return_value = mock_consumer
 
         with patch.dict(sys.modules, {"kafka": mock_kafka}):
@@ -455,7 +957,7 @@ class TestKafkaSourceStop:
         mock_consumer.assignment.return_value = []
         mock_consumer.end_offsets.return_value = {}
         mock_consumer.poll.side_effect = RuntimeError("conn lost")
-        mock_kafka = MagicMock()
+        mock_kafka = _mock_kafka_module()
         mock_kafka.KafkaConsumer.return_value = mock_consumer
 
         with patch.dict(sys.modules, {"kafka": mock_kafka}):
@@ -481,7 +983,7 @@ class TestKafkaSourceStop:
         mock_consumer.assignment.return_value = []
         mock_consumer.end_offsets.return_value = {}
         mock_consumer.poll.return_value = {_TopicPartition("events", 0): [msg1, msg2]}
-        mock_kafka = MagicMock()
+        mock_kafka = _mock_kafka_module()
         mock_kafka.KafkaConsumer.return_value = mock_consumer
 
         with patch.dict(sys.modules, {"kafka": mock_kafka}):
@@ -636,10 +1138,11 @@ class TestKafkaSourceEpochFrontier:
         src._consumer = mock_consumer
         src._assignment_epoch = 2
 
-        src._commit_batch(mock_consumer, {"tp": 9}, epoch=1)  # stale
+        tp = _TopicPartition("events", 0)
+        src._commit_batch(mock_consumer, {tp: 9}, epoch=1)  # stale
         mock_consumer.commit.assert_not_called()
 
-        src._commit_batch(mock_consumer, {"tp": 9}, epoch=2)  # current
+        src._commit_batch(mock_consumer, {tp: 9}, epoch=2)  # current
         mock_consumer.commit.assert_called_once()
 
     def test_read_meta_carries_epoch_and_ack_commits(self):
@@ -655,7 +1158,7 @@ class TestKafkaSourceEpochFrontier:
             {_TopicPartition("events", 0): [
                 TestKafkaSourceRead._make_msg(value=b"SENTINEL", offset=43)]},
         ]
-        mock_kafka = MagicMock()
+        mock_kafka = _mock_kafka_module()
         mock_kafka.KafkaConsumer.return_value = mock_consumer
 
         with patch.dict(sys.modules, {"kafka": mock_kafka}):
@@ -1271,7 +1774,7 @@ class TestKafkaSinkDelivery:
         assert self._make_sink().acks == "all"
 
     def test_producer_built_with_acks_all(self):
-        mock_kafka = MagicMock()
+        mock_kafka = _mock_kafka_module()
         mock_kafka.KafkaProducer.return_value = MagicMock()
 
         with patch.dict(sys.modules, {"kafka": mock_kafka}):
@@ -1468,7 +1971,7 @@ class TestKafkaSourceUnitIdentity:
             {_TopicPartition("events", 0): [sentinel]},
         ]
         mock_consumer._client.cluster.cluster_id = "cluster-A"
-        mock_kafka = MagicMock()
+        mock_kafka = _mock_kafka_module()
         mock_kafka.KafkaConsumer.return_value = mock_consumer
 
         with patch.dict(sys.modules, {"kafka": mock_kafka}):
