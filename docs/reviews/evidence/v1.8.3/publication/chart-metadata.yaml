@@ -1,0 +1,21 @@
+apiVersion: v2
+appVersion: 1.8.3
+dependencies:
+- condition: postgresql.enabled
+  name: postgresql
+  repository: https://charts.bitnami.com/bitnami
+  version: 16.x.x
+description: TRAM — Trishul Real-time Aggregation & Mediation
+home: https://github.com/trishul/tram
+keywords:
+- data-pipeline
+- adapter
+- mapper
+- streaming
+maintainers:
+- name: TRAM Maintainers
+name: trishul-ram
+sources:
+- https://github.com/trishul/tram
+type: application
+version: 1.8.3
