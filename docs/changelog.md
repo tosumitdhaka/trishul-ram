@@ -5,7 +5,7 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ---
 
-## [Unreleased]
+## [1.8.3] - 2026-10-13
 
 ### Fixed
 - Executor-managed Kafka sources no longer commit a consumed poll batch before
@@ -1821,7 +1821,8 @@ is reassigned to 1.8.3; operational confidence is reassigned to 1.8.4.
 ---
 
 <!-- Comparison links -->
-[Unreleased]: https://github.com/tosumitdhaka/trishul-ram/compare/v1.8.2...HEAD
+[Unreleased]: https://github.com/tosumitdhaka/trishul-ram/compare/v1.8.3...HEAD
+[1.8.3]: https://github.com/tosumitdhaka/trishul-ram/compare/v1.8.2...v1.8.3
 [1.8.2]: https://github.com/tosumitdhaka/trishul-ram/compare/v1.8.0...v1.8.2
 [1.4.0]: https://github.com/tosumitdhaka/trishul-ram/compare/v1.3.3...v1.4.0
 [1.3.3]: https://github.com/tosumitdhaka/trishul-ram/compare/v1.3.2...v1.3.3
