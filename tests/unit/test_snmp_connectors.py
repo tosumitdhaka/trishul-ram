@@ -129,37 +129,19 @@ class TestSNMPTrapSource:
                     list(source.read())
 
     def test_yields_trap_then_stops(self):
-        # A minimal SNMP v2c trap-like datagram (just raw bytes)
-        raw_trap = b"\x30\x29\x02\x01\x01\x04\x06public\xa7\x1c"
+        from tests.unit.test_snmp_decode_equivalence import _v2c_trap_bytes
 
-        mock_pysnmp = MagicMock()
-        with patch.dict("sys.modules", {
-            "pysnmp": mock_pysnmp,
-            "pysnmp.hlapi": mock_pysnmp,
-            "pysnmp.carrier": mock_pysnmp,
-            "pysnmp.carrier.asyncio": mock_pysnmp,
-            "pysnmp.carrier.asyncio.dgram": mock_pysnmp,
-            "pysnmp.entity": mock_pysnmp,
-            "pysnmp.entity.rfc3413": mock_pysnmp,
-        }):
-            with patch("socket.socket") as mock_sock_cls:
-                mock_sock = MagicMock()
-                mock_sock_cls.return_value = mock_sock
-                mock_sock.recvfrom.side_effect = [
-                    (raw_trap, ("192.168.1.1", 162)),
-                    socket.timeout,
-                ]
-
-                source = SNMPTrapSource({"host": "0.0.0.0", "port": 162})
-                it = source.read()
-                payload, meta = next(it)
-                source.stop()
-                list(it)
-
+        with patch("socket.socket") as mock_sock_cls:
+            sock = mock_sock_cls.return_value
+            sock.recvfrom.side_effect = [(_v2c_trap_bytes(), ("192.168.1.1", 162))]
+            source = SNMPTrapSource({"resolve_oids": False})
+            it = source.read()
+            payload, meta = next(it)
+            source.stop()
+            list(it)
         assert meta["source_ip"] == "192.168.1.1"
         assert meta["community"] == "public"
-        data = json.loads(payload)
-        assert isinstance(data, dict)
+        assert json.loads(payload)["1.3.6.1.4.1.99999.1.0"] == "v2c-alarm"
 
     def test_stop_terminates_stream(self):
         mock_pysnmp = MagicMock()
@@ -220,12 +202,11 @@ class TestSNMPTrapSource:
         assert result["1.3.6.1.2.1.2.2.1.1.1"] == "42"
         assert "_raw" not in result
 
-    def test_decode_trap_fallback_on_garbage(self):
-        """_decode_trap returns _raw hex for non-SNMP bytes."""
+    def test_decode_trap_rejects_garbage(self):
         source = SNMPTrapSource({"port": 162})
-        result = source._decode_trap(b"\x00\x01\x02garbage")
-        assert "_raw" in result
-        assert result["_raw"] == b"\x00\x01\x02garbage".hex()
+        with pytest.raises(SourceError, match="undecodable packet"):
+            source._decode_trap(b"\x00\x01\x02garbage")
+
 
 
 # ── SNMPPollSource ─────────────────────────────────────────────────────────

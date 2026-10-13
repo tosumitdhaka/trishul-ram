@@ -1380,6 +1380,44 @@ class TestStreamBrokerUnitAcks:
     connector-name checks in the executor.
     """
 
+    @pytest.mark.parametrize("thread_workers", [1, 2])
+    @pytest.mark.parametrize("filtered", [False, True])
+    def test_kafka_poll_batches_reconcile_before_reader_resumes(self, thread_workers, filtered):
+        config = _stream_config(
+            "stream_flush_records: 100\n"
+            "          stream_flush_interval_s: 60\n"
+            f"          thread_workers: {thread_workers}\n"
+            + ("          transforms:\n"
+               "            - type: filter\n"
+               "              condition: 'False'" if filtered else "")
+        )
+
+        class PollSource(_AckCaptureSource):
+            def read(self):
+                for offset in range(32):
+                    if offset % 4 == 0:
+                        # A broker's next poll cannot precede disposition of
+                        # its previous bounded batch, including empty output.
+                        assert len(self.acks) == offset
+                    meta = _kafka_meta(offset)
+                    meta["source_batch_end"] = offset % 4 == 3
+                    yield _chunk([{"seq": offset}]), meta
+                assert len(self.acks) == 32
+
+        source = PollSource([])
+        sink = _CommitSink()
+        _run_finite_stream(config, chunks=[], source=source, sink=sink)
+        expected = AckDisposition.FILTERED if filtered else AckDisposition.DELIVERED
+        assert [disposition for _, disposition in source.acks] == [expected] * 32
+        assert sink.commits == 8
+        if filtered:
+            assert sink.payloads == []
+        else:
+            assert len(sink.payloads) == 8
+            assert all(len(json.loads(payload)) == 4 for payload in sink.payloads)
+            assert sorted(record["seq"] for payload in sink.payloads
+                          for record in json.loads(payload)) == list(range(32))
+
     def test_single_threaded_kafka_units_ack_delivered(self):
         """Each Kafka record is its own unit: committed barrier + DELIVERED
         ack at its boundary."""
@@ -1394,7 +1432,7 @@ class TestStreamBrokerUnitAcks:
         sink = _CommitSink()
         _stats, _ = _run_finite_stream(config, chunks=[], source=source, sink=sink)
 
-        assert sink.commits == 2  # one commit barrier per decided unit
+        assert sink.commits == 1  # one barrier confirms both contributing records
         assert [d for _, d in source.acks] == [
             AckDisposition.DELIVERED, AckDisposition.DELIVERED,
         ]
@@ -1476,7 +1514,7 @@ class TestStreamBrokerUnitAcks:
         assert [d for _, d in source.acks] == [
             AckDisposition.DELIVERED, AckDisposition.DELIVERED,
         ]
-        assert sink.commits == 2
+        assert sink.commits == 1
 
     def test_single_threaded_amqp_delivery_tag_fallback_acks_delivered(self):
         """Without a source_unit_id, the meta's delivery-tag family still
@@ -1513,7 +1551,7 @@ class TestStreamBrokerUnitAcks:
         sink = _CommitSink()
         stats, _ = _run_finite_stream(config, chunks=[], source=source, sink=sink)
 
-        assert sink.commits == 3
+        assert sink.commits == 1  # batching is preserved across partitions
         assert [d for _, d in source.acks] == [
             AckDisposition.DELIVERED, AckDisposition.DELIVERED,
             AckDisposition.DELIVERED,

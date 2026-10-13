@@ -20,6 +20,119 @@ from tram.interfaces.base_source import AckDisposition
 
 
 class TestAmqpSource:
+    def test_bridge_last_delivery_marks_flush_boundary(self):
+        mock_pika = MagicMock()
+        connection = mock_pika.BlockingConnection.return_value
+        channel = connection.channel.return_value
+        source = AmqpSource({"queue": "q", "prefetch_count": 1})
+        source._msg_queue.put_nowait((b"first", {"amqp_delivery_tag": 1}))
+        source._msg_queue.put_nowait((b"last", {"amqp_delivery_tag": 2}))
+        source.stop()
+        with patch.dict(sys.modules, {"pika": mock_pika}):
+            records = list(source.read())
+
+        assert [meta["source_batch_end"] for _, meta in records] == [False, True]
+        assert [body for body, _ in records] == [b"first", b"last"]
+        channel.basic_ack.assert_not_called()
+
+    @pytest.mark.parametrize("prefetch", [0, -1])
+    def test_unbounded_prefetch_is_rejected(self, prefetch):
+        from pydantic import ValidationError
+
+        from tram.models.pipeline import AmqpSourceConfig
+
+        with pytest.raises(SourceError, match="prefetch_count must be >= 1"):
+            AmqpSource({"queue": "q", "prefetch_count": prefetch})
+        with pytest.raises(ValidationError):
+            AmqpSourceConfig(type="amqp", queue="q", prefetch_count=prefetch)
+
+    @pytest.mark.parametrize("auto_ack", [False, True])
+    @pytest.mark.parametrize("payloads", [[b"1234", b"x"], [b"12345"]])
+    def test_admission_overflow_is_bounded_and_does_not_block_shutdown(self, auto_ack, payloads):
+        mock_pika = MagicMock()
+        connection = mock_pika.BlockingConnection.return_value
+        channel = connection.channel.return_value
+        with patch.dict(os.environ, {
+            "TRAM_SOURCE_BRIDGE_MAX_COUNT": "1", "TRAM_SOURCE_BRIDGE_MAX_BYTES": "4",
+        }):
+            source = AmqpSource({"queue": "q", "auto_ack": auto_ack})
+
+        consumed = threading.Event()
+
+        def consume():
+            callback = channel.basic_consume.call_args.kwargs["on_message_callback"]
+            try:
+                for tag, body in enumerate(payloads, 1):
+                    callback(channel, MagicMock(delivery_tag=tag, routing_key="q"),
+                             MagicMock(message_id=str(tag)), body)
+            finally:
+                consumed.set()
+
+        original_get = source._msg_queue.get
+
+        def get_after_intake(*args, **kwargs):
+            assert consumed.wait(timeout=2)
+            return original_get(*args, **kwargs)
+
+        channel.start_consuming.side_effect = consume
+        with (
+            patch.dict(sys.modules, {"pika": mock_pika}),
+            patch.object(source._msg_queue, "get", side_effect=get_after_intake),
+        ):
+            reader = source.read()
+            if len(payloads) > 1:
+                assert next(reader)[0] == payloads[0]
+            message = "cannot be replayed" if auto_ack else "will be requeued"
+            with pytest.raises(SourceError, match=message):
+                next(reader)
+
+        source.stop()
+        connection.close.assert_called_once()
+        channel.basic_ack.assert_not_called()
+        assert source._msg_queue.qsize() == 0
+        assert source._msg_queue._bytes == 0
+
+    def test_queued_delivery_drains_before_consumer_failure(self):
+        mock_pika = MagicMock()
+        connection = mock_pika.BlockingConnection.return_value
+        channel = connection.channel.return_value
+        source = AmqpSource({"queue": "q"})
+
+        def consume_then_fail():
+            callback = channel.basic_consume.call_args.kwargs["on_message_callback"]
+            method = MagicMock(delivery_tag=1, routing_key="q", redelivered=False)
+            callback(channel, method, MagicMock(message_id="input-1"), b"payload")
+            raise RuntimeError("broker lost")
+
+        channel.start_consuming.side_effect = consume_then_fail
+        with patch.dict(sys.modules, {"pika": mock_pika}):
+            reader = source.read()
+            body, meta = next(reader)
+            assert body == b"payload"
+            assert meta["amqp_message_id"] == "input-1"
+            with pytest.raises(SourceError, match="broker lost"):
+                next(reader)
+
+        channel.basic_ack.assert_not_called()
+        channel.basic_nack.assert_not_called()
+        connection.close.assert_called_once()
+
+    @pytest.mark.parametrize("failure", [RuntimeError("broker lost"), None])
+    def test_consumer_loss_raises_in_reader(self, failure):
+        mock_pika = MagicMock()
+        connection = mock_pika.BlockingConnection.return_value
+        channel = connection.channel.return_value
+        channel.start_consuming.side_effect = failure
+        source = AmqpSource({"queue": "q"})
+
+        with patch.dict(sys.modules, {"pika": mock_pika}):
+            with pytest.raises(SourceError, match="consumer stopped unexpectedly"):
+                next(source.read())
+
+        connection.close.assert_called_once()
+        assert source._connection is None
+        assert source._channel is None
+
     def test_import_error_raises_source_error(self):
         with patch.dict(sys.modules, {"pika": None}):
             source = AmqpSource({"queue": "myqueue"})
@@ -429,13 +542,23 @@ class TestAmqpSink:
     def test_nack_failure_raises_sink_error(self):
         """A broker basic.nack (or unroutable/connection failure) raises — no
         false clean success."""
-        mock_pika, mock_channel, _ = self._make_pika_mock()
+        mock_pika, mock_channel, connection = self._make_pika_mock()
         mock_channel.basic_publish.side_effect = Exception("NackError: message nacked")
 
         with patch.dict(sys.modules, {"pika": mock_pika}):
             sink = AmqpSink({"routing_key": "mykey"})
             with pytest.raises(SinkError, match="AMQP publish failed"):
                 sink.write(b"data", {})
+        connection.close.assert_called_once()
+
+    def test_publish_requires_routing_and_persistence(self):
+        mock_pika, channel, connection = self._make_pika_mock()
+        with patch.dict(sys.modules, {"pika": mock_pika}):
+            AmqpSink({"routing_key": "key"}).write(b"data", {})
+
+        assert channel.basic_publish.call_args.kwargs["mandatory"] is True
+        assert mock_pika.BasicProperties.call_args.kwargs["delivery_mode"] == 2
+        connection.close.assert_called_once()
 
     def test_commit_confirms_remote_durable(self):
         sink = AmqpSink({"routing_key": "mykey"})

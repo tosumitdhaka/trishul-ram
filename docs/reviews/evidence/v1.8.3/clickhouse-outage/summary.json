@@ -1,0 +1,125 @@
+[
+  {
+    "repetition": 1,
+    "service_version": "24.10.2.80",
+    "direct_retained_rows": [
+      {
+        "id": 1,
+        "val": "buffer-retained"
+      },
+      {
+        "id": 2,
+        "val": "exact-content"
+      }
+    ],
+    "source_retained_bytes": "[{\"id\": 10, \"val\": \"source-retained\"}, {\"id\": 11, \"val\": \"replay-content\"}]",
+    "failed_status": "failed",
+    "replay_status": "success",
+    "tracker_marks": 1,
+    "confirmed_readback": [
+      [
+        1,
+        "buffer-retained"
+      ],
+      [
+        2,
+        "exact-content"
+      ],
+      [
+        10,
+        "source-retained"
+      ],
+      [
+        11,
+        "replay-content"
+      ]
+    ],
+    "container": "tram-v183-clickhouse-test",
+    "scenarios": [
+      "real-outage-buffer-restart-commit",
+      "real-outage-threaded-source-replay"
+    ]
+  },
+  {
+    "repetition": 2,
+    "service_version": "24.10.2.80",
+    "direct_retained_rows": [
+      {
+        "id": 1,
+        "val": "buffer-retained"
+      },
+      {
+        "id": 2,
+        "val": "exact-content"
+      }
+    ],
+    "source_retained_bytes": "[{\"id\": 10, \"val\": \"source-retained\"}, {\"id\": 11, \"val\": \"replay-content\"}]",
+    "failed_status": "failed",
+    "replay_status": "success",
+    "tracker_marks": 1,
+    "confirmed_readback": [
+      [
+        1,
+        "buffer-retained"
+      ],
+      [
+        2,
+        "exact-content"
+      ],
+      [
+        10,
+        "source-retained"
+      ],
+      [
+        11,
+        "replay-content"
+      ]
+    ],
+    "container": "tram-v183-clickhouse-test",
+    "scenarios": [
+      "real-outage-buffer-restart-commit",
+      "real-outage-threaded-source-replay"
+    ]
+  },
+  {
+    "repetition": 3,
+    "service_version": "24.10.2.80",
+    "direct_retained_rows": [
+      {
+        "id": 1,
+        "val": "buffer-retained"
+      },
+      {
+        "id": 2,
+        "val": "exact-content"
+      }
+    ],
+    "source_retained_bytes": "[{\"id\": 10, \"val\": \"source-retained\"}, {\"id\": 11, \"val\": \"replay-content\"}]",
+    "failed_status": "failed",
+    "replay_status": "success",
+    "tracker_marks": 1,
+    "confirmed_readback": [
+      [
+        1,
+        "buffer-retained"
+      ],
+      [
+        2,
+        "exact-content"
+      ],
+      [
+        10,
+        "source-retained"
+      ],
+      [
+        11,
+        "replay-content"
+      ]
+    ],
+    "container": "tram-v183-clickhouse-test",
+    "scenarios": [
+      "real-outage-buffer-restart-commit",
+      "real-outage-threaded-source-replay"
+    ]
+  }
+]

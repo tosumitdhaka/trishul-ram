@@ -5,6 +5,37 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ---
 
+## [Unreleased]
+
+### Fixed
+- Executor-managed Kafka sources no longer commit a consumed poll batch before
+  its records have decided delivery acknowledgements.
+- AMQP sources surface unexpected consumer failure or cancellation after
+  draining admitted deliveries instead of waiting indefinitely for more input.
+- Kafka batch runs account for broker records before acknowledgement, retain
+  failed commit frontiers, enforce reconnect exhaustion and handle tombstones
+  and compacted offset gaps without crossing undecided inputs.
+- Kafka and AMQP streams reconcile individual record dispositions after
+  confirmed microbatch output. Batch-boundary checkpoints precede source
+  acknowledgements; Kafka tail commits stay on the reader thread, and AMQP
+  prefetch-one streams advance without waiting for another delivery.
+- Unconfirmed sink receipts fail delivery barriers. Threaded batch file sinks
+  stage publication before destructive source finalization.
+- ClickHouse sink retries flush already-admitted input without appending it
+  twice; uncertain remote responses retain the documented duplicate window.
+- AMQP publications require routing and publisher confirmation, use persistent
+  messages and close failed connections. Sources require positive prefetch and
+  enforce bounded intake, including explicit loss reporting in auto-ack mode.
+- SNMP trap receivers enforce configured communities and reject corrupt input.
+  Legacy SNMPv3 trap reception fails explicitly; use the default stack for
+  authentication and privacy.
+
+### Added
+- SNMP polling supports up to ten distinct targets with bounded concurrency,
+  whole-target deadlines, per-device attribution and target results. Healthy
+  output drains before failed targets determine the overall batch outcome;
+  existing single-host YAML remains supported.
+
 ## [1.8.2] - 2026-10-12
 
 Includes the prepared recovery/auth corrections from the unpublished 1.8.1

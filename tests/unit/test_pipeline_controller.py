@@ -1142,6 +1142,8 @@ class TestWorkerDispatch:
         probe is_run_active() → False and mark a succeeded run as lost."""
         wp = self._worker_pool()
         ctrl = _started_controller(worker_pool=wp, manager_url="http://manager:8765")
+        # This test dispatches explicitly; an immediate scheduled run would race it.
+        ctrl._scheduler.pause()
         config = load_pipeline_from_yaml(_INTERVAL_YAML)
         ctrl.register(config, yaml_text=_INTERVAL_YAML)
         ctrl.manager.set_status("my-interval", "scheduled")

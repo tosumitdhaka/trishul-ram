@@ -171,6 +171,9 @@ class SNMPTrapSource(BaseSource):
         """
         if self._snmp_stack == "trishul":
             return self._read_tsnmp_listener()
+        if self.version == "3":
+            raise SourceError("SNMPv3 trap reception requires TRAM_SNMP_STACK=trishul; "
+                              "the legacy receiver does not authenticate or decrypt v3 traps")
         return self._read_raw_udp()
 
     def _read_raw_udp(self) -> Iterator[tuple[bytes, dict]]:
@@ -197,11 +200,15 @@ class SNMPTrapSource(BaseSource):
                 except TimeoutError:
                     continue
                 except Exception as exc:
-                    logger.warning("SNMP trap recv error: %s", exc)
+                    logger.warning("SNMP trap recv error: %s", type(exc).__name__)
                     continue
 
                 source_ip, src_port = addr
-                raw_bindings = self._decode_trap(raw)
+                try:
+                    raw_bindings = self._decode_trap(raw)
+                except SourceError as exc:
+                    logger.warning("SNMP trap rejected from %s: %s", source_ip, exc)
+                    continue
 
                 # Optional MIB-based OID resolution (shared with the tsnmp path)
                 bindings = self._resolve_trap_bindings(raw_bindings)
@@ -262,9 +269,9 @@ class SNMPTrapSource(BaseSource):
             return V3NotificationListener(
                 host=self.host, port=self.port, user=user, local_engine=local_engine
             )
-        # The community listener accepts any community (parity with the legacy
-        # decode-everything behavior); the configured community is only meta.
-        return V2cNotificationListener(host=self.host, port=self.port, communities=None)
+        return V2cNotificationListener(
+            host=self.host, port=self.port, communities=[self.community]
+        )
 
     def _tsnmp_listener_loop(self, listener, q, thread_stop: threading.Event, ready: threading.Event) -> None:
         """Run the tsnmp listener on its own event loop, pushing events to *q*.
@@ -285,7 +292,7 @@ class SNMPTrapSource(BaseSource):
                     except TimeoutError:
                         continue
                     except Exception as exc:
-                        logger.warning("SNMP trap listener error: %s", exc)
+                        logger.warning("SNMP trap listener error: %s", type(exc).__name__)
                         continue
                     try:
                         q.put(event, timeout=1.0)
@@ -295,7 +302,7 @@ class SNMPTrapSource(BaseSource):
         try:
             asyncio.run(_serve())
         except Exception as exc:
-            logger.warning("SNMP trap tsnmp listener thread failed: %s", exc)
+            logger.warning("SNMP trap tsnmp listener thread failed: %s", type(exc).__name__)
 
     def _read_tsnmp_listener(self) -> Iterator[tuple[bytes, dict]]:
         """Trap stream over tsnmp listeners (V1/V2c community or V3 USM).
@@ -410,24 +417,40 @@ class SNMPTrapSource(BaseSource):
         return bindings
 
     def _decode_trap(self, raw: bytes) -> dict:
-        """Decode a raw SNMP trap PDU using pyasn1 BER decoder + pysnmp proto API.
+        """Decode a configured-community v1/v2c trap; reject malformed input.
 
         Legacy-path only (v1.5.0, GH #72): the flag-on trap stream decodes
         inside the tsnmp listeners (``_tsnmp_event_record``), so this method is
         never called on the trishul stack.
         """
+        if self.version == "3":
+            raise SourceError("SNMPv3 trap reception requires TRAM_SNMP_STACK=trishul")
         try:
             from pyasn1.codec.ber import decoder as ber_decoder
-            from pysnmp.proto.api import v2c as pMod
-            msg, _ = ber_decoder.decode(raw, asn1Spec=pMod.Message())
-            reqPDU = _call_snmp_api(pMod.apiMessage, "get_pdu", msg)
-            bindings: dict = {}
-            for oid, val in _call_snmp_api(pMod.apiPDU, "get_varbinds", reqPDU):
-                bindings[str(oid)] = str(val)
-            return bindings
+            from pysnmp.proto.api import v1, v2c
+
+            pmod = v1 if self.version == "1" else v2c
+            msg, trailing = ber_decoder.decode(raw, asn1Spec=pmod.Message())
+            if trailing:
+                raise SourceError("undecodable packet")
+            expected_version = 0 if self.version == "1" else 1
+            if int(_call_snmp_api(pmod.apiMessage, "get_version", msg)) != expected_version:
+                raise SourceError("unsupported version")
+            community = bytes(_call_snmp_api(pmod.apiMessage, "get_community", msg))
+            if community != self.community.encode("utf-8"):
+                raise SourceError("wrong community")
+            pdu = _call_snmp_api(pmod.apiMessage, "get_pdu", msg)
+            trap_type = pmod.TrapPDU if self.version == "1" else pmod.SNMPv2TrapPDU
+            if pdu.tagSet != trap_type.tagSet:
+                raise SourceError("not a trap notification")
+            api = pmod.apiTrapPDU if self.version == "1" else pmod.apiPDU
+            return {str(oid): str(val) for oid, val in _call_snmp_api(api, "get_varbinds", pdu)}
+        except SourceError:
+            raise
         except Exception:
-            # Fall back to hex representation for undecodable packets
-            return {"_raw": raw.hex()}
+            # BER errors may contain packet contents; expose only a fixed reason.
+            raise SourceError("undecodable packet") from None
+
 
 
 @register_source("snmp_poll")
@@ -441,7 +464,10 @@ class SNMPPollSource(BaseSource):
     Requires the ``tram[snmp]`` optional extra.
 
     Config keys:
-        host            (str, required)        SNMP agent hostname or IP.
+        host            (str)                  Single SNMP agent hostname or IP.
+        targets         (list[str])            1–10 distinct hosts instead of host.
+        max_concurrency (int, default 4)       Concurrent multi-target polls (1–10).
+        target_timeout  (float, default 60)    Whole-device multi-target cycle timeout.
         port            (int, default 161)     SNMP agent port.
         community       (str, default "public") Community string (v1/v2c).
         version         (str, default "2c")    "1", "2c", or "3".
@@ -472,7 +498,21 @@ class SNMPPollSource(BaseSource):
 
     def __init__(self, config: dict) -> None:
         super().__init__(config)
-        self.host: str = config["host"]
+        self.targets: list[str] = cfg_list(config, "targets")
+        self.host: str = config.get("host") or ""
+        if self.host and not self.host.strip():
+            raise SourceError("SNMP poll host must be nonempty")
+        if bool(self.host) == bool(self.targets):
+            raise SourceError("SNMP poll requires exactly one of host or targets")
+        if (len(self.targets) > 10 or len(set(self.targets)) != len(self.targets)
+                or any(not isinstance(t, str) or not t.strip() for t in self.targets)):
+            raise SourceError("SNMP poll targets must be 1..10 distinct nonempty hosts")
+        self.max_concurrency = cfg_int(config, "max_concurrency", 4)
+        if not 1 <= self.max_concurrency <= 10:
+            raise SourceError("SNMP poll max_concurrency must be 1..10")
+        self._stop_event = threading.Event()
+        self.poll_results: list[dict] = []
+        self._completion_managed = bool(config.get("_completion_managed", False))
         self.port: int = cfg_int(config, "port", 161)
         self.community: str = config.get("community", "public")
         self.version: str = cfg_str(config, "version", "2c")
@@ -480,6 +520,9 @@ class SNMPPollSource(BaseSource):
         self.operation: str = config.get("operation", "get").lower()
         self.timeout: float = cfg_float(config, "timeout", 1.0)
         self.retries: int = cfg_int(config, "retries", 5)
+        self.target_timeout = cfg_float(config, "target_timeout", 60.0)
+        if self.timeout <= 0 or self.retries < 0 or self.target_timeout <= 0:
+            raise SourceError("SNMP poll timeout budgets must be positive and retries nonnegative")
         self.mib_dirs: list[str] = prepend_system_mib_dirs(cfg_list(config, "mib_dirs"))
         self.mib_modules: list[str] = cfg_list(config, "mib_modules")
         self.resolve_oids: bool = cfg_bool(config, "resolve_oids", True)
@@ -1198,7 +1241,11 @@ class SNMPPollSource(BaseSource):
                         hlapi_mod.ObjectType(hlapi_mod.ObjectIdentity(current_oid)),
                         lookupMib=False,
                     )
-                    if errInd or errStatus or not varBinds:
+                    if errInd:
+                        raise SourceError("SNMP WALK request failed")
+                    if errStatus:
+                        raise SourceError("SNMP WALK PDU rejected")
+                    if not varBinds:
                         break
                     # varBinds from nextCmd/get_next_cmd is list-of-list: [[( oid, val ), ...]]
                     row = varBinds[0] if isinstance(varBinds[0], list) else varBinds
@@ -1231,8 +1278,128 @@ class SNMPPollSource(BaseSource):
         finally:
             close_snmp_engine(engine)
 
-    def read(self) -> Iterator[tuple[bytes, dict]]:
+    def bind_run_control(self, stop_event: object | None, deadline: float | None) -> None:
+        self._run_stop_event = stop_event
+        self._run_deadline = deadline
+
+    def stop(self) -> None:
+        self._stop_event.set()
+
+    async def _collect_targets(self) -> list[tuple[SNMPPollSource, dict | None]]:
+        import time
+
+        semaphore = asyncio.Semaphore(self.max_concurrency)
+        output: list[tuple[SNMPPollSource, dict | None]] = []
+
+        async def poll(host: str) -> None:
+            child_config = {**self.config, "host": host}
+            child_config.pop("targets", None)
+            child = None
+            result = {"target": host, "status": "cancelled", "duration_seconds": 0.0,
+                      "bindings": 0, "records": 0}
+            started = time.monotonic()
+            raw = None
+            try:
+                child = SNMPPollSource(child_config)
+                async with semaphore:
+                    if self._stop_event.is_set():
+                        return
+                    started = time.monotonic()
+                    hlapi = None if child._snmp_stack == "trishul" else get_hlapi_asyncio()
+                    # Bound the whole device cycle, including WALK's potentially
+                    # many requests, separately from per-request retry timeouts.
+                    async with asyncio.timeout(self.target_timeout):
+                        if child.operation == "get":
+                            raw = await child._do_get(hlapi, typed=child.classify)
+                        elif child.operation == "walk":
+                            raw = await child._do_walk(hlapi, typed=child.classify)
+                        else:
+                            raise SourceError("unsupported operation")
+                    result["status"] = "success"
+                    result["bindings"] = len(raw)
+            except TimeoutError:
+                result["status"] = "timeout"
+            except asyncio.CancelledError:
+                result["status"] = "cancelled"
+            except Exception as exc:
+                # Dependency exceptions may include credentials or packet bytes.
+                result["status"] = (
+                    "timeout" if type(exc).__name__ == "RequestTimeoutError" else "poll_failed"
+                )
+            finally:
+                result["duration_seconds"] = round(time.monotonic() - started, 3)
+                self.poll_results.append(result)
+                if child is not None:
+                    output.append((child, raw))
+
+        tasks = [asyncio.create_task(poll(host)) for host in self.targets]
+        try:
+            while any(not task.done() for task in tasks):
+                run_stop = getattr(self, "_run_stop_event", None)
+                run_deadline = getattr(self, "_run_deadline", None)
+                if ((run_stop is not None and run_stop.is_set())
+                        or (run_deadline is not None and time.monotonic() >= run_deadline)):
+                    self._stop_event.set()
+                if self._stop_event.is_set():
+                    for task in tasks:
+                        task.cancel()
+                    break
+                await asyncio.wait(tasks, timeout=0.1)
+        finally:
+            # A stopped run retains ownership until managers actually close.
+            await asyncio.gather(*tasks, return_exceptions=True)
+        reported = {result["target"] for result in self.poll_results}
+        self.poll_results.extend(
+            {"target": host, "status": "cancelled", "duration_seconds": 0.0}
+            for host in self.targets if host not in reported
+        )
+        return output
+
+    def _read_targets(self) -> Iterator[tuple[bytes, dict]]:
         import json
+
+        self.poll_results = []
+        polled_at = datetime.datetime.now(datetime.UTC).isoformat()
+        output = asyncio.run(self._collect_targets())
+        prepared = []
+        by_host = {r["target"]: r for r in self.poll_results}
+        for child, raw in output:
+            if raw is None or self._stop_event.is_set():
+                continue
+            try:
+                rendered = []
+                count = 0
+                for payload, meta in child._render_poll(raw, polled_at):
+                    records = json.loads(payload)
+                    for record in records if isinstance(records, list) else [records]:
+                        record["_source_host"] = child.host
+                        count += 1
+                    rendered.append((json.dumps(records).encode("utf-8"), meta))
+                by_host[child.host]["records"] = count
+                prepared.extend(rendered)
+            except Exception:
+                by_host[child.host]["status"] = "render_failed"
+                by_host[child.host]["records"] = 0
+        for result in self.poll_results:
+            logger.info("SNMP target poll result", extra={"snmp_target_result": result})
+        for payload, meta in prepared:
+            meta["poll_results"] = list(self.poll_results)
+            yield payload, meta
+        error = self.completion_error()
+        if error and not getattr(self, "_completion_managed", False):
+            raise SourceError(error)
+
+    def completion_error(self) -> str | None:
+        failures = [r for r in self.poll_results if r["status"] != "success"]
+        if failures or self._stop_event.is_set():
+            summary = ", ".join(f"{r['target']}={r['status']}" for r in self.poll_results)
+            return f"SNMP multi-target poll incomplete: {summary}"
+        return None
+
+    def read(self) -> Iterator[tuple[bytes, dict]]:
+        if self.targets:
+            yield from self._read_targets()
+            return
         if self._snmp_stack != "trishul":
             try:
                 _hlapi = get_hlapi_asyncio()
@@ -1265,6 +1432,11 @@ class SNMPPollSource(BaseSource):
             raise
         except Exception as exc:
             raise SourceError(f"SNMP poll failed: {exc}") from exc
+
+        yield from self._render_poll(raw, polled_at)
+
+    def _render_poll(self, raw: dict, polled_at: str) -> Iterator[tuple[bytes, dict]]:
+        import json
 
         meta = {
             "source_host": self.host,

@@ -97,7 +97,7 @@ All configuration is via environment variables (12-factor).
 | `TRAM_AUTH_CLOCK_SKEW_S` | `5` | Start-authorization clock-skew tolerance (v1.8.0 §4, frozen) — a token whose `issued_at` is in the future beyond this window is rejected |
 | `TRAM_AUTH_SESSION_SECRET` | _(empty)_ | Manager↔worker session secret for start-authorization tokens (v1.8.0 §4). Bootstrap/fallback **only**: the `/agent/handshake` exchange mints a fresh secret at runtime and rotates it (previous secret stays valid for max-TTL + skew). Pre-share it so dispatches work before the first handshake; empty ⇒ no manager can mint a valid token until a handshake occurs. Generate with `openssl rand -base64 32` |
 | `TRAM_WORKER_LEGACY_ADMIT` | `auto` | Legacy-admit rollback bridge (v1.8.0 §5, frozen). `auto` (default): a dispatch carrying no `authorization` field is accepted exactly as today with an explicit `legacy` marker and **no fencing claimed** — keeps v1.7 managers dispatching during rollout. `off`: such dispatches are rejected with 400 (authorized dispatches are unaffected). Never force v1.8 guarantees for legacy dispatches |
-| `TRAM_SOURCE_BRIDGE_MAX_BYTES` | `16777216` | Internal source→executor bridge queue budget, payload bytes (v1.8.0 §9, frozen) — bounds the producer→reader queues of mqtt / websocket / nats / prometheus_rw / syslog-TCP. Overflow pauses intake (blocking/cooperative put) or is rejected explicitly (webhook router 503) — never a silent drop, never an early acknowledgement. AMQP is bounded by broker prefetch instead |
+| `TRAM_SOURCE_BRIDGE_MAX_BYTES` | `16777216` | Internal source→executor bridge queue budget, payload bytes (v1.8.0 §9, frozen) — bounds mqtt / websocket / nats / prometheus_rw / syslog-TCP and AMQP bridges. Overflow pauses cooperative intake or is rejected explicitly (webhook router 503). AMQP overflow fails its consumer without blocking the I/O thread; manual-ack deliveries requeue, while auto-acked overflow is reported as unreplayable loss. AMQP also requires positive broker prefetch |
 | `TRAM_SOURCE_BRIDGE_MAX_COUNT` | `10000` | Internal source→executor bridge queue budget, item count (v1.8.0 §9, frozen) |
 | `TRAM_TRANSFORM_MAX_STATE_BYTES` | `67108864` | Transform-state storage budget, serialized bytes (v1.8.0 §9, frozen) — a state write over the budget is REJECTED at the write with the reason (never silently truncated or evicted). Complements the PUT body cap `TRAM_STATE_MAX_BYTES` (20 MiB): that caps the HTTP body, this caps what may actually be stored. `0` disables |
 | `TRAM_TRANSFORM_MAX_CARDINALITY` | `1000000` | Transform-state storage budget, top-level state keys (v1.8.0 §9, frozen) — counter/window identities; a write over the budget is REJECTED with the reason (never silently evicted). `0` disables |
@@ -532,7 +532,7 @@ durability tier its `commit()` barrier confirms:
 | Tier | Meaning | Built-ins at this tier |
 |---|---|---|
 | `fsynced_local` | File published (atomic rename); local fsync confirmed where the transport expresses it — per-sink notes bound any limitation | local file sink (publication manifest + fsync); sftp file sink (atomic `posix_rename`; server-side fsync not expressible in SFTP — durability limited to rename atomicity); DLQ fallback spool |
-| `remote_durable` | Service-confirmed durable write | ClickHouse (confirmed insert, retained buffer); Kafka sink (`acks=all`); AMQP sink (publisher confirms); s3 / gcs / azure_blob (per-write server-confirmed PUT/upload; objects appear atomically) |
+| `remote_durable` | Service-confirmed durable write | ClickHouse (confirmed insert, retained buffer); Kafka sink (`acks=all`); AMQP sink (mandatory routed persistent messages with publisher confirms; requires durable broker queues/exchanges for restart durability); s3 / gcs / azure_blob (per-write server-confirmed PUT/upload; objects appear atomically) |
 | `remote_accepted` | Synchronous service acceptance, durability not asserted | REST sink; ftp sink (STOR completion reply; no client-observable fsync; publication not atomic — a failed mid-transfer STOR can leave a partial file at the final path) |
 | `none` | Memory/undefined | stdio / debug sinks |
 
@@ -1289,6 +1289,18 @@ Configure Prometheus:
 remote_write:
   - url: http://tram:8765/webhooks/prom-rw
 ```
+
+## Isolated connector verification
+
+Connector fault-test profiles use separate disposable services. The test-only
+`TRAM_TEST_CLICKHOUSE_NATIVE_PORT` selects the native ClickHouse port (default
+`9000`) when `TRAM_TEST_CLICKHOUSE_URL` gates live tests.
+`TRAM_TEST_SFTP_URL` selects an isolated SFTP fixture in the form
+`sftp://user:password@host:port/path`. Use a disposable writable directory:
+publication tests create source/output files and exercise move/delete/replay.
+These selectors are not application settings and need no Helm deployment change.
+The 1.8.3 campaign uses dedicated localhost fixtures; see its
+[evidence ledger](reviews/v1.8.3-connector-hardening-evidence.md).
 
 ## Security
 

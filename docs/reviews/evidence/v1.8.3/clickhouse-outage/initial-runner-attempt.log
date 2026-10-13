@@ -1,0 +1,1316 @@
+{"service_version": "24.10.2.80", "container": "tram-v183-clickhouse-test"}
+{"container": "tram-v183-clickhouse-test", "action": "stop"}
+Failed to connect to 127.0.0.1:19083
+Traceback (most recent call last):
+  File "/tmp/tram-v183-venv/lib/python3.13/site-packages/clickhouse_driver/connection.py", line 428, in connect
+    return self._init_connection(host, port)
+           ~~~~~~~~~~~~~~~~~~~~~^^^^^^^^^^^^
+  File "/tmp/tram-v183-venv/lib/python3.13/site-packages/clickhouse_driver/connection.py", line 358, in _init_connection
+    self.socket = self._create_socket(host, port)
+                  ~~~~~~~~~~~~~~~~~~~^^^^^^^^^^^^
+  File "/tmp/tram-v183-venv/lib/python3.13/site-packages/clickhouse_driver/connection.py", line 326, in _create_socket
+    raise err
+  File "/tmp/tram-v183-venv/lib/python3.13/site-packages/clickhouse_driver/connection.py", line 317, in _create_socket
+    sock.connect(sa)
+    ~~~~~~~~~~~~^^^^
+ConnectionRefusedError: [Errno 111] Connection refused
+{"container": "tram-v183-clickhouse-test", "action": "start"}
+Error on socket shutdown: [Errno 107] Transport endpoint is not connected
+Failed to connect to 127.0.0.1:19083
+Traceback (most recent call last):
+  File "/tmp/tram-v183-venv/lib/python3.13/site-packages/clickhouse_driver/connection.py", line 428, in connect
+    return self._init_connection(host, port)
+           ~~~~~~~~~~~~~~~~~~~~~^^^^^^^^^^^^
+  File "/tmp/tram-v183-venv/lib/python3.13/site-packages/clickhouse_driver/connection.py", line 372, in _init_connection
+    self.receive_hello()
+    ~~~~~~~~~~~~~~~~~~^^
+  File "/tmp/tram-v183-venv/lib/python3.13/site-packages/clickhouse_driver/connection.py", line 507, in receive_hello
+    packet_type = read_varint(self.fin)
+  File "clickhouse_driver/varint.pyx", line 62, in clickhouse_driver.varint.read_varint
+  File "clickhouse_driver/bufferedreader.pyx", line 55, in clickhouse_driver.bufferedreader.BufferedReader.read_one
+  File "clickhouse_driver/bufferedreader.pyx", line 325, in clickhouse_driver.bufferedreader.BufferedSocketReader.read_into_buffer
+ConnectionResetError: [Errno 104] Connection reset by peer
+Error on socket shutdown: [Errno 107] Transport endpoint is not connected
+Failed to connect to 127.0.0.1:19083
+Traceback (most recent call last):
+  File "/tmp/tram-v183-venv/lib/python3.13/site-packages/clickhouse_driver/connection.py", line 428, in connect
+    return self._init_connection(host, port)
+           ~~~~~~~~~~~~~~~~~~~~~^^^^^^^^^^^^
+  File "/tmp/tram-v183-venv/lib/python3.13/site-packages/clickhouse_driver/connection.py", line 372, in _init_connection
+    self.receive_hello()
+    ~~~~~~~~~~~~~~~~~~^^
+  File "/tmp/tram-v183-venv/lib/python3.13/site-packages/clickhouse_driver/connection.py", line 507, in receive_hello
+    packet_type = read_varint(self.fin)
+  File "clickhouse_driver/varint.pyx", line 62, in clickhouse_driver.varint.read_varint
+  File "clickhouse_driver/bufferedreader.pyx", line 55, in clickhouse_driver.bufferedreader.BufferedReader.read_one
+  File "clickhouse_driver/bufferedreader.pyx", line 325, in clickhouse_driver.bufferedreader.BufferedSocketReader.read_into_buffer
+ConnectionResetError: [Errno 104] Connection reset by peer
+Error on socket shutdown: [Errno 107] Transport endpoint is not connected
+Failed to connect to 127.0.0.1:19083
+Traceback (most recent call last):
+  File "/tmp/tram-v183-venv/lib/python3.13/site-packages/clickhouse_driver/connection.py", line 428, in connect
+    return self._init_connection(host, port)
+           ~~~~~~~~~~~~~~~~~~~~~^^^^^^^^^^^^
+  File "/tmp/tram-v183-venv/lib/python3.13/site-packages/clickhouse_driver/connection.py", line 372, in _init_connection
+    self.receive_hello()
+    ~~~~~~~~~~~~~~~~~~^^
+  File "/tmp/tram-v183-venv/lib/python3.13/site-packages/clickhouse_driver/connection.py", line 507, in receive_hello
+    packet_type = read_varint(self.fin)
+  File "clickhouse_driver/varint.pyx", line 62, in clickhouse_driver.varint.read_varint
+  File "clickhouse_driver/bufferedreader.pyx", line 55, in clickhouse_driver.bufferedreader.BufferedReader.read_one
+  File "clickhouse_driver/bufferedreader.pyx", line 325, in clickhouse_driver.bufferedreader.BufferedSocketReader.read_into_buffer
+ConnectionResetError: [Errno 104] Connection reset by peer
+Error on socket shutdown: [Errno 107] Transport endpoint is not connected
+Failed to connect to 127.0.0.1:19083
+Traceback (most recent call last):
+  File "/tmp/tram-v183-venv/lib/python3.13/site-packages/clickhouse_driver/connection.py", line 428, in connect
+    return self._init_connection(host, port)
+           ~~~~~~~~~~~~~~~~~~~~~^^^^^^^^^^^^
+  File "/tmp/tram-v183-venv/lib/python3.13/site-packages/clickhouse_driver/connection.py", line 372, in _init_connection
+    self.receive_hello()
+    ~~~~~~~~~~~~~~~~~~^^
+  File "/tmp/tram-v183-venv/lib/python3.13/site-packages/clickhouse_driver/connection.py", line 507, in receive_hello
+    packet_type = read_varint(self.fin)
+  File "clickhouse_driver/varint.pyx", line 62, in clickhouse_driver.varint.read_varint
+  File "clickhouse_driver/bufferedreader.pyx", line 55, in clickhouse_driver.bufferedreader.BufferedReader.read_one
+  File "clickhouse_driver/bufferedreader.pyx", line 325, in clickhouse_driver.bufferedreader.BufferedSocketReader.read_into_buffer
+ConnectionResetError: [Errno 104] Connection reset by peer
+Error on socket shutdown: [Errno 107] Transport endpoint is not connected
+Failed to connect to 127.0.0.1:19083
+Traceback (most recent call last):
+  File "/tmp/tram-v183-venv/lib/python3.13/site-packages/clickhouse_driver/connection.py", line 428, in connect
+    return self._init_connection(host, port)
+           ~~~~~~~~~~~~~~~~~~~~~^^^^^^^^^^^^
+  File "/tmp/tram-v183-venv/lib/python3.13/site-packages/clickhouse_driver/connection.py", line 372, in _init_connection
+    self.receive_hello()
+    ~~~~~~~~~~~~~~~~~~^^
+  File "/tmp/tram-v183-venv/lib/python3.13/site-packages/clickhouse_driver/connection.py", line 507, in receive_hello
+    packet_type = read_varint(self.fin)
+  File "clickhouse_driver/varint.pyx", line 62, in clickhouse_driver.varint.read_varint
+  File "clickhouse_driver/bufferedreader.pyx", line 55, in clickhouse_driver.bufferedreader.BufferedReader.read_one
+  File "clickhouse_driver/bufferedreader.pyx", line 325, in clickhouse_driver.bufferedreader.BufferedSocketReader.read_into_buffer
+ConnectionResetError: [Errno 104] Connection reset by peer
+Error on socket shutdown: [Errno 107] Transport endpoint is not connected
+Failed to connect to 127.0.0.1:19083
+Traceback (most recent call last):
+  File "/tmp/tram-v183-venv/lib/python3.13/site-packages/clickhouse_driver/connection.py", line 428, in connect
+    return self._init_connection(host, port)
+           ~~~~~~~~~~~~~~~~~~~~~^^^^^^^^^^^^
+  File "/tmp/tram-v183-venv/lib/python3.13/site-packages/clickhouse_driver/connection.py", line 372, in _init_connection
+    self.receive_hello()
+    ~~~~~~~~~~~~~~~~~~^^
+  File "/tmp/tram-v183-venv/lib/python3.13/site-packages/clickhouse_driver/connection.py", line 507, in receive_hello
+    packet_type = read_varint(self.fin)
+  File "clickhouse_driver/varint.pyx", line 62, in clickhouse_driver.varint.read_varint
+  File "clickhouse_driver/bufferedreader.pyx", line 55, in clickhouse_driver.bufferedreader.BufferedReader.read_one
+  File "clickhouse_driver/bufferedreader.pyx", line 325, in clickhouse_driver.bufferedreader.BufferedSocketReader.read_into_buffer
+ConnectionResetError: [Errno 104] Connection reset by peer
+Error on socket shutdown: [Errno 107] Transport endpoint is not connected
+Failed to connect to 127.0.0.1:19083
+Traceback (most recent call last):
+  File "/tmp/tram-v183-venv/lib/python3.13/site-packages/clickhouse_driver/connection.py", line 428, in connect
+    return self._init_connection(host, port)
+           ~~~~~~~~~~~~~~~~~~~~~^^^^^^^^^^^^
+  File "/tmp/tram-v183-venv/lib/python3.13/site-packages/clickhouse_driver/connection.py", line 372, in _init_connection
+    self.receive_hello()
+    ~~~~~~~~~~~~~~~~~~^^
+  File "/tmp/tram-v183-venv/lib/python3.13/site-packages/clickhouse_driver/connection.py", line 507, in receive_hello
+    packet_type = read_varint(self.fin)
+  File "clickhouse_driver/varint.pyx", line 62, in clickhouse_driver.varint.read_varint
+  File "clickhouse_driver/bufferedreader.pyx", line 55, in clickhouse_driver.bufferedreader.BufferedReader.read_one
+  File "clickhouse_driver/bufferedreader.pyx", line 325, in clickhouse_driver.bufferedreader.BufferedSocketReader.read_into_buffer
+ConnectionResetError: [Errno 104] Connection reset by peer
+Error on socket shutdown: [Errno 107] Transport endpoint is not connected
+Failed to connect to 127.0.0.1:19083
+Traceback (most recent call last):
+  File "/tmp/tram-v183-venv/lib/python3.13/site-packages/clickhouse_driver/connection.py", line 428, in connect
+    return self._init_connection(host, port)
+           ~~~~~~~~~~~~~~~~~~~~~^^^^^^^^^^^^
+  File "/tmp/tram-v183-venv/lib/python3.13/site-packages/clickhouse_driver/connection.py", line 372, in _init_connection
+    self.receive_hello()
+    ~~~~~~~~~~~~~~~~~~^^
+  File "/tmp/tram-v183-venv/lib/python3.13/site-packages/clickhouse_driver/connection.py", line 507, in receive_hello
+    packet_type = read_varint(self.fin)
+  File "clickhouse_driver/varint.pyx", line 62, in clickhouse_driver.varint.read_varint
+  File "clickhouse_driver/bufferedreader.pyx", line 55, in clickhouse_driver.bufferedreader.BufferedReader.read_one
+  File "clickhouse_driver/bufferedreader.pyx", line 325, in clickhouse_driver.bufferedreader.BufferedSocketReader.read_into_buffer
+ConnectionResetError: [Errno 104] Connection reset by peer
+Error on socket shutdown: [Errno 107] Transport endpoint is not connected
+Failed to connect to 127.0.0.1:19083
+Traceback (most recent call last):
+  File "/tmp/tram-v183-venv/lib/python3.13/site-packages/clickhouse_driver/connection.py", line 428, in connect
+    return self._init_connection(host, port)
+           ~~~~~~~~~~~~~~~~~~~~~^^^^^^^^^^^^
+  File "/tmp/tram-v183-venv/lib/python3.13/site-packages/clickhouse_driver/connection.py", line 372, in _init_connection
+    self.receive_hello()
+    ~~~~~~~~~~~~~~~~~~^^
+  File "/tmp/tram-v183-venv/lib/python3.13/site-packages/clickhouse_driver/connection.py", line 507, in receive_hello
+    packet_type = read_varint(self.fin)
+  File "clickhouse_driver/varint.pyx", line 62, in clickhouse_driver.varint.read_varint
+  File "clickhouse_driver/bufferedreader.pyx", line 55, in clickhouse_driver.bufferedreader.BufferedReader.read_one
+  File "clickhouse_driver/bufferedreader.pyx", line 325, in clickhouse_driver.bufferedreader.BufferedSocketReader.read_into_buffer
+ConnectionResetError: [Errno 104] Connection reset by peer
+Error on socket shutdown: [Errno 107] Transport endpoint is not connected
+Failed to connect to 127.0.0.1:19083
+Traceback (most recent call last):
+  File "/tmp/tram-v183-venv/lib/python3.13/site-packages/clickhouse_driver/connection.py", line 428, in connect
+    return self._init_connection(host, port)
+           ~~~~~~~~~~~~~~~~~~~~~^^^^^^^^^^^^
+  File "/tmp/tram-v183-venv/lib/python3.13/site-packages/clickhouse_driver/connection.py", line 372, in _init_connection
+    self.receive_hello()
+    ~~~~~~~~~~~~~~~~~~^^
+  File "/tmp/tram-v183-venv/lib/python3.13/site-packages/clickhouse_driver/connection.py", line 507, in receive_hello
+    packet_type = read_varint(self.fin)
+  File "clickhouse_driver/varint.pyx", line 62, in clickhouse_driver.varint.read_varint
+  File "clickhouse_driver/bufferedreader.pyx", line 55, in clickhouse_driver.bufferedreader.BufferedReader.read_one
+  File "clickhouse_driver/bufferedreader.pyx", line 325, in clickhouse_driver.bufferedreader.BufferedSocketReader.read_into_buffer
+ConnectionResetError: [Errno 104] Connection reset by peer
+Error on socket shutdown: [Errno 107] Transport endpoint is not connected
+Failed to connect to 127.0.0.1:19083
+Traceback (most recent call last):
+  File "/tmp/tram-v183-venv/lib/python3.13/site-packages/clickhouse_driver/connection.py", line 428, in connect
+    return self._init_connection(host, port)
+           ~~~~~~~~~~~~~~~~~~~~~^^^^^^^^^^^^
+  File "/tmp/tram-v183-venv/lib/python3.13/site-packages/clickhouse_driver/connection.py", line 372, in _init_connection
+    self.receive_hello()
+    ~~~~~~~~~~~~~~~~~~^^
+  File "/tmp/tram-v183-venv/lib/python3.13/site-packages/clickhouse_driver/connection.py", line 507, in receive_hello
+    packet_type = read_varint(self.fin)
+  File "clickhouse_driver/varint.pyx", line 62, in clickhouse_driver.varint.read_varint
+  File "clickhouse_driver/bufferedreader.pyx", line 55, in clickhouse_driver.bufferedreader.BufferedReader.read_one
+  File "clickhouse_driver/bufferedreader.pyx", line 325, in clickhouse_driver.bufferedreader.BufferedSocketReader.read_into_buffer
+ConnectionResetError: [Errno 104] Connection reset by peer
+Error on socket shutdown: [Errno 107] Transport endpoint is not connected
+Failed to connect to 127.0.0.1:19083
+Traceback (most recent call last):
+  File "/tmp/tram-v183-venv/lib/python3.13/site-packages/clickhouse_driver/connection.py", line 428, in connect
+    return self._init_connection(host, port)
+           ~~~~~~~~~~~~~~~~~~~~~^^^^^^^^^^^^
+  File "/tmp/tram-v183-venv/lib/python3.13/site-packages/clickhouse_driver/connection.py", line 372, in _init_connection
+    self.receive_hello()
+    ~~~~~~~~~~~~~~~~~~^^
+  File "/tmp/tram-v183-venv/lib/python3.13/site-packages/clickhouse_driver/connection.py", line 507, in receive_hello
+    packet_type = read_varint(self.fin)
+  File "clickhouse_driver/varint.pyx", line 62, in clickhouse_driver.varint.read_varint
+  File "clickhouse_driver/bufferedreader.pyx", line 55, in clickhouse_driver.bufferedreader.BufferedReader.read_one
+  File "clickhouse_driver/bufferedreader.pyx", line 325, in clickhouse_driver.bufferedreader.BufferedSocketReader.read_into_buffer
+ConnectionResetError: [Errno 104] Connection reset by peer
+Error on socket shutdown: [Errno 107] Transport endpoint is not connected
+Failed to connect to 127.0.0.1:19083
+Traceback (most recent call last):
+  File "/tmp/tram-v183-venv/lib/python3.13/site-packages/clickhouse_driver/connection.py", line 428, in connect
+    return self._init_connection(host, port)
+           ~~~~~~~~~~~~~~~~~~~~~^^^^^^^^^^^^
+  File "/tmp/tram-v183-venv/lib/python3.13/site-packages/clickhouse_driver/connection.py", line 372, in _init_connection
+    self.receive_hello()
+    ~~~~~~~~~~~~~~~~~~^^
+  File "/tmp/tram-v183-venv/lib/python3.13/site-packages/clickhouse_driver/connection.py", line 507, in receive_hello
+    packet_type = read_varint(self.fin)
+  File "clickhouse_driver/varint.pyx", line 62, in clickhouse_driver.varint.read_varint
+  File "clickhouse_driver/bufferedreader.pyx", line 55, in clickhouse_driver.bufferedreader.BufferedReader.read_one
+  File "clickhouse_driver/bufferedreader.pyx", line 325, in clickhouse_driver.bufferedreader.BufferedSocketReader.read_into_buffer
+ConnectionResetError: [Errno 104] Connection reset by peer
+Error on socket shutdown: [Errno 107] Transport endpoint is not connected
+Failed to connect to 127.0.0.1:19083
+Traceback (most recent call last):
+  File "/tmp/tram-v183-venv/lib/python3.13/site-packages/clickhouse_driver/connection.py", line 428, in connect
+    return self._init_connection(host, port)
+           ~~~~~~~~~~~~~~~~~~~~~^^^^^^^^^^^^
+  File "/tmp/tram-v183-venv/lib/python3.13/site-packages/clickhouse_driver/connection.py", line 372, in _init_connection
+    self.receive_hello()
+    ~~~~~~~~~~~~~~~~~~^^
+  File "/tmp/tram-v183-venv/lib/python3.13/site-packages/clickhouse_driver/connection.py", line 507, in receive_hello
+    packet_type = read_varint(self.fin)
+  File "clickhouse_driver/varint.pyx", line 62, in clickhouse_driver.varint.read_varint
+  File "clickhouse_driver/bufferedreader.pyx", line 55, in clickhouse_driver.bufferedreader.BufferedReader.read_one
+  File "clickhouse_driver/bufferedreader.pyx", line 325, in clickhouse_driver.bufferedreader.BufferedSocketReader.read_into_buffer
+ConnectionResetError: [Errno 104] Connection reset by peer
+Error on socket shutdown: [Errno 107] Transport endpoint is not connected
+Failed to connect to 127.0.0.1:19083
+Traceback (most recent call last):
+  File "/tmp/tram-v183-venv/lib/python3.13/site-packages/clickhouse_driver/connection.py", line 428, in connect
+    return self._init_connection(host, port)
+           ~~~~~~~~~~~~~~~~~~~~~^^^^^^^^^^^^
+  File "/tmp/tram-v183-venv/lib/python3.13/site-packages/clickhouse_driver/connection.py", line 372, in _init_connection
+    self.receive_hello()
+    ~~~~~~~~~~~~~~~~~~^^
+  File "/tmp/tram-v183-venv/lib/python3.13/site-packages/clickhouse_driver/connection.py", line 507, in receive_hello
+    packet_type = read_varint(self.fin)
+  File "clickhouse_driver/varint.pyx", line 62, in clickhouse_driver.varint.read_varint
+  File "clickhouse_driver/bufferedreader.pyx", line 55, in clickhouse_driver.bufferedreader.BufferedReader.read_one
+  File "clickhouse_driver/bufferedreader.pyx", line 325, in clickhouse_driver.bufferedreader.BufferedSocketReader.read_into_buffer
+ConnectionResetError: [Errno 104] Connection reset by peer
+Error on socket shutdown: [Errno 107] Transport endpoint is not connected
+Failed to connect to 127.0.0.1:19083
+Traceback (most recent call last):
+  File "/tmp/tram-v183-venv/lib/python3.13/site-packages/clickhouse_driver/connection.py", line 428, in connect
+    return self._init_connection(host, port)
+           ~~~~~~~~~~~~~~~~~~~~~^^^^^^^^^^^^
+  File "/tmp/tram-v183-venv/lib/python3.13/site-packages/clickhouse_driver/connection.py", line 372, in _init_connection
+    self.receive_hello()
+    ~~~~~~~~~~~~~~~~~~^^
+  File "/tmp/tram-v183-venv/lib/python3.13/site-packages/clickhouse_driver/connection.py", line 507, in receive_hello
+    packet_type = read_varint(self.fin)
+  File "clickhouse_driver/varint.pyx", line 62, in clickhouse_driver.varint.read_varint
+  File "clickhouse_driver/bufferedreader.pyx", line 55, in clickhouse_driver.bufferedreader.BufferedReader.read_one
+  File "clickhouse_driver/bufferedreader.pyx", line 325, in clickhouse_driver.bufferedreader.BufferedSocketReader.read_into_buffer
+ConnectionResetError: [Errno 104] Connection reset by peer
+Error on socket shutdown: [Errno 107] Transport endpoint is not connected
+Failed to connect to 127.0.0.1:19083
+Traceback (most recent call last):
+  File "/tmp/tram-v183-venv/lib/python3.13/site-packages/clickhouse_driver/connection.py", line 428, in connect
+    return self._init_connection(host, port)
+           ~~~~~~~~~~~~~~~~~~~~~^^^^^^^^^^^^
+  File "/tmp/tram-v183-venv/lib/python3.13/site-packages/clickhouse_driver/connection.py", line 372, in _init_connection
+    self.receive_hello()
+    ~~~~~~~~~~~~~~~~~~^^
+  File "/tmp/tram-v183-venv/lib/python3.13/site-packages/clickhouse_driver/connection.py", line 507, in receive_hello
+    packet_type = read_varint(self.fin)
+  File "clickhouse_driver/varint.pyx", line 62, in clickhouse_driver.varint.read_varint
+  File "clickhouse_driver/bufferedreader.pyx", line 55, in clickhouse_driver.bufferedreader.BufferedReader.read_one
+  File "clickhouse_driver/bufferedreader.pyx", line 325, in clickhouse_driver.bufferedreader.BufferedSocketReader.read_into_buffer
+ConnectionResetError: [Errno 104] Connection reset by peer
+Error on socket shutdown: [Errno 107] Transport endpoint is not connected
+Error on socket shutdown: [Errno 107] Transport endpoint is not connected
+Failed to connect to 127.0.0.1:19083
+Traceback (most recent call last):
+  File "/tmp/tram-v183-venv/lib/python3.13/site-packages/clickhouse_driver/connection.py", line 428, in connect
+    return self._init_connection(host, port)
+           ~~~~~~~~~~~~~~~~~~~~~^^^^^^^^^^^^
+  File "/tmp/tram-v183-venv/lib/python3.13/site-packages/clickhouse_driver/connection.py", line 372, in _init_connection
+    self.receive_hello()
+    ~~~~~~~~~~~~~~~~~~^^
+  File "/tmp/tram-v183-venv/lib/python3.13/site-packages/clickhouse_driver/connection.py", line 507, in receive_hello
+    packet_type = read_varint(self.fin)
+  File "clickhouse_driver/varint.pyx", line 62, in clickhouse_driver.varint.read_varint
+  File "clickhouse_driver/bufferedreader.pyx", line 55, in clickhouse_driver.bufferedreader.BufferedReader.read_one
+  File "clickhouse_driver/bufferedreader.pyx", line 325, in clickhouse_driver.bufferedreader.BufferedSocketReader.read_into_buffer
+ConnectionResetError: [Errno 104] Connection reset by peer
+Error on socket shutdown: [Errno 107] Transport endpoint is not connected
+Failed to connect to 127.0.0.1:19083
+Traceback (most recent call last):
+  File "/tmp/tram-v183-venv/lib/python3.13/site-packages/clickhouse_driver/connection.py", line 428, in connect
+    return self._init_connection(host, port)
+           ~~~~~~~~~~~~~~~~~~~~~^^^^^^^^^^^^
+  File "/tmp/tram-v183-venv/lib/python3.13/site-packages/clickhouse_driver/connection.py", line 372, in _init_connection
+    self.receive_hello()
+    ~~~~~~~~~~~~~~~~~~^^
+  File "/tmp/tram-v183-venv/lib/python3.13/site-packages/clickhouse_driver/connection.py", line 507, in receive_hello
+    packet_type = read_varint(self.fin)
+  File "clickhouse_driver/varint.pyx", line 62, in clickhouse_driver.varint.read_varint
+  File "clickhouse_driver/bufferedreader.pyx", line 55, in clickhouse_driver.bufferedreader.BufferedReader.read_one
+  File "clickhouse_driver/bufferedreader.pyx", line 325, in clickhouse_driver.bufferedreader.BufferedSocketReader.read_into_buffer
+ConnectionResetError: [Errno 104] Connection reset by peer
+Error on socket shutdown: [Errno 107] Transport endpoint is not connected
+Failed to connect to 127.0.0.1:19083
+Traceback (most recent call last):
+  File "/tmp/tram-v183-venv/lib/python3.13/site-packages/clickhouse_driver/connection.py", line 428, in connect
+    return self._init_connection(host, port)
+           ~~~~~~~~~~~~~~~~~~~~~^^^^^^^^^^^^
+  File "/tmp/tram-v183-venv/lib/python3.13/site-packages/clickhouse_driver/connection.py", line 372, in _init_connection
+    self.receive_hello()
+    ~~~~~~~~~~~~~~~~~~^^
+  File "/tmp/tram-v183-venv/lib/python3.13/site-packages/clickhouse_driver/connection.py", line 507, in receive_hello
+    packet_type = read_varint(self.fin)
+  File "clickhouse_driver/varint.pyx", line 62, in clickhouse_driver.varint.read_varint
+  File "clickhouse_driver/bufferedreader.pyx", line 55, in clickhouse_driver.bufferedreader.BufferedReader.read_one
+  File "clickhouse_driver/bufferedreader.pyx", line 325, in clickhouse_driver.bufferedreader.BufferedSocketReader.read_into_buffer
+ConnectionResetError: [Errno 104] Connection reset by peer
+Error on socket shutdown: [Errno 107] Transport endpoint is not connected
+Failed to connect to 127.0.0.1:19083
+Traceback (most recent call last):
+  File "/tmp/tram-v183-venv/lib/python3.13/site-packages/clickhouse_driver/connection.py", line 428, in connect
+    return self._init_connection(host, port)
+           ~~~~~~~~~~~~~~~~~~~~~^^^^^^^^^^^^
+  File "/tmp/tram-v183-venv/lib/python3.13/site-packages/clickhouse_driver/connection.py", line 372, in _init_connection
+    self.receive_hello()
+    ~~~~~~~~~~~~~~~~~~^^
+  File "/tmp/tram-v183-venv/lib/python3.13/site-packages/clickhouse_driver/connection.py", line 507, in receive_hello
+    packet_type = read_varint(self.fin)
+  File "clickhouse_driver/varint.pyx", line 62, in clickhouse_driver.varint.read_varint
+  File "clickhouse_driver/bufferedreader.pyx", line 55, in clickhouse_driver.bufferedreader.BufferedReader.read_one
+  File "clickhouse_driver/bufferedreader.pyx", line 325, in clickhouse_driver.bufferedreader.BufferedSocketReader.read_into_buffer
+ConnectionResetError: [Errno 104] Connection reset by peer
+Error on socket shutdown: [Errno 107] Transport endpoint is not connected
+Failed to connect to 127.0.0.1:19083
+Traceback (most recent call last):
+  File "/tmp/tram-v183-venv/lib/python3.13/site-packages/clickhouse_driver/connection.py", line 428, in connect
+    return self._init_connection(host, port)
+           ~~~~~~~~~~~~~~~~~~~~~^^^^^^^^^^^^
+  File "/tmp/tram-v183-venv/lib/python3.13/site-packages/clickhouse_driver/connection.py", line 372, in _init_connection
+    self.receive_hello()
+    ~~~~~~~~~~~~~~~~~~^^
+  File "/tmp/tram-v183-venv/lib/python3.13/site-packages/clickhouse_driver/connection.py", line 507, in receive_hello
+    packet_type = read_varint(self.fin)
+  File "clickhouse_driver/varint.pyx", line 62, in clickhouse_driver.varint.read_varint
+  File "clickhouse_driver/bufferedreader.pyx", line 55, in clickhouse_driver.bufferedreader.BufferedReader.read_one
+  File "clickhouse_driver/bufferedreader.pyx", line 325, in clickhouse_driver.bufferedreader.BufferedSocketReader.read_into_buffer
+ConnectionResetError: [Errno 104] Connection reset by peer
+Error on socket shutdown: [Errno 107] Transport endpoint is not connected
+Failed to connect to 127.0.0.1:19083
+Traceback (most recent call last):
+  File "/tmp/tram-v183-venv/lib/python3.13/site-packages/clickhouse_driver/connection.py", line 428, in connect
+    return self._init_connection(host, port)
+           ~~~~~~~~~~~~~~~~~~~~~^^^^^^^^^^^^
+  File "/tmp/tram-v183-venv/lib/python3.13/site-packages/clickhouse_driver/connection.py", line 372, in _init_connection
+    self.receive_hello()
+    ~~~~~~~~~~~~~~~~~~^^
+  File "/tmp/tram-v183-venv/lib/python3.13/site-packages/clickhouse_driver/connection.py", line 507, in receive_hello
+    packet_type = read_varint(self.fin)
+  File "clickhouse_driver/varint.pyx", line 62, in clickhouse_driver.varint.read_varint
+  File "clickhouse_driver/bufferedreader.pyx", line 55, in clickhouse_driver.bufferedreader.BufferedReader.read_one
+  File "clickhouse_driver/bufferedreader.pyx", line 325, in clickhouse_driver.bufferedreader.BufferedSocketReader.read_into_buffer
+ConnectionResetError: [Errno 104] Connection reset by peer
+Error on socket shutdown: [Errno 107] Transport endpoint is not connected
+Failed to connect to 127.0.0.1:19083
+Traceback (most recent call last):
+  File "/tmp/tram-v183-venv/lib/python3.13/site-packages/clickhouse_driver/connection.py", line 428, in connect
+    return self._init_connection(host, port)
+           ~~~~~~~~~~~~~~~~~~~~~^^^^^^^^^^^^
+  File "/tmp/tram-v183-venv/lib/python3.13/site-packages/clickhouse_driver/connection.py", line 372, in _init_connection
+    self.receive_hello()
+    ~~~~~~~~~~~~~~~~~~^^
+  File "/tmp/tram-v183-venv/lib/python3.13/site-packages/clickhouse_driver/connection.py", line 507, in receive_hello
+    packet_type = read_varint(self.fin)
+  File "clickhouse_driver/varint.pyx", line 62, in clickhouse_driver.varint.read_varint
+  File "clickhouse_driver/bufferedreader.pyx", line 55, in clickhouse_driver.bufferedreader.BufferedReader.read_one
+  File "clickhouse_driver/bufferedreader.pyx", line 325, in clickhouse_driver.bufferedreader.BufferedSocketReader.read_into_buffer
+ConnectionResetError: [Errno 104] Connection reset by peer
+Error on socket shutdown: [Errno 107] Transport endpoint is not connected
+Failed to connect to 127.0.0.1:19083
+Traceback (most recent call last):
+  File "/tmp/tram-v183-venv/lib/python3.13/site-packages/clickhouse_driver/connection.py", line 428, in connect
+    return self._init_connection(host, port)
+           ~~~~~~~~~~~~~~~~~~~~~^^^^^^^^^^^^
+  File "/tmp/tram-v183-venv/lib/python3.13/site-packages/clickhouse_driver/connection.py", line 372, in _init_connection
+    self.receive_hello()
+    ~~~~~~~~~~~~~~~~~~^^
+  File "/tmp/tram-v183-venv/lib/python3.13/site-packages/clickhouse_driver/connection.py", line 507, in receive_hello
+    packet_type = read_varint(self.fin)
+  File "clickhouse_driver/varint.pyx", line 62, in clickhouse_driver.varint.read_varint
+  File "clickhouse_driver/bufferedreader.pyx", line 55, in clickhouse_driver.bufferedreader.BufferedReader.read_one
+  File "clickhouse_driver/bufferedreader.pyx", line 325, in clickhouse_driver.bufferedreader.BufferedSocketReader.read_into_buffer
+ConnectionResetError: [Errno 104] Connection reset by peer
+Error on socket shutdown: [Errno 107] Transport endpoint is not connected
+Failed to connect to 127.0.0.1:19083
+Traceback (most recent call last):
+  File "/tmp/tram-v183-venv/lib/python3.13/site-packages/clickhouse_driver/connection.py", line 428, in connect
+    return self._init_connection(host, port)
+           ~~~~~~~~~~~~~~~~~~~~~^^^^^^^^^^^^
+  File "/tmp/tram-v183-venv/lib/python3.13/site-packages/clickhouse_driver/connection.py", line 372, in _init_connection
+    self.receive_hello()
+    ~~~~~~~~~~~~~~~~~~^^
+  File "/tmp/tram-v183-venv/lib/python3.13/site-packages/clickhouse_driver/connection.py", line 507, in receive_hello
+    packet_type = read_varint(self.fin)
+  File "clickhouse_driver/varint.pyx", line 62, in clickhouse_driver.varint.read_varint
+  File "clickhouse_driver/bufferedreader.pyx", line 55, in clickhouse_driver.bufferedreader.BufferedReader.read_one
+  File "clickhouse_driver/bufferedreader.pyx", line 325, in clickhouse_driver.bufferedreader.BufferedSocketReader.read_into_buffer
+ConnectionResetError: [Errno 104] Connection reset by peer
+Error on socket shutdown: [Errno 107] Transport endpoint is not connected
+Failed to connect to 127.0.0.1:19083
+Traceback (most recent call last):
+  File "/tmp/tram-v183-venv/lib/python3.13/site-packages/clickhouse_driver/connection.py", line 428, in connect
+    return self._init_connection(host, port)
+           ~~~~~~~~~~~~~~~~~~~~~^^^^^^^^^^^^
+  File "/tmp/tram-v183-venv/lib/python3.13/site-packages/clickhouse_driver/connection.py", line 372, in _init_connection
+    self.receive_hello()
+    ~~~~~~~~~~~~~~~~~~^^
+  File "/tmp/tram-v183-venv/lib/python3.13/site-packages/clickhouse_driver/connection.py", line 507, in receive_hello
+    packet_type = read_varint(self.fin)
+  File "clickhouse_driver/varint.pyx", line 62, in clickhouse_driver.varint.read_varint
+  File "clickhouse_driver/bufferedreader.pyx", line 55, in clickhouse_driver.bufferedreader.BufferedReader.read_one
+  File "clickhouse_driver/bufferedreader.pyx", line 325, in clickhouse_driver.bufferedreader.BufferedSocketReader.read_into_buffer
+ConnectionResetError: [Errno 104] Connection reset by peer
+Error on socket shutdown: [Errno 107] Transport endpoint is not connected
+Failed to connect to 127.0.0.1:19083
+Traceback (most recent call last):
+  File "/tmp/tram-v183-venv/lib/python3.13/site-packages/clickhouse_driver/connection.py", line 428, in connect
+    return self._init_connection(host, port)
+           ~~~~~~~~~~~~~~~~~~~~~^^^^^^^^^^^^
+  File "/tmp/tram-v183-venv/lib/python3.13/site-packages/clickhouse_driver/connection.py", line 372, in _init_connection
+    self.receive_hello()
+    ~~~~~~~~~~~~~~~~~~^^
+  File "/tmp/tram-v183-venv/lib/python3.13/site-packages/clickhouse_driver/connection.py", line 507, in receive_hello
+    packet_type = read_varint(self.fin)
+  File "clickhouse_driver/varint.pyx", line 62, in clickhouse_driver.varint.read_varint
+  File "clickhouse_driver/bufferedreader.pyx", line 55, in clickhouse_driver.bufferedreader.BufferedReader.read_one
+  File "clickhouse_driver/bufferedreader.pyx", line 325, in clickhouse_driver.bufferedreader.BufferedSocketReader.read_into_buffer
+ConnectionResetError: [Errno 104] Connection reset by peer
+Error on socket shutdown: [Errno 107] Transport endpoint is not connected
+Failed to connect to 127.0.0.1:19083
+Traceback (most recent call last):
+  File "/tmp/tram-v183-venv/lib/python3.13/site-packages/clickhouse_driver/connection.py", line 428, in connect
+    return self._init_connection(host, port)
+           ~~~~~~~~~~~~~~~~~~~~~^^^^^^^^^^^^
+  File "/tmp/tram-v183-venv/lib/python3.13/site-packages/clickhouse_driver/connection.py", line 372, in _init_connection
+    self.receive_hello()
+    ~~~~~~~~~~~~~~~~~~^^
+  File "/tmp/tram-v183-venv/lib/python3.13/site-packages/clickhouse_driver/connection.py", line 507, in receive_hello
+    packet_type = read_varint(self.fin)
+  File "clickhouse_driver/varint.pyx", line 62, in clickhouse_driver.varint.read_varint
+  File "clickhouse_driver/bufferedreader.pyx", line 55, in clickhouse_driver.bufferedreader.BufferedReader.read_one
+  File "clickhouse_driver/bufferedreader.pyx", line 325, in clickhouse_driver.bufferedreader.BufferedSocketReader.read_into_buffer
+ConnectionResetError: [Errno 104] Connection reset by peer
+Error on socket shutdown: [Errno 107] Transport endpoint is not connected
+Error on socket shutdown: [Errno 107] Transport endpoint is not connected
+Failed to connect to 127.0.0.1:19083
+Traceback (most recent call last):
+  File "/tmp/tram-v183-venv/lib/python3.13/site-packages/clickhouse_driver/connection.py", line 428, in connect
+    return self._init_connection(host, port)
+           ~~~~~~~~~~~~~~~~~~~~~^^^^^^^^^^^^
+  File "/tmp/tram-v183-venv/lib/python3.13/site-packages/clickhouse_driver/connection.py", line 372, in _init_connection
+    self.receive_hello()
+    ~~~~~~~~~~~~~~~~~~^^
+  File "/tmp/tram-v183-venv/lib/python3.13/site-packages/clickhouse_driver/connection.py", line 507, in receive_hello
+    packet_type = read_varint(self.fin)
+  File "clickhouse_driver/varint.pyx", line 62, in clickhouse_driver.varint.read_varint
+  File "clickhouse_driver/bufferedreader.pyx", line 55, in clickhouse_driver.bufferedreader.BufferedReader.read_one
+  File "clickhouse_driver/bufferedreader.pyx", line 325, in clickhouse_driver.bufferedreader.BufferedSocketReader.read_into_buffer
+ConnectionResetError: [Errno 104] Connection reset by peer
+{"repetition": 1, "scenario": "real-outage-buffer-restart-commit", "result": "passed"}
+{"container": "tram-v183-clickhouse-test", "action": "stop"}
+{"container": "tram-v183-clickhouse-test", "action": "start"}
+Error on socket shutdown: [Errno 107] Transport endpoint is not connected
+Error on socket shutdown: [Errno 107] Transport endpoint is not connected
+Failed to connect to 127.0.0.1:19083
+Traceback (most recent call last):
+  File "/tmp/tram-v183-clickhouse-outage.py", line 126, in <module>
+    failed = executor.batch_run(config)
+  File "/home/dhaka/trishul/trishul-ram/tram/pipeline/executor.py", line 2714, in batch_run
+    return self._batch_run_inner(
+           ~~~~~~~~~~~~~~~~~~~~~^
+        config, run_id=run_id, stats=stats, config_sha256=config_sha256,
+        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+        flush=flush, stop_event=stop_event, deadline=deadline,
+        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    )
+    ^
+  File "/home/dhaka/trishul/trishul-ram/tram/pipeline/executor.py", line 2742, in _batch_run_inner
+    serializer_in = self._build_serializer_in(config)
+  File "/home/dhaka/trishul/trishul-ram/tram/pipeline/executor.py", line 1248, in _build_serializer_in
+    ser_cls = get_serializer(config.serializer_in.type)
+  File "/home/dhaka/trishul/trishul-ram/tram/registry/registry.py", line 85, in get_serializer
+    raise PluginNotFoundError(
+        f"No serializer registered for key '{key}'. Available: {list(_serializers)}"
+    )
+tram.core.exceptions.PluginNotFoundError: No serializer registered for key 'json'. Available: []
+
+During handling of the above exception, another exception occurred:
+
+Traceback (most recent call last):
+  File "/tmp/tram-v183-venv/lib/python3.13/site-packages/clickhouse_driver/connection.py", line 428, in connect
+    return self._init_connection(host, port)
+           ~~~~~~~~~~~~~~~~~~~~~^^^^^^^^^^^^
+  File "/tmp/tram-v183-venv/lib/python3.13/site-packages/clickhouse_driver/connection.py", line 372, in _init_connection
+    self.receive_hello()
+    ~~~~~~~~~~~~~~~~~~^^
+  File "/tmp/tram-v183-venv/lib/python3.13/site-packages/clickhouse_driver/connection.py", line 507, in receive_hello
+    packet_type = read_varint(self.fin)
+  File "clickhouse_driver/varint.pyx", line 62, in clickhouse_driver.varint.read_varint
+  File "clickhouse_driver/bufferedreader.pyx", line 55, in clickhouse_driver.bufferedreader.BufferedReader.read_one
+  File "clickhouse_driver/bufferedreader.pyx", line 325, in clickhouse_driver.bufferedreader.BufferedSocketReader.read_into_buffer
+ConnectionResetError: [Errno 104] Connection reset by peer
+Error on socket shutdown: [Errno 107] Transport endpoint is not connected
+Failed to connect to 127.0.0.1:19083
+Traceback (most recent call last):
+  File "/tmp/tram-v183-clickhouse-outage.py", line 126, in <module>
+    failed = executor.batch_run(config)
+  File "/home/dhaka/trishul/trishul-ram/tram/pipeline/executor.py", line 2714, in batch_run
+    return self._batch_run_inner(
+           ~~~~~~~~~~~~~~~~~~~~~^
+        config, run_id=run_id, stats=stats, config_sha256=config_sha256,
+        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+        flush=flush, stop_event=stop_event, deadline=deadline,
+        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    )
+    ^
+  File "/home/dhaka/trishul/trishul-ram/tram/pipeline/executor.py", line 2742, in _batch_run_inner
+    serializer_in = self._build_serializer_in(config)
+  File "/home/dhaka/trishul/trishul-ram/tram/pipeline/executor.py", line 1248, in _build_serializer_in
+    ser_cls = get_serializer(config.serializer_in.type)
+  File "/home/dhaka/trishul/trishul-ram/tram/registry/registry.py", line 85, in get_serializer
+    raise PluginNotFoundError(
+        f"No serializer registered for key '{key}'. Available: {list(_serializers)}"
+    )
+tram.core.exceptions.PluginNotFoundError: No serializer registered for key 'json'. Available: []
+
+During handling of the above exception, another exception occurred:
+
+Traceback (most recent call last):
+  File "/tmp/tram-v183-venv/lib/python3.13/site-packages/clickhouse_driver/connection.py", line 428, in connect
+    return self._init_connection(host, port)
+           ~~~~~~~~~~~~~~~~~~~~~^^^^^^^^^^^^
+  File "/tmp/tram-v183-venv/lib/python3.13/site-packages/clickhouse_driver/connection.py", line 372, in _init_connection
+    self.receive_hello()
+    ~~~~~~~~~~~~~~~~~~^^
+  File "/tmp/tram-v183-venv/lib/python3.13/site-packages/clickhouse_driver/connection.py", line 507, in receive_hello
+    packet_type = read_varint(self.fin)
+  File "clickhouse_driver/varint.pyx", line 62, in clickhouse_driver.varint.read_varint
+  File "clickhouse_driver/bufferedreader.pyx", line 55, in clickhouse_driver.bufferedreader.BufferedReader.read_one
+  File "clickhouse_driver/bufferedreader.pyx", line 325, in clickhouse_driver.bufferedreader.BufferedSocketReader.read_into_buffer
+ConnectionResetError: [Errno 104] Connection reset by peer
+Error on socket shutdown: [Errno 107] Transport endpoint is not connected
+Failed to connect to 127.0.0.1:19083
+Traceback (most recent call last):
+  File "/tmp/tram-v183-clickhouse-outage.py", line 126, in <module>
+    failed = executor.batch_run(config)
+  File "/home/dhaka/trishul/trishul-ram/tram/pipeline/executor.py", line 2714, in batch_run
+    return self._batch_run_inner(
+           ~~~~~~~~~~~~~~~~~~~~~^
+        config, run_id=run_id, stats=stats, config_sha256=config_sha256,
+        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+        flush=flush, stop_event=stop_event, deadline=deadline,
+        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    )
+    ^
+  File "/home/dhaka/trishul/trishul-ram/tram/pipeline/executor.py", line 2742, in _batch_run_inner
+    serializer_in = self._build_serializer_in(config)
+  File "/home/dhaka/trishul/trishul-ram/tram/pipeline/executor.py", line 1248, in _build_serializer_in
+    ser_cls = get_serializer(config.serializer_in.type)
+  File "/home/dhaka/trishul/trishul-ram/tram/registry/registry.py", line 85, in get_serializer
+    raise PluginNotFoundError(
+        f"No serializer registered for key '{key}'. Available: {list(_serializers)}"
+    )
+tram.core.exceptions.PluginNotFoundError: No serializer registered for key 'json'. Available: []
+
+During handling of the above exception, another exception occurred:
+
+Traceback (most recent call last):
+  File "/tmp/tram-v183-venv/lib/python3.13/site-packages/clickhouse_driver/connection.py", line 428, in connect
+    return self._init_connection(host, port)
+           ~~~~~~~~~~~~~~~~~~~~~^^^^^^^^^^^^
+  File "/tmp/tram-v183-venv/lib/python3.13/site-packages/clickhouse_driver/connection.py", line 372, in _init_connection
+    self.receive_hello()
+    ~~~~~~~~~~~~~~~~~~^^
+  File "/tmp/tram-v183-venv/lib/python3.13/site-packages/clickhouse_driver/connection.py", line 507, in receive_hello
+    packet_type = read_varint(self.fin)
+  File "clickhouse_driver/varint.pyx", line 62, in clickhouse_driver.varint.read_varint
+  File "clickhouse_driver/bufferedreader.pyx", line 55, in clickhouse_driver.bufferedreader.BufferedReader.read_one
+  File "clickhouse_driver/bufferedreader.pyx", line 325, in clickhouse_driver.bufferedreader.BufferedSocketReader.read_into_buffer
+ConnectionResetError: [Errno 104] Connection reset by peer
+Error on socket shutdown: [Errno 107] Transport endpoint is not connected
+Failed to connect to 127.0.0.1:19083
+Traceback (most recent call last):
+  File "/tmp/tram-v183-clickhouse-outage.py", line 126, in <module>
+    failed = executor.batch_run(config)
+  File "/home/dhaka/trishul/trishul-ram/tram/pipeline/executor.py", line 2714, in batch_run
+    return self._batch_run_inner(
+           ~~~~~~~~~~~~~~~~~~~~~^
+        config, run_id=run_id, stats=stats, config_sha256=config_sha256,
+        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+        flush=flush, stop_event=stop_event, deadline=deadline,
+        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    )
+    ^
+  File "/home/dhaka/trishul/trishul-ram/tram/pipeline/executor.py", line 2742, in _batch_run_inner
+    serializer_in = self._build_serializer_in(config)
+  File "/home/dhaka/trishul/trishul-ram/tram/pipeline/executor.py", line 1248, in _build_serializer_in
+    ser_cls = get_serializer(config.serializer_in.type)
+  File "/home/dhaka/trishul/trishul-ram/tram/registry/registry.py", line 85, in get_serializer
+    raise PluginNotFoundError(
+        f"No serializer registered for key '{key}'. Available: {list(_serializers)}"
+    )
+tram.core.exceptions.PluginNotFoundError: No serializer registered for key 'json'. Available: []
+
+During handling of the above exception, another exception occurred:
+
+Traceback (most recent call last):
+  File "/tmp/tram-v183-venv/lib/python3.13/site-packages/clickhouse_driver/connection.py", line 428, in connect
+    return self._init_connection(host, port)
+           ~~~~~~~~~~~~~~~~~~~~~^^^^^^^^^^^^
+  File "/tmp/tram-v183-venv/lib/python3.13/site-packages/clickhouse_driver/connection.py", line 372, in _init_connection
+    self.receive_hello()
+    ~~~~~~~~~~~~~~~~~~^^
+  File "/tmp/tram-v183-venv/lib/python3.13/site-packages/clickhouse_driver/connection.py", line 507, in receive_hello
+    packet_type = read_varint(self.fin)
+  File "clickhouse_driver/varint.pyx", line 62, in clickhouse_driver.varint.read_varint
+  File "clickhouse_driver/bufferedreader.pyx", line 55, in clickhouse_driver.bufferedreader.BufferedReader.read_one
+  File "clickhouse_driver/bufferedreader.pyx", line 325, in clickhouse_driver.bufferedreader.BufferedSocketReader.read_into_buffer
+ConnectionResetError: [Errno 104] Connection reset by peer
+Error on socket shutdown: [Errno 107] Transport endpoint is not connected
+Error on socket shutdown: [Errno 107] Transport endpoint is not connected
+Failed to connect to 127.0.0.1:19083
+Traceback (most recent call last):
+  File "/tmp/tram-v183-clickhouse-outage.py", line 126, in <module>
+    failed = executor.batch_run(config)
+  File "/home/dhaka/trishul/trishul-ram/tram/pipeline/executor.py", line 2714, in batch_run
+    return self._batch_run_inner(
+           ~~~~~~~~~~~~~~~~~~~~~^
+        config, run_id=run_id, stats=stats, config_sha256=config_sha256,
+        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+        flush=flush, stop_event=stop_event, deadline=deadline,
+        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    )
+    ^
+  File "/home/dhaka/trishul/trishul-ram/tram/pipeline/executor.py", line 2742, in _batch_run_inner
+    serializer_in = self._build_serializer_in(config)
+  File "/home/dhaka/trishul/trishul-ram/tram/pipeline/executor.py", line 1248, in _build_serializer_in
+    ser_cls = get_serializer(config.serializer_in.type)
+  File "/home/dhaka/trishul/trishul-ram/tram/registry/registry.py", line 85, in get_serializer
+    raise PluginNotFoundError(
+        f"No serializer registered for key '{key}'. Available: {list(_serializers)}"
+    )
+tram.core.exceptions.PluginNotFoundError: No serializer registered for key 'json'. Available: []
+
+During handling of the above exception, another exception occurred:
+
+Traceback (most recent call last):
+  File "/tmp/tram-v183-venv/lib/python3.13/site-packages/clickhouse_driver/connection.py", line 428, in connect
+    return self._init_connection(host, port)
+           ~~~~~~~~~~~~~~~~~~~~~^^^^^^^^^^^^
+  File "/tmp/tram-v183-venv/lib/python3.13/site-packages/clickhouse_driver/connection.py", line 372, in _init_connection
+    self.receive_hello()
+    ~~~~~~~~~~~~~~~~~~^^
+  File "/tmp/tram-v183-venv/lib/python3.13/site-packages/clickhouse_driver/connection.py", line 507, in receive_hello
+    packet_type = read_varint(self.fin)
+  File "clickhouse_driver/varint.pyx", line 62, in clickhouse_driver.varint.read_varint
+  File "clickhouse_driver/bufferedreader.pyx", line 55, in clickhouse_driver.bufferedreader.BufferedReader.read_one
+  File "clickhouse_driver/bufferedreader.pyx", line 325, in clickhouse_driver.bufferedreader.BufferedSocketReader.read_into_buffer
+ConnectionResetError: [Errno 104] Connection reset by peer
+Error on socket shutdown: [Errno 107] Transport endpoint is not connected
+Failed to connect to 127.0.0.1:19083
+Traceback (most recent call last):
+  File "/tmp/tram-v183-clickhouse-outage.py", line 126, in <module>
+    failed = executor.batch_run(config)
+  File "/home/dhaka/trishul/trishul-ram/tram/pipeline/executor.py", line 2714, in batch_run
+    return self._batch_run_inner(
+           ~~~~~~~~~~~~~~~~~~~~~^
+        config, run_id=run_id, stats=stats, config_sha256=config_sha256,
+        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+        flush=flush, stop_event=stop_event, deadline=deadline,
+        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    )
+    ^
+  File "/home/dhaka/trishul/trishul-ram/tram/pipeline/executor.py", line 2742, in _batch_run_inner
+    serializer_in = self._build_serializer_in(config)
+  File "/home/dhaka/trishul/trishul-ram/tram/pipeline/executor.py", line 1248, in _build_serializer_in
+    ser_cls = get_serializer(config.serializer_in.type)
+  File "/home/dhaka/trishul/trishul-ram/tram/registry/registry.py", line 85, in get_serializer
+    raise PluginNotFoundError(
+        f"No serializer registered for key '{key}'. Available: {list(_serializers)}"
+    )
+tram.core.exceptions.PluginNotFoundError: No serializer registered for key 'json'. Available: []
+
+During handling of the above exception, another exception occurred:
+
+Traceback (most recent call last):
+  File "/tmp/tram-v183-venv/lib/python3.13/site-packages/clickhouse_driver/connection.py", line 428, in connect
+    return self._init_connection(host, port)
+           ~~~~~~~~~~~~~~~~~~~~~^^^^^^^^^^^^
+  File "/tmp/tram-v183-venv/lib/python3.13/site-packages/clickhouse_driver/connection.py", line 372, in _init_connection
+    self.receive_hello()
+    ~~~~~~~~~~~~~~~~~~^^
+  File "/tmp/tram-v183-venv/lib/python3.13/site-packages/clickhouse_driver/connection.py", line 507, in receive_hello
+    packet_type = read_varint(self.fin)
+  File "clickhouse_driver/varint.pyx", line 62, in clickhouse_driver.varint.read_varint
+  File "clickhouse_driver/bufferedreader.pyx", line 55, in clickhouse_driver.bufferedreader.BufferedReader.read_one
+  File "clickhouse_driver/bufferedreader.pyx", line 325, in clickhouse_driver.bufferedreader.BufferedSocketReader.read_into_buffer
+ConnectionResetError: [Errno 104] Connection reset by peer
+Error on socket shutdown: [Errno 107] Transport endpoint is not connected
+Failed to connect to 127.0.0.1:19083
+Traceback (most recent call last):
+  File "/tmp/tram-v183-clickhouse-outage.py", line 126, in <module>
+    failed = executor.batch_run(config)
+  File "/home/dhaka/trishul/trishul-ram/tram/pipeline/executor.py", line 2714, in batch_run
+    return self._batch_run_inner(
+           ~~~~~~~~~~~~~~~~~~~~~^
+        config, run_id=run_id, stats=stats, config_sha256=config_sha256,
+        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+        flush=flush, stop_event=stop_event, deadline=deadline,
+        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    )
+    ^
+  File "/home/dhaka/trishul/trishul-ram/tram/pipeline/executor.py", line 2742, in _batch_run_inner
+    serializer_in = self._build_serializer_in(config)
+  File "/home/dhaka/trishul/trishul-ram/tram/pipeline/executor.py", line 1248, in _build_serializer_in
+    ser_cls = get_serializer(config.serializer_in.type)
+  File "/home/dhaka/trishul/trishul-ram/tram/registry/registry.py", line 85, in get_serializer
+    raise PluginNotFoundError(
+        f"No serializer registered for key '{key}'. Available: {list(_serializers)}"
+    )
+tram.core.exceptions.PluginNotFoundError: No serializer registered for key 'json'. Available: []
+
+During handling of the above exception, another exception occurred:
+
+Traceback (most recent call last):
+  File "/tmp/tram-v183-venv/lib/python3.13/site-packages/clickhouse_driver/connection.py", line 428, in connect
+    return self._init_connection(host, port)
+           ~~~~~~~~~~~~~~~~~~~~~^^^^^^^^^^^^
+  File "/tmp/tram-v183-venv/lib/python3.13/site-packages/clickhouse_driver/connection.py", line 372, in _init_connection
+    self.receive_hello()
+    ~~~~~~~~~~~~~~~~~~^^
+  File "/tmp/tram-v183-venv/lib/python3.13/site-packages/clickhouse_driver/connection.py", line 507, in receive_hello
+    packet_type = read_varint(self.fin)
+  File "clickhouse_driver/varint.pyx", line 62, in clickhouse_driver.varint.read_varint
+  File "clickhouse_driver/bufferedreader.pyx", line 55, in clickhouse_driver.bufferedreader.BufferedReader.read_one
+  File "clickhouse_driver/bufferedreader.pyx", line 325, in clickhouse_driver.bufferedreader.BufferedSocketReader.read_into_buffer
+ConnectionResetError: [Errno 104] Connection reset by peer
+Error on socket shutdown: [Errno 107] Transport endpoint is not connected
+Error on socket shutdown: [Errno 107] Transport endpoint is not connected
+Failed to connect to 127.0.0.1:19083
+Traceback (most recent call last):
+  File "/tmp/tram-v183-clickhouse-outage.py", line 126, in <module>
+    failed = executor.batch_run(config)
+  File "/home/dhaka/trishul/trishul-ram/tram/pipeline/executor.py", line 2714, in batch_run
+    return self._batch_run_inner(
+           ~~~~~~~~~~~~~~~~~~~~~^
+        config, run_id=run_id, stats=stats, config_sha256=config_sha256,
+        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+        flush=flush, stop_event=stop_event, deadline=deadline,
+        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    )
+    ^
+  File "/home/dhaka/trishul/trishul-ram/tram/pipeline/executor.py", line 2742, in _batch_run_inner
+    serializer_in = self._build_serializer_in(config)
+  File "/home/dhaka/trishul/trishul-ram/tram/pipeline/executor.py", line 1248, in _build_serializer_in
+    ser_cls = get_serializer(config.serializer_in.type)
+  File "/home/dhaka/trishul/trishul-ram/tram/registry/registry.py", line 85, in get_serializer
+    raise PluginNotFoundError(
+        f"No serializer registered for key '{key}'. Available: {list(_serializers)}"
+    )
+tram.core.exceptions.PluginNotFoundError: No serializer registered for key 'json'. Available: []
+
+During handling of the above exception, another exception occurred:
+
+Traceback (most recent call last):
+  File "/tmp/tram-v183-venv/lib/python3.13/site-packages/clickhouse_driver/connection.py", line 428, in connect
+    return self._init_connection(host, port)
+           ~~~~~~~~~~~~~~~~~~~~~^^^^^^^^^^^^
+  File "/tmp/tram-v183-venv/lib/python3.13/site-packages/clickhouse_driver/connection.py", line 372, in _init_connection
+    self.receive_hello()
+    ~~~~~~~~~~~~~~~~~~^^
+  File "/tmp/tram-v183-venv/lib/python3.13/site-packages/clickhouse_driver/connection.py", line 507, in receive_hello
+    packet_type = read_varint(self.fin)
+  File "clickhouse_driver/varint.pyx", line 62, in clickhouse_driver.varint.read_varint
+  File "clickhouse_driver/bufferedreader.pyx", line 55, in clickhouse_driver.bufferedreader.BufferedReader.read_one
+  File "clickhouse_driver/bufferedreader.pyx", line 325, in clickhouse_driver.bufferedreader.BufferedSocketReader.read_into_buffer
+ConnectionResetError: [Errno 104] Connection reset by peer
+Error on socket shutdown: [Errno 107] Transport endpoint is not connected
+Failed to connect to 127.0.0.1:19083
+Traceback (most recent call last):
+  File "/tmp/tram-v183-clickhouse-outage.py", line 126, in <module>
+    failed = executor.batch_run(config)
+  File "/home/dhaka/trishul/trishul-ram/tram/pipeline/executor.py", line 2714, in batch_run
+    return self._batch_run_inner(
+           ~~~~~~~~~~~~~~~~~~~~~^
+        config, run_id=run_id, stats=stats, config_sha256=config_sha256,
+        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+        flush=flush, stop_event=stop_event, deadline=deadline,
+        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    )
+    ^
+  File "/home/dhaka/trishul/trishul-ram/tram/pipeline/executor.py", line 2742, in _batch_run_inner
+    serializer_in = self._build_serializer_in(config)
+  File "/home/dhaka/trishul/trishul-ram/tram/pipeline/executor.py", line 1248, in _build_serializer_in
+    ser_cls = get_serializer(config.serializer_in.type)
+  File "/home/dhaka/trishul/trishul-ram/tram/registry/registry.py", line 85, in get_serializer
+    raise PluginNotFoundError(
+        f"No serializer registered for key '{key}'. Available: {list(_serializers)}"
+    )
+tram.core.exceptions.PluginNotFoundError: No serializer registered for key 'json'. Available: []
+
+During handling of the above exception, another exception occurred:
+
+Traceback (most recent call last):
+  File "/tmp/tram-v183-venv/lib/python3.13/site-packages/clickhouse_driver/connection.py", line 428, in connect
+    return self._init_connection(host, port)
+           ~~~~~~~~~~~~~~~~~~~~~^^^^^^^^^^^^
+  File "/tmp/tram-v183-venv/lib/python3.13/site-packages/clickhouse_driver/connection.py", line 372, in _init_connection
+    self.receive_hello()
+    ~~~~~~~~~~~~~~~~~~^^
+  File "/tmp/tram-v183-venv/lib/python3.13/site-packages/clickhouse_driver/connection.py", line 507, in receive_hello
+    packet_type = read_varint(self.fin)
+  File "clickhouse_driver/varint.pyx", line 62, in clickhouse_driver.varint.read_varint
+  File "clickhouse_driver/bufferedreader.pyx", line 55, in clickhouse_driver.bufferedreader.BufferedReader.read_one
+  File "clickhouse_driver/bufferedreader.pyx", line 325, in clickhouse_driver.bufferedreader.BufferedSocketReader.read_into_buffer
+ConnectionResetError: [Errno 104] Connection reset by peer
+Error on socket shutdown: [Errno 107] Transport endpoint is not connected
+Failed to connect to 127.0.0.1:19083
+Traceback (most recent call last):
+  File "/tmp/tram-v183-clickhouse-outage.py", line 126, in <module>
+    failed = executor.batch_run(config)
+  File "/home/dhaka/trishul/trishul-ram/tram/pipeline/executor.py", line 2714, in batch_run
+    return self._batch_run_inner(
+           ~~~~~~~~~~~~~~~~~~~~~^
+        config, run_id=run_id, stats=stats, config_sha256=config_sha256,
+        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+        flush=flush, stop_event=stop_event, deadline=deadline,
+        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    )
+    ^
+  File "/home/dhaka/trishul/trishul-ram/tram/pipeline/executor.py", line 2742, in _batch_run_inner
+    serializer_in = self._build_serializer_in(config)
+  File "/home/dhaka/trishul/trishul-ram/tram/pipeline/executor.py", line 1248, in _build_serializer_in
+    ser_cls = get_serializer(config.serializer_in.type)
+  File "/home/dhaka/trishul/trishul-ram/tram/registry/registry.py", line 85, in get_serializer
+    raise PluginNotFoundError(
+        f"No serializer registered for key '{key}'. Available: {list(_serializers)}"
+    )
+tram.core.exceptions.PluginNotFoundError: No serializer registered for key 'json'. Available: []
+
+During handling of the above exception, another exception occurred:
+
+Traceback (most recent call last):
+  File "/tmp/tram-v183-venv/lib/python3.13/site-packages/clickhouse_driver/connection.py", line 428, in connect
+    return self._init_connection(host, port)
+           ~~~~~~~~~~~~~~~~~~~~~^^^^^^^^^^^^
+  File "/tmp/tram-v183-venv/lib/python3.13/site-packages/clickhouse_driver/connection.py", line 372, in _init_connection
+    self.receive_hello()
+    ~~~~~~~~~~~~~~~~~~^^
+  File "/tmp/tram-v183-venv/lib/python3.13/site-packages/clickhouse_driver/connection.py", line 507, in receive_hello
+    packet_type = read_varint(self.fin)
+  File "clickhouse_driver/varint.pyx", line 62, in clickhouse_driver.varint.read_varint
+  File "clickhouse_driver/bufferedreader.pyx", line 55, in clickhouse_driver.bufferedreader.BufferedReader.read_one
+  File "clickhouse_driver/bufferedreader.pyx", line 325, in clickhouse_driver.bufferedreader.BufferedSocketReader.read_into_buffer
+ConnectionResetError: [Errno 104] Connection reset by peer
+Error on socket shutdown: [Errno 107] Transport endpoint is not connected
+Error on socket shutdown: [Errno 107] Transport endpoint is not connected
+Failed to connect to 127.0.0.1:19083
+Traceback (most recent call last):
+  File "/tmp/tram-v183-clickhouse-outage.py", line 126, in <module>
+    failed = executor.batch_run(config)
+  File "/home/dhaka/trishul/trishul-ram/tram/pipeline/executor.py", line 2714, in batch_run
+    return self._batch_run_inner(
+           ~~~~~~~~~~~~~~~~~~~~~^
+        config, run_id=run_id, stats=stats, config_sha256=config_sha256,
+        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+        flush=flush, stop_event=stop_event, deadline=deadline,
+        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    )
+    ^
+  File "/home/dhaka/trishul/trishul-ram/tram/pipeline/executor.py", line 2742, in _batch_run_inner
+    serializer_in = self._build_serializer_in(config)
+  File "/home/dhaka/trishul/trishul-ram/tram/pipeline/executor.py", line 1248, in _build_serializer_in
+    ser_cls = get_serializer(config.serializer_in.type)
+  File "/home/dhaka/trishul/trishul-ram/tram/registry/registry.py", line 85, in get_serializer
+    raise PluginNotFoundError(
+        f"No serializer registered for key '{key}'. Available: {list(_serializers)}"
+    )
+tram.core.exceptions.PluginNotFoundError: No serializer registered for key 'json'. Available: []
+
+During handling of the above exception, another exception occurred:
+
+Traceback (most recent call last):
+  File "/tmp/tram-v183-venv/lib/python3.13/site-packages/clickhouse_driver/connection.py", line 428, in connect
+    return self._init_connection(host, port)
+           ~~~~~~~~~~~~~~~~~~~~~^^^^^^^^^^^^
+  File "/tmp/tram-v183-venv/lib/python3.13/site-packages/clickhouse_driver/connection.py", line 372, in _init_connection
+    self.receive_hello()
+    ~~~~~~~~~~~~~~~~~~^^
+  File "/tmp/tram-v183-venv/lib/python3.13/site-packages/clickhouse_driver/connection.py", line 507, in receive_hello
+    packet_type = read_varint(self.fin)
+  File "clickhouse_driver/varint.pyx", line 62, in clickhouse_driver.varint.read_varint
+  File "clickhouse_driver/bufferedreader.pyx", line 55, in clickhouse_driver.bufferedreader.BufferedReader.read_one
+  File "clickhouse_driver/bufferedreader.pyx", line 325, in clickhouse_driver.bufferedreader.BufferedSocketReader.read_into_buffer
+ConnectionResetError: [Errno 104] Connection reset by peer
+Error on socket shutdown: [Errno 107] Transport endpoint is not connected
+Failed to connect to 127.0.0.1:19083
+Traceback (most recent call last):
+  File "/tmp/tram-v183-clickhouse-outage.py", line 126, in <module>
+    failed = executor.batch_run(config)
+  File "/home/dhaka/trishul/trishul-ram/tram/pipeline/executor.py", line 2714, in batch_run
+    return self._batch_run_inner(
+           ~~~~~~~~~~~~~~~~~~~~~^
+        config, run_id=run_id, stats=stats, config_sha256=config_sha256,
+        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+        flush=flush, stop_event=stop_event, deadline=deadline,
+        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    )
+    ^
+  File "/home/dhaka/trishul/trishul-ram/tram/pipeline/executor.py", line 2742, in _batch_run_inner
+    serializer_in = self._build_serializer_in(config)
+  File "/home/dhaka/trishul/trishul-ram/tram/pipeline/executor.py", line 1248, in _build_serializer_in
+    ser_cls = get_serializer(config.serializer_in.type)
+  File "/home/dhaka/trishul/trishul-ram/tram/registry/registry.py", line 85, in get_serializer
+    raise PluginNotFoundError(
+        f"No serializer registered for key '{key}'. Available: {list(_serializers)}"
+    )
+tram.core.exceptions.PluginNotFoundError: No serializer registered for key 'json'. Available: []
+
+During handling of the above exception, another exception occurred:
+
+Traceback (most recent call last):
+  File "/tmp/tram-v183-venv/lib/python3.13/site-packages/clickhouse_driver/connection.py", line 428, in connect
+    return self._init_connection(host, port)
+           ~~~~~~~~~~~~~~~~~~~~~^^^^^^^^^^^^
+  File "/tmp/tram-v183-venv/lib/python3.13/site-packages/clickhouse_driver/connection.py", line 372, in _init_connection
+    self.receive_hello()
+    ~~~~~~~~~~~~~~~~~~^^
+  File "/tmp/tram-v183-venv/lib/python3.13/site-packages/clickhouse_driver/connection.py", line 507, in receive_hello
+    packet_type = read_varint(self.fin)
+  File "clickhouse_driver/varint.pyx", line 62, in clickhouse_driver.varint.read_varint
+  File "clickhouse_driver/bufferedreader.pyx", line 55, in clickhouse_driver.bufferedreader.BufferedReader.read_one
+  File "clickhouse_driver/bufferedreader.pyx", line 325, in clickhouse_driver.bufferedreader.BufferedSocketReader.read_into_buffer
+ConnectionResetError: [Errno 104] Connection reset by peer
+Error on socket shutdown: [Errno 107] Transport endpoint is not connected
+Failed to connect to 127.0.0.1:19083
+Traceback (most recent call last):
+  File "/tmp/tram-v183-clickhouse-outage.py", line 126, in <module>
+    failed = executor.batch_run(config)
+  File "/home/dhaka/trishul/trishul-ram/tram/pipeline/executor.py", line 2714, in batch_run
+    return self._batch_run_inner(
+           ~~~~~~~~~~~~~~~~~~~~~^
+        config, run_id=run_id, stats=stats, config_sha256=config_sha256,
+        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+        flush=flush, stop_event=stop_event, deadline=deadline,
+        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    )
+    ^
+  File "/home/dhaka/trishul/trishul-ram/tram/pipeline/executor.py", line 2742, in _batch_run_inner
+    serializer_in = self._build_serializer_in(config)
+  File "/home/dhaka/trishul/trishul-ram/tram/pipeline/executor.py", line 1248, in _build_serializer_in
+    ser_cls = get_serializer(config.serializer_in.type)
+  File "/home/dhaka/trishul/trishul-ram/tram/registry/registry.py", line 85, in get_serializer
+    raise PluginNotFoundError(
+        f"No serializer registered for key '{key}'. Available: {list(_serializers)}"
+    )
+tram.core.exceptions.PluginNotFoundError: No serializer registered for key 'json'. Available: []
+
+During handling of the above exception, another exception occurred:
+
+Traceback (most recent call last):
+  File "/tmp/tram-v183-venv/lib/python3.13/site-packages/clickhouse_driver/connection.py", line 428, in connect
+    return self._init_connection(host, port)
+           ~~~~~~~~~~~~~~~~~~~~~^^^^^^^^^^^^
+  File "/tmp/tram-v183-venv/lib/python3.13/site-packages/clickhouse_driver/connection.py", line 372, in _init_connection
+    self.receive_hello()
+    ~~~~~~~~~~~~~~~~~~^^
+  File "/tmp/tram-v183-venv/lib/python3.13/site-packages/clickhouse_driver/connection.py", line 507, in receive_hello
+    packet_type = read_varint(self.fin)
+  File "clickhouse_driver/varint.pyx", line 62, in clickhouse_driver.varint.read_varint
+  File "clickhouse_driver/bufferedreader.pyx", line 55, in clickhouse_driver.bufferedreader.BufferedReader.read_one
+  File "clickhouse_driver/bufferedreader.pyx", line 325, in clickhouse_driver.bufferedreader.BufferedSocketReader.read_into_buffer
+ConnectionResetError: [Errno 104] Connection reset by peer
+Error on socket shutdown: [Errno 107] Transport endpoint is not connected
+Failed to connect to 127.0.0.1:19083
+Traceback (most recent call last):
+  File "/tmp/tram-v183-clickhouse-outage.py", line 126, in <module>
+    failed = executor.batch_run(config)
+  File "/home/dhaka/trishul/trishul-ram/tram/pipeline/executor.py", line 2714, in batch_run
+    return self._batch_run_inner(
+           ~~~~~~~~~~~~~~~~~~~~~^
+        config, run_id=run_id, stats=stats, config_sha256=config_sha256,
+        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+        flush=flush, stop_event=stop_event, deadline=deadline,
+        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    )
+    ^
+  File "/home/dhaka/trishul/trishul-ram/tram/pipeline/executor.py", line 2742, in _batch_run_inner
+    serializer_in = self._build_serializer_in(config)
+  File "/home/dhaka/trishul/trishul-ram/tram/pipeline/executor.py", line 1248, in _build_serializer_in
+    ser_cls = get_serializer(config.serializer_in.type)
+  File "/home/dhaka/trishul/trishul-ram/tram/registry/registry.py", line 85, in get_serializer
+    raise PluginNotFoundError(
+        f"No serializer registered for key '{key}'. Available: {list(_serializers)}"
+    )
+tram.core.exceptions.PluginNotFoundError: No serializer registered for key 'json'. Available: []
+
+During handling of the above exception, another exception occurred:
+
+Traceback (most recent call last):
+  File "/tmp/tram-v183-venv/lib/python3.13/site-packages/clickhouse_driver/connection.py", line 428, in connect
+    return self._init_connection(host, port)
+           ~~~~~~~~~~~~~~~~~~~~~^^^^^^^^^^^^
+  File "/tmp/tram-v183-venv/lib/python3.13/site-packages/clickhouse_driver/connection.py", line 372, in _init_connection
+    self.receive_hello()
+    ~~~~~~~~~~~~~~~~~~^^
+  File "/tmp/tram-v183-venv/lib/python3.13/site-packages/clickhouse_driver/connection.py", line 507, in receive_hello
+    packet_type = read_varint(self.fin)
+  File "clickhouse_driver/varint.pyx", line 62, in clickhouse_driver.varint.read_varint
+  File "clickhouse_driver/bufferedreader.pyx", line 55, in clickhouse_driver.bufferedreader.BufferedReader.read_one
+  File "clickhouse_driver/bufferedreader.pyx", line 325, in clickhouse_driver.bufferedreader.BufferedSocketReader.read_into_buffer
+ConnectionResetError: [Errno 104] Connection reset by peer
+Error on socket shutdown: [Errno 107] Transport endpoint is not connected
+Error on socket shutdown: [Errno 107] Transport endpoint is not connected
+Failed to connect to 127.0.0.1:19083
+Traceback (most recent call last):
+  File "/tmp/tram-v183-clickhouse-outage.py", line 126, in <module>
+    failed = executor.batch_run(config)
+  File "/home/dhaka/trishul/trishul-ram/tram/pipeline/executor.py", line 2714, in batch_run
+    return self._batch_run_inner(
+           ~~~~~~~~~~~~~~~~~~~~~^
+        config, run_id=run_id, stats=stats, config_sha256=config_sha256,
+        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+        flush=flush, stop_event=stop_event, deadline=deadline,
+        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    )
+    ^
+  File "/home/dhaka/trishul/trishul-ram/tram/pipeline/executor.py", line 2742, in _batch_run_inner
+    serializer_in = self._build_serializer_in(config)
+  File "/home/dhaka/trishul/trishul-ram/tram/pipeline/executor.py", line 1248, in _build_serializer_in
+    ser_cls = get_serializer(config.serializer_in.type)
+  File "/home/dhaka/trishul/trishul-ram/tram/registry/registry.py", line 85, in get_serializer
+    raise PluginNotFoundError(
+        f"No serializer registered for key '{key}'. Available: {list(_serializers)}"
+    )
+tram.core.exceptions.PluginNotFoundError: No serializer registered for key 'json'. Available: []
+
+During handling of the above exception, another exception occurred:
+
+Traceback (most recent call last):
+  File "/tmp/tram-v183-venv/lib/python3.13/site-packages/clickhouse_driver/connection.py", line 428, in connect
+    return self._init_connection(host, port)
+           ~~~~~~~~~~~~~~~~~~~~~^^^^^^^^^^^^
+  File "/tmp/tram-v183-venv/lib/python3.13/site-packages/clickhouse_driver/connection.py", line 372, in _init_connection
+    self.receive_hello()
+    ~~~~~~~~~~~~~~~~~~^^
+  File "/tmp/tram-v183-venv/lib/python3.13/site-packages/clickhouse_driver/connection.py", line 507, in receive_hello
+    packet_type = read_varint(self.fin)
+  File "clickhouse_driver/varint.pyx", line 62, in clickhouse_driver.varint.read_varint
+  File "clickhouse_driver/bufferedreader.pyx", line 55, in clickhouse_driver.bufferedreader.BufferedReader.read_one
+  File "clickhouse_driver/bufferedreader.pyx", line 325, in clickhouse_driver.bufferedreader.BufferedSocketReader.read_into_buffer
+ConnectionResetError: [Errno 104] Connection reset by peer
+Error on socket shutdown: [Errno 107] Transport endpoint is not connected
+Failed to connect to 127.0.0.1:19083
+Traceback (most recent call last):
+  File "/tmp/tram-v183-clickhouse-outage.py", line 126, in <module>
+    failed = executor.batch_run(config)
+  File "/home/dhaka/trishul/trishul-ram/tram/pipeline/executor.py", line 2714, in batch_run
+    return self._batch_run_inner(
+           ~~~~~~~~~~~~~~~~~~~~~^
+        config, run_id=run_id, stats=stats, config_sha256=config_sha256,
+        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+        flush=flush, stop_event=stop_event, deadline=deadline,
+        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    )
+    ^
+  File "/home/dhaka/trishul/trishul-ram/tram/pipeline/executor.py", line 2742, in _batch_run_inner
+    serializer_in = self._build_serializer_in(config)
+  File "/home/dhaka/trishul/trishul-ram/tram/pipeline/executor.py", line 1248, in _build_serializer_in
+    ser_cls = get_serializer(config.serializer_in.type)
+  File "/home/dhaka/trishul/trishul-ram/tram/registry/registry.py", line 85, in get_serializer
+    raise PluginNotFoundError(
+        f"No serializer registered for key '{key}'. Available: {list(_serializers)}"
+    )
+tram.core.exceptions.PluginNotFoundError: No serializer registered for key 'json'. Available: []
+
+During handling of the above exception, another exception occurred:
+
+Traceback (most recent call last):
+  File "/tmp/tram-v183-venv/lib/python3.13/site-packages/clickhouse_driver/connection.py", line 428, in connect
+    return self._init_connection(host, port)
+           ~~~~~~~~~~~~~~~~~~~~~^^^^^^^^^^^^
+  File "/tmp/tram-v183-venv/lib/python3.13/site-packages/clickhouse_driver/connection.py", line 372, in _init_connection
+    self.receive_hello()
+    ~~~~~~~~~~~~~~~~~~^^
+  File "/tmp/tram-v183-venv/lib/python3.13/site-packages/clickhouse_driver/connection.py", line 507, in receive_hello
+    packet_type = read_varint(self.fin)
+  File "clickhouse_driver/varint.pyx", line 62, in clickhouse_driver.varint.read_varint
+  File "clickhouse_driver/bufferedreader.pyx", line 55, in clickhouse_driver.bufferedreader.BufferedReader.read_one
+  File "clickhouse_driver/bufferedreader.pyx", line 325, in clickhouse_driver.bufferedreader.BufferedSocketReader.read_into_buffer
+ConnectionResetError: [Errno 104] Connection reset by peer
+Error on socket shutdown: [Errno 107] Transport endpoint is not connected
+Failed to connect to 127.0.0.1:19083
+Traceback (most recent call last):
+  File "/tmp/tram-v183-clickhouse-outage.py", line 126, in <module>
+    failed = executor.batch_run(config)
+  File "/home/dhaka/trishul/trishul-ram/tram/pipeline/executor.py", line 2714, in batch_run
+    return self._batch_run_inner(
+           ~~~~~~~~~~~~~~~~~~~~~^
+        config, run_id=run_id, stats=stats, config_sha256=config_sha256,
+        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+        flush=flush, stop_event=stop_event, deadline=deadline,
+        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    )
+    ^
+  File "/home/dhaka/trishul/trishul-ram/tram/pipeline/executor.py", line 2742, in _batch_run_inner
+    serializer_in = self._build_serializer_in(config)
+  File "/home/dhaka/trishul/trishul-ram/tram/pipeline/executor.py", line 1248, in _build_serializer_in
+    ser_cls = get_serializer(config.serializer_in.type)
+  File "/home/dhaka/trishul/trishul-ram/tram/registry/registry.py", line 85, in get_serializer
+    raise PluginNotFoundError(
+        f"No serializer registered for key '{key}'. Available: {list(_serializers)}"
+    )
+tram.core.exceptions.PluginNotFoundError: No serializer registered for key 'json'. Available: []
+
+During handling of the above exception, another exception occurred:
+
+Traceback (most recent call last):
+  File "/tmp/tram-v183-venv/lib/python3.13/site-packages/clickhouse_driver/connection.py", line 428, in connect
+    return self._init_connection(host, port)
+           ~~~~~~~~~~~~~~~~~~~~~^^^^^^^^^^^^
+  File "/tmp/tram-v183-venv/lib/python3.13/site-packages/clickhouse_driver/connection.py", line 372, in _init_connection
+    self.receive_hello()
+    ~~~~~~~~~~~~~~~~~~^^
+  File "/tmp/tram-v183-venv/lib/python3.13/site-packages/clickhouse_driver/connection.py", line 507, in receive_hello
+    packet_type = read_varint(self.fin)
+  File "clickhouse_driver/varint.pyx", line 62, in clickhouse_driver.varint.read_varint
+  File "clickhouse_driver/bufferedreader.pyx", line 55, in clickhouse_driver.bufferedreader.BufferedReader.read_one
+  File "clickhouse_driver/bufferedreader.pyx", line 325, in clickhouse_driver.bufferedreader.BufferedSocketReader.read_into_buffer
+ConnectionResetError: [Errno 104] Connection reset by peer
+Error on socket shutdown: [Errno 107] Transport endpoint is not connected
+Failed to connect to 127.0.0.1:19083
+Traceback (most recent call last):
+  File "/tmp/tram-v183-clickhouse-outage.py", line 126, in <module>
+    failed = executor.batch_run(config)
+  File "/home/dhaka/trishul/trishul-ram/tram/pipeline/executor.py", line 2714, in batch_run
+    return self._batch_run_inner(
+           ~~~~~~~~~~~~~~~~~~~~~^
+        config, run_id=run_id, stats=stats, config_sha256=config_sha256,
+        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+        flush=flush, stop_event=stop_event, deadline=deadline,
+        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    )
+    ^
+  File "/home/dhaka/trishul/trishul-ram/tram/pipeline/executor.py", line 2742, in _batch_run_inner
+    serializer_in = self._build_serializer_in(config)
+  File "/home/dhaka/trishul/trishul-ram/tram/pipeline/executor.py", line 1248, in _build_serializer_in
+    ser_cls = get_serializer(config.serializer_in.type)
+  File "/home/dhaka/trishul/trishul-ram/tram/registry/registry.py", line 85, in get_serializer
+    raise PluginNotFoundError(
+        f"No serializer registered for key '{key}'. Available: {list(_serializers)}"
+    )
+tram.core.exceptions.PluginNotFoundError: No serializer registered for key 'json'. Available: []
+
+During handling of the above exception, another exception occurred:
+
+Traceback (most recent call last):
+  File "/tmp/tram-v183-venv/lib/python3.13/site-packages/clickhouse_driver/connection.py", line 428, in connect
+    return self._init_connection(host, port)
+           ~~~~~~~~~~~~~~~~~~~~~^^^^^^^^^^^^
+  File "/tmp/tram-v183-venv/lib/python3.13/site-packages/clickhouse_driver/connection.py", line 372, in _init_connection
+    self.receive_hello()
+    ~~~~~~~~~~~~~~~~~~^^
+  File "/tmp/tram-v183-venv/lib/python3.13/site-packages/clickhouse_driver/connection.py", line 507, in receive_hello
+    packet_type = read_varint(self.fin)
+  File "clickhouse_driver/varint.pyx", line 62, in clickhouse_driver.varint.read_varint
+  File "clickhouse_driver/bufferedreader.pyx", line 55, in clickhouse_driver.bufferedreader.BufferedReader.read_one
+  File "clickhouse_driver/bufferedreader.pyx", line 325, in clickhouse_driver.bufferedreader.BufferedSocketReader.read_into_buffer
+ConnectionResetError: [Errno 104] Connection reset by peer
+Error on socket shutdown: [Errno 107] Transport endpoint is not connected
+Failed to connect to 127.0.0.1:19083
+Traceback (most recent call last):
+  File "/tmp/tram-v183-clickhouse-outage.py", line 126, in <module>
+    failed = executor.batch_run(config)
+  File "/home/dhaka/trishul/trishul-ram/tram/pipeline/executor.py", line 2714, in batch_run
+    return self._batch_run_inner(
+           ~~~~~~~~~~~~~~~~~~~~~^
+        config, run_id=run_id, stats=stats, config_sha256=config_sha256,
+        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+        flush=flush, stop_event=stop_event, deadline=deadline,
+        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    )
+    ^
+  File "/home/dhaka/trishul/trishul-ram/tram/pipeline/executor.py", line 2742, in _batch_run_inner
+    serializer_in = self._build_serializer_in(config)
+  File "/home/dhaka/trishul/trishul-ram/tram/pipeline/executor.py", line 1248, in _build_serializer_in
+    ser_cls = get_serializer(config.serializer_in.type)
+  File "/home/dhaka/trishul/trishul-ram/tram/registry/registry.py", line 85, in get_serializer
+    raise PluginNotFoundError(
+        f"No serializer registered for key '{key}'. Available: {list(_serializers)}"
+    )
+tram.core.exceptions.PluginNotFoundError: No serializer registered for key 'json'. Available: []
+
+During handling of the above exception, another exception occurred:
+
+Traceback (most recent call last):
+  File "/tmp/tram-v183-venv/lib/python3.13/site-packages/clickhouse_driver/connection.py", line 428, in connect
+    return self._init_connection(host, port)
+           ~~~~~~~~~~~~~~~~~~~~~^^^^^^^^^^^^
+  File "/tmp/tram-v183-venv/lib/python3.13/site-packages/clickhouse_driver/connection.py", line 372, in _init_connection
+    self.receive_hello()
+    ~~~~~~~~~~~~~~~~~~^^
+  File "/tmp/tram-v183-venv/lib/python3.13/site-packages/clickhouse_driver/connection.py", line 507, in receive_hello
+    packet_type = read_varint(self.fin)
+  File "clickhouse_driver/varint.pyx", line 62, in clickhouse_driver.varint.read_varint
+  File "clickhouse_driver/bufferedreader.pyx", line 55, in clickhouse_driver.bufferedreader.BufferedReader.read_one
+  File "clickhouse_driver/bufferedreader.pyx", line 325, in clickhouse_driver.bufferedreader.BufferedSocketReader.read_into_buffer
+ConnectionResetError: [Errno 104] Connection reset by peer
+Error on socket shutdown: [Errno 107] Transport endpoint is not connected
+Failed to connect to 127.0.0.1:19083
+Traceback (most recent call last):
+  File "/tmp/tram-v183-clickhouse-outage.py", line 126, in <module>
+    failed = executor.batch_run(config)
+  File "/home/dhaka/trishul/trishul-ram/tram/pipeline/executor.py", line 2714, in batch_run
+    return self._batch_run_inner(
+           ~~~~~~~~~~~~~~~~~~~~~^
+        config, run_id=run_id, stats=stats, config_sha256=config_sha256,
+        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+        flush=flush, stop_event=stop_event, deadline=deadline,
+        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    )
+    ^
+  File "/home/dhaka/trishul/trishul-ram/tram/pipeline/executor.py", line 2742, in _batch_run_inner
+    serializer_in = self._build_serializer_in(config)
+  File "/home/dhaka/trishul/trishul-ram/tram/pipeline/executor.py", line 1248, in _build_serializer_in
+    ser_cls = get_serializer(config.serializer_in.type)
+  File "/home/dhaka/trishul/trishul-ram/tram/registry/registry.py", line 85, in get_serializer
+    raise PluginNotFoundError(
+        f"No serializer registered for key '{key}'. Available: {list(_serializers)}"
+    )
+tram.core.exceptions.PluginNotFoundError: No serializer registered for key 'json'. Available: []
+
+During handling of the above exception, another exception occurred:
+
+Traceback (most recent call last):
+  File "/tmp/tram-v183-venv/lib/python3.13/site-packages/clickhouse_driver/connection.py", line 428, in connect
+    return self._init_connection(host, port)
+           ~~~~~~~~~~~~~~~~~~~~~^^^^^^^^^^^^
+  File "/tmp/tram-v183-venv/lib/python3.13/site-packages/clickhouse_driver/connection.py", line 372, in _init_connection
+    self.receive_hello()
+    ~~~~~~~~~~~~~~~~~~^^
+  File "/tmp/tram-v183-venv/lib/python3.13/site-packages/clickhouse_driver/connection.py", line 507, in receive_hello
+    packet_type = read_varint(self.fin)
+  File "clickhouse_driver/varint.pyx", line 62, in clickhouse_driver.varint.read_varint
+  File "clickhouse_driver/bufferedreader.pyx", line 55, in clickhouse_driver.bufferedreader.BufferedReader.read_one
+  File "clickhouse_driver/bufferedreader.pyx", line 325, in clickhouse_driver.bufferedreader.BufferedSocketReader.read_into_buffer
+ConnectionResetError: [Errno 104] Connection reset by peer
+Failed to connect to 127.0.0.1:19083
+Traceback (most recent call last):
+  File "/tmp/tram-v183-clickhouse-outage.py", line 126, in <module>
+    failed = executor.batch_run(config)
+  File "/home/dhaka/trishul/trishul-ram/tram/pipeline/executor.py", line 2714, in batch_run
+    return self._batch_run_inner(
+           ~~~~~~~~~~~~~~~~~~~~~^
+        config, run_id=run_id, stats=stats, config_sha256=config_sha256,
+        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+        flush=flush, stop_event=stop_event, deadline=deadline,
+        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    )
+    ^
+  File "/home/dhaka/trishul/trishul-ram/tram/pipeline/executor.py", line 2742, in _batch_run_inner
+    serializer_in = self._build_serializer_in(config)
+  File "/home/dhaka/trishul/trishul-ram/tram/pipeline/executor.py", line 1248, in _build_serializer_in
+    ser_cls = get_serializer(config.serializer_in.type)
+  File "/home/dhaka/trishul/trishul-ram/tram/registry/registry.py", line 85, in get_serializer
+    raise PluginNotFoundError(
+        f"No serializer registered for key '{key}'. Available: {list(_serializers)}"
+    )
+tram.core.exceptions.PluginNotFoundError: No serializer registered for key 'json'. Available: []
+
+During handling of the above exception, another exception occurred:
+
+Traceback (most recent call last):
+  File "/tmp/tram-v183-venv/lib/python3.13/site-packages/clickhouse_driver/connection.py", line 428, in connect
+    return self._init_connection(host, port)
+           ~~~~~~~~~~~~~~~~~~~~~^^^^^^^^^^^^
+  File "/tmp/tram-v183-venv/lib/python3.13/site-packages/clickhouse_driver/connection.py", line 372, in _init_connection
+    self.receive_hello()
+    ~~~~~~~~~~~~~~~~~~^^
+  File "/tmp/tram-v183-venv/lib/python3.13/site-packages/clickhouse_driver/connection.py", line 507, in receive_hello
+    packet_type = read_varint(self.fin)
+  File "clickhouse_driver/varint.pyx", line 62, in clickhouse_driver.varint.read_varint
+  File "clickhouse_driver/bufferedreader.pyx", line 55, in clickhouse_driver.bufferedreader.BufferedReader.read_one
+  File "clickhouse_driver/bufferedreader.pyx", line 325, in clickhouse_driver.bufferedreader.BufferedSocketReader.read_into_buffer
+TimeoutError: timed out
+Traceback (most recent call last):
+  File "/tmp/tram-v183-clickhouse-outage.py", line 126, in <module>
+    failed = executor.batch_run(config)
+  File "/home/dhaka/trishul/trishul-ram/tram/pipeline/executor.py", line 2714, in batch_run
+    return self._batch_run_inner(
+           ~~~~~~~~~~~~~~~~~~~~~^
+        config, run_id=run_id, stats=stats, config_sha256=config_sha256,
+        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+        flush=flush, stop_event=stop_event, deadline=deadline,
+        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    )
+    ^
+  File "/home/dhaka/trishul/trishul-ram/tram/pipeline/executor.py", line 2742, in _batch_run_inner
+    serializer_in = self._build_serializer_in(config)
+  File "/home/dhaka/trishul/trishul-ram/tram/pipeline/executor.py", line 1248, in _build_serializer_in
+    ser_cls = get_serializer(config.serializer_in.type)
+  File "/home/dhaka/trishul/trishul-ram/tram/registry/registry.py", line 85, in get_serializer
+    raise PluginNotFoundError(
+        f"No serializer registered for key '{key}'. Available: {list(_serializers)}"
+    )
+tram.core.exceptions.PluginNotFoundError: No serializer registered for key 'json'. Available: []

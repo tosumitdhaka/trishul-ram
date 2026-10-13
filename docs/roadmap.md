@@ -255,11 +255,13 @@ contracts. No universal exactly-once or blind partition-failover guarantee.
 - [x] **Wizard/editor toolbar correction** — included with the existing authoring workflow fixes.
 - [x] **Release closure** — self-review and independent full-diff review approved; all 11 release checks and PR CI green. [PR #93](https://github.com/tosumitdhaka/trishul-ram/pull/93) merged; `v1.8.2` tagged on `f14b560`. [Release workflow](https://github.com/tosumitdhaka/trishul-ram/actions/runs/38265973209) succeeded; all three image tags and the Helm chart independently verified. [Release notes](https://github.com/tosumitdhaka/trishul-ram/releases/tag/v1.8.2).
 
-## v1.8.3 — Connector Correctness Under Failure (planned)
+## v1.8.3 — Connector Correctness Under Failure (in progress)
 
 > Full plan: [v1.8.3 connector hardening](plans/v1.8.3-connector-hardening-plan.md).
 > Baseline: released v1.8.2. Verification scope is agreed; fixes require current
 > reproductions. This does not assign every capability in GH #58–#61.
+> Investigation started 2026-10-13; current results and remaining acceptance
+> work are tracked in the [evidence ledger](reviews/v1.8.3-connector-hardening-evidence.md).
 
 - [ ] **H183-01 — Kafka (scoped GH #58)** — reconnect/rebalance/stop, producer failures and acknowledgement-frontier correctness
 - [ ] **H183-02 — AMQP (scoped GH #61)** — channel/broker failure, ack/nack ownership, publisher confirmations and bounded admission

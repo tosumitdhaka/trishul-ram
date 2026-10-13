@@ -33,6 +33,7 @@ import pytest
 
 from tram.connectors.amqp.sink import AmqpSink
 from tram.connectors.amqp.source import AmqpSource
+from tram.core.exceptions import SinkError, SourceError
 from tram.interfaces.base_sink import DeliveryTier
 from tram.interfaces.base_source import AckDisposition
 
@@ -45,13 +46,13 @@ class TestLiveAmqpBroker:
 
     @pytest.fixture
     def queue(self):
-        """A unique transient queue; deleted after the test."""
+        """A unique durable queue; deleted after the test."""
         import pika
 
         name = f"tram-live-{uuid.uuid4().hex[:12]}"
         conn = pika.BlockingConnection(pika.URLParameters(AMQP_URL))
         ch = conn.channel()
-        ch.queue_declare(queue=name, durable=False, auto_delete=False, exclusive=False)
+        ch.queue_declare(queue=name, durable=True, auto_delete=False, exclusive=False)
         conn.close()
         yield name
         try:
@@ -63,6 +64,129 @@ class TestLiveAmqpBroker:
             pass
 
     # ── helpers ────────────────────────────────────────────────────────────
+
+    @pytest.mark.parametrize("repeat", range(3))
+    @pytest.mark.parametrize("auto_ack", [False, True])
+    def test_live_bounded_admission_reports_overflow(
+        self, queue, repeat, auto_ack, monkeypatch
+    ):
+        monkeypatch.setenv("TRAM_SOURCE_BRIDGE_MAX_COUNT", "2")
+        monkeypatch.setenv("TRAM_SOURCE_BRIDGE_MAX_BYTES", "32")
+        source = AmqpSource({"url": AMQP_URL, "queue": queue, "auto_ack": auto_ack})
+        for identity in range(4):
+            self._publish(queue, f"{repeat}:{identity}".encode())
+        get = source._msg_queue.get
+        captured_bounds = []
+
+        def get_after_overflow(*args, **kwargs):
+            deadline = time.monotonic() + 5
+            while (
+                source._connection is not None
+                and not source._connection.is_closed
+                and time.monotonic() < deadline
+            ):
+                time.sleep(0.01)
+            captured_bounds.append((source._msg_queue.qsize(), source._msg_queue._bytes))
+            return get(*args, **kwargs)
+
+        monkeypatch.setattr(source._msg_queue, "get", get_after_overflow)
+        admitted = []
+        reader = source.read()
+        try:
+            with pytest.raises(SourceError, match="admission limit exceeded"):
+                while True:
+                    admitted.append(next(reader)[0])
+        finally:
+            reader.close()
+            source.stop()
+
+        assert admitted == [f"{repeat}:{identity}".encode() for identity in range(2)]
+        assert all(count <= 2 and size <= 32 for count, size in captured_bounds)
+        if not auto_ack:
+            # All four deliveries retain broker ownership; the two admitted
+            # messages also requeue because the executor made no disposition.
+            assert self._message_count(queue) == 4
+
+    @pytest.mark.parametrize("repeat", range(3))
+    def test_live_missing_route_is_rejected(self, repeat):
+        missing = f"tram-missing-{uuid.uuid4().hex[:12]}"
+        sink = AmqpSink({"url": AMQP_URL, "routing_key": missing})
+        with pytest.raises(SinkError, match="AMQP publish failed"):
+            sink.write(f"missing-{repeat}".encode(), {})
+
+    @pytest.mark.parametrize("repeat", range(3))
+    def test_live_publisher_nack_reports_failure(self, repeat):
+        import pika
+
+        name = f"tram-reject-publish-{uuid.uuid4().hex[:12]}"
+        connection = pika.BlockingConnection(pika.URLParameters(AMQP_URL))
+        channel = connection.channel()
+        try:
+            channel.queue_declare(
+                queue=name, durable=True,
+                arguments={"x-max-length": 1, "x-overflow": "reject-publish"},
+            )
+            sink = AmqpSink({"url": AMQP_URL, "routing_key": name})
+            accepted = f"accepted-{repeat}".encode()
+            sink.write(accepted, {})
+            with pytest.raises(SinkError, match="AMQP publish failed"):
+                sink.write(f"rejected-{repeat}".encode(), {})
+            assert channel.queue_declare(queue=name, passive=True).method.message_count == 1
+            _, properties, body = channel.basic_get(queue=name, auto_ack=True)
+            assert body == accepted
+            assert properties.delivery_mode == 2
+        finally:
+            channel.queue_delete(queue=name)
+            connection.close()
+
+    @pytest.mark.parametrize("repeat", range(3))
+    def test_live_persistent_message_content_readback(self, queue, repeat):
+        import pika
+
+        payload = f"persistent-{repeat}".encode()
+        sink = AmqpSink({"url": AMQP_URL, "routing_key": queue})
+        sink.write(payload, {})
+        assert sink.commit().confirmed
+        connection = pika.BlockingConnection(pika.URLParameters(AMQP_URL))
+        try:
+            _, properties, body = connection.channel().basic_get(queue=queue, auto_ack=True)
+            assert body == payload
+            assert properties.delivery_mode == 2
+        finally:
+            connection.close()
+
+    @pytest.mark.parametrize("repeat", range(3))
+    def test_live_consumer_cancellation_surfaces_failure(self, queue, repeat):
+        import pika
+
+        source = AmqpSource({"url": AMQP_URL, "queue": queue})
+        errors = []
+
+        def read():
+            try:
+                list(source.read())
+            except Exception as exc:
+                errors.append(exc)
+
+        reader = threading.Thread(target=read, daemon=True)
+        reader.start()
+        try:
+            deadline = time.monotonic() + 10
+            while source._channel is None and time.monotonic() < deadline:
+                time.sleep(0.05)
+            assert source._channel is not None
+            connection = pika.BlockingConnection(pika.URLParameters(AMQP_URL))
+            try:
+                connection.channel().queue_delete(queue=queue)
+            finally:
+                connection.close()
+            reader.join(timeout=5)
+            assert not reader.is_alive(), f"cancelled reader hung, repetition {repeat}"
+            assert len(errors) == 1
+            assert isinstance(errors[0], SourceError)
+        finally:
+            source.stop()
+            reader.join(timeout=5)
 
     def _publish(self, queue: str, body: bytes, message_id: str | None = None) -> None:
         """Publish one message to the queue on a throwaway connection."""

@@ -6,6 +6,8 @@ import queue
 import threading
 from collections.abc import Iterator
 
+from tram.connectors.bridge import BoundedBridgeQueue
+from tram.core.config import source_bridge_max_bytes, source_bridge_max_count
 from tram.core.exceptions import SourceError
 from tram.interfaces.base_source import AckDisposition, BaseSource
 from tram.registry.registry import register_source
@@ -35,7 +37,11 @@ class AmqpSource(BaseSource):
     (``basic_qos``) bounds how many unacked
     deliveries can be outstanding, which is the backpressure that bounds the
     internal bridge: a slow sink fills the prefetch window and the broker
-    stops delivering, never growing memory without bound. Unacked tags are
+    stops delivering. A count/byte bounded bridge also protects auto-ack mode
+    (``TRAM_SOURCE_BRIDGE_MAX_COUNT`` / ``TRAM_SOURCE_BRIDGE_MAX_BYTES``).
+    Overflow fails intake without blocking the connection's heartbeat thread;
+    manual-ack deliveries requeue on close, while auto-acked overflow is
+    reported as unreplayable loss. Unacked tags are
     requeued by the broker when the connection closes, so a mid-run abort
     re-delivers the tail (at-least-once). ``auto_ack: true`` opts back into
     broker-side auto-acknowledgement (at-most-once); ``ack()`` then no-ops
@@ -56,13 +62,17 @@ class AmqpSource(BaseSource):
         self.url: str = config.get("url", "amqp://guest:guest@localhost:5672/")
         self.queue_name: str = config["queue"]
         self.prefetch_count: int = int(config.get("prefetch_count", 10))
+        if self.prefetch_count < 1:
+            raise SourceError("AMQP prefetch_count must be >= 1")
         self.auto_ack: bool = bool(config.get("auto_ack", False))
         # V18-01 §7: when true, a delivery without a producer ``message_id``
         # is refused at intake (never processed, nacked with requeue) — no
         # durable identity means no honest ack under strict delivery.
         self.require_message_id: bool = bool(config.get("require_message_id", False))
         self._stop_event = threading.Event()
-        self._msg_queue: queue.SimpleQueue = queue.SimpleQueue()
+        self._msg_queue = BoundedBridgeQueue(
+            max_count=source_bridge_max_count(), max_bytes=source_bridge_max_bytes(),
+        )
         self._connection = None
         self._channel = None
 
@@ -151,7 +161,18 @@ class AmqpSource(BaseSource):
                             extra={"error": str(exc)},
                         )
                 return
-            self._msg_queue.put((body, meta))
+            try:
+                self._msg_queue.put_nowait((body, meta))
+            except queue.Full as exc:
+                # Blocking this callback would prevent pika heartbeats and
+                # shutdown callbacks. Fail the connection visibly instead:
+                # manual-ack deliveries remain broker-owned and are requeued.
+                # Auto-ack overflow is unreplayable, explicitly reported loss.
+                raise SourceError(
+                    "AMQP admission limit exceeded; "
+                    + ("auto-acked delivery cannot be replayed" if self.auto_ack
+                       else "unacknowledged deliveries will be requeued")
+                ) from exc
             # Deliberately NO basic_ack at intake (V18-01 R2): the tag stays
             # with the message until the executor calls ack(); the broker
             # prefetch bounds how many unacked deliveries stay outstanding.
@@ -163,11 +184,14 @@ class AmqpSource(BaseSource):
         )
         logger.info("AMQP source consuming from queue", extra={"amqp_queue": self.queue_name})
 
+        consumer_finished = threading.Event()
+        consumer_errors: list[Exception] = []
+
         def consume_thread():
             try:
                 channel.start_consuming()
-            except Exception:
-                pass
+            except Exception as exc:
+                consumer_errors.append(exc)
             finally:
                 # The connection is closed on the thread that owns the I/O
                 # loop — never from the reader thread (see the read() finally).
@@ -175,6 +199,7 @@ class AmqpSource(BaseSource):
                     connection.close()
                 except Exception:
                     pass
+                consumer_finished.set()
 
         t = threading.Thread(target=consume_thread, daemon=True)
         t.start()
@@ -183,10 +208,19 @@ class AmqpSource(BaseSource):
             while not self._stop_event.is_set() or not self._msg_queue.empty():
                 try:
                     payload, meta = self._msg_queue.get(timeout=1.0)
+                    # Flush the admitted cohort before waiting for another
+                    # delivery. With prefetch=1 the broker cannot send that
+                    # next delivery until this one has a decided ack.
+                    meta["source_batch_end"] = self._msg_queue.empty()
                     yield payload, meta
                 except queue.Empty:
                     if self._stop_event.is_set():
                         break
+                    if consumer_finished.is_set():
+                        error = consumer_errors[0] if consumer_errors else None
+                        raise SourceError(
+                            f"AMQP consumer stopped unexpectedly: {error or 'consumer cancelled'}"
+                        ) from error
                     continue
         finally:
             # The pika blocking adapter is not thread-safe: the consumer

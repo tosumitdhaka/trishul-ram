@@ -1,0 +1,35 @@
+Compact case results extracted from /tmp/tram-v183-kafka-final.log; full DEBUG log retained as /tmp/tram-v183-kafka-final.log.gz.
+tests/unit/test_kafka_live_broker.py::TestLiveKafkaBroker::test_live_broker_rejects_oversized_publication[0]
+PASSED                                                                   [  6%]
+tests/unit/test_kafka_live_broker.py::TestLiveKafkaBroker::test_live_broker_rejects_oversized_publication[1]
+PASSED                                                                   [ 12%]
+tests/unit/test_kafka_live_broker.py::TestLiveKafkaBroker::test_live_broker_rejects_oversized_publication[2]
+PASSED                                                                   [ 18%]
+tests/unit/test_kafka_live_broker.py::TestLiveKafkaBroker::test_live_undecided_prefix_replays_after_consumer_session_restart[0]
+PASSED                                                                   [ 25%]
+tests/unit/test_kafka_live_broker.py::TestLiveKafkaBroker::test_live_undecided_prefix_replays_after_consumer_session_restart[1]
+PASSED                                                                   [ 31%]
+tests/unit/test_kafka_live_broker.py::TestLiveKafkaBroker::test_live_undecided_prefix_replays_after_consumer_session_restart[2]
+PASSED                                                                   [ 37%]
+tests/unit/test_kafka_live_broker.py::TestLiveKafkaBroker::test_live_process_restart_replays_unacknowledged_inputs[0]
+PASSED                                                                   [ 43%]
+tests/unit/test_kafka_live_broker.py::TestLiveKafkaBroker::test_live_process_restart_replays_unacknowledged_inputs[1]
+PASSED                                                                   [ 50%]
+tests/unit/test_kafka_live_broker.py::TestLiveKafkaBroker::test_live_process_restart_replays_unacknowledged_inputs[2]
+PASSED                                                                   [ 56%]
+tests/unit/test_kafka_live_broker.py::TestLiveKafkaBroker::test_live_rebalance_fences_inflight_ownership[0]
+PASSED                                                                   [ 62%]
+tests/unit/test_kafka_live_broker.py::TestLiveKafkaBroker::test_live_rebalance_fences_inflight_ownership[1]
+PASSED                                                                   [ 68%]
+tests/unit/test_kafka_live_broker.py::TestLiveKafkaBroker::test_live_rebalance_fences_inflight_ownership[2]
+PASSED                                                                   [ 75%]
+tests/unit/test_kafka_live_broker.py::TestLiveKafkaBroker::test_live_sink_durable_commit_barrier_lands_records
+PASSED                                                                   [ 81%]
+tests/unit/test_kafka_live_broker.py::TestLiveKafkaBroker::test_live_source_roundtrip_and_frontier_advance
+PASSED                                                                   [ 87%]
+tests/unit/test_kafka_live_broker.py::TestLiveKafkaBroker::test_live_stale_epoch_ack_refused
+PASSED                                                                   [ 93%]
+tests/unit/test_kafka_live_broker.py::TestLiveKafkaBroker::test_live_threaded_multi_partition_gap_aware_commits
+PASSED                                                                   [100%]
+-------------- generated xml file: /tmp/tram-v183-kafka-final.xml --------------
+======================== 16 passed in 111.39s (0:01:51) ========================

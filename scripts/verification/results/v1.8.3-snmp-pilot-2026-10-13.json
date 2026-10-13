@@ -1,0 +1,763 @@
+{
+  "python": "3.13.15 (main, Sep 24 2026, 17:55:50) [Clang 22.1.3 ]",
+  "network": "isolated local loopback 127.0.0.11..20",
+  "port": 54152,
+  "oids": [
+    "1.3.6.1.2.1.1.1.0",
+    "1.3.6.1.2.1.1.3.0"
+  ],
+  "max_concurrency": 4,
+  "request_timeout": 0.15,
+  "retries": 0,
+  "target_timeout": 1,
+  "snmp_library": "0.6.2",
+  "platform": "Linux-6.6.114.1-microsoft-standard-WSL2-x86_64-with-glibc2.39",
+  "visible_cpus": 12,
+  "max_rss_kib": 292864,
+  "results": [
+    {
+      "kind": "stop",
+      "iteration": 1,
+      "status": "aborted",
+      "elapsed_seconds": 0.144,
+      "poll_results": [
+        {
+          "target": "127.0.0.11",
+          "status": "cancelled",
+          "duration_seconds": 0.101,
+          "bindings": 0,
+          "records": 0
+        },
+        {
+          "target": "127.0.0.12",
+          "status": "cancelled",
+          "duration_seconds": 0.101,
+          "bindings": 0,
+          "records": 0
+        },
+        {
+          "target": "127.0.0.13",
+          "status": "cancelled",
+          "duration_seconds": 0.099,
+          "bindings": 0,
+          "records": 0
+        },
+        {
+          "target": "127.0.0.14",
+          "status": "cancelled",
+          "duration_seconds": 0.098,
+          "bindings": 0,
+          "records": 0
+        },
+        {
+          "target": "127.0.0.15",
+          "status": "cancelled",
+          "duration_seconds": 0.098,
+          "bindings": 0,
+          "records": 0
+        },
+        {
+          "target": "127.0.0.16",
+          "status": "cancelled",
+          "duration_seconds": 0.097,
+          "bindings": 0,
+          "records": 0
+        },
+        {
+          "target": "127.0.0.17",
+          "status": "cancelled",
+          "duration_seconds": 0.097,
+          "bindings": 0,
+          "records": 0
+        },
+        {
+          "target": "127.0.0.18",
+          "status": "cancelled",
+          "duration_seconds": 0.097,
+          "bindings": 0,
+          "records": 0
+        },
+        {
+          "target": "127.0.0.19",
+          "status": "cancelled",
+          "duration_seconds": 0.097,
+          "bindings": 0,
+          "records": 0
+        },
+        {
+          "target": "127.0.0.20",
+          "status": "cancelled",
+          "duration_seconds": 0.097,
+          "bindings": 0,
+          "records": 0
+        }
+      ]
+    },
+    {
+      "kind": "healthy",
+      "iteration": 1,
+      "elapsed_seconds": 0.276,
+      "status": "success",
+      "error": null,
+      "records": 10,
+      "files": [
+        "odd_38f8919c-f640-4d3b-b31e-a719cd3dfaeb.jsonl",
+        "even_38f8919c-f640-4d3b-b31e-a719cd3dfaeb.jsonl"
+      ],
+      "remote_path": "/upload/v183-snmp-pilot/1791870093-healthy-1",
+      "poll_results": [
+        {
+          "target": "127.0.0.11",
+          "status": "success",
+          "duration_seconds": 0.007,
+          "bindings": 2,
+          "records": 1
+        },
+        {
+          "target": "127.0.0.13",
+          "status": "success",
+          "duration_seconds": 0.006,
+          "bindings": 2,
+          "records": 1
+        },
+        {
+          "target": "127.0.0.12",
+          "status": "success",
+          "duration_seconds": 0.01,
+          "bindings": 2,
+          "records": 1
+        },
+        {
+          "target": "127.0.0.14",
+          "status": "success",
+          "duration_seconds": 0.009,
+          "bindings": 2,
+          "records": 1
+        },
+        {
+          "target": "127.0.0.15",
+          "status": "success",
+          "duration_seconds": 0.008,
+          "bindings": 2,
+          "records": 1
+        },
+        {
+          "target": "127.0.0.16",
+          "status": "success",
+          "duration_seconds": 0.007,
+          "bindings": 2,
+          "records": 1
+        },
+        {
+          "target": "127.0.0.17",
+          "status": "success",
+          "duration_seconds": 0.005,
+          "bindings": 2,
+          "records": 1
+        },
+        {
+          "target": "127.0.0.18",
+          "status": "success",
+          "duration_seconds": 0.004,
+          "bindings": 2,
+          "records": 1
+        },
+        {
+          "target": "127.0.0.20",
+          "status": "success",
+          "duration_seconds": 0.004,
+          "bindings": 2,
+          "records": 1
+        },
+        {
+          "target": "127.0.0.19",
+          "status": "success",
+          "duration_seconds": 0.004,
+          "bindings": 2,
+          "records": 1
+        }
+      ]
+    },
+    {
+      "kind": "mixed",
+      "iteration": 1,
+      "elapsed_seconds": 0.239,
+      "status": "failed",
+      "error": "SNMP multi-target poll incomplete: 127.0.0.11=success, 127.0.0.13=success, 127.0.0.12=success, 127.0.0.16=success, 127.0.0.14=success, 127.0.0.15=success, 127.0.0.20=poll_failed, 127.0.0.17=success, 127.0.0.19=success, 127.0.0.18=success",
+      "records": 9,
+      "files": [
+        "odd_4041ee7d-2f96-4394-a706-1f5372457520.jsonl",
+        "even_4041ee7d-2f96-4394-a706-1f5372457520.jsonl"
+      ],
+      "remote_path": "/upload/v183-snmp-pilot/1791870094-mixed-1",
+      "poll_results": [
+        {
+          "target": "127.0.0.11",
+          "status": "success",
+          "duration_seconds": 0.004,
+          "bindings": 2,
+          "records": 1
+        },
+        {
+          "target": "127.0.0.13",
+          "status": "success",
+          "duration_seconds": 0.003,
+          "bindings": 2,
+          "records": 1
+        },
+        {
+          "target": "127.0.0.12",
+          "status": "success",
+          "duration_seconds": 0.004,
+          "bindings": 2,
+          "records": 1
+        },
+        {
+          "target": "127.0.0.16",
+          "status": "success",
+          "duration_seconds": 0.002,
+          "bindings": 2,
+          "records": 1
+        },
+        {
+          "target": "127.0.0.14",
+          "status": "success",
+          "duration_seconds": 0.005,
+          "bindings": 2,
+          "records": 1
+        },
+        {
+          "target": "127.0.0.15",
+          "status": "success",
+          "duration_seconds": 0.004,
+          "bindings": 2,
+          "records": 1
+        },
+        {
+          "target": "127.0.0.20",
+          "status": "poll_failed",
+          "duration_seconds": 0.001,
+          "bindings": 0,
+          "records": 0
+        },
+        {
+          "target": "127.0.0.17",
+          "status": "success",
+          "duration_seconds": 0.004,
+          "bindings": 2,
+          "records": 1
+        },
+        {
+          "target": "127.0.0.19",
+          "status": "success",
+          "duration_seconds": 0.003,
+          "bindings": 2,
+          "records": 1
+        },
+        {
+          "target": "127.0.0.18",
+          "status": "success",
+          "duration_seconds": 0.004,
+          "bindings": 2,
+          "records": 1
+        }
+      ]
+    },
+    {
+      "kind": "stop",
+      "iteration": 2,
+      "status": "aborted",
+      "elapsed_seconds": 0.147,
+      "poll_results": [
+        {
+          "target": "127.0.0.11",
+          "status": "cancelled",
+          "duration_seconds": 0.101,
+          "bindings": 0,
+          "records": 0
+        },
+        {
+          "target": "127.0.0.12",
+          "status": "cancelled",
+          "duration_seconds": 0.099,
+          "bindings": 0,
+          "records": 0
+        },
+        {
+          "target": "127.0.0.13",
+          "status": "cancelled",
+          "duration_seconds": 0.099,
+          "bindings": 0,
+          "records": 0
+        },
+        {
+          "target": "127.0.0.14",
+          "status": "cancelled",
+          "duration_seconds": 0.098,
+          "bindings": 0,
+          "records": 0
+        },
+        {
+          "target": "127.0.0.15",
+          "status": "cancelled",
+          "duration_seconds": 0.098,
+          "bindings": 0,
+          "records": 0
+        },
+        {
+          "target": "127.0.0.16",
+          "status": "cancelled",
+          "duration_seconds": 0.098,
+          "bindings": 0,
+          "records": 0
+        },
+        {
+          "target": "127.0.0.17",
+          "status": "cancelled",
+          "duration_seconds": 0.097,
+          "bindings": 0,
+          "records": 0
+        },
+        {
+          "target": "127.0.0.18",
+          "status": "cancelled",
+          "duration_seconds": 0.097,
+          "bindings": 0,
+          "records": 0
+        },
+        {
+          "target": "127.0.0.19",
+          "status": "cancelled",
+          "duration_seconds": 0.097,
+          "bindings": 0,
+          "records": 0
+        },
+        {
+          "target": "127.0.0.20",
+          "status": "cancelled",
+          "duration_seconds": 0.097,
+          "bindings": 0,
+          "records": 0
+        }
+      ]
+    },
+    {
+      "kind": "healthy",
+      "iteration": 2,
+      "elapsed_seconds": 0.235,
+      "status": "success",
+      "error": null,
+      "records": 10,
+      "files": [
+        "even_b4c88acb-dcd1-46e6-8302-9e7452c34cfd.jsonl",
+        "odd_b4c88acb-dcd1-46e6-8302-9e7452c34cfd.jsonl"
+      ],
+      "remote_path": "/upload/v183-snmp-pilot/1791870094-healthy-2",
+      "poll_results": [
+        {
+          "target": "127.0.0.11",
+          "status": "success",
+          "duration_seconds": 0.004,
+          "bindings": 2,
+          "records": 1
+        },
+        {
+          "target": "127.0.0.13",
+          "status": "success",
+          "duration_seconds": 0.005,
+          "bindings": 2,
+          "records": 1
+        },
+        {
+          "target": "127.0.0.14",
+          "status": "success",
+          "duration_seconds": 0.004,
+          "bindings": 2,
+          "records": 1
+        },
+        {
+          "target": "127.0.0.12",
+          "status": "success",
+          "duration_seconds": 0.006,
+          "bindings": 2,
+          "records": 1
+        },
+        {
+          "target": "127.0.0.15",
+          "status": "success",
+          "duration_seconds": 0.005,
+          "bindings": 2,
+          "records": 1
+        },
+        {
+          "target": "127.0.0.18",
+          "status": "success",
+          "duration_seconds": 0.003,
+          "bindings": 2,
+          "records": 1
+        },
+        {
+          "target": "127.0.0.16",
+          "status": "success",
+          "duration_seconds": 0.004,
+          "bindings": 2,
+          "records": 1
+        },
+        {
+          "target": "127.0.0.17",
+          "status": "success",
+          "duration_seconds": 0.004,
+          "bindings": 2,
+          "records": 1
+        },
+        {
+          "target": "127.0.0.19",
+          "status": "success",
+          "duration_seconds": 0.004,
+          "bindings": 2,
+          "records": 1
+        },
+        {
+          "target": "127.0.0.20",
+          "status": "success",
+          "duration_seconds": 0.004,
+          "bindings": 2,
+          "records": 1
+        }
+      ]
+    },
+    {
+      "kind": "mixed",
+      "iteration": 2,
+      "elapsed_seconds": 0.237,
+      "status": "failed",
+      "error": "SNMP multi-target poll incomplete: 127.0.0.11=success, 127.0.0.13=success, 127.0.0.12=success, 127.0.0.14=success, 127.0.0.15=success, 127.0.0.16=success, 127.0.0.20=poll_failed, 127.0.0.17=success, 127.0.0.18=success, 127.0.0.19=success",
+      "records": 9,
+      "files": [
+        "odd_0fe0215e-ffe1-48a9-a0f9-25ceaec15fac.jsonl",
+        "even_0fe0215e-ffe1-48a9-a0f9-25ceaec15fac.jsonl"
+      ],
+      "remote_path": "/upload/v183-snmp-pilot/1791870095-mixed-2",
+      "poll_results": [
+        {
+          "target": "127.0.0.11",
+          "status": "success",
+          "duration_seconds": 0.006,
+          "bindings": 2,
+          "records": 1
+        },
+        {
+          "target": "127.0.0.13",
+          "status": "success",
+          "duration_seconds": 0.007,
+          "bindings": 2,
+          "records": 1
+        },
+        {
+          "target": "127.0.0.12",
+          "status": "success",
+          "duration_seconds": 0.008,
+          "bindings": 2,
+          "records": 1
+        },
+        {
+          "target": "127.0.0.14",
+          "status": "success",
+          "duration_seconds": 0.011,
+          "bindings": 2,
+          "records": 1
+        },
+        {
+          "target": "127.0.0.15",
+          "status": "success",
+          "duration_seconds": 0.009,
+          "bindings": 2,
+          "records": 1
+        },
+        {
+          "target": "127.0.0.16",
+          "status": "success",
+          "duration_seconds": 0.007,
+          "bindings": 2,
+          "records": 1
+        },
+        {
+          "target": "127.0.0.20",
+          "status": "poll_failed",
+          "duration_seconds": 0.001,
+          "bindings": 0,
+          "records": 0
+        },
+        {
+          "target": "127.0.0.17",
+          "status": "success",
+          "duration_seconds": 0.008,
+          "bindings": 2,
+          "records": 1
+        },
+        {
+          "target": "127.0.0.18",
+          "status": "success",
+          "duration_seconds": 0.005,
+          "bindings": 2,
+          "records": 1
+        },
+        {
+          "target": "127.0.0.19",
+          "status": "success",
+          "duration_seconds": 0.003,
+          "bindings": 2,
+          "records": 1
+        }
+      ]
+    },
+    {
+      "kind": "stop",
+      "iteration": 3,
+      "status": "aborted",
+      "elapsed_seconds": 0.141,
+      "poll_results": [
+        {
+          "target": "127.0.0.11",
+          "status": "cancelled",
+          "duration_seconds": 0.101,
+          "bindings": 0,
+          "records": 0
+        },
+        {
+          "target": "127.0.0.12",
+          "status": "cancelled",
+          "duration_seconds": 0.1,
+          "bindings": 0,
+          "records": 0
+        },
+        {
+          "target": "127.0.0.13",
+          "status": "cancelled",
+          "duration_seconds": 0.1,
+          "bindings": 0,
+          "records": 0
+        },
+        {
+          "target": "127.0.0.14",
+          "status": "cancelled",
+          "duration_seconds": 0.099,
+          "bindings": 0,
+          "records": 0
+        },
+        {
+          "target": "127.0.0.15",
+          "status": "cancelled",
+          "duration_seconds": 0.099,
+          "bindings": 0,
+          "records": 0
+        },
+        {
+          "target": "127.0.0.16",
+          "status": "cancelled",
+          "duration_seconds": 0.099,
+          "bindings": 0,
+          "records": 0
+        },
+        {
+          "target": "127.0.0.17",
+          "status": "cancelled",
+          "duration_seconds": 0.099,
+          "bindings": 0,
+          "records": 0
+        },
+        {
+          "target": "127.0.0.18",
+          "status": "cancelled",
+          "duration_seconds": 0.099,
+          "bindings": 0,
+          "records": 0
+        },
+        {
+          "target": "127.0.0.19",
+          "status": "cancelled",
+          "duration_seconds": 0.099,
+          "bindings": 0,
+          "records": 0
+        },
+        {
+          "target": "127.0.0.20",
+          "status": "cancelled",
+          "duration_seconds": 0.099,
+          "bindings": 0,
+          "records": 0
+        }
+      ]
+    },
+    {
+      "kind": "healthy",
+      "iteration": 3,
+      "elapsed_seconds": 0.245,
+      "status": "success",
+      "error": null,
+      "records": 10,
+      "files": [
+        "even_c7d28b89-989f-4509-8aad-8b510c0f1534.jsonl",
+        "odd_c7d28b89-989f-4509-8aad-8b510c0f1534.jsonl"
+      ],
+      "remote_path": "/upload/v183-snmp-pilot/1791870096-healthy-3",
+      "poll_results": [
+        {
+          "target": "127.0.0.12",
+          "status": "success",
+          "duration_seconds": 0.004,
+          "bindings": 2,
+          "records": 1
+        },
+        {
+          "target": "127.0.0.11",
+          "status": "success",
+          "duration_seconds": 0.006,
+          "bindings": 2,
+          "records": 1
+        },
+        {
+          "target": "127.0.0.13",
+          "status": "success",
+          "duration_seconds": 0.005,
+          "bindings": 2,
+          "records": 1
+        },
+        {
+          "target": "127.0.0.15",
+          "status": "success",
+          "duration_seconds": 0.002,
+          "bindings": 2,
+          "records": 1
+        },
+        {
+          "target": "127.0.0.14",
+          "status": "success",
+          "duration_seconds": 0.006,
+          "bindings": 2,
+          "records": 1
+        },
+        {
+          "target": "127.0.0.16",
+          "status": "success",
+          "duration_seconds": 0.004,
+          "bindings": 2,
+          "records": 1
+        },
+        {
+          "target": "127.0.0.17",
+          "status": "success",
+          "duration_seconds": 0.004,
+          "bindings": 2,
+          "records": 1
+        },
+        {
+          "target": "127.0.0.18",
+          "status": "success",
+          "duration_seconds": 0.004,
+          "bindings": 2,
+          "records": 1
+        },
+        {
+          "target": "127.0.0.19",
+          "status": "success",
+          "duration_seconds": 0.005,
+          "bindings": 2,
+          "records": 1
+        },
+        {
+          "target": "127.0.0.20",
+          "status": "success",
+          "duration_seconds": 0.003,
+          "bindings": 2,
+          "records": 1
+        }
+      ]
+    },
+    {
+      "kind": "mixed",
+      "iteration": 3,
+      "elapsed_seconds": 0.263,
+      "status": "failed",
+      "error": "SNMP multi-target poll incomplete: 127.0.0.13=success, 127.0.0.11=success, 127.0.0.12=success, 127.0.0.14=success, 127.0.0.15=success, 127.0.0.16=success, 127.0.0.19=success, 127.0.0.17=success, 127.0.0.20=poll_failed, 127.0.0.18=success",
+      "records": 9,
+      "files": [
+        "even_5e0bfe2e-e142-455d-84da-24b32d583e26.jsonl",
+        "odd_5e0bfe2e-e142-455d-84da-24b32d583e26.jsonl"
+      ],
+      "remote_path": "/upload/v183-snmp-pilot/1791870096-mixed-3",
+      "poll_results": [
+        {
+          "target": "127.0.0.13",
+          "status": "success",
+          "duration_seconds": 0.005,
+          "bindings": 2,
+          "records": 1
+        },
+        {
+          "target": "127.0.0.11",
+          "status": "success",
+          "duration_seconds": 0.008,
+          "bindings": 2,
+          "records": 1
+        },
+        {
+          "target": "127.0.0.12",
+          "status": "success",
+          "duration_seconds": 0.009,
+          "bindings": 2,
+          "records": 1
+        },
+        {
+          "target": "127.0.0.14",
+          "status": "success",
+          "duration_seconds": 0.008,
+          "bindings": 2,
+          "records": 1
+        },
+        {
+          "target": "127.0.0.15",
+          "status": "success",
+          "duration_seconds": 0.005,
+          "bindings": 2,
+          "records": 1
+        },
+        {
+          "target": "127.0.0.16",
+          "status": "success",
+          "duration_seconds": 0.005,
+          "bindings": 2,
+          "records": 1
+        },
+        {
+          "target": "127.0.0.19",
+          "status": "success",
+          "duration_seconds": 0.003,
+          "bindings": 2,
+          "records": 1
+        },
+        {
+          "target": "127.0.0.17",
+          "status": "success",
+          "duration_seconds": 0.005,
+          "bindings": 2,
+          "records": 1
+        },
+        {
+          "target": "127.0.0.20",
+          "status": "poll_failed",
+          "duration_seconds": 0.002,
+          "bindings": 0,
+          "records": 0
+        },
+        {
+          "target": "127.0.0.18",
+          "status": "success",
+          "duration_seconds": 0.005,
+          "bindings": 2,
+          "records": 1
+        }
+      ]
+    }
+  ]
+}

@@ -5,6 +5,7 @@ from __future__ import annotations
 import logging
 import threading
 import time
+from collections import deque
 from collections.abc import Iterator
 
 from tram.core.exceptions import SourceError
@@ -47,10 +48,11 @@ class KafkaSource(BaseSource):
     explicitly as per-partition completed frontiers (V18-01 §7 / plan C).
     Two paths share the epoch-fenced explicit commits:
 
-    * Legacy batch path — each poll batch is committed once the caller has
+    * Direct-reader legacy batch path — each poll batch is committed once the caller has
       consumed every message in it (the at-least-once contract of the
-      single-threaded executor: a crash at any point leaves the uncommitted
-      batch to be re-polled on restart). Serves non-strict/legacy pipelines.
+      direct synchronous reader: a crash at any point leaves the uncommitted
+      batch to be re-polled on restart). The executor disables this path with
+      its internal ``_ack_managed`` flag before intake begins.
     * Per-record ack path — ``ack(meta, disposition)`` marks one record
       complete; a partition's committable frontier advances only across its
       contiguous completed prefix (V18-01 §7 / plan C: threaded execution
@@ -60,9 +62,11 @@ class KafkaSource(BaseSource):
       advances, the explicit offset (frontier + 1) is queued as a pending
       commit for that partition on the owning consumer. Tombstone records
       (value None) need no processing: read() records their offsets and the
-      frontier sweep bridges them, but a tombstone never advances a frontier
-      or fires a commit by itself — a tombstone-only partition is committed
-      only by the legacy batch path.
+      frontier sweep bridges them. Managed readers also sweep at tombstone
+      intake, so tombstone-only batches and trailing tombstones can advance a
+      decided prefix without waiting for another payload. Undecided payloads
+      still block that prefix. Direct legacy readers commit tombstone-only
+      batches at intake completion.
 
     The per-record ack path never commits from the acking thread: kafka-python
     consumers are not thread-safe for concurrent commits, and racing commits
@@ -71,8 +75,8 @@ class KafkaSource(BaseSource):
     the reader thread — drains it once per poll iteration and issues at most
     one consolidated commit per partition per drain (V18-02). Completion is
     bound to the consumer session and partition-assignment epoch: any
-    assignment change (rebalance/revoke) bumps the epoch and in-flight
-    completions from the old epoch are ignored — they can never advance a new
+    revoked partition receives a new ownership epoch when reassigned;
+    in-flight completions from its old epoch are ignored — they cannot advance a new
     assignment's frontier. Revocation drops the revoked partition's frontier,
     out-of-order, tombstone, and pending-commit tracking, and a new consumer
     session resets the whole set. The gap-aware threaded frontier
@@ -83,9 +87,10 @@ class KafkaSource(BaseSource):
 
     Under stream micro-batching (GH #78) the last message of each poll batch
     carries ``source_batch_end: true`` in its meta; the executor flushes its
-    micro-batch buffer when it sees that marker and only then resumes the
-    generator past it, so the per-batch commit can never precede the flush of
-    the batch's records (commit-after-flush). Setting ``enable_auto_commit:
+    micro-batch buffer when it sees that marker. Executor-managed readers still
+    require the decided per-record ack frontier before committing offsets;
+    resuming the generator past a batch alone cannot authorize a commit.
+    Setting ``enable_auto_commit:
     true`` restores the legacy at-most-once behavior: the consumer commits on
     its own ~5s timer regardless of sink progress, and the explicit commits
     are disabled.
@@ -114,6 +119,9 @@ class KafkaSource(BaseSource):
         self.group_id: str = config.get("group_id") or config.get("_pipeline_name", "tram")
         self.auto_offset_reset: str = config.get("auto_offset_reset", "latest")
         self.enable_auto_commit: bool = bool(config.get("enable_auto_commit", False))
+        # Executor-managed readers decide delivery through ack(); exhausting
+        # a poll batch only proves intake, not completion of its records.
+        self._ack_managed: bool = bool(config.get("_ack_managed", False))
         self.max_poll_records: int = int(config.get("max_poll_records", 500))
         self.session_timeout_ms: int = int(config.get("session_timeout_ms", 30000))
         self.security_protocol: str = config.get("security_protocol", "PLAINTEXT")
@@ -126,11 +134,12 @@ class KafkaSource(BaseSource):
         self._stop_event: threading.Event = threading.Event()
         self._consumer = None
         # V18-01 §7: consumer-session / partition-assignment epoch fencing.
-        # ``_assignment_epoch`` increments on every assignment change and on
-        # every new consumer session; metas carry the epoch they were read
-        # under and ``ack()`` ignores completions whose epoch is stale.
+        # The global counter allocates per-partition ownership epochs. Reader
+        # metas retain their partition's token while ownership is uninterrupted;
+        # revoke/reassign and a new consumer session fence old completions.
         self._lock = threading.Lock()
         self._assignment_epoch: int = 0
+        self._partition_epochs: dict[tuple[str, int], int] = {}
         self._assigned: set = set()
         # Per-partition completed frontier: {(topic, partition): offset} — the
         # highest offset whose entire prefix (≤ offset) has been completed via
@@ -151,6 +160,9 @@ class KafkaSource(BaseSource):
         # session/batch already committed them), so they are implicitly
         # complete — the frontier floor for the partition is read_min - 1.
         self._read_min: dict[tuple[str, int], int] = {}
+        # Ordered observed offsets distinguish compacted log holes from actual
+        # undecided payloads. Only a decided observed prefix can be committed.
+        self._observed_offsets: dict[tuple[str, int], deque[int]] = {}
         # Pending per-partition frontier commits recorded by ack() (V18-02).
         # ack() NEVER commits directly: kafka-python consumers are not
         # thread-safe for concurrent commits, and racing worker-thread commits
@@ -179,20 +191,40 @@ class KafkaSource(BaseSource):
     # ── Lifecycle ──────────────────────────────────────────────────────────
 
     def stop(self) -> None:
-        """Interrupt read(): wake a blocked poll and skip the reconnect backoff.
+        """Request reader shutdown and interrupt reconnect backoff.
 
-        Called by the executor's stop-watcher thread when the pipeline stop
-        event fires.  Closes the active consumer so a blocked ``poll()``
-        unblocks immediately instead of waiting out the poll timeout; the read
-        loop then observes the stop flag and exits without reconnecting.
+        Executor-managed readers retain the consumer until the owning thread
+        calls ``close()`` after deciding the final tail. Legacy readers close
+        immediately to wake a blocked poll.
         """
         self._stop_event.set()
+        if self._ack_managed:
+            # The reader polls at most once per second. Keep its consumer
+            # available until the executor decides and acknowledges the tail;
+            # the stop-watcher must not close a reader-owned consumer.
+            return
         consumer = self._consumer
         if consumer is not None:
             try:
                 consumer.close()
             except Exception:
                 pass
+
+    def close(self) -> None:
+        """Drain decided offsets and release the consumer on its owning thread."""
+        consumer = self._consumer
+        if consumer is None:
+            return
+        if self._ack_managed and not self.enable_auto_commit:
+            self._drain_pending_commits(consumer)
+        try:
+            consumer.close()
+            logger.info("Kafka consumer closed", extra={"topics": self.topics})
+        except Exception:
+            pass
+        finally:
+            if self._consumer is consumer:
+                self._consumer = None
 
     def _sleep_interruptible(self, seconds: float) -> bool:
         """Sleep in slices so stop() interrupts the delay. Returns True if stopped."""
@@ -206,7 +238,7 @@ class KafkaSource(BaseSource):
 
     def _build_consumer(self):
         try:
-            from kafka import KafkaConsumer
+            from kafka import ConsumerRebalanceListener, KafkaConsumer
         except ImportError as exc:
             raise SourceError(
                 "Kafka source requires kafka-python: pip install kafka-python"
@@ -228,7 +260,22 @@ class KafkaSource(BaseSource):
         if self.ssl_cafile:
             kwargs["ssl_cafile"] = self.ssl_cafile
 
-        return KafkaConsumer(*self.topics, **kwargs)
+        source = self
+
+        class Listener(ConsumerRebalanceListener):
+            def on_partitions_revoked(self, partitions) -> None:
+                source._on_partitions_revoked(partitions)
+
+            def on_partitions_assigned(self, partitions) -> None:
+                source._on_partitions_assigned(partitions)
+
+        consumer = KafkaConsumer(**kwargs)
+        try:
+            consumer.subscribe(topics=self.topics, listener=Listener())
+        except Exception:
+            consumer.close()
+            raise
+        return consumer
 
     # ── V18-01 §7: session/assignment-epoch fencing and frontiers ─────────
 
@@ -241,38 +288,60 @@ class KafkaSource(BaseSource):
         """
         with self._lock:
             self._assignment_epoch += 1
+            self._partition_epochs.clear()
             self._assigned = set()
             self._completed.clear()
             self._completed_ooo.clear()
             self._tombstone_offsets.clear()
             self._read_min.clear()
+            self._observed_offsets.clear()
             self._pending_commits.clear()
 
-    def _sync_assignment(self, consumer) -> None:
-        """Detect partition-assignment changes by diffing ``consumer.assignment()``.
+    def _forget_partition(self, tp) -> None:
+        """Drop revoked ownership while holding ``_lock``."""
+        key = (tp.topic, tp.partition)
+        self._partition_epochs.pop(key, None)
+        self._completed.pop(key, None)
+        self._completed_ooo.pop(key, None)
+        self._tombstone_offsets.pop(key, None)
+        self._read_min.pop(key, None)
+        self._observed_offsets.pop(key, None)
+        self._pending_commits.pop(key, None)
 
-        kafka-python exposes no rebalance callbacks, so the assignment set is
-        compared across polls. Any change bumps ``_assignment_epoch``: metas
-        yielded after the bump carry the new epoch, and completions read under
-        the old epoch can no longer advance the frontier or commit (plan C —
-        "old-epoch completions cannot advance a new assignment"). Frontier,
-        out-of-order, tombstone, read-floor, and pending-commit tracking for
-        revoked partitions is dropped; the new owner re-polls from the last
-        committed offsets (at-least-once, never loss).
+    def _on_partitions_revoked(self, partitions) -> None:
+        """Authoritative revocation fences even a same-set reassignment."""
+        revoked = set(partitions)
+        with self._lock:
+            self._assignment_epoch += 1
+            for tp in revoked:
+                self._forget_partition(tp)
+            self._assigned -= revoked
+
+    def _on_partitions_assigned(self, partitions) -> None:
+        current_set = set(partitions)
+        with self._lock:
+            self._assignment_epoch += 1
+            for tp in self._assigned - current_set:
+                self._forget_partition(tp)
+            for tp in current_set:
+                self._partition_epochs.setdefault((tp.topic, tp.partition), self._assignment_epoch)
+            self._assigned = current_set
+
+    def _sync_assignment(self, consumer) -> None:
+        """Reconcile set changes while preserving uninterrupted ownership.
+
+        Real rebalances use the listener, including revoke/reassign to the
+        same set. This reconciliation also handles direct/manual assignments.
         """
         current_set = set(consumer.assignment())
         with self._lock:
-            previous = self._assigned
-            if current_set == previous:
+            if current_set == self._assigned:
                 return
             self._assignment_epoch += 1
-            for tp in previous - current_set:
-                key = (tp.topic, tp.partition)
-                self._completed.pop(key, None)
-                self._completed_ooo.pop(key, None)
-                self._tombstone_offsets.pop(key, None)
-                self._read_min.pop(key, None)
-                self._pending_commits.pop(key, None)
+            for tp in self._assigned - current_set:
+                self._forget_partition(tp)
+            for tp in current_set:
+                self._partition_epochs.setdefault((tp.topic, tp.partition), self._assignment_epoch)
             self._assigned = current_set
 
     def _commit_offsets(self, consumer, offsets: dict, *, raise_on_error: bool) -> None:
@@ -310,6 +379,12 @@ class KafkaSource(BaseSource):
             if epoch != self._assignment_epoch:
                 return
         self._commit_offsets(consumer, batch_tps, raise_on_error=True)
+        with self._lock:
+            for tp, frontier in batch_tps.items():
+                observed = self._observed_offsets.get((tp.topic, tp.partition))
+                if observed is not None:
+                    while observed and observed[0] <= frontier:
+                        observed.popleft()
 
     def _drain_pending_commits(self, consumer) -> None:
         """Reader-thread commit dispatch (V18-02).
@@ -333,15 +408,28 @@ class KafkaSource(BaseSource):
                 return
             pending = self._pending_commits
             self._pending_commits = {}
+            epochs = {
+                key: self._partition_epochs.get(key, self._assignment_epoch) for key in pending
+            }
         try:
             from kafka import TopicPartition
 
             self._commit_offsets(
                 consumer,
                 {TopicPartition(t, p): f for (t, p), f in pending.items()},
-                raise_on_error=False,
+                raise_on_error=True,
             )
         except Exception as exc:
+            with self._lock:
+                # An uncertain/failed commit still owns this frontier. Keep
+                # it for the next reader-thread drain, without overwriting a
+                # newer concurrent completion or resurrecting a stale session.
+                if consumer is self._consumer:
+                    for key, frontier in pending.items():
+                        if epochs[key] == self._partition_epochs.get(key, self._assignment_epoch):
+                            self._pending_commits[key] = max(
+                                self._pending_commits.get(key, -1), frontier
+                            )
             logger.warning(
                 "Kafka pending commit drain failed",
                 extra={
@@ -401,6 +489,47 @@ class KafkaSource(BaseSource):
             return None
         return f"{incarnation}/{topic}/{partition}"
 
+    def _advance_decided_frontier(self, key: tuple[str, int]) -> None:
+        """Sweep decided payloads/tombstones while holding ``_lock``.
+
+        The first observed offset establishes the floor. Any subsequently
+        observed payload without an ack blocks both kinds of completion.
+        """
+        frontier = max(self._completed.get(key, -1), self._read_min[key] - 1)
+        ooo = self._completed_ooo.get(key, set())
+        tombstones = self._tombstone_offsets.get(key, set())
+        advanced = False
+        observed = self._observed_offsets.get(key)
+        while True:
+            # Kafka compaction/control records may leave numerical holes.
+            # Once read() supplies coverage, the next observed offset is the
+            # barrier; an absent offset is not an outstanding delivery.
+            if observed is not None:
+                if not observed:
+                    break
+                next_offset = observed[0]
+            else:
+                # Direct ack callers without poll coverage retain the legacy
+                # numerical frontier used by the interface's unit harnesses.
+                next_offset = frontier + 1
+            if next_offset not in ooo and next_offset not in tombstones:
+                break
+            frontier = next_offset
+            if observed is not None:
+                observed.popleft()
+            ooo.discard(frontier)
+            tombstones.discard(frontier)
+            advanced = True
+        if not ooo:
+            self._completed_ooo.pop(key, None)
+        if not tombstones:
+            self._tombstone_offsets.pop(key, None)
+        if advanced:
+            self._completed[key] = frontier
+            self._pending_commits[key] = max(
+                self._pending_commits.get(key, -1), frontier
+            )
+
     def ack(self, meta: dict, disposition) -> None:
         """Advance the per-partition completed frontier and record its commit.
 
@@ -414,7 +543,7 @@ class KafkaSource(BaseSource):
         the frontier never commits past a queued/in-flight record (an unacked
         payload offset is a permanent gap). Tombstone offsets recorded by
         read() need no processing and are bridged by the frontier sweep without
-        firing a commit of their own. Fenced by the assignment epoch captured
+        bypassing undecided payloads. Fenced by the assignment epoch captured
         at yield time: a completion whose epoch no longer matches (rebalance/
         revoke, or a new consumer session since the message was read) is
         ignored and never commits.
@@ -424,8 +553,8 @@ class KafkaSource(BaseSource):
         not thread-safe for concurrent commits). The poll loop (reader thread)
         drains the pending set and issues at most one consolidated commit per
         partition per drain (``_drain_pending_commits``). The legacy
-        batch-boundary commit path (_commit_batch) is unchanged and continues
-        to serve non-strict/legacy pipelines.
+        batch-boundary commit path (_commit_batch) serves direct readers only;
+        executor-managed readers commit exclusively through this ack path.
         """
         if self.enable_auto_commit:
             return
@@ -435,7 +564,9 @@ class KafkaSource(BaseSource):
         if topic is None or partition is None or offset is None:
             return
         with self._lock:
-            if meta.get("kafka_epoch", -1) != self._assignment_epoch:
+            key = (topic, partition)
+            epoch = self._partition_epochs.get(key, self._assignment_epoch)
+            if meta.get("kafka_epoch", -1) != epoch:
                 logger.warning(
                     "Kafka stale-epoch completion ignored",
                     extra={"topic": topic, "partition": partition, "offset": offset},
@@ -448,7 +579,6 @@ class KafkaSource(BaseSource):
                     extra={"topic": topic, "partition": partition, "offset": offset},
                 )
                 return
-            key = (topic, partition)
             frontier = self._completed.get(key, -1)
             read_min = self._read_min.get(key)
             if read_min is None:
@@ -475,29 +605,8 @@ class KafkaSource(BaseSource):
                     # Already recorded as an out-of-order completion.
                     return
                 ooo.add(offset)
-                tombstones = self._tombstone_offsets.get(key)
-                # Sweep the contiguous completed prefix: the next offset is
-                # complete when it was acked out of order or is a tombstone
-                # that needs no processing. The frontier can never pass an
-                # unacked payload record (queued/in-flight).
-                next_offset = frontier + 1
-                advanced = False
-                while next_offset in ooo or (
-                    tombstones is not None and next_offset in tombstones
-                ):
-                    ooo.discard(next_offset)
-                    if tombstones is not None:
-                        tombstones.discard(next_offset)
-                    frontier = next_offset
-                    next_offset += 1
-                    advanced = True
-                if not ooo:
-                    self._completed_ooo.pop(key, None)
-                if tombstones is not None and not tombstones:
-                    self._tombstone_offsets.pop(key, None)
-                if not advanced:
-                    return  # gap remains: the frontier did not move, no commit
-                self._completed[key] = frontier
+                self._advance_decided_frontier(key)
+                return
             # Record the frontier advance as a pending commit for the reader
             # thread's drain — never commit from this thread. The max guard
             # keeps the pending value monotone under concurrent acks.
@@ -571,7 +680,6 @@ class KafkaSource(BaseSource):
                 except Exception as exc:
                     raise SourceError(f"Kafka consumer init failed: {exc}") from exc
 
-                attempt = 0  # Reset on successful connect
                 # New consumer session: bump the epoch so in-flight
                 # completions from the previous session can never commit on
                 # this consumer, and reset assignment/frontier/pending state.
@@ -581,6 +689,9 @@ class KafkaSource(BaseSource):
                     if self._stop_event.is_set():
                         return
                     batch = consumer.poll(timeout_ms=1000)
+                    # Construction alone can succeed while every poll fails.
+                    # Reset the failure streak only after successful intake.
+                    attempt = 0
                     self._sync_assignment(consumer)
                     # Reader-thread commit dispatch (V18-02): drain the pending
                     # commits recorded by ack() — at most one consolidated
@@ -593,6 +704,11 @@ class KafkaSource(BaseSource):
                         continue
                     with self._lock:
                         batch_epoch = self._assignment_epoch
+                        batch_epochs = {
+                            (tp.topic, tp.partition): self._partition_epochs.get(
+                                (tp.topic, tp.partition), batch_epoch
+                            ) for tp in batch
+                        }
                     self._update_lag(consumer)
                     # Materialize the poll batch in yield order so the
                     # batch-end marker can be pinned to the final message the
@@ -618,8 +734,13 @@ class KafkaSource(BaseSource):
                         # below it were never handed to the executor and are
                         # implicitly complete — the ack-path frontier floor.
                         for topic, partition, _m in ordered:
-                            if (topic, partition) not in self._read_min:
-                                self._read_min[(topic, partition)] = _m.offset
+                            key = (topic, partition)
+                            if key not in self._read_min:
+                                self._read_min[key] = _m.offset
+                            observed = self._observed_offsets.setdefault(key, deque())
+                            floor = observed[-1] if observed else self._completed.get(key, -1)
+                            if _m.offset > floor:
+                                observed.append(_m.offset)
                     live_count = sum(1 for _t, _p, m in ordered if m.value is not None)
                     yielded = 0
                     for topic, partition, msg in ordered:
@@ -628,10 +749,10 @@ class KafkaSource(BaseSource):
                             # Tombstone: needs no processing, so it is never
                             # yielded and never acked. Record its offset so the
                             # ack-path frontier sweep can bridge it without a
-                            # per-record completion; a tombstone alone never
-                            # advances a frontier or fires a commit (only a
-                            # payload ack can), and offsets already covered by
-                            # the frontier are not retained. The sweep
+                            # per-record completion. Managed readers advance
+                            # the decided prefix here too, while undecided
+                            # payloads remain barriers. Covered offsets are
+                            # not retained. The sweep
                             # discards each bridged offset, bounding the set.
                             with self._lock:
                                 if msg.offset > self._completed.get(
@@ -640,6 +761,8 @@ class KafkaSource(BaseSource):
                                     self._tombstone_offsets.setdefault(
                                         (topic, partition), set()
                                     ).add(msg.offset)
+                                    if self._ack_managed and not self.enable_auto_commit:
+                                        self._advance_decided_frontier((topic, partition))
                             continue
                         yielded += 1
                         yield value, {
@@ -647,10 +770,10 @@ class KafkaSource(BaseSource):
                             "kafka_partition": partition,
                             "kafka_offset": msg.offset,
                             "kafka_key": msg.key.decode("utf-8") if msg.key else None,
-                            "kafka_epoch": batch_epoch,
+                            "kafka_epoch": batch_epochs[(topic, partition)],
                             "source_batch_end": yielded == live_count,
                         }
-                    if not self.enable_auto_commit:
+                    if not self.enable_auto_commit and not self._ack_managed:
                         # Explicit per-partition commit. Reached only when the
                         # caller has resumed the generator past the last message
                         # of this poll batch (i.e. it fully consumed the batch),
@@ -683,15 +806,14 @@ class KafkaSource(BaseSource):
                     return
             finally:
                 if consumer is not None:
-                    # Deliberately NO commit() here: a finally-commit would
-                    # persist offsets for a partially consumed batch when the
-                    # caller aborts mid-batch (sink error / run stop), silently
-                    # losing those messages. At-least-once means the uncommitted
-                    # tail is re-polled instead.
-                    try:
-                        consumer.close()
-                        logger.info("Kafka consumer closed", extra={"topics": self.topics})
-                    except Exception:
+                    # Managed readers may have a final decided frontier when
+                    # batch_size/stop closes the generator before another
+                    # poll. Drain only ack/tombstone decisions on this reader
+                    # thread; never commit the poll batch's observed offsets.
+                    if self._ack_managed and self._stop_event.is_set():
+                        # Natural stop returns control to the executor before
+                        # its buffered tail has been decided. The executor's
+                        # source.close() owns the final drain and close.
                         pass
-                    finally:
-                        self._consumer = None
+                    else:
+                        self.close()

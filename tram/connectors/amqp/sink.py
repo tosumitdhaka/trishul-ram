@@ -29,7 +29,10 @@ class AmqpSink(BaseSink):
     confirms via ``channel.confirm_delivery()``. In blocking mode each
     ``basic_publish`` then blocks until the broker confirms the message (a
     ``basic.nack`` raises), so a synchronous return is a broker-confirmed
-    publish — no false clean success. Every publish opens its own connection
+    publish. Mandatory routing rejects an unroutable message, and persistent
+    message properties request storage across broker restarts. The receiving
+    queue/exchange topology must also be durable to provide remote durability.
+    Every publish opens its own connection
     and blocks on its confirm, so the sink holds no buffered state and
     ``commit()`` is a trivial confirmed barrier at ``remote_durable``. The
     tier assignment is confirmed by this audit; end-to-end behavior against a
@@ -73,6 +76,7 @@ class AmqpSink(BaseSink):
             raise SinkError(
                 "AMQP sink requires pika — install with: pip install tram[amqp]"
             ) from exc
+        connection = None
         try:
             params = pika.URLParameters(self.url)
             connection = pika.BlockingConnection(params)
@@ -85,12 +89,20 @@ class AmqpSink(BaseSink):
                 exchange=self.exchange,
                 routing_key=self.routing_key,
                 body=data,
-                properties=pika.BasicProperties(content_type=self.content_type),
+                mandatory=True,
+                properties=pika.BasicProperties(
+                    content_type=self.content_type, delivery_mode=2,
+                ),
             )
-            connection.close()
             logger.info("Published to AMQP", extra={"routing_key": self.routing_key, "bytes": len(data)})
         except Exception as exc:
             raise SinkError(f"AMQP publish failed: {exc}") from exc
+        finally:
+            if connection is not None:
+                try:
+                    connection.close()
+                except Exception as exc:
+                    logger.warning("AMQP connection cleanup failed", extra={"error": str(exc)})
 
     def commit(self, *, deadline: float | None = None) -> SinkCommitReceipt:
         """Delivery flush/commit barrier (V18-01 section 6).
@@ -104,5 +116,8 @@ class AmqpSink(BaseSink):
             sink_key=self.__class__.__name__,
             tier=DeliveryTier.REMOTE_DURABLE,
             confirmed=True,
-            notes="per-publish publisher confirms (channel.confirm_delivery); nothing buffered",
+            notes=(
+                "mandatory persistent publication confirmed; receiving topology "
+                "must be durable; nothing buffered"
+            ),
         )
