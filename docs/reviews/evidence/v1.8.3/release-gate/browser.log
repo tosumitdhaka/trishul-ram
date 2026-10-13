@@ -1,0 +1,222 @@
+[browser-smoke] static server: http://127.0.0.1:36951 (serving /tmp/tram-v183-release-gate/tram/ui/dist)
+  PASS: shell visible (auth-disabled boot path)
+  PASS: fixture meta.json version matches tram/ui/package.json — fixture=1.8.3, package.json=1.8.3
+  PASS: brand version renders — got "v1.8.3" (fixture meta.json, expected v1.8.3)
+  PASS: health card shows the same version — got "1.8.3" (expected 1.8.3)
+  PASS: no errors at boot
+  PASS: #dashboard boots clean (Dashboard)
+  PASS: #pipelines boots clean (Pipelines)
+  PASS: #runs boots clean (Run History)
+  PASS: #editor boots clean (Pipeline Editor)
+  PASS: #create boots clean (Pipeline Wizard)
+  PASS: #schemas boots clean (Schemas)
+  PASS: #mibs boots clean (MIB Modules)
+  PASS: #cluster boots clean (Cluster)
+  PASS: #plugins boots clean (Plugins)
+  PASS: #settings boots clean (Settings)
+  PASS: #detail boots clean (Pipeline Detail: sftp-pm-to-kafka)
+  PASS: #runs boots clean (Run Detail: 479d6f4d)
+PAGE ERRORS: NONE
+CONSOLE ERRORS: NONE
+FAILED REQUESTS: NONE
+ALL CHECKS PASSED
+
+[boot] PASS (7551ms, exit 0)
+
+  PASS: wizard step 1 renders
+  PASS: wizard has 5 steps — got 5
+  PASS: source types come from the schema fixture — got ["","kafka","sftp"]
+  PASS: AI-unconfigured note shown (fixture says disabled)
+  PASS: wizard advances to step 2
+  PASS: required fields only revealed by default — visible=["brokers","topic"] all=["brokers","topic","group_id","api_key","password","port"]
+  PASS: optional fields exist but start hidden — got ["api_key","brokers","group_id","password","port","topic"]
+  PASS: secret field renders as password input — got "password"
+  PASS: optional fields start collapsed behind the disclosure
+  PASS: serializer choices from schema fixture — got ["csv","json"]
+  PASS: advanced disclosure toggles open
+  PASS: missing required field blocks advance
+  PASS: missing required field marked .is-invalid
+  PASS: wizard advances through sinks to schedule
+  PASS: wizard reaches the review step
+  PASS: review YAML is generated
+  PASS: stale-schema banner shown after version rotation
+  PASS: navigation blocked while stale
+  PASS: save blocked while stale
+  PASS: reload clears the stale banner
+  PASS: navigation restored after reload
+  PASS: template pre-seeds the pipeline name — got "kafka-to-os"
+  PASS: template pre-seeds the source type — got "kafka"
+  PASS: editor hand-off prefills from sessionStorage — got "name: handoff-check"
+SCHEMA_FETCHES: 10
+PAGE ERRORS: NONE
+CONSOLE ERRORS: NONE
+ALL CHECKS PASSED
+
+[wizard] PASS (7243ms, exit 0)
+
+  PASS: AI generate button enabled (status stub says enabled)
+TOASTS_AFTER_AI_GENERATE: [{"text":"YAML generated — review and save","cls":"tram-toast tram-toast-info is-visible","bg":"rgb(15, 43, 46)"}]
+  PASS: AI generate jumps to the Review step
+  PASS: Review textarea holds the AI YAML — first line: "name: ai-generated-pipe"
+  PASS: no "Select a source type" validation toast
+  PASS: no "Add at least one sink" validation toast
+  PASS: no "Pipeline name is required" validation toast
+  PASS: "YAML generated" toast is an info toast (not success/error) — got {"text":"YAML generated — review and save","cls":"tram-toast tram-toast-info is-visible","bg":"rgb(15, 43, 46)"}
+EDITOR_TEXTAREA_FIRST_LINE: "name: ai-generated-pipe"
+  PASS: editor textarea holds the AI YAML after hand-off — first line: "name: ai-generated-pipe", expected "name: ai-generated-pipe"
+  PASS: editor Cancel lands on the pipelines page — rows=2
+  PASS: New Pipeline opens the YAML editor — hash=#editor?return=pipelines
+  PASS: New Pipeline starts with the default YAML instead of wizard hand-off — title=New Pipeline, first line="name: my-pipeline"
+  PASS: new editor Cancel returns to Pipelines
+  PASS: Pipeline Wizard opens the guided flow — button=Pipeline Wizard
+AFTER_SAVE_TYPED_NAME: {"hash":"#detail/server-ai-generated-pipe?tab=runs","detail":true,"detailErr":false,"runBtn":"Start","editWired":true}
+  PASS: Save lands on the created pipeline detail page — {"hash":"#detail/server-ai-generated-pipe?tab=runs","detail":true,"detailErr":false,"runBtn":"Start","editWired":true}
+  PASS: detail page loaded without an error state — {"hash":"#detail/server-ai-generated-pipe?tab=runs","detail":true,"detailErr":false,"runBtn":"Start","editWired":true}
+  PASS: detail page buttons are wired (edit responds) — {"hash":"#detail/server-ai-generated-pipe?tab=runs","detail":true,"detailErr":false,"runBtn":"Start","editWired":true}
+  PASS: Save Pipeline POST reached the API — createCount=1
+AFTER_SAVE_NO_NAME: {"hash":"#detail/server-ai-generated-pipe?tab=runs","detail":true,"editWired":true}
+  PASS: Save without a typed name lands on the AI-named pipeline detail page — {"hash":"#detail/server-ai-generated-pipe?tab=runs","detail":true,"editWired":true}
+  PASS: detail page buttons wired in the no-name variant too — {"hash":"#detail/server-ai-generated-pipe?tab=runs","detail":true,"editWired":true}
+SUGGEST_COUNT: 3
+CREATE_COUNT: 2
+PAGE ERRORS: NONE
+CONSOLE ERRORS: NONE
+ALL CHECKS PASSED
+
+[wizard-ai] PASS (11535ms, exit 0)
+
+  PASS: gutter renders with the default template — gutter=15 textarea=15
+  PASS: highlight layer tokenizes keys and values — {"key":14,"str":10,"comment":0}
+  PASS: all features tokenize (key/value/env/comment) — {"lines":15,"keys":12,"values":10,"numbers":0,"env":1,"comments":1,"blockSpans":15}
+  PASS: line spans match gutter lines — lines=15 spans=15
+  PASS: typing adds a line and syncs the gutter — lines=16 expected=16
+  PASS: caret moved with typing
+  PASS: draft guard persists after typing
+  PASS: tab inserts two spaces at the caret
+  PASS: gutter stays synced after tab
+  PASS: overlay text is transparent, caret visible — {"color":"rgba(0, 0, 0, 0)","caretColor":"rgb(230, 237, 243)","wrap":"off","lineHeight":"20px"}
+  PASS: scroll is synced across textarea/highlight/gutter — {"ta":0,"pre":0,"gutter":0}
+  PASS: dry-run error anchors to the source line — {"markedLine":7,"spanLine":7,"actualSourceLine":7}
+  PASS: typing clears the error marks
+  PASS: wizard sink validation blocks an empty sink — {"activeStep":"3","step4Hidden":true,"cards":1,"selects":[""]}
+  PASS: wizard Review renders from the editor — first line: "name: \"regression\""
+PAGE ERRORS: NONE
+CONSOLE ERRORS: NONE
+ALL CHECKS PASSED
+
+[editor] PASS (6572ms, exit 0)
+
+  PASS: dark theme --fg-muted meets contrast (#8b949e) — got "#8b949e"
+  PASS: health card is a <button> — got "BUTTON"
+  PASS: focus reveals the health card
+  PASS: click pins the health card (open + aria-expanded)
+  PASS: Esc unpins the health card
+  PASS: light theme --fg-muted meets contrast (#57606a) — got "#57606a"
+  PASS: light theme --badge-cyan-fg (#0a6a8c) — got "#0a6a8c"
+  PASS: light theme --badge-off-fg (#636c76) — got "#636c76"
+  PASS: editor gutter renders in light theme — {"gutter":15,"tokens":14,"gutterColor":"rgb(87, 96, 106)"}
+PAGE ERRORS: NONE
+CONSOLE ERRORS: NONE
+ALL CHECKS PASSED
+
+[a11y] PASS (3207ms, exit 0)
+
+REVIEW_YAML:
+name: "123"
+description: "12345"
+schedule:
+  type: interval
+  interval_seconds: 300
+source:
+  type: kafka
+  brokers:
+    - "host:9092"
+  topic: "true"
+  group_id: "tram"
+  password: "12345"
+  port: 42
+serializer_in:
+  type: json
+sinks:
+  - type: kafka
+    topic: "sink-topic"
+-----
+  PASS: name quoted (numeric pipeline name) — got "name: \"123\""
+  PASS: description quoted (numeric-looking text)
+  PASS: secret password quoted
+  PASS: text field boolean-looking value quoted
+  PASS: integer field stays unquoted
+  PASS: list item still quoted
+  PASS: legacy #wizard redirects to #create — hash=#create?return=detail
+  PASS: no stray schema poll after page-leave during init — fetches after release=8, after 3s=8
+SCHEMA_FETCHES_AFTER_RELEASE: 8
+SCHEMA_FETCHES_AFTER_3S: 8
+PAGE ERRORS: NONE
+CONSOLE ERRORS: NONE
+ALL CHECKS PASSED
+
+[yaml-quote] PASS (10547ms, exit 0)
+
+  PASS: Back with modal open: no .modal-backdrop remains — {"backdrops":0,"modalOpen":false,"overflow":"","shown":0,"confirmDisplay":null}
+  PASS: Back with modal open: body lost modal-open
+  PASS: Back with modal open: body overflow cleared — got ""
+  PASS: Back with modal open: no .modal.show remains
+  PASS: Back with modal open: search accepts focus (page interactive)
+  PASS: deep link opens the templates modal on fresh load
+  PASS: topbar title stays "Pipelines" while the modal is open
+  PASS: dismissing the deep-linked modal rewrites the hash to #pipelines
+  PASS: route change with modal open: no .modal-backdrop remains — {"backdrops":0,"modalOpen":false,"overflow":"","shown":0,"confirmDisplay":null}
+  PASS: route change with modal open: body lost modal-open
+  PASS: route change with modal open: body overflow cleared — got ""
+  PASS: route change with modal open: no .modal.show remains
+  PASS: Stop opens the shared confirm dialog
+  PASS: Back resolves the pending confirmAction promise as false — {"captured":true,"settled":true,"value":false}
+  PASS: Back with confirm open: no .modal-backdrop remains — {"backdrops":0,"modalOpen":false,"overflow":"","shown":0,"confirmDisplay":"none"}
+  PASS: Back with confirm open: body lost modal-open
+  PASS: Back with confirm open: body overflow cleared — got ""
+  PASS: Back with confirm open: no .modal.show remains
+  PASS: Back with confirm open: dialog reset to hidden (not destroyed) — got "none"
+  PASS: confirm dialog opens again after Back (element was reset, not destroyed)
+  PASS: brand literal: brand-ver renders the released version, not the v— placeholder — got "v1.8.3" (fixture meta.json v1.8.3)
+PAGE ERRORS: NONE
+CONSOLE ERRORS: NONE
+ALL CHECKS PASSED
+
+[modal-nav] PASS (3149ms, exit 0)
+
+  PASS: partial run row renders its own "partial" status (not error/success) — {"text":"partial","cls":"tram-badge badge-partial has-dot partial"}
+  PASS: partial status filter option exists
+  PASS: aborted run row is distinct from failed (own badge, not failed-red) — {"text":"aborted","cls":"tram-badge badge-aborted has-dot aborted"}
+  PASS: partial run detail leads with "Completed with losses (partial)"
+  PASS: aborted run detail explains "Run aborted" (not "Pipeline failure")
+  PASS: Admission column appears when workers report admission_state
+  PASS: admitting and draining workers both render badges — ["admitting","draining","draining"]
+  PASS: drained worker shows the safe-to-restart gate
+  PASS: draining worker expanded shows the drain runbook with "not safe to restart yet"
+  PASS: operations tab lists rows — {"rows":5,"kinds":["trigger","stop","boot adopt","drain","restart"],"states":["complete","complete","complete","pending","failed"]}
+  PASS: operations kinds render humanized (force release style) — ["trigger","stop","boot adopt","drain","restart"]
+  PASS: operation states render pending/complete/failed badges — ["complete","complete","complete","pending","failed"]
+  PASS: stopping pipeline renders pulsing "stopping" badge with a disabled transition button — {"badge":"stopping","hasStoppingClass":true,"buttonDisabled":true}
+  PASS: trigger receipt shows the operation_id — {"text":"Manual run triggered — receipt op-3f8a9View operations","href":"#detail/manual-report-gen?tab=operations"}
+  PASS: trigger receipt links to the operations view — {"text":"Manual run triggered — receipt op-3f8a9View operations","href":"#detail/manual-report-gen?tab=operations"}
+  PASS: receipt link opens the operations tab with rows
+  PASS: partial outcome toast fires ("completed with losses (partial)")
+  PASS: no page/console/request errors across all surfaces — {"pageErrors":[],"consoleErrors":[],"failedRequests":[]}
+PAGE ERRORS: NONE
+CONSOLE ERRORS: NONE
+FAILED REQUESTS: NONE
+ALL CHECKS PASSED
+
+[states] PASS (2699ms, exit 0)
+
+================ browser smoke summary ================
+  [PASS] boot (7551ms)
+  [PASS] wizard (7243ms)
+  [PASS] wizard-ai (11535ms)
+  [PASS] editor (6572ms)
+  [PASS] a11y (3207ms)
+  [PASS] yaml-quote (10547ms)
+  [PASS] modal-nav (3149ms)
+  [PASS] states (2699ms)
+--------------------------------------------------------
+BROWSER SMOKE GREEN — all checks passed.

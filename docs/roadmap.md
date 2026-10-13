@@ -255,22 +255,26 @@ contracts. No universal exactly-once or blind partition-failover guarantee.
 - [x] **Wizard/editor toolbar correction** — included with the existing authoring workflow fixes.
 - [x] **Release closure** — self-review and independent full-diff review approved; all 11 release checks and PR CI green. [PR #93](https://github.com/tosumitdhaka/trishul-ram/pull/93) merged; `v1.8.2` tagged on `f14b560`. [Release workflow](https://github.com/tosumitdhaka/trishul-ram/actions/runs/38265973209) succeeded; all three image tags and the Helm chart independently verified. [Release notes](https://github.com/tosumitdhaka/trishul-ram/releases/tag/v1.8.2).
 
-## v1.8.3 — Connector Correctness Under Failure (in progress)
+## v1.8.3 — Connector Correctness Under Failure (gate green; publication pending)
 
 > Full plan: [v1.8.3 connector hardening](plans/v1.8.3-connector-hardening-plan.md).
 > Baseline: released v1.8.2. Verification scope is agreed; fixes require current
 > reproductions. This does not assign every capability in GH #58–#61.
 > Investigation started 2026-10-13; current results and remaining acceptance
 > work are tracked in the [evidence ledger](reviews/v1.8.3-connector-hardening-evidence.md).
+> Implementation is complete and independently approved; the full
+> [release gate](reviews/v1.8.3-release-gate.md) passed 11/11 on 2026-10-13.
+> Six accepted [verification follow-ups](plans/v1.8.3-open-verification-followups.md)
+> remain OPEN for the next benchmark simulation/run.
 
 - [ ] **H183-01 — Kafka (scoped GH #58)** — reconnect/rebalance/stop, producer failures and acknowledgement-frontier correctness
-- [ ] **H183-02 — AMQP (scoped GH #61)** — channel/broker failure, ack/nack ownership, publisher confirmations and bounded admission
+- [x] **H183-02 — AMQP (scoped GH #61)** — channel/broker failure, ack/nack ownership, publisher confirmations and bounded admission
 - [ ] **H183-03 — ClickHouse (scoped GH #60)** — failed flush/commit, retained obligations and truthful stop/drain outcomes
-- [ ] **H183-04 — SNMP traps (remaining GH #65)** — community verification and visible v3 privacy failures; retain valid-trap/Counter64 behavior
+- [x] **H183-04 — SNMP traps (remaining GH #65)** — community verification and visible v3 privacy failures; retain valid-trap/Counter64 behavior
 - [ ] **H183-05 — file finalization** — verify historical threaded stream/staged-batch residuals and the PGW ASN.1 memory case; fix reproduced violations before destructive source actions
-- [ ] **H183-06 — evidence and issue scope** — deterministic regressions plus required live Kafka/AMQP/ClickHouse/SNMP/file evidence; already-covered and deferred requirements recorded separately
-- [ ] **H183-07 — ten-IP SNMP polling pilot** — approved scope exception: one pipeline, bounded concurrent targets, device attribution, isolated failures and truthful results; five-minute demo with SFTP readback, preserving single-host YAML
-- [ ] **Release closure** — selected live faults repeated at least three times, reconciled output/acknowledgement evidence, independent full-diff review and all release checks green
+- [x] **H183-06 — evidence and issue scope** — deterministic regressions and recorded live evidence; verified and user-accepted OPEN requirements recorded separately
+- [x] **H183-07 — ten-IP SNMP polling pilot** — approved scope exception: one pipeline, bounded concurrent targets, device attribution, isolated failures and truthful results; five-minute demo with SFTP readback, preserving single-host YAML
+- [ ] **Release closure** — independent review and all 11 gate checks pass; accepted verification follow-ups remain OPEN, tagging/publication pending
 
 ## v1.8.4 — Operational Confidence & Bounded Capacity (planned)
 
