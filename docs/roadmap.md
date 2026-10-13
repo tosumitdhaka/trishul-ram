@@ -255,7 +255,7 @@ contracts. No universal exactly-once or blind partition-failover guarantee.
 - [x] **Wizard/editor toolbar correction** — included with the existing authoring workflow fixes.
 - [x] **Release closure** — self-review and independent full-diff review approved; all 11 release checks and PR CI green. [PR #93](https://github.com/tosumitdhaka/trishul-ram/pull/93) merged; `v1.8.2` tagged on `f14b560`. [Release workflow](https://github.com/tosumitdhaka/trishul-ram/actions/runs/38265973209) succeeded; all three image tags and the Helm chart independently verified. [Release notes](https://github.com/tosumitdhaka/trishul-ram/releases/tag/v1.8.2).
 
-## v1.8.3 — Connector Correctness Under Failure (gate green; publication pending)
+## v1.8.3 — Connector Correctness Under Failure (released)
 
 > Full plan: [v1.8.3 connector hardening](plans/v1.8.3-connector-hardening-plan.md).
 > Baseline: released v1.8.2. Verification scope is agreed; fixes require current
@@ -274,7 +274,7 @@ contracts. No universal exactly-once or blind partition-failover guarantee.
 - [ ] **H183-05 — file finalization** — verify historical threaded stream/staged-batch residuals and the PGW ASN.1 memory case; fix reproduced violations before destructive source actions
 - [x] **H183-06 — evidence and issue scope** — deterministic regressions and recorded live evidence; verified and user-accepted OPEN requirements recorded separately
 - [x] **H183-07 — ten-IP SNMP polling pilot** — approved scope exception: one pipeline, bounded concurrent targets, device attribution, isolated failures and truthful results; five-minute demo with SFTP readback, preserving single-host YAML
-- [ ] **Release closure** — independent review and all 11 gate checks pass; accepted verification follow-ups remain OPEN, tagging/publication pending
+- [x] **Release closure** — independent review, all 11 gate checks, PR CI and tag-triggered publication passed. [PR #94](https://github.com/tosumitdhaka/trishul-ram/pull/94) merged; `v1.8.3` tagged on `2751401`. All three dual-platform images and the Helm chart independently verified; [publication evidence](reviews/v1.8.3-publication.md) and [release notes](https://github.com/tosumitdhaka/trishul-ram/releases/tag/v1.8.3). Six accepted verification follow-ups remain OPEN.
 
 ## v1.8.4 — Operational Confidence & Bounded Capacity (planned)
 

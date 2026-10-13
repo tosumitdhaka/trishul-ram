@@ -1,0 +1,107 @@
+{
+  "verified_at_utc": "2026-10-13T08:13:23.463174+00:00",
+  "release_run": 38366122051,
+  "tag": "v1.8.3",
+  "revision": "2751401346f575f88b12c3398b552631a04c8705",
+  "images": [
+    {
+      "image": "ghcr.io/tosumitdhaka/trishul-ram",
+      "version_tag": "1.8.3",
+      "version_digest": "sha256:a795481580a51227eb4ff309a6860d5c9aa2dfb4ca71c527708c35e2d9b12acb",
+      "latest_digest": "sha256:a795481580a51227eb4ff309a6860d5c9aa2dfb4ca71c527708c35e2d9b12acb",
+      "platforms": [
+        {
+          "platform": {
+            "architecture": "amd64",
+            "os": "linux"
+          },
+          "manifest_digest": "sha256:daf1a249f1599b964cc33f5cccad9d173e9954f9bf8a3c72001843ffb324f123",
+          "config_digest": "sha256:4b14cac08fffbf3653c05e7a285f7ef8fad4f6115b43e04f2d57366a3169c418",
+          "version": "1.8.3",
+          "revision": "2751401346f575f88b12c3398b552631a04c8705"
+        },
+        {
+          "platform": {
+            "architecture": "arm64",
+            "os": "linux"
+          },
+          "manifest_digest": "sha256:6f92f19f36a876d3e9641bc3c7fd4c0ff96e049286bcf207147767039675d495",
+          "config_digest": "sha256:a7719d20ed8cbab5d6555ef8a1474758872f3e7e3fb82d81a77b55bfe65ad705",
+          "version": "1.8.3",
+          "revision": "2751401346f575f88b12c3398b552631a04c8705"
+        }
+      ],
+      "verified": true
+    },
+    {
+      "image": "ghcr.io/tosumitdhaka/trishul-ram-manager",
+      "version_tag": "1.8.3",
+      "version_digest": "sha256:2a92c254e53e1dc0e28537fd845ef4288ff3b6facf52e560a3376d274c6f834b",
+      "latest_digest": "sha256:2a92c254e53e1dc0e28537fd845ef4288ff3b6facf52e560a3376d274c6f834b",
+      "platforms": [
+        {
+          "platform": {
+            "architecture": "amd64",
+            "os": "linux"
+          },
+          "manifest_digest": "sha256:ee0462ac85ac437ea3b57c870116a01f4fa1d48215fd76d5e413459f39c55861",
+          "config_digest": "sha256:71e6a3e821181b593737ef4a6c0245ac3ae0f12bc865a6b22036132e6f888a1f",
+          "version": "1.8.3",
+          "revision": "2751401346f575f88b12c3398b552631a04c8705"
+        },
+        {
+          "platform": {
+            "architecture": "arm64",
+            "os": "linux"
+          },
+          "manifest_digest": "sha256:fec100c105498bf755190dbc049a6c08ffdbe05e857412c10560fa1df746dcb7",
+          "config_digest": "sha256:f6cb5b6e74ee06750aac363b72adfc8da80180f18d4d025db807fd6b98a9a449",
+          "version": "1.8.3",
+          "revision": "2751401346f575f88b12c3398b552631a04c8705"
+        }
+      ],
+      "verified": true
+    },
+    {
+      "image": "ghcr.io/tosumitdhaka/trishul-ram-worker",
+      "version_tag": "1.8.3",
+      "version_digest": "sha256:76040b0c42927058495a88234785388850ee4f2efc47f708a344fc8010d0690b",
+      "latest_digest": "sha256:76040b0c42927058495a88234785388850ee4f2efc47f708a344fc8010d0690b",
+      "platforms": [
+        {
+          "platform": {
+            "architecture": "amd64",
+            "os": "linux"
+          },
+          "manifest_digest": "sha256:32a6a19d4091e9411b3f0ea6a743200af35d07f470fbddbf4be193ea381ba51e",
+          "config_digest": "sha256:26f964e8b35280f96fbecfc20556b4c78d7721e37d50555dca4704de3afc8fe0",
+          "version": "1.8.3",
+          "revision": "2751401346f575f88b12c3398b552631a04c8705"
+        },
+        {
+          "platform": {
+            "architecture": "arm64",
+            "os": "linux"
+          },
+          "manifest_digest": "sha256:65cd10ac782a157991a84118a834f32738b6988bc9abb8e007d34d7a02a2c1c7",
+          "config_digest": "sha256:e7f63a814b4e15d6dcb8d22e75f11e1db4425a623f2801ea83b4264c1f67b739",
+          "version": "1.8.3",
+          "revision": "2751401346f575f88b12c3398b552631a04c8705"
+        }
+      ],
+      "verified": true
+    }
+  ],
+  "chart": {
+    "chart": "oci://ghcr.io/tosumitdhaka/charts/trishul-ram",
+    "version": "1.8.3",
+    "appVersion": "1.8.3",
+    "oci_digest": "sha256:4f8c274381438f0b0370a8be1b19f76060fa03de150163b4cca5c8a6391087a7",
+    "archive_sha256": "5047c6de2a6bb816f63a74baf51679e12554a3873c3b8cefbd5ca8c19a517303",
+    "lint": "PASS",
+    "offline_template": "PASS",
+    "verified": true
+  },
+  "kind_accessed": false,
+  "deployment_performed": false
+}
